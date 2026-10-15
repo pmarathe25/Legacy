@@ -76,7 +76,7 @@ impl Session {
                         break;
                     }
                     if let Some(time) = target {
-                        let progress = simulation.advance(time, 32);
+                        let progress = simulation.advance(time, 1);
                         if !progress.as_ref().is_ok_and(|p| p.stop == Stop::Budget) {
                             target = None;
                         }

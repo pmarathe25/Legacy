@@ -1,6 +1,7 @@
 //! In-kind contributions and construction consume real goods and worker time.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,19 +22,17 @@ pub struct Project {
     pub status: Status,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Projects(pub BTreeMap<ProjectId, Project>);
+pub struct Projects(pub Records<ProjectId, Project>);
 impl Resource for Projects {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().map(|id| id.0).collect()
     }
     const KEY: &'static str = "projects.sites";
     fn validate(&self) -> Result<()> {
-        require(
-            self.0.values().all(|p| {
-                p.duration.0 > 0 && !p.materials.is_empty() && p.materials.values().all(|q| *q > 0)
-            }),
-            "invalid project",
-        )
+        self.validate_rows(self.0.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -185,4 +184,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
+}
+
+impl Projects {
+    fn validate_rows<'a>(&'a self, mut rows: impl Iterator<Item = &'a Project>) -> Result<()> {
+        require(
+            rows.all(|p| {
+                p.duration.0 > 0 && !p.materials.is_empty() && p.materials.values().all(|q| *q > 0)
+            }),
+            "invalid project",
+        )
+    }
 }

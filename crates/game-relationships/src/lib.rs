@@ -1,6 +1,7 @@
 //! Directed relationships, distinct beliefs, and learned values.
 use game_core::*;
 use game_sim::*;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -18,9 +19,9 @@ pub struct Beliefs {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Social {
-    pub relationships: BTreeMap<PersonId, BTreeMap<PersonId, Relationship>>,
-    pub beliefs: BTreeMap<PersonId, Beliefs>,
-    pub values: BTreeMap<PersonId, BTreeMap<String, i32>>,
+    pub relationships: Records<PersonId, BTreeMap<PersonId, Relationship>>,
+    pub beliefs: Table<PersonId, Beliefs>,
+    pub values: Records<PersonId, BTreeMap<String, i32>>,
 }
 impl Resource for Social {
     const KEY: &'static str = "relationships.social";

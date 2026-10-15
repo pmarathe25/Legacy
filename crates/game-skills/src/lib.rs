@@ -1,12 +1,13 @@
 //! Learning attribution prevents crediting one interval twice.
 use game_core::*;
 use game_sim::*;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skills {
-    pub levels: BTreeMap<PersonId, BTreeMap<String, u64>>,
-    pub credited: BTreeSet<u64>,
+    pub levels: Records<PersonId, BTreeMap<String, u64>>,
+    pub credited: Table<u64, ()>,
 }
 impl Resource for Skills {
     const KEY: &'static str = "skills.practice";
@@ -32,7 +33,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         require(!r.skill.is_empty() && r.effort > 0, "invalid practice")?;
         let s = tx.edit::<Skills>()?;
         require(
-            s.credited.insert(r.attribution),
+            s.credited.insert(r.attribution, ()).is_none(),
             "work interval already credited",
         )?;
         let level = s

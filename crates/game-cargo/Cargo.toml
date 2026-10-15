@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-storage.workspace = true
 game-objects.workspace = true
 
 game-core.workspace = true
@@ -13,6 +14,7 @@ game-transport.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 game-land.workspace = true
 game-property.workspace = true
 game-physiology.workspace = true

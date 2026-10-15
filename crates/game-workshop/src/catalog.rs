@@ -50,7 +50,7 @@ pub fn load(store: &mut Store, objects: &Objects) -> Result<InstallRecipes> {
         }
     }
     let check = Workshop {
-        recipes: recipes.clone(),
+        recipes: recipes.clone().into(),
         ..Default::default()
     };
     check.validate()?;
@@ -60,7 +60,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.request::<InstallRecipes>(|tx, r| {
         require(tx.get::<Workshop>()?.work.is_empty(), "workshop is active")?;
         let workshop = tx.edit::<Workshop>()?;
-        workshop.recipes = r.recipes;
+        workshop.recipes = r.recipes.into();
         workshop.stamps = r.stamps;
         Ok(())
     })

@@ -1,16 +1,16 @@
 //! Needs, bodily harm, rest, and guardian recovery.
+use game_storage::Table;
 mod compute;
-pub use compute::{Batch, advance_body};
+pub use compute::advance_body;
 use game_core::*;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Mortal,
     Guardian,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Body {
     pub kind: Kind,
     pub born: SimTime,
@@ -54,7 +54,7 @@ impl Default for Rules {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bodies {
-    pub people: BTreeMap<PersonId, Body>,
+    pub people: Table<PersonId, Body>,
     pub rules: Rules,
     pub ticking: bool,
 }
@@ -64,17 +64,13 @@ impl Resource for Bodies {
     }
     const KEY: &'static str = "physiology.bodies";
     fn validate(&self) -> Result<()> {
-        require(
-            self.rules.tick.0 > 0 && self.rules.max_health > 0,
-            "invalid physiology rates",
-        )?;
-        for p in self.people.values() {
-            require(
-                p.health <= self.rules.max_health && (p.kind == Kind::Mortal || p.alive),
-                "invalid body",
-            )?;
+        self.validate_rows(self.people.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        if self.rules != previous.rules {
+            return self.validate();
         }
-        Ok(())
+        self.validate_rows(self.people.changed(&previous.people).map(|(_, row)| row))
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,19 +284,22 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Tick>(|tx, _| {
-        let state = tx.get::<Bodies>()?;
-        let input: Vec<_> = state
+        let rules = tx.get::<Bodies>()?.rules.clone();
+        let at = tx.now();
+        tx.edit_with_compute::<Bodies, _>(|state, pool| {
+            state
+                .people
+                .update(pool, |_, body| *body = advance_body(body, &rules, at))
+        })?;
+        // Only deaths and incapacitated guardians require cross-feature effects.
+        let affected: Vec<_> = tx
+            .get::<Bodies>()?
             .people
             .iter()
-            .map(|(id, p)| (*id, p.clone()))
+            .filter(|(_, p)| p.alive && p.health == 0)
+            .map(|(id, _)| *id)
             .collect();
-        let rules = state.rules.clone();
-        let output = compute::Cpu.evaluate(&input, &rules, tx.now(), tx.compute());
-        let people = &mut tx.edit::<Bodies>()?.people;
-        for (id, body) in &output {
-            people.insert(*id, body.clone());
-        }
-        for (id, _) in output {
+        for id in affected {
             death(tx, id)?;
         }
         tx.schedule(tx.now().after(rules.tick)?, 0, Tick)?;
@@ -419,4 +418,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         p.health = p.health.saturating_sub(r.amount);
         death(tx, r.person)
     })
+}
+
+impl Bodies {
+    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Body>) -> Result<()> {
+        require(
+            self.rules.tick.0 > 0 && self.rules.max_health > 0,
+            "invalid physiology rates",
+        )?;
+        for p in rows {
+            require(
+                p.health <= self.rules.max_health && (p.kind == Kind::Mortal || p.alive),
+                "invalid body",
+            )?;
+        }
+        Ok(())
+    }
 }

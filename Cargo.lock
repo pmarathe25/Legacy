@@ -51,6 +51,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -69,6 +70,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -101,6 +103,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -159,8 +162,10 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -183,6 +188,7 @@ dependencies = [
  "game-relationships",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-traits",
  "game-transport",
  "game-workshop",
@@ -213,6 +219,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -229,6 +236,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -262,6 +270,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -300,6 +309,7 @@ dependencies = [
  "game-sim",
  "game-skills",
  "game-spatial",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -333,6 +343,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -370,6 +381,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -388,6 +400,7 @@ dependencies = [
  "game-sim",
  "game-skills",
  "game-spatial",
+ "game-storage",
  "game-transport",
  "serde",
  "serde_json",
@@ -399,6 +412,7 @@ version = "0.2.0"
 dependencies = [
  "game-core",
  "game-sim",
+ "game-storage",
  "serde",
 ]
 
@@ -415,6 +429,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -433,6 +448,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -450,6 +466,7 @@ dependencies = [
  "game-sim",
  "game-skills",
  "game-spatial",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -467,6 +484,7 @@ dependencies = [
  "game-sim",
  "game-skills",
  "game-spatial",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -523,6 +541,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-performance"
+version = "0.2.0"
+dependencies = [
+ "game-api",
+ "game-assembly",
+ "game-cargo",
+ "game-characters",
+ "game-core",
+ "game-knowledge",
+ "game-land",
+ "game-lifecycle",
+ "game-logistics",
+ "game-objects",
+ "game-openings",
+ "game-physiology",
+ "game-property",
+ "game-relationships",
+ "game-session",
+ "game-sim",
+ "game-storage",
+ "game-transport",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-physiology"
 version = "0.2.0"
 dependencies = [
@@ -534,6 +579,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "rayon",
  "serde",
@@ -551,6 +597,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -566,6 +613,7 @@ dependencies = [
  "game-physiology",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -601,6 +649,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]
@@ -611,6 +660,7 @@ version = "0.2.0"
 dependencies = [
  "game-core",
  "game-sim",
+ "game-storage",
  "serde",
 ]
 
@@ -639,6 +689,7 @@ name = "game-sim"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-storage",
  "rayon",
  "serde",
  "serde_json",
@@ -650,6 +701,7 @@ version = "0.2.0"
 dependencies = [
  "game-core",
  "game-sim",
+ "game-storage",
  "serde",
 ]
 
@@ -662,12 +714,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-storage"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-traits"
 version = "0.2.0"
 dependencies = [
  "game-content",
  "game-core",
  "game-sim",
+ "game-storage",
  "serde",
 ]
 
@@ -683,6 +745,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "serde",
 ]
 
@@ -699,6 +762,7 @@ dependencies = [
  "game-property",
  "game-sim",
  "game-skills",
+ "game-storage",
  "game-transport",
  "serde",
 ]

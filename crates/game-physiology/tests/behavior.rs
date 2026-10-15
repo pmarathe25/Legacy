@@ -70,3 +70,40 @@ fn fixture_state_roundtrips_with_only_required_plugins() {
     let loaded = builder().load(&save, 2).unwrap();
     assert_eq!(save, loaded.save().unwrap());
 }
+#[test]
+fn twenty_thousand_deaths_commit_in_stable_order_without_truncating_the_phase() {
+    let mut host = builder().build(9, 4).unwrap();
+    host.dispatch(Configure(Rules {
+        deprivation: 0,
+        harm_per_tick: 100,
+        ..Default::default()
+    }))
+    .unwrap();
+    for _ in 0..20_000 {
+        host.dispatch(Create {
+            kind: Kind::Mortal,
+            born: SimTime(0),
+        })
+        .unwrap();
+    }
+    host.dispatch(Start).unwrap();
+    run(&mut host, SimTime(MINUTE.0));
+    assert!(
+        host.get::<Bodies>()
+            .unwrap()
+            .people
+            .values()
+            .all(|p| !p.alive && p.health == 0)
+    );
+    let notices: Vec<_> = host.notices().collect();
+    assert_eq!(notices.len(), 1024);
+    assert_eq!(notices.last().unwrap().sequence, 20_000);
+    assert!(
+        notices
+            .windows(2)
+            .all(|pair| pair[0].sequence < pair[1].sequence)
+    );
+    let saved = host.save().unwrap();
+    let loaded = builder().load(&saved, 1).unwrap();
+    assert_eq!(loaded.save().unwrap(), saved);
+}

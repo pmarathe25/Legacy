@@ -1,6 +1,7 @@
 //! Founding, votes, executable access rules, and revocable offices.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -34,8 +35,8 @@ pub struct Proposal {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Institutions {
-    pub groups: BTreeMap<InstitutionId, Institution>,
-    pub proposals: BTreeMap<u64, Proposal>,
+    pub groups: Records<InstitutionId, Institution>,
+    pub proposals: Records<u64, Proposal>,
 }
 impl Resource for Institutions {
     fn allocated_ids(&self) -> Vec<u64> {
@@ -47,18 +48,10 @@ impl Resource for Institutions {
     }
     const KEY: &'static str = "institutions.groups";
     fn validate(&self) -> Result<()> {
-        for i in self.groups.values() {
-            require(
-                !i.members.is_empty()
-                    && !i.name.is_empty()
-                    && i.offices.values().all(|p| i.members.contains(p)),
-                "invalid institution",
-            )?;
-            if let Procedure::Leader(p) = i.procedure {
-                require(i.members.contains(&p), "leader is not a member")?;
-            }
-        }
-        Ok(())
+        self.validate_rows(self.groups.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.groups.changed(&previous.groups).map(|(_, row)| row))
     }
 }
 pub fn passed(
@@ -241,6 +234,22 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
+}
+impl Institutions {
+    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Institution>) -> Result<()> {
+        for i in rows {
+            require(
+                !i.members.is_empty()
+                    && !i.name.is_empty()
+                    && i.offices.values().all(|p| i.members.contains(p)),
+                "invalid institution",
+            )?;
+            if let Procedure::Leader(p) = i.procedure {
+                require(i.members.contains(&p), "leader is not a member")?;
+            }
+        }
+        Ok(())
+    }
 }
 #[cfg(test)]
 mod tests {

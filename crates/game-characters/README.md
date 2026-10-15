@@ -7,3 +7,5 @@ Food plans come from [game-provisioning](../game-provisioning/README.md). Their 
 Scenarios select a `characters` profile from [content/characters](../../content/characters). The owning [schema](src/rules.rs) controls review intervals, retry intervals, need thresholds, utility weights for time and gathering, switching margins, and action kinds that urgent hunger can interrupt. Existing food acquisition stays committed; interrupted work keeps the cancellation consequences defined by its owner. Configuration freezes before minds are created.
 
 Run `cargo test -p game-characters`. Tests cover plan continuation, stale-stock alternatives, blocked routes, partial travel, gathering, urgent hunger, learned values, and save/load with different workers, using only required feature plugins.
+
+Reviews process at most 128 people per committed request, in stable person order. Continuations run at the same simulation time; the next review interval starts after the full review. Save/load preserves the continuation cursor. This bounds input delays without changing anyone’s review frequency.

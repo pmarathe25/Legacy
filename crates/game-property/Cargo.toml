@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-storage.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
 game-cargo.workspace = true

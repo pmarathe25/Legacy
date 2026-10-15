@@ -1,8 +1,8 @@
 //! Delegated authority with budgets, removal, and physical spending.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mandate {
     pub institution: InstitutionId,
@@ -14,17 +14,17 @@ pub struct Mandate {
     pub active: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Realm(pub BTreeMap<u64, Mandate>);
+pub struct Realm(pub Records<u64, Mandate>);
 impl Resource for Realm {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().copied().collect()
     }
     const KEY: &'static str = "realm.mandates";
     fn validate(&self) -> Result<()> {
-        require(
-            self.0.values().all(|m| m.spent <= m.budget),
-            "mandate overspent",
-        )
+        self.validate_rows(self.0.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -132,4 +132,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.edit::<Realm>()?.0.get_mut(&r.mandate).unwrap().active = false;
         Ok(())
     })
+}
+
+impl Realm {
+    fn validate_rows<'a>(&'a self, mut rows: impl Iterator<Item = &'a Mandate>) -> Result<()> {
+        require(rows.all(|m| m.spent <= m.budget), "mandate overspent")
+    }
 }

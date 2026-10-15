@@ -1,8 +1,8 @@
 //! Physical confinement is independent of mortality, regeneration, and office.
 use game_core::*;
 use game_sim::*;
+use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cell {
     pub area: AreaId,
@@ -10,7 +10,7 @@ pub struct Cell {
     pub resistance: u64,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Confinement(pub BTreeMap<PersonId, Cell>);
+pub struct Confinement(pub Table<PersonId, Cell>);
 impl Resource for Confinement {
     const KEY: &'static str = "confinement.cells";
 }

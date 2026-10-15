@@ -1,8 +1,8 @@
 //! Actual pregnancies and births, families, aging inputs, and death consequences.
 use game_core::*;
 use game_sim::*;
+use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Family {
     pub mother: PersonId,
@@ -20,16 +20,16 @@ pub struct Pregnancy {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Population {
-    pub families: BTreeMap<PersonId, Family>,
-    pub pregnancies: BTreeMap<u64, Pregnancy>,
+    pub families: Table<PersonId, Family>,
+    pub pregnancies: Table<u64, Pregnancy>,
     pub gestation: SimDuration,
     pub adult_age: SimDuration,
 }
 impl Default for Population {
     fn default() -> Self {
         Self {
-            families: BTreeMap::new(),
-            pregnancies: BTreeMap::new(),
+            families: Table::new(),
+            pregnancies: Table::new(),
             gestation: SimDuration(DAY.0 * 270),
             adult_age: SimDuration(DAY.0 * 365 * 18),
         }

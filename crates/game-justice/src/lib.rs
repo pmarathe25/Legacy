@@ -1,8 +1,8 @@
 //! Known precedents influence judgments. Enforcement requires a physical actor.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
     pub taking: bool,
@@ -46,8 +46,8 @@ pub struct Case {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Justice {
-    pub cases: BTreeMap<CaseId, Case>,
-    pub known: BTreeMap<PersonId, Vec<Precedent>>,
+    pub cases: Records<CaseId, Case>,
+    pub known: Records<PersonId, Vec<Precedent>>,
 }
 impl Resource for Justice {
     fn allocated_ids(&self) -> Vec<u64> {

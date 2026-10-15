@@ -1,6 +1,7 @@
 //! Player continuity never implies inherited office, assets, or personal skills.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,7 +15,7 @@ pub struct Life {
 pub struct Lineage {
     pub current: Option<PersonId>,
     pub after_death: Option<SimTime>,
-    pub history: BTreeMap<LifeId, Life>,
+    pub history: Records<LifeId, Life>,
 }
 impl Resource for Lineage {
     fn allocated_ids(&self) -> Vec<u64> {

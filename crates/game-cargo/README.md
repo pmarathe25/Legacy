@@ -7,3 +7,5 @@ Physical inventories, checked quantity accounting, atomic local transfers, carri
 **Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
 **Verification:** Run `cargo test -p game-cargo`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+
+Balances and reservations use bounded-copy numeric tables inside each inventory. `used()` reads cached reserved mass; capacity checks do not scan the reservation book. Owner requests update that cache atomically. Full save validation recalculates it and rejects mismatches.

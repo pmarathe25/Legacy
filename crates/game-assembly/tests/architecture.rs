@@ -46,11 +46,15 @@ fn small_crates_and_dependency_direction_are_enforced() {
                 );
             }
         }
-        if name == "game-sim" || name == "game-core" {
+        if name == "game-sim" || name == "game-core" || name == "game-storage" {
             for line in manifest.lines().filter(|l| l.starts_with("game-")) {
-                assert_eq!(
-                    line, "game-core.workspace = true",
-                    "kernel depends on a feature"
+                assert!(
+                    [
+                        "game-core.workspace = true",
+                        "game-storage.workspace = true"
+                    ]
+                    .contains(&line),
+                    "kernel depends on a feature: {line}"
                 );
             }
         }

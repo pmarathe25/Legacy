@@ -1,8 +1,8 @@
 //! Travel owns position, arrival, and interruption. No work is credited in transit.
 use game_core::*;
 use game_sim::*;
+use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
     At(AreaId),
@@ -21,7 +21,7 @@ pub enum Location {
     },
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Positions(pub BTreeMap<PersonId, Location>);
+pub struct Positions(pub Table<PersonId, Location>);
 impl Resource for Positions {
     const KEY: &'static str = "transport.positions";
 }

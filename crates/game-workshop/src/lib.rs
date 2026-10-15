@@ -1,4 +1,5 @@
 //! Recipes and timed manufacturing. Inputs are consumed once, never by previews.
+use game_storage::{Records, Table};
 mod catalog;
 pub use catalog::{InstallRecipes, load};
 use game_core::*;
@@ -23,22 +24,17 @@ struct Work {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workshop {
     pub stamps: Vec<game_content::Stamp>,
-    pub recipes: BTreeMap<String, Recipe>,
-    work: BTreeMap<PersonId, Work>,
+    pub recipes: Records<String, Recipe>,
+    work: Table<PersonId, Work>,
     pub waste: BTreeMap<GoodId, u64>,
 }
 impl Resource for Workshop {
     const KEY: &'static str = "workshop.recipes";
     fn validate(&self) -> Result<()> {
-        require(
-            self.recipes.values().all(|r| {
-                r.duration.0 > 0
-                    && r.quantity > 0
-                    && !r.skill.is_empty()
-                    && r.inputs.values().all(|q| *q > 0)
-            }),
-            "invalid recipe",
-        )
+        self.validate_recipes(self.recipes.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_recipes(self.recipes.changed(&previous.recipes).map(|(_, r)| r))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -176,4 +172,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
+}
+
+impl Workshop {
+    fn validate_recipes<'a>(&self, mut rows: impl Iterator<Item = &'a Recipe>) -> Result<()> {
+        require(
+            rows.all(|r| {
+                r.duration.0 > 0
+                    && r.quantity > 0
+                    && !r.skill.is_empty()
+                    && r.inputs.values().all(|q| *q > 0)
+            }),
+            "invalid recipe",
+        )
+    }
 }

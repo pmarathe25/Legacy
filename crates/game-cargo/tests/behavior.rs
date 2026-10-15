@@ -113,3 +113,78 @@ fn output_space_is_reserved_and_cancellation_releases_it() {
             .is_empty()
     );
 }
+#[test]
+fn a_large_reservation_book_keeps_cached_capacity_atomic_and_validated_on_load() {
+    let mut f = setup();
+    let inventory = f
+        .host
+        .dispatch(Create {
+            custody: Custody::Area(f.home),
+            capacity: 4096,
+        })
+        .unwrap();
+    let tokens: Vec<_> = (0..4096)
+        .map(|_| {
+            f.host
+                .dispatch(ReserveSpace {
+                    inventory,
+                    good: FOOD,
+                    quantity: 1,
+                })
+                .unwrap()
+        })
+        .collect();
+    let saved = f.host.save().unwrap();
+    assert_eq!(
+        f.host.get::<Cargo>().unwrap().0[&inventory].used().unwrap(),
+        4096
+    );
+    assert!(
+        f.host
+            .dispatch(ReserveSpace {
+                inventory,
+                good: FOOD,
+                quantity: 1
+            })
+            .is_err()
+    );
+    assert!(
+        f.host
+            .dispatch(DepositReserved {
+                inventory,
+                reservation: tokens[0],
+                good: FOOD,
+                quantity: 2
+            })
+            .is_err()
+    );
+    assert_eq!(f.host.save().unwrap(), saved);
+    let mut loaded = builder().load(&saved, 4).unwrap();
+    for (index, reservation) in tokens.into_iter().enumerate() {
+        if index % 2 == 0 {
+            loaded
+                .dispatch(ReleaseSpace {
+                    inventory,
+                    reservation,
+                })
+                .unwrap();
+        } else {
+            loaded
+                .dispatch(DepositReserved {
+                    inventory,
+                    reservation,
+                    good: FOOD,
+                    quantity: 1,
+                })
+                .unwrap();
+        }
+    }
+    let inv = &loaded.get::<Cargo>().unwrap().0[&inventory];
+    assert_eq!(inv.amount(FOOD), 2048);
+    assert_eq!(inv.used().unwrap(), 2048);
+    assert_eq!(inv.reserved_mass, 0);
+    assert!(inv.reserved.is_empty());
+    let mut bad: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    bad["resources"]["cargo.inventories"][inventory.0.to_string()]["reserved_mass"] = 1.into();
+    assert!(builder().load(&bad.to_string(), 1).is_err());
+}

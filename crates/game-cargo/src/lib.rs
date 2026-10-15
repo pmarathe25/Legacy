@@ -1,8 +1,8 @@
 //! Physical inventory accounting. Permission is a separate property concern.
 use game_core::*;
 use game_sim::*;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 pub const FOOD: GoodId = GoodId(1);
 pub const TIMBER: GoodId = GoodId(2);
 pub const SEED: GoodId = GoodId(3);
@@ -22,18 +22,19 @@ pub enum Custody {
 pub struct Inventory {
     pub custody: Custody,
     pub capacity: u64,
-    pub goods: BTreeMap<GoodId, u64>,
+    pub goods: Table<GoodId, u64>,
     pub mass: u64,
-    pub reserved: BTreeMap<u64, u64>,
+    pub reserved: Table<u64, u64>,
+    pub reserved_mass: u64,
 }
 impl Inventory {
     pub fn amount(&self, good: GoodId) -> u64 {
         *self.goods.get(&good).unwrap_or(&0)
     }
     pub fn used(&self) -> Result<u64> {
-        self.reserved.values().try_fold(self.mass, |sum, q| {
-            sum.checked_add(*q).ok_or(Error::Overflow)
-        })
+        self.mass
+            .checked_add(self.reserved_mass)
+            .ok_or(Error::Overflow)
     }
     pub fn total(&self) -> Result<u64> {
         self.goods
@@ -42,7 +43,7 @@ impl Inventory {
     }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Cargo(pub BTreeMap<InventoryId, Inventory>);
+pub struct Cargo(pub Records<InventoryId, Inventory>);
 impl Resource for Cargo {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0
@@ -52,13 +53,18 @@ impl Resource for Cargo {
     }
     const KEY: &'static str = "cargo.inventories";
     fn validate(&self) -> Result<()> {
+        self.validate_rows(self.0.values())?;
         for inventory in self.0.values() {
-            require(
-                inventory.used()? <= inventory.capacity,
-                "inventory over capacity",
-            )?;
+            let reserved = inventory
+                .reserved
+                .values()
+                .try_fold(0u64, |sum, q| sum.checked_add(*q).ok_or(Error::Overflow))?;
+            require(reserved == inventory.reserved_mass, "invalid reserved mass")?;
         }
         Ok(())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
 pub fn locality(tx: &Transaction<'_>, id: InventoryId) -> Result<AreaId> {
@@ -171,9 +177,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             Inventory {
                 custody: r.custody,
                 capacity: r.capacity,
-                goods: BTreeMap::new(),
+                goods: Table::new(),
                 mass: 0,
-                reserved: BTreeMap::new(),
+                reserved: Table::new(),
+                reserved_mass: 0,
             },
         );
         Ok(id)
@@ -194,6 +201,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             "no output capacity",
         )?;
         inventory.reserved.insert(id, mass);
+        inventory.reserved_mass = inventory
+            .reserved_mass
+            .checked_add(mass)
+            .ok_or(Error::Overflow)?;
         Ok(id)
     })?;
     b.request::<ReleaseSpace>(|tx, r| {
@@ -202,10 +213,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .0
             .get_mut(&r.inventory)
             .ok_or_else(|| Error::Missing("inventory".into()))?;
-        require(
-            inventory.reserved.remove(&r.reservation).is_some(),
-            "unknown capacity reservation",
-        )?;
+        let mass = inventory
+            .reserved
+            .remove(&r.reservation)
+            .ok_or_else(|| Error::Missing("capacity reservation".into()))?;
+        inventory.reserved_mass = inventory
+            .reserved_mass
+            .checked_sub(mass)
+            .ok_or(Error::Overflow)?;
         Ok(())
     })?;
     b.request::<DepositReserved>(|tx, r| {
@@ -221,6 +236,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .reserved
             .remove(&r.reservation)
             .ok_or_else(|| Error::Missing("capacity reservation".into()))?;
+        inventory.reserved_mass = inventory
+            .reserved_mass
+            .checked_sub(reserved)
+            .ok_or(Error::Overflow)?;
         require(mass <= reserved, "output exceeds reservation")?;
         tx.call(Deposit {
             inventory: r.inventory,
@@ -296,10 +315,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             },
             None => return Ok(()),
         };
-        for inventory in tx.edit::<Cargo>()?.0.values_mut() {
-            if inventory.custody == Custody::Carried(r.person) {
-                inventory.custody = custody.clone();
-            }
+        let carried: Vec<_> = tx
+            .get::<Cargo>()?
+            .0
+            .iter()
+            .filter(|(_, inv)| inv.custody == Custody::Carried(r.person))
+            .map(|(id, _)| *id)
+            .collect();
+        for id in carried {
+            tx.edit::<Cargo>()?.0.get_mut(&id).unwrap().custody = custody.clone();
         }
         Ok(())
     })?;
@@ -320,4 +344,16 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             quantity: r.quantity,
         })
     })
+}
+
+impl Cargo {
+    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Inventory>) -> Result<()> {
+        for inventory in rows {
+            require(
+                inventory.used()? <= inventory.capacity,
+                "inventory over capacity",
+            )?;
+        }
+        Ok(())
+    }
 }

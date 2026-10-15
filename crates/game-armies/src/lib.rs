@@ -1,8 +1,9 @@
 //! Recruitment and units preserve each member's identity and actual supplies.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unit {
     pub commander: PersonId,
@@ -11,7 +12,7 @@ pub struct Unit {
     pub deployed: Option<MissionId>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Armies(pub BTreeMap<ArmyId, Unit>);
+pub struct Armies(pub Records<ArmyId, Unit>);
 impl Resource for Armies {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().map(|id| id.0).collect()

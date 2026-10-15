@@ -2,6 +2,7 @@
 use game_content::{Document, Stamp, Store};
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -21,12 +22,26 @@ pub struct Definitions {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Traits {
-    pub definitions: BTreeMap<String, Trait>,
-    pub people: BTreeMap<PersonId, BTreeMap<String, i32>>,
+    pub definitions: Records<String, Trait>,
+    pub people: Records<PersonId, BTreeMap<String, i32>>,
     pub stamps: Vec<Stamp>,
 }
 impl Resource for Traits {
     const KEY: &'static str = "traits.dispositions";
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        if self
+            .definitions
+            .changed(&previous.definitions)
+            .next()
+            .is_some()
+        {
+            return self.validate();
+        }
+        for (_, profile) in self.people.changed(&previous.people) {
+            self.validate_profile(profile)?;
+        }
+        Ok(())
+    }
     fn validate(&self) -> Result<()> {
         for (key, t) in &self.definitions {
             require(
@@ -93,8 +108,8 @@ pub fn load(store: &mut Store) -> Result<Traits> {
         }
     }
     let traits = Traits {
-        definitions,
-        people: BTreeMap::new(),
+        definitions: definitions.into(),
+        people: Records::new(),
         stamps,
     };
     traits.validate()?;

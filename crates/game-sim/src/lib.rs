@@ -1,4 +1,5 @@
 //! One transactional host. Plugins own all gameplay state and requests.
+use game_storage::Records;
 mod persistence;
 mod registry;
 mod transaction;
@@ -42,7 +43,7 @@ pub struct Action {
     pub cancel: Envelope,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Actions(pub BTreeMap<PersonId, Action>);
+pub struct Actions(pub Records<PersonId, Action>);
 impl Resource for Actions {
     const KEY: &'static str = "world.actions";
 }
@@ -73,6 +74,7 @@ pub struct Host {
     revision: u64,
     next_id: u64,
     jobs: BTreeMap<(SimTime, u8, ScheduleId), Job>,
+    job_keys: BTreeMap<ScheduleId, (SimTime, u8, ScheduleId)>,
     notices: VecDeque<Notice>,
     next_notice: u64,
     receipts: BTreeMap<u64, Receipt>,
@@ -154,18 +156,27 @@ impl Host {
     ) -> Result<Value> {
         let at = remove.map_or(self.time, |key| key.0);
         let mut tx = Transaction::new(self, at);
-        let response = tx.call_envelope(envelope)?;
-        tx.validate()?;
+        let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let response = tx.call_envelope(envelope)?;
+            tx.validate()?;
+            Ok(response)
+        }))
+        .map_err(|_| Error::WorkerFailure)??;
         let changes = tx.finish();
         self.data.extend(changes.writes);
         if let Some(key) = remove {
             self.jobs.remove(&key);
+            self.job_keys.remove(&key.2);
         }
         for id in changes.cancelled {
-            self.jobs.retain(|(_, _, job), _| *job != id);
+            if let Some(key) = self.job_keys.remove(&id) {
+                self.jobs.remove(&key);
+            }
         }
         for job in changes.jobs {
-            self.jobs.insert((job.at, job.priority, job.id), job);
+            let key = (job.at, job.priority, job.id);
+            self.job_keys.insert(job.id, key);
+            self.jobs.insert(key, job);
         }
         for notice in changes.notices {
             self.notices.push_back(notice);

@@ -1,4 +1,6 @@
 use crate::*;
+// Independent events in a 20,000-person phase must fit; recursion remains depth-limited.
+const MAX_CALLS: usize = 1_000_000;
 use std::any::Any;
 pub(crate) struct Changes {
     pub writes: BTreeMap<TypeId, Stored>,
@@ -13,9 +15,9 @@ pub struct Transaction<'a> {
     owner: String,
     at: SimTime,
     writes: BTreeMap<TypeId, Box<dyn Any + Send + Sync>>,
-    jobs: Vec<Job>,
+    jobs: Records<ScheduleId, Job>,
     cancelled: Vec<ScheduleId>,
-    notices: Vec<Notice>,
+    notices: Records<u64, Notice>,
     next_id: u64,
     next_notice: u64,
     calls: usize,
@@ -28,9 +30,9 @@ impl<'a> Transaction<'a> {
             owner: "sim".into(),
             at,
             writes: BTreeMap::new(),
-            jobs: vec![],
+            jobs: Records::new(),
             cancelled: vec![],
-            notices: vec![],
+            notices: Records::new(),
             next_id: host.next_id,
             next_notice: host.next_notice,
             calls: 0,
@@ -78,7 +80,7 @@ impl<'a> Transaction<'a> {
         }
         self.host.get::<T>()
     }
-    /// Copy only a touched resource; errors discard all writes, events, jobs, and allocated IDs.
+    /// Stage a resource snapshot. Persistent tables copy only changed paths and records.
     pub fn edit<T: Resource>(&mut self) -> Result<&mut T> {
         let owner = &self
             .host
@@ -92,6 +94,14 @@ impl<'a> Transaction<'a> {
             "only the registered resource owner may mutate it",
         )?;
         self.edit_owned::<T>()
+    }
+    pub fn edit_with_compute<T: Resource, R>(
+        &mut self,
+        f: impl FnOnce(&mut T, &rayon::ThreadPool) -> R,
+    ) -> Result<R> {
+        let host = self.host;
+        let state = self.edit::<T>()?;
+        Ok(f(state, &host.pool))
     }
     fn edit_owned<T: Resource>(&mut self) -> Result<&mut T> {
         let id = TypeId::of::<T>();
@@ -117,11 +127,33 @@ impl<'a> Transaction<'a> {
         Ok(id)
     }
     pub fn call<R: Request>(&mut self, request: R) -> Result<R::Response> {
-        let value = self.call_envelope(Envelope {
-            key: R::KEY.into(),
-            payload: serde_json::to_value(request).map_err(registry::json_error)?,
-        })?;
-        serde_json::from_value(value).map_err(registry::json_error)
+        self.calls += 1;
+        require(
+            self.calls <= MAX_CALLS && self.depth < 32,
+            "request dispatch limit exceeded",
+        )?;
+        let handler = self
+            .host
+            .registry
+            .typed
+            .get(&TypeId::of::<R>())
+            .cloned()
+            .ok_or_else(|| Error::Missing(R::KEY.into()))?
+            .downcast::<registry::Typed<R>>()
+            .expect("registered request type");
+        self.depth += 1;
+        let result = (|| {
+            if let Some(checks) = self.host.registry.before.get(R::KEY) {
+                let data = serde_json::to_value(&request).map_err(registry::json_error)?;
+                let checks: Vec<_> = checks.values().cloned().collect();
+                for check in checks {
+                    check(self, data.clone())?;
+                }
+            }
+            self.with_owner(&handler.owner, |tx| (handler.run)(tx, request))
+        })();
+        self.depth -= 1;
+        result
     }
     /// A failed nested attempt restores its own changes while retaining its caller's work.
     pub fn attempt<R: Request>(&mut self, request: R) -> Result<R::Response> {
@@ -157,11 +189,6 @@ impl<'a> Transaction<'a> {
         result
     }
     pub(crate) fn call_envelope(&mut self, request: Envelope) -> Result<Value> {
-        self.calls += 1;
-        require(
-            self.calls <= 10_000 && self.depth < 32,
-            "request dispatch limit exceeded",
-        )?;
         let handler = self
             .host
             .registry
@@ -169,23 +196,7 @@ impl<'a> Transaction<'a> {
             .get(&request.key)
             .ok_or_else(|| Error::Missing(request.key.clone()))?
             .clone();
-        self.depth += 1;
-        let checks: Vec<_> = self
-            .host
-            .registry
-            .before
-            .get(&request.key)
-            .into_iter()
-            .flat_map(|m| m.values().cloned())
-            .collect();
-        let result = (|| {
-            for check in checks {
-                check(self, request.payload.clone())?;
-            }
-            handler(self, request.payload)
-        })();
-        self.depth -= 1;
-        result
+        handler(self, request.payload)
     }
     pub fn schedule<R: Request>(
         &mut self,
@@ -199,37 +210,43 @@ impl<'a> Transaction<'a> {
             "unregistered scheduled request",
         )?;
         let id = ScheduleId(self.allocate()?);
-        self.jobs.push(Job {
+        self.jobs.insert(
             id,
-            at,
-            priority,
-            request: Envelope {
-                key: R::KEY.into(),
-                payload: serde_json::to_value(request).map_err(registry::json_error)?,
+            Job {
+                id,
+                at,
+                priority,
+                request: Envelope {
+                    key: R::KEY.into(),
+                    payload: serde_json::to_value(request).map_err(registry::json_error)?,
+                },
             },
-        });
+        );
         Ok(id)
     }
     pub fn unschedule(&mut self, id: ScheduleId) {
         self.cancelled.push(id);
-        self.jobs.retain(|j| j.id != id);
+        self.jobs.remove(&id);
     }
     pub fn emit<E: Event>(&mut self, event: E, witnesses: Vec<PersonId>) -> Result<()> {
         self.calls += 1;
         require(
-            self.calls <= 10_000 && self.depth < 32,
+            self.calls <= MAX_CALLS && self.depth < 32,
             "notification limit exceeded",
         )?;
         let data = serde_json::to_value(event).map_err(registry::json_error)?;
         let sequence = self.next_notice;
         self.next_notice = sequence.checked_add(1).ok_or(Error::Overflow)?;
-        self.notices.push(Notice {
+        self.notices.insert(
             sequence,
-            at: self.at,
-            kind: E::KEY.into(),
-            data: data.clone(),
-            witnesses,
-        });
+            Notice {
+                sequence,
+                at: self.at,
+                kind: E::KEY.into(),
+                data: data.clone(),
+                witnesses,
+            },
+        );
         let listeners: Vec<_> = self
             .host
             .registry
@@ -302,7 +319,7 @@ impl<'a> Transaction<'a> {
         // Each feature owns validation of its state. Cross-feature checks can be registered as listeners.
         for (id, write) in &self.writes {
             let codec = &self.host.registry.resources[id];
-            (codec.validate_borrowed)(write.as_ref())?;
+            (codec.validate_borrowed)(write.as_ref(), &self.host.data[id])?;
         }
         self.host.revision.checked_add(1).ok_or(Error::Overflow)?;
         Ok(())
@@ -314,9 +331,9 @@ impl<'a> Transaction<'a> {
                 .into_iter()
                 .map(|(k, v)| (k, Arc::from(v)))
                 .collect(),
-            jobs: self.jobs,
+            jobs: self.jobs.values().cloned().collect(),
             cancelled: self.cancelled,
-            notices: self.notices,
+            notices: self.notices.values().cloned().collect(),
             next_id: self.next_id,
             next_notice: self.next_notice,
         }

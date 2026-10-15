@@ -1,26 +1,52 @@
 //! Claims and standing permissions never replace physical custody.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
     pub claimant: PersonId,
     pub recognized_by: BTreeSet<PersonId>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "SavedProperty")]
 pub struct Property {
-    pub claims: BTreeMap<InventoryId, Vec<Claim>>,
-    pub access: BTreeMap<InventoryId, BTreeSet<PersonId>>,
+    pub claims: Records<InventoryId, Vec<Claim>>,
+    pub access: Records<InventoryId, game_storage::Table<PersonId, ()>>,
+    #[serde(skip)]
+    permitted: Records<PersonId, game_storage::Table<InventoryId, ()>>,
 }
 impl Resource for Property {
     const KEY: &'static str = "property.claims";
 }
 impl Property {
+    pub fn permitted(&self, person: PersonId) -> impl Iterator<Item = InventoryId> + '_ {
+        self.permitted
+            .get(&person)
+            .into_iter()
+            .flat_map(|ids| ids.keys().copied())
+    }
+    fn permit(&mut self, person: PersonId, inventory: InventoryId, allow: bool) {
+        if allow {
+            self.access.entry(inventory).or_default().insert(person, ());
+            self.permitted
+                .entry(person)
+                .or_default()
+                .insert(inventory, ());
+        } else {
+            if let Some(ids) = self.access.get_mut(&inventory) {
+                ids.remove(&person);
+            }
+            if let Some(ids) = self.permitted.get_mut(&person) {
+                ids.remove(&inventory);
+            }
+        }
+    }
     pub fn allowed(&self, person: PersonId, inventory: InventoryId) -> bool {
         self.access
             .get(&inventory)
-            .is_some_and(|p| p.contains(&person))
+            .is_some_and(|p| p.contains_key(&person))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -86,7 +112,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             claimant: r.claimant,
             recognized_by: r.recognized_by,
         });
-        p.access.entry(r.inventory).or_default().insert(r.claimant);
+        p.permit(r.claimant, r.inventory, true);
         Ok(())
     })?;
     b.request::<Permit>(|tx, r| {
@@ -97,16 +123,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 .is_some_and(|c| c.iter().any(|c| c.claimant == r.issuer)),
             "issuer has no claim",
         )?;
-        let people = tx
-            .edit::<Property>()?
-            .access
-            .entry(r.inventory)
-            .or_default();
-        if r.allow {
-            people.insert(r.person);
-        } else {
-            people.remove(&r.person);
-        }
+        tx.edit::<Property>()?
+            .permit(r.person, r.inventory, r.allow);
         Ok(())
     })?;
     b.request::<Take>(|tx, r| {
@@ -129,4 +147,25 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             vec![r.actor],
         )
     })
+}
+
+#[derive(Deserialize)]
+struct SavedProperty {
+    claims: Records<InventoryId, Vec<Claim>>,
+    access: Records<InventoryId, game_storage::Table<PersonId, ()>>,
+}
+impl From<SavedProperty> for Property {
+    fn from(saved: SavedProperty) -> Self {
+        let mut permitted: Records<PersonId, game_storage::Table<InventoryId, ()>> = Records::new();
+        for (inventory, people) in &saved.access {
+            for person in people.keys() {
+                permitted.entry(*person).or_default().insert(*inventory, ());
+            }
+        }
+        Self {
+            claims: saved.claims,
+            access: saved.access,
+            permitted,
+        }
+    }
 }

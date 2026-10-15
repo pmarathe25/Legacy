@@ -1,6 +1,6 @@
 # game-session
 
-A dedicated host thread processes input between bounded advances and coalesces ordinary progress into one slot. Terminal stops, accepted command results, and requested saves and views remain explicit responses.
+A dedicated host thread processes input after each committed due request and coalesces ordinary progress into one slot. Terminal stops, accepted command results, and requested saves and views remain explicit responses.
 
 **Dependencies:** [game-core](../game-core/README.md), [game-api](../game-api/README.md), [game-assembly](../game-assembly/README.md), [game-sim](../game-sim/README.md).
 

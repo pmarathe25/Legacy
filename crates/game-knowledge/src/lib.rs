@@ -1,4 +1,5 @@
 //! Character-local facts and delayed reports. Queries never teach facts.
+use game_storage::Records;
 mod geography;
 use game_core::*;
 use game_sim::*;
@@ -7,23 +8,21 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fact {
-    pub value: serde_json::Value,
+    pub value: std::sync::Arc<serde_json::Value>,
     pub source: PersonId,
     pub observed: SimTime,
     pub revision: u64,
     pub confidence: u8,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Knowledge(pub BTreeMap<PersonId, BTreeMap<String, Fact>>);
+pub struct Knowledge(pub Records<PersonId, BTreeMap<String, Fact>>);
 impl Resource for Knowledge {
     const KEY: &'static str = "knowledge.facts";
     fn validate(&self) -> Result<()> {
-        require(
-            self.0
-                .values()
-                .all(|m| m.values().all(|f| f.confidence <= 100)),
-            "invalid confidence",
-        )
+        self.validate_rows(self.0.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -119,7 +118,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let value = serde_json::to_value(&tx.get::<game_cargo::Cargo>()?.0[&r.inventory].goods)
             .map_err(|e| Error::Rejected(e.to_string()))?;
         let fact = Fact {
-            value,
+            value: value.into(),
             source: r.person,
             observed: tx.now(),
             revision: tx.revision_after(),
@@ -177,4 +176,16 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
+}
+
+impl Knowledge {
+    fn validate_rows<'a>(
+        &'a self,
+        mut rows: impl Iterator<Item = &'a BTreeMap<String, Fact>>,
+    ) -> Result<()> {
+        require(
+            rows.all(|m| m.values().all(|f| f.confidence <= 100)),
+            "invalid confidence",
+        )
+    }
 }

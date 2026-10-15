@@ -1,4 +1,5 @@
 //! Crop phases, paid seed inputs, seasonal growth, and real harvest labor.
+use game_storage::Table;
 mod catalog;
 pub use catalog::{Crop, CropSpec, Crops, InstallCrops, load};
 use game_core::*;
@@ -29,8 +30,8 @@ struct Work {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Farms {
-    pub plots: BTreeMap<PlotId, Plot>,
-    work: BTreeMap<PersonId, Work>,
+    pub plots: Table<PlotId, Plot>,
+    work: Table<PersonId, Work>,
     pub lost_seed: u64,
 }
 impl Resource for Farms {
@@ -39,10 +40,10 @@ impl Resource for Farms {
     }
     const KEY: &'static str = "agriculture.plots";
     fn validate(&self) -> Result<()> {
-        require(
-            self.plots.values().all(|p| !p.crop.is_empty()),
-            "invalid crop reference",
-        )
+        self.validate_rows(self.plots.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.plots.changed(&previous.plots).map(|(_, row)| row))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -289,4 +290,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
+}
+
+impl Farms {
+    fn validate_rows<'a>(&'a self, mut rows: impl Iterator<Item = &'a Plot>) -> Result<()> {
+        require(rows.all(|p| !p.crop.is_empty()), "invalid crop reference")
+    }
 }

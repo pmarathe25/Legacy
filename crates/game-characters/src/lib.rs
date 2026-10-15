@@ -1,5 +1,6 @@
 //! Autonomous survival uses individual knowledge, committed plans, and explainable utility.
 use game_provisioning as plans;
+use game_storage::Records;
 mod rules;
 mod utility;
 use game_core::*;
@@ -18,7 +19,7 @@ pub struct Mind {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Minds {
-    pub people: BTreeMap<PersonId, Mind>,
+    pub people: Records<PersonId, Mind>,
     pub rules: Rules,
     pub running: bool,
 }
@@ -44,7 +45,9 @@ impl Request for Start {
     type Response = ();
 }
 #[derive(Serialize, Deserialize)]
-struct Review;
+struct Review {
+    after: Option<PersonId>,
+}
 impl Request for Review {
     const KEY: &'static str = "characters.review";
     type Response = ();
@@ -75,7 +78,7 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     if ruler == Some(person) && game_invocation::controlled(tx.get()?, tx.now()) {
         return Ok(());
     }
-    let rules = tx.get::<Minds>()?.rules.clone();
+    let rules = &tx.get::<Minds>()?.rules;
     let body = &tx.get::<game_physiology::Bodies>()?.people[&person];
     let hunger = body.hunger.min((i64::MAX / 4) as u64);
     let fatigue = body.fatigue.min(i64::MAX as u64);
@@ -100,6 +103,7 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     if let Some(plan) = mind.plan {
         return proceed(tx, person, plan, mind.last.as_ref().unwrap().id);
     }
+    let rules = &tx.get::<Minds>()?.rules;
     let mut candidates = vec![];
     if fatigue > rules.rest_fatigue {
         candidates.push(Candidate {
@@ -171,6 +175,9 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             .get(&c.id)
             .is_none_or(|until| tx.now() >= *until)
     });
+    if candidates.is_empty() {
+        return Ok(());
+    }
     if let Ok(traits) = tx.get::<game_traits::Traits>() {
         let weights = traits.weights(person);
         for c in &mut candidates {
@@ -193,13 +200,14 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
         return Ok(());
     };
     let id = decision.id;
+    let retry_delay = rules.retry;
     let now = tx.now();
     let m = tx.edit::<Minds>()?.people.get_mut(&person).unwrap();
     m.last = Some(decision);
     m.retry_after.retain(|_, until| *until > now);
     if id == 1 {
         if tx.attempt(game_physiology::Rest { person }).is_err() {
-            let retry = tx.now().after(rules.retry)?;
+            let retry = tx.now().after(retry_delay)?;
             tx.edit::<Minds>()?
                 .people
                 .get_mut(&person)
@@ -259,15 +267,35 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Start>(|tx, _| {
         require(!tx.get::<Minds>()?.running, "already reviewing")?;
         tx.edit::<Minds>()?.running = true;
-        tx.schedule(tx.now().after(tx.get::<Minds>()?.rules.review)?, 50, Review)?;
+        tx.schedule(
+            tx.now().after(tx.get::<Minds>()?.rules.review)?,
+            50,
+            Review { after: None },
+        )?;
         Ok(())
     })?;
-    b.request::<Review>(|tx, _| {
-        let people: Vec<_> = tx.get::<Minds>()?.people.keys().copied().collect();
+    b.request::<Review>(|tx, r| {
+        let people: Vec<_> = tx
+            .get::<Minds>()?
+            .people
+            .scan_after(r.after.as_ref())
+            .take(128)
+            .map(|(id, _)| *id)
+            .collect();
+        let last = people.last().copied();
+        let full = people.len() == 128;
         for person in people {
             review(tx, person)?;
         }
-        tx.schedule(tx.now().after(tx.get::<Minds>()?.rules.review)?, 50, Review)?;
+        if full {
+            tx.schedule(tx.now(), 50, Review { after: last })?;
+        } else {
+            tx.schedule(
+                tx.now().after(tx.get::<Minds>()?.rules.review)?,
+                50,
+                Review { after: None },
+            )?;
+        }
         Ok(())
     })
 }

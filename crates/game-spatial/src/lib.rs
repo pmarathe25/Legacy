@@ -49,32 +49,35 @@ mod tests {
     use game_land::Area;
     #[test]
     fn shortest_path_is_stable_and_unreachable_fails() {
-        let land = Land(BTreeMap::from([
-            (
-                AreaId(1),
-                Area {
-                    name: "a".into(),
-                    links: BTreeMap::from([
-                        (AreaId(2), SimDuration(4)),
-                        (AreaId(3), SimDuration(2)),
-                    ]),
-                },
-            ),
-            (
-                AreaId(2),
-                Area {
-                    name: "b".into(),
-                    links: BTreeMap::new(),
-                },
-            ),
-            (
-                AreaId(3),
-                Area {
-                    name: "c".into(),
-                    links: BTreeMap::from([(AreaId(2), SimDuration(1))]),
-                },
-            ),
-        ]));
+        let land = Land(
+            BTreeMap::from([
+                (
+                    AreaId(1),
+                    Area {
+                        name: "a".into(),
+                        links: BTreeMap::from([
+                            (AreaId(2), SimDuration(4)),
+                            (AreaId(3), SimDuration(2)),
+                        ]),
+                    },
+                ),
+                (
+                    AreaId(2),
+                    Area {
+                        name: "b".into(),
+                        links: BTreeMap::new(),
+                    },
+                ),
+                (
+                    AreaId(3),
+                    Area {
+                        name: "c".into(),
+                        links: BTreeMap::from([(AreaId(2), SimDuration(1))]),
+                    },
+                ),
+            ])
+            .into(),
+        );
         assert_eq!(
             route(&land, AreaId(1), AreaId(2)).unwrap(),
             Route {

@@ -1,6 +1,7 @@
 //! Guardian connection, physical search, mentorship, and discretionary orders.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -12,7 +13,7 @@ pub struct Guardian {
     pub known_danger: BTreeMap<AreaId, u64>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Guardians(pub BTreeMap<PersonId, Guardian>);
+pub struct Guardians(pub Records<PersonId, Guardian>);
 impl Resource for Guardians {
     const KEY: &'static str = "guardians.mission";
 }

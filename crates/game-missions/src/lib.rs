@@ -1,8 +1,9 @@
 //! Parties travel through the same world as workers and return with persistent consequences.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Phase {
     Preparing,
@@ -23,7 +24,7 @@ pub struct Mission {
     pub phase: Phase,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Missions(pub BTreeMap<MissionId, Mission>);
+pub struct Missions(pub Records<MissionId, Mission>);
 impl Resource for Missions {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().map(|id| id.0).collect()
@@ -201,7 +202,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.subscribe::<game_physiology::Died>("missions.casualty", |tx, e| {
-        for m in tx.edit::<Missions>()?.0.values_mut() {
+        let affected: Vec<_> = tx
+            .get::<Missions>()?
+            .0
+            .iter()
+            .filter(|(_, m)| m.accepted.contains(&e.person) && m.phase != Phase::Complete)
+            .map(|(id, _)| *id)
+            .collect();
+        for id in affected {
+            let m = tx.edit::<Missions>()?.0.get_mut(&id).unwrap();
             if m.accepted.contains(&e.person) && m.phase != Phase::Complete {
                 m.phase = Phase::Failed;
             }

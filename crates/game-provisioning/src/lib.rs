@@ -51,12 +51,12 @@ pub struct Opportunity {
 }
 pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec<Opportunity>> {
     require(meals > 0, "gather a positive number of meals")?;
+    let empty = BTreeMap::new();
     let facts = tx
         .get::<game_knowledge::Knowledge>()?
         .0
         .get(&person)
-        .cloned()
-        .unwrap_or_default();
+        .unwrap_or(&empty);
     let inventories: Vec<_> = facts
         .keys()
         .filter_map(|key| {
@@ -68,7 +68,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
         .collect();
     let mut options = vec![];
     for inventory in &inventories {
-        let stock = known::<BTreeMap<GoodId, u64>>(&facts, &store_key(*inventory));
+        let stock = known::<BTreeMap<GoodId, u64>>(facts, &store_key(*inventory));
         if !stock.is_some_and(|s| {
             tx.get::<game_objects::Objects>()
                 .is_ok_and(|o| o.meal(&s).is_some())
@@ -76,7 +76,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
             continue;
         }
         let Ok((_, duration)) =
-            location(tx, person, &facts, *inventory).and_then(|a| travel(tx, person, &facts, a))
+            location(tx, person, facts, *inventory).and_then(|a| travel(tx, person, facts, a))
         else {
             continue;
         };
@@ -99,7 +99,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
         else {
             continue;
         };
-        let Some(p) = known::<game_ecology::Patch>(&facts, key) else {
+        let Some(p) = known::<game_ecology::Patch>(facts, key) else {
             continue;
         };
         let Some(food) = tx
@@ -114,7 +114,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
         if p.stock < quantity {
             continue;
         }
-        let Ok((_, duration)) = travel(tx, person, &facts, p.area) else {
+        let Ok((_, duration)) = travel(tx, person, facts, p.area) else {
             continue;
         };
         let mass = tx.get::<game_objects::Objects>()?.mass(p.good, quantity)?;
@@ -122,7 +122,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
         let inventory = inventories
             .iter()
             .filter_map(|id| {
-                let l: StoreLocation = known(&facts, &location_key(*id))?;
+                let l: StoreLocation = known(facts, &location_key(*id))?;
                 ((l.carrier == Some(person) || l.area == p.area)
                     && l.mass
                         .checked_add(mass)

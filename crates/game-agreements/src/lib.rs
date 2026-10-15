@@ -1,8 +1,9 @@
 //! Promises create obligations; only physical fulfillment transfers goods.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Term {
     pub debtor: PersonId,
@@ -30,28 +31,17 @@ pub struct Agreement {
     pub status: Status,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Agreements(pub BTreeMap<AgreementId, Agreement>);
+pub struct Agreements(pub Records<AgreementId, Agreement>);
 impl Resource for Agreements {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().map(|id| id.0).collect()
     }
     const KEY: &'static str = "agreements.promises";
     fn validate(&self) -> Result<()> {
-        for a in self.0.values() {
-            require(
-                a.parties.len() >= 2 && !a.terms.is_empty() && a.accepted.is_subset(&a.parties),
-                "invalid agreement",
-            )?;
-            for t in &a.terms {
-                require(
-                    t.quantity > 0
-                        && a.parties.contains(&t.debtor)
-                        && a.parties.contains(&t.creditor),
-                    "invalid term",
-                )?;
-            }
-        }
-        Ok(())
+        self.validate_rows(self.0.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -223,4 +213,24 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
+}
+
+impl Agreements {
+    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Agreement>) -> Result<()> {
+        for a in rows {
+            require(
+                a.parties.len() >= 2 && !a.terms.is_empty() && a.accepted.is_subset(&a.parties),
+                "invalid agreement",
+            )?;
+            for t in &a.terms {
+                require(
+                    t.quantity > 0
+                        && a.parties.contains(&t.debtor)
+                        && a.parties.contains(&t.creditor),
+                    "invalid term",
+                )?;
+            }
+        }
+        Ok(())
+    }
 }

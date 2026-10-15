@@ -70,8 +70,11 @@ impl Objects {
             .checked_mul(quantity)
             .ok_or(Error::Overflow)
     }
-    pub fn meal(&self, stock: &BTreeMap<GoodId, u64>) -> Option<(GoodId, Food)> {
-        stock.iter().find_map(|(id, q)| {
+    pub fn meal<'a>(
+        &self,
+        stock: impl IntoIterator<Item = (&'a GoodId, &'a u64)>,
+    ) -> Option<(GoodId, Food)> {
+        stock.into_iter().find_map(|(id, q)| {
             self.by_id(*id)
                 .ok()?
                 .food

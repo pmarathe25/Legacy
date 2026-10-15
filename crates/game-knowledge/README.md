@@ -9,3 +9,5 @@ Owns per-person facts with source, observation time, and confidence. Views retur
 `route` and `next_step` construct routes from recorded roads, including known endpoints not yet visited. Actual transport validates each road separately. Newly closed roads remain believed open until observation or communication supplies the change.
 
 Run `cargo test -p game-knowledge`. Tests cover local discovery, stale stock, report delivery, spoken locality, and unknown intermediate roads without the application.
+
+Facts share immutable value payloads when records or reports are copied. Observation time, source, confidence, and revision remain individual evidence. The permission owner indexes accessible inventories, so local discovery does not scan all world containers.

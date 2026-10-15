@@ -19,7 +19,7 @@ pub fn known<T: serde::de::DeserializeOwned>(
     facts: &BTreeMap<String, Fact>,
     key: &str,
 ) -> Option<T> {
-    serde_json::from_value(facts.get(key)?.value.clone()).ok()
+    T::deserialize(facts.get(key)?.value.as_ref()).ok()
 }
 pub(super) fn remember<T: Serialize>(
     tx: &mut Transaction<'_>,
@@ -28,7 +28,9 @@ pub(super) fn remember<T: Serialize>(
     data: &T,
 ) -> Result<()> {
     let fact = Fact {
-        value: serde_json::to_value(data).map_err(|e| Error::Rejected(e.to_string()))?,
+        value: serde_json::to_value(data)
+            .map_err(|e| Error::Rejected(e.to_string()))?
+            .into(),
         source: person,
         observed: tx.now(),
         revision: tx.revision_after(),
@@ -126,10 +128,8 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         // Inspect newly encountered accessible containers; refreshing a known stock
         // requires deliberate inspection, so remembered stock can still become stale.
         let inventories: Vec<_> = tx
-            .get::<game_cargo::Cargo>()?
-            .0
-            .keys()
-            .copied()
+            .get::<game_property::Property>()?
+            .permitted(r.person)
             .filter(|id| {
                 tx.get::<game_property::Property>()
                     .is_ok_and(|p| p.allowed(r.person, *id))

@@ -4,7 +4,7 @@ use crate::*;
 struct Save {
     version: u32,
     plugins: BTreeMap<String, u32>,
-    resources: BTreeMap<String, Value>,
+    resources: BTreeMap<String, Box<serde_json::value::RawValue>>,
     time: SimTime,
     seed: u64,
     revision: u64,
@@ -98,7 +98,7 @@ impl Builder {
                 .resources
                 .get(codec.key)
                 .ok_or_else(|| Error::InvalidSave(format!("missing {}", codec.key)))?;
-            host.data.insert(*id, (codec.decode)(value.clone())?);
+            host.data.insert(*id, (codec.decode)(value.get())?);
         }
         let mut seen = std::collections::BTreeSet::new();
         for job in save.jobs {
@@ -111,7 +111,9 @@ impl Builder {
                 "unknown saved request",
             )?;
             host.registry.decoders[&job.request.key](job.request.payload.clone())?;
-            host.jobs.insert((job.at, job.priority, job.id), job);
+            let key = (job.at, job.priority, job.id);
+            host.job_keys.insert(job.id, key);
+            host.jobs.insert(key, job);
         }
         require(
             save.next_id > 0 && save.next_notice > 0,

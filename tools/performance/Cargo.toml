@@ -1,0 +1,46 @@
+[package]
+name = "game-performance"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[features]
+allocation-profile = []
+
+[dependencies]
+game-assembly.workspace = true
+game-api.workspace = true
+game-session.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-openings.workspace = true
+game-physiology.workspace = true
+game-transport.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-characters.workspace = true
+game-land.workspace = true
+game-relationships.workspace = true
+game-knowledge.workspace = true
+game-lifecycle.workspace = true
+game-logistics.workspace = true
+game-objects.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true
+
+[[bench]]
+name = "economy"
+harness = false
+[[bench]]
+name = "storage"
+harness = false
+[[bench]]
+name = "latency"
+harness = false
+
+[[bench]]
+name = "ledger"
+harness = false

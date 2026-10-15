@@ -1,8 +1,8 @@
 //! A delivery is loading, actual travel, then local unloading.
 use game_core::*;
 use game_sim::*;
+use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delivery {
     pub pack: InventoryId,
@@ -13,7 +13,7 @@ pub struct Delivery {
     pub blocked: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Logistics(pub BTreeMap<PersonId, Delivery>);
+pub struct Logistics(pub Table<PersonId, Delivery>);
 impl Resource for Logistics {
     const KEY: &'static str = "logistics.deliveries";
 }

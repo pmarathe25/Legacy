@@ -7,6 +7,11 @@ pub trait Resource: Clone + Default + Serialize + DeserializeOwned + Send + Sync
     fn allocated_ids(&self) -> Vec<u64> {
         vec![]
     }
+    /// Validate changed records against the committed resource. Full validation
+    /// remains mandatory when constructing or loading a save.
+    fn validate_changes(&self, _previous: &Self) -> Result<()> {
+        self.validate()
+    }
     fn validate(&self) -> Result<()> {
         Ok(())
     }
@@ -18,6 +23,12 @@ pub trait Request: Serialize + DeserializeOwned + Send + Sync + 'static {
 pub trait Event: Serialize + DeserializeOwned + 'static {
     const KEY: &'static str;
 }
+type TypedOperation<R> =
+    dyn Fn(&mut Transaction<'_>, R) -> Result<<R as Request>::Response> + Send + Sync;
+pub(crate) struct Typed<R: Request> {
+    pub owner: String,
+    pub run: Box<TypedOperation<R>>,
+}
 pub(crate) type Stored = Arc<dyn Any + Send + Sync>;
 type Handler = Arc<dyn Fn(&mut Transaction<'_>, Value) -> Result<Value> + Send + Sync>;
 type Listener = Arc<dyn Fn(&mut Transaction<'_>, Value) -> Result<()> + Send + Sync>;
@@ -28,16 +39,17 @@ pub(crate) struct Codec {
     pub owner: String,
     pub copy: fn(&Stored) -> Box<dyn Any + Send + Sync>,
     pub copy_borrowed: fn(&(dyn Any + Send + Sync)) -> Box<dyn Any + Send + Sync>,
-    pub encode: fn(&Stored) -> Result<Value>,
-    pub decode: fn(Value) -> Result<Stored>,
+    pub encode: fn(&Stored) -> Result<Box<serde_json::value::RawValue>>,
+    pub decode: fn(&str) -> Result<Stored>,
     pub ids: fn(&Stored) -> Vec<u64>,
     pub validate: fn(&Stored) -> Result<()>,
-    pub validate_borrowed: fn(&(dyn Any + Send + Sync)) -> Result<()>,
+    pub validate_borrowed: fn(&(dyn Any + Send + Sync), &Stored) -> Result<()>,
 }
 #[derive(Default)]
 pub(crate) struct Registry {
     pub resources: BTreeMap<TypeId, Codec>,
     pub handlers: BTreeMap<String, Handler>,
+    pub typed: BTreeMap<TypeId, Stored>,
     pub request_owners: BTreeMap<String, String>,
     pub listeners: BTreeMap<String, BTreeMap<String, Listener>>,
     pub save_checks: Vec<fn(&Host) -> Result<()>>,
@@ -88,11 +100,11 @@ impl Builder {
                     Box::new(s.downcast_ref::<T>().expect("registered type").clone())
                 },
                 encode: |s| {
-                    serde_json::to_value(s.downcast_ref::<T>().expect("registered type"))
+                    serde_json::value::to_raw_value(s.downcast_ref::<T>().expect("registered type"))
                         .map_err(json_error)
                 },
                 decode: |v| {
-                    let x: T = serde_json::from_value(v).map_err(json_error)?;
+                    let x: T = serde_json::from_str(v).map_err(json_error)?;
                     x.validate()?;
                     Ok(Arc::new(x))
                 },
@@ -102,7 +114,11 @@ impl Builder {
                         .allocated_ids()
                 },
                 validate: |s| s.downcast_ref::<T>().expect("registered type").validate(),
-                validate_borrowed: |s| s.downcast_ref::<T>().expect("registered type").validate(),
+                validate_borrowed: |s, old| {
+                    s.downcast_ref::<T>()
+                        .expect("registered type")
+                        .validate_changes(old.downcast_ref::<T>().expect("registered type"))
+                },
             },
         );
         let initial = T::default();
@@ -124,14 +140,16 @@ impl Builder {
         self.registry
             .request_owners
             .insert(R::KEY.into(), self.owner.clone());
-        let owner = self.owner.clone();
+        let typed = Arc::new(Typed::<R> {
+            owner: self.owner.clone(),
+            run: Box::new(handler),
+        });
+        self.registry.typed.insert(TypeId::of::<R>(), typed);
         self.registry.handlers.insert(
             R::KEY.into(),
             Arc::new(move |tx, value| {
-                let request = serde_json::from_value(value).map_err(json_error)?;
-                tx.with_owner(&owner, |tx| {
-                    serde_json::to_value(handler(tx, request)?).map_err(json_error)
-                })
+                let request: R = serde_json::from_value(value).map_err(json_error)?;
+                serde_json::to_value(tx.call(request)?).map_err(json_error)
             }),
         );
         Ok(())
@@ -203,6 +221,7 @@ impl Builder {
             revision: 0,
             next_id: 1,
             jobs: BTreeMap::new(),
+            job_keys: BTreeMap::new(),
             notices: VecDeque::new(),
             next_notice: 1,
             receipts: BTreeMap::new(),

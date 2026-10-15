@@ -1,4 +1,5 @@
 //! Headless tactical fixture: continuous coordinates and fixed shared rounds.
+use game_storage::Records;
 mod geometry;
 mod resolution;
 mod view;
@@ -31,30 +32,17 @@ pub struct Battle {
     pub finished: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Battles(pub BTreeMap<u64, Battle>);
+pub struct Battles(pub Records<u64, Battle>);
 impl Resource for Battles {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().copied().collect()
     }
     const KEY: &'static str = "conflict.battles";
     fn validate(&self) -> Result<()> {
-        for b in self.0.values() {
-            require(
-                b.interval.0 > 0
-                    && b.movement > 0
-                    && b.reach > 0
-                    && b.map.width > 0
-                    && b.map.width <= 1_000_000
-                    && b.map.valid(),
-                "invalid tactical rules",
-            )?;
-            require(
-                b.controlled.iter().all(|p| b.fighters.contains_key(p))
-                    && b.fighters.values().all(|f| b.map.contains(f.point)),
-                "invalid tactical positions",
-            )?;
-        }
-        Ok(())
+        self.validate_rows(self.0.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
     }
 }
 #[derive(Serialize, Deserialize)]
@@ -306,4 +294,26 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         queue(tx, r.battle)
     })
+}
+
+impl Battles {
+    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Battle>) -> Result<()> {
+        for b in rows {
+            require(
+                b.interval.0 > 0
+                    && b.movement > 0
+                    && b.reach > 0
+                    && b.map.width > 0
+                    && b.map.width <= 1_000_000
+                    && b.map.valid(),
+                "invalid tactical rules",
+            )?;
+            require(
+                b.controlled.iter().all(|p| b.fighters.contains_key(p))
+                    && b.fighters.values().all(|f| b.map.contains(f.point)),
+                "invalid tactical positions",
+            )?;
+        }
+        Ok(())
+    }
 }

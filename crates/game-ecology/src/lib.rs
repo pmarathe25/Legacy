@@ -1,8 +1,8 @@
 //! Renewable resource patches and timed gathering with reservations.
 use game_core::*;
 use game_sim::*;
+use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Patch {
     pub area: AreaId,
@@ -21,8 +21,8 @@ pub struct Gathering {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Ecology {
-    pub patches: BTreeMap<u64, Patch>,
-    pub gathering: BTreeMap<PersonId, Gathering>,
+    pub patches: Table<u64, Patch>,
+    pub gathering: Table<PersonId, Gathering>,
     pub renewing: bool,
 }
 impl Resource for Ecology {
@@ -31,10 +31,10 @@ impl Resource for Ecology {
     }
     const KEY: &'static str = "ecology.patches";
     fn validate(&self) -> Result<()> {
-        require(
-            self.patches.values().all(|p| p.stock <= p.capacity),
-            "patch over capacity",
-        )
+        self.validate_rows(self.patches.values())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        self.validate_rows(self.patches.changed(&previous.patches).map(|(_, row)| row))
     }
 }
 impl Ecology {
@@ -210,10 +210,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Renew>(|tx, _| {
-        for patch in tx.edit::<Ecology>()?.patches.values_mut() {
-            patch.stock = patch.stock.saturating_add(patch.renew).min(patch.capacity);
-        }
+        tx.edit_with_compute::<Ecology, _>(|state, pool| {
+            state.patches.update(pool, |_, patch| {
+                patch.stock = patch.stock.saturating_add(patch.renew).min(patch.capacity);
+            })
+        })?;
         tx.schedule(tx.now().after(DAY)?, 30, Renew)?;
         Ok(())
     })
+}
+
+impl Ecology {
+    fn validate_rows<'a>(&'a self, mut rows: impl Iterator<Item = &'a Patch>) -> Result<()> {
+        require(rows.all(|p| p.stock <= p.capacity), "patch over capacity")
+    }
 }

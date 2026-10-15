@@ -1,6 +1,7 @@
 //! Named strategic areas and travel links.
 use game_core::*;
 use game_sim::*;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -9,7 +10,7 @@ pub struct Area {
     pub links: BTreeMap<AreaId, SimDuration>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Land(pub BTreeMap<AreaId, Area>);
+pub struct Land(pub Records<AreaId, Area>);
 impl Resource for Land {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0.keys().map(|id| id.0).collect()
