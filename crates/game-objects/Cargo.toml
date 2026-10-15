@@ -9,3 +9,6 @@ game-core.workspace = true
 game-sim.workspace = true
 game-content.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

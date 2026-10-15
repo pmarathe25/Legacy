@@ -1,5 +1,5 @@
 use super::*;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub id: u64,
     pub need: i64,
@@ -8,7 +8,6 @@ pub struct Candidate {
     pub effort: i64,
     pub risk: i64,
     pub survival: bool,
-    pub reasons: Vec<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
@@ -47,7 +46,7 @@ pub fn choose(
     Some(Decision {
         id: chosen.id,
         score: chosen.score(),
-        reasons: chosen.reasons.clone(),
+        reasons: vec![],
     })
 }
 #[cfg(test)]
@@ -63,7 +62,6 @@ mod tests {
             effort: 0,
             risk: 0,
             survival: true,
-            reasons: vec![],
         };
         let b = Candidate {
             id: 2,
@@ -73,10 +71,9 @@ mod tests {
             effort: 0,
             risk: 0,
             survival: false,
-            reasons: vec![],
         };
-        assert_eq!(choose(&[a.clone(), b], None, 5, true).unwrap().id, 1);
-        let mut better = a.clone();
+        assert_eq!(choose(&[a, b], None, 5, true).unwrap().id, 1);
+        let mut better = a;
         better.id = 2;
         better.goal = 4;
         assert_eq!(choose(&[a, better], Some(1), 5, false).unwrap().id, 1);

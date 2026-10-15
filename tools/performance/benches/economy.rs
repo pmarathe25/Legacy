@@ -87,6 +87,9 @@ fn main() {
     let t = Instant::now();
     let save = sim.save().unwrap();
     let saving = t.elapsed();
+    if let Ok(path) = std::env::var("LEGACY_SNAPSHOT") {
+        std::fs::write(path, &save).unwrap();
+    }
     let t = Instant::now();
     let mut loaded = Simulation::load(&save, workers).unwrap();
     let loading = t.elapsed();

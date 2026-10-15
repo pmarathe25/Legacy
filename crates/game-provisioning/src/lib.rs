@@ -1,9 +1,10 @@
 //! Food acquisition templates use learned stock, patches, and roads.
 use game_core::*;
-use game_knowledge::{Fact, StoreLocation, known, location_key, patch_key, store_key};
+use game_knowledge::{
+    Facts, StoreLocation, known, location_key, patch_key, store_key, with_prefix,
+};
 use game_sim::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Plan {
     Meal {
@@ -19,7 +20,7 @@ pub enum Plan {
 fn location(
     tx: &Transaction<'_>,
     person: PersonId,
-    facts: &BTreeMap<String, Fact>,
+    facts: &Facts,
     inventory: InventoryId,
 ) -> Result<AreaId> {
     let location: StoreLocation = known(facts, &location_key(inventory))
@@ -33,7 +34,7 @@ fn location(
 fn travel(
     tx: &Transaction<'_>,
     person: PersonId,
-    facts: &BTreeMap<String, Fact>,
+    facts: &Facts,
     target: AreaId,
 ) -> Result<(Option<AreaId>, SimDuration)> {
     let location = tx
@@ -41,7 +42,7 @@ fn travel(
         .0
         .get(&person)
         .ok_or_else(|| Error::Missing("position".into()))?;
-    game_knowledge::next_step(facts, location, target)
+    next_step(facts, location, target)
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opportunity {
@@ -49,17 +50,29 @@ pub struct Opportunity {
     pub travel: SimDuration,
     pub plan: Plan,
 }
+impl Opportunity {
+    pub fn reasons(&self) -> Vec<String> {
+        vec![
+            if matches!(self.plan, Plan::Forage { .. }) {
+                "obtain own food"
+            } else {
+                "known meal"
+            }
+            .into(),
+            format!("known travel {} ms", self.travel.0),
+        ]
+    }
+}
 pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec<Opportunity>> {
     require(meals > 0, "gather a positive number of meals")?;
-    let empty = BTreeMap::new();
+    let empty = Facts::default();
     let facts = tx
         .get::<game_knowledge::Knowledge>()?
         .0
         .get(&person)
         .unwrap_or(&empty);
-    let inventories: Vec<_> = facts
-        .keys()
-        .filter_map(|key| {
+    let inventories: Vec<_> = with_prefix(facts, "store:")
+        .filter_map(|(key, _)| {
             key.strip_prefix("store:")?
                 .parse::<u64>()
                 .ok()
@@ -68,7 +81,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
         .collect();
     let mut options = vec![];
     for inventory in &inventories {
-        let stock = known::<BTreeMap<GoodId, u64>>(facts, &store_key(*inventory));
+        let stock = known::<game_knowledge::Stock>(facts, &store_key(*inventory));
         if !stock.is_some_and(|s| {
             tx.get::<game_objects::Objects>()
                 .is_ok_and(|o| o.meal(&s).is_some())
@@ -92,7 +105,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
             },
         });
     }
-    for key in facts.keys() {
+    for (key, _) in with_prefix(facts, "patch:") {
         let Some(patch) = key
             .strip_prefix("patch:")
             .and_then(|id| id.parse::<u64>().ok())
@@ -153,20 +166,19 @@ pub fn step(tx: &mut Transaction<'_>, person: PersonId, plan: &mut Plan) -> Resu
         .get::<game_knowledge::Knowledge>()?
         .0
         .get(&person)
-        .cloned()
-        .unwrap_or_default();
+        .ok_or_else(|| Error::Missing("personal knowledge".into()))?;
     let inventory = match *plan {
         Plan::Meal { inventory } | Plan::Forage { inventory, .. } => inventory,
     };
     let target = match *plan {
-        Plan::Meal { .. } => location(tx, person, &facts, inventory)?,
+        Plan::Meal { .. } => location(tx, person, facts, inventory)?,
         Plan::Forage { patch, .. } => {
-            known::<game_ecology::Patch>(&facts, &patch_key(patch))
+            known::<game_ecology::Patch>(facts, &patch_key(patch))
                 .ok_or_else(|| Error::Missing("known patch".into()))?
                 .area
         }
     };
-    if let (Some(next), _) = travel(tx, person, &facts, target)? {
+    if let (Some(next), _) = travel(tx, person, facts, target)? {
         tx.attempt(game_transport::Move {
             person,
             destination: next,
@@ -201,5 +213,46 @@ pub fn learn_failure(tx: &mut Transaction<'_>, person: PersonId, plan: &Plan) {
     let _ = tx.attempt(game_knowledge::ObserveStore { person, inventory });
     if let Plan::Forage { patch, .. } = *plan {
         let _ = tx.attempt(game_knowledge::ObservePatch { person, patch });
+    }
+}
+
+/// Choose the next known road, including resuming an interrupted journey.
+fn next_step(
+    facts: &Facts,
+    location: &game_transport::Location,
+    target: AreaId,
+) -> Result<(Option<AreaId>, SimDuration)> {
+    use game_transport::Location;
+    match location {
+        Location::At(area) => {
+            let route = game_knowledge::route(facts, *area, target)?;
+            Ok((route.areas.get(1).copied(), route.duration))
+        }
+        Location::Road {
+            from,
+            to,
+            elapsed,
+            duration,
+        } => [
+            (*from, elapsed.0),
+            (
+                *to,
+                duration
+                    .0
+                    .checked_sub(elapsed.0)
+                    .ok_or_else(|| Error::Rejected("invalid road progress".into()))?,
+            ),
+        ]
+        .into_iter()
+        .filter_map(|(area, offset)| {
+            let route = game_knowledge::route(facts, area, target).ok()?;
+            Some((
+                Some(area),
+                SimDuration(offset.checked_add(route.duration.0)?),
+            ))
+        })
+        .min_by_key(|(area, cost)| (cost.0, *area))
+        .ok_or_else(|| Error::Rejected("no known route from road".into())),
+        _ => Err(Error::Rejected("already travelling".into())),
     }
 }

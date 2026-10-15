@@ -1,10 +1,10 @@
 use crate::*;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Save {
+struct Save<R> {
     version: u32,
     plugins: BTreeMap<String, u32>,
-    resources: BTreeMap<String, Box<serde_json::value::RawValue>>,
+    resources: BTreeMap<String, R>,
     time: SimTime,
     seed: u64,
     revision: u64,
@@ -83,7 +83,8 @@ impl Host {
 }
 impl Builder {
     pub fn load(self, source: &str, workers: usize) -> Result<Host> {
-        let save: Save = serde_json::from_str(source).map_err(registry::json_error)?;
+        let save: Save<&serde_json::value::RawValue> =
+            serde_json::from_str(source).map_err(registry::json_error)?;
         require(
             save.version == 1 && save.plugins == self.registry.plugins,
             "incompatible save manifest",

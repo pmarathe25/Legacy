@@ -15,6 +15,7 @@ game-skills.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 game-objects.workspace = true
 game-land.workspace = true
 game-property.workspace = true

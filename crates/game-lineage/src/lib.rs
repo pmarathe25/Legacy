@@ -3,13 +3,12 @@ use game_core::*;
 use game_sim::*;
 use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Life {
     pub person: PersonId,
     pub died: SimTime,
-    pub skills: BTreeMap<String, u64>,
-    pub memories: BTreeMap<String, game_knowledge::Fact>,
+    pub skills: game_skills::Levels,
+    pub memories: game_knowledge::Facts,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lineage {

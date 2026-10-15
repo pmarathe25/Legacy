@@ -106,7 +106,7 @@ pub struct PlayerView {
     pub body: Option<game_physiology::BodyView>,
     pub location: Option<game_transport::Location>,
     pub action: Option<String>,
-    pub facts: BTreeMap<String, game_knowledge::Fact>,
+    pub facts: game_knowledge::Facts,
     pub warning: Option<game_invocation::Warning>,
     pub control_until: Option<SimTime>,
     pub past_lives: Vec<LifeId>,

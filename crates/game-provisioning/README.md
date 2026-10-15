@@ -2,7 +2,7 @@
 
 Food acquisition templates turn known sources into executable plans: travel to a meal, or travel to a resource patch, gather into a container, and eat the output. Opportunities use the person's recorded stock, locations, capacity, patches, and roads. They never inspect distant actual stock or the global route graph.
 
-`options` estimates available approaches. `step` performs the next physical action through the owning feature's request; `learn_failure` records only local evidence. Own carried containers follow the carrier, and interrupted travel resumes from the actual road position. Output appears only when gathering completes. Eating consumes the object's authored portion.
+`options` reads numeric known snapshots and seeks only stock and patch namespaces. `next_step` chooses a known road endpoint, including interrupted travel. `step` performs the next physical action through the owning feature's request; `learn_failure` records only local evidence. Own carried containers follow the carrier, and interrupted travel resumes from the actual road position. Output appears only when gathering completes. Eating consumes the object's authored portion.
 
 Plans are serializable values owned by their caller, such as a character's mind. This crate creates no second action table or inventory ledger. [game-characters](../game-characters/README.md) chooses plans, applies motivation, and controls when they advance.
 

@@ -4,7 +4,7 @@ use game_sim::*;
 use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Area {
     pub name: String,
     pub links: BTreeMap<AreaId, SimDuration>,

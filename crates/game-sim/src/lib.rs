@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     any::TypeId,
-    collections::{BTreeMap, VecDeque},
+    collections::{BTreeMap, HashMap, VecDeque},
     sync::Arc,
 };
 pub use transaction::Transaction;
@@ -37,10 +37,18 @@ pub struct Notice {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Action {
-    pub owner: String,
+    pub owner: Arc<str>,
     pub kind: String,
     pub until: Option<SimTime>,
     pub cancel: Envelope,
+}
+/// An internal lifecycle signal; it does not append a player notice.
+#[derive(Serialize, Deserialize)]
+pub struct ActionFinished {
+    pub person: PersonId,
+}
+impl Event for ActionFinished {
+    const KEY: &'static str = "sim.action_finished";
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actions(pub Records<PersonId, Action>);
@@ -67,7 +75,7 @@ struct Receipt {
 }
 pub struct Host {
     registry: Arc<Registry>,
-    data: BTreeMap<TypeId, Stored>,
+    data: HashMap<TypeId, Stored>,
     pool: rayon::ThreadPool,
     pub(crate) time: SimTime,
     pub(crate) seed: u64,
@@ -155,17 +163,59 @@ impl Host {
         remove: Option<(SimTime, u8, ScheduleId)>,
     ) -> Result<Value> {
         let at = remove.map_or(self.time, |key| key.0);
+        let limit = self
+            .registry
+            .batches
+            .get(&envelope.key)
+            .copied()
+            .unwrap_or(1);
+        let registered_key = self
+            .registry
+            .handlers
+            .get_key_value(&envelope.key)
+            .map(|(key, _)| key.as_str());
+        let jobs = &self.jobs;
+        let extra = remove.into_iter().flat_map(|first| {
+            jobs.range((std::ops::Bound::Excluded(first), std::ops::Bound::Unbounded))
+                .take(limit - 1)
+                .take_while(move |(key, job)| {
+                    (key.0, key.1) == (first.0, first.1)
+                        && Some(job.request.key.as_str()) == registered_key
+                })
+                .map(|(key, job)| (Some(*key), job.request.clone()))
+        });
+        let requests = std::iter::once((remove, envelope)).chain(extra);
+        let mut removed = 0;
         let mut tx = Transaction::new(self, at);
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let response = tx.call_envelope(envelope)?;
+            let mut response = Value::Null;
+            for (key, request) in requests {
+                if let Some(key) = key {
+                    // A newly scheduled earlier phase must run before the next
+                    // captured request. Cancellation can remove a captured job.
+                    if tx.precedes(key) {
+                        break;
+                    }
+                    removed += 1;
+                    if tx.cancelled(key.2) {
+                        continue;
+                    }
+                }
+                response = tx.call_envelope(request)?;
+            }
             tx.validate()?;
             Ok(response)
         }))
         .map_err(|_| Error::WorkerFailure)??;
         let changes = tx.finish();
-        self.data.extend(changes.writes);
-        if let Some(key) = remove {
-            self.jobs.remove(&key);
+        self.data.extend(
+            changes
+                .writes
+                .iter()
+                .map(|(id, value)| (*id, value.clone())),
+        );
+        for _ in 0..removed {
+            let (key, _) = self.jobs.pop_first().expect("committed due prefix");
             self.job_keys.remove(&key.2);
         }
         for id in changes.cancelled {

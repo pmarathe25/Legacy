@@ -9,6 +9,10 @@ publish = false
 allocation-profile = []
 
 [dependencies]
+game-ecology.workspace = true
+game-provisioning.workspace = true
+game-skills.workspace = true
+game-traits.workspace = true
 game-assembly.workspace = true
 game-api.workspace = true
 game-session.workspace = true
@@ -43,4 +47,12 @@ harness = false
 
 [[bench]]
 name = "ledger"
+harness = false
+
+[[bench]]
+name = "perception"
+harness = false
+
+[[bench]]
+name = "traits"
 harness = false

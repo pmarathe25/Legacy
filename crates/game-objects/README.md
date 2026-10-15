@@ -5,3 +5,5 @@ Runtime object catalogs with stable data keys and IDs, names, mass, tags, and ed
 Run `cargo test -p game-objects` from the repository root.
 
 **Content:** [Store format and extension guide](../../content/README.md). Definitions are read from files at startup and resolved snapshots survive save/load. The schema and validation live in this crate.
+
+An ID index resolves numeric object references without scanning the catalog. It is derived from authored definitions and rebuilt on load.

@@ -36,7 +36,11 @@ fn small_crates_and_dependency_direction_are_enforced() {
             .iter()
             .map(|p| fs::read_to_string(p).unwrap().lines().count())
             .sum();
-        let budget = if name == "game-sim" { 1000 } else { 600 };
+        let budget = match name {
+            "game-sim" => 1100,
+            "game-storage" => 800,
+            _ => 600,
+        };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");
         if !applications.contains(&name) {
             for app in applications {

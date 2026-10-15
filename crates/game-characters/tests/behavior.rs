@@ -148,3 +148,42 @@ fn learned_values_change_choices_with_physical_options_held_constant() {
         patch * 2 + 11
     );
 }
+
+#[test]
+fn an_early_action_cancellation_wakes_a_parked_mind_on_the_authored_grid() {
+    let mut f = setup();
+    f.host
+        .dispatch(Register {
+            person: f.guardian,
+            mind: Mind::default(),
+        })
+        .unwrap();
+    f.host.dispatch(game_physiology::Start).unwrap();
+    f.host.dispatch(Start).unwrap();
+    run(&mut f.host, SimTime(11 * MINUTE.0));
+    assert_eq!(
+        f.host.get::<game_sim::Actions>().unwrap().0[&f.guardian].until,
+        Some(SimTime(71 * MINUTE.0))
+    );
+    f.host
+        .dispatch(game_physiology::Damage {
+            person: f.guardian,
+            amount: 100,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_physiology::Heal {
+            person: f.guardian,
+            amount: 100,
+        })
+        .unwrap();
+    let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    for host in [&mut f.host, &mut loaded] {
+        run(host, SimTime(12 * MINUTE.0));
+    }
+    assert_eq!(
+        f.host.get::<game_sim::Actions>().unwrap().0[&f.guardian].until,
+        Some(SimTime(72 * MINUTE.0))
+    );
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
+}

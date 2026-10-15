@@ -9,3 +9,5 @@ Physical inventories, checked quantity accounting, atomic local transfers, carri
 **Verification:** Run `cargo test -p game-cargo`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
 
 Balances and reservations use bounded-copy numeric tables inside each inventory. `used()` reads cached reserved mass; capacity checks do not scan the reservation book. Owner requests update that cache atomically. Full save validation recalculates it and rejects mismatches.
+
+Carrier lookup indexes only carried containers. Dropping an actor’s load visits those containers, with no scan of unrelated world inventories. The index is rebuilt on load and omitted from saves.

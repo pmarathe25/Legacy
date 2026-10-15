@@ -150,3 +150,111 @@ fn paged_scans_keep_stable_order_after_deletion_and_shared_splits() {
     }
     assert!(after.scan_after(None).eq(after.iter()));
 }
+
+#[test]
+fn borrowed_ranges_match_reference_through_splits_and_deletions() {
+    use std::ops::Bound::{Excluded, Included, Unbounded};
+    let mut table: Table<Arc<str>, u64> = (0..5000)
+        .map(|i| (format!("fact:{i:05}").into(), i))
+        .collect();
+    for i in (0..5000).step_by(3) {
+        table.remove(format!("fact:{i:05}").as_str());
+    }
+    let snapshot = table.clone();
+    *table.get_mut("fact:00001").unwrap() = 9;
+    assert_eq!(snapshot["fact:00001"], 1);
+    for lower in [
+        Unbounded,
+        Included("fact:00031"),
+        Excluded("fact:00032"),
+        Included("z"),
+    ] {
+        for upper in [
+            Unbounded,
+            Included("fact:01024"),
+            Excluded("fact:01024"),
+            Excluded("a"),
+        ] {
+            let expected = table.iter().filter(|(k, _)| {
+                let lo = match lower {
+                    Unbounded => true,
+                    Included(s) => k.as_ref() >= s,
+                    Excluded(s) => k.as_ref() > s,
+                };
+                let hi = match upper {
+                    Unbounded => true,
+                    Included(s) => k.as_ref() <= s,
+                    Excluded(s) => k.as_ref() < s,
+                };
+                lo && hi
+            });
+            assert!(table.range((lower, upper)).eq(expected));
+        }
+    }
+    assert_eq!(table.iter().len(), table.len());
+}
+
+#[test]
+fn agendas_replace_deadlines_keep_time_key_order_and_restore_indexes() {
+    use game_storage::Agenda;
+    let mut agenda = Agenda::<u64, u64>::default();
+    let mut reference = BTreeMap::new();
+    let mut seed = 1u64;
+    for i in 0..10_000 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let key = seed % 1000;
+        let at = !seed.is_multiple_of(7);
+        agenda.set(key, at.then_some(seed % 100));
+        if at {
+            reference.insert(key, seed % 100);
+        } else {
+            reference.remove(&key);
+        }
+        if i % 500 == 0 {
+            let snapshot = agenda.clone();
+            assert!(snapshot.valid());
+            let mut expected: Vec<_> = reference
+                .iter()
+                .filter(|(_, at)| **at <= 50)
+                .map(|(key, at)| (*at, *key))
+                .collect();
+            expected.sort();
+            assert_eq!(
+                snapshot.due(&50).copied().collect::<Vec<_>>(),
+                expected.iter().map(|(_, key)| *key).collect::<Vec<_>>()
+            );
+            let bytes = serde_json::to_string(&snapshot).unwrap();
+            let loaded: Agenda<u64, u64> = serde_json::from_str(&bytes).unwrap();
+            assert_eq!(loaded, snapshot);
+            assert!(loaded.valid());
+        }
+    }
+}
+
+#[test]
+fn replacement_and_removal_return_shared_snapshots_without_copying_cold_records() {
+    let copies = Arc::new(AtomicUsize::new(0));
+    let records: Records<_, _> = (0..1000).map(|id| (id, Counted(copies.clone()))).collect();
+    let mut staged = records.clone();
+    copies.store(0, Ordering::Relaxed);
+    let replaced = staged.insert(500, Counted(copies.clone())).unwrap();
+    let removed = staged.remove(&501).unwrap();
+    assert_eq!(copies.load(Ordering::Relaxed), 0);
+    assert!(records.contains_key(&500) && records.contains_key(&501));
+    assert!(!staged.contains_key(&501));
+    assert!(Arc::ptr_eq(&records.shared(&500).unwrap(), &replaced));
+    assert!(Arc::ptr_eq(&records.shared(&501).unwrap(), &removed));
+}
+
+#[test]
+fn ordered_stream_merge_retains_tails_and_suppresses_shared_keys() {
+    assert_eq!(
+        game_storage::merge_unique([1, 3, 9].into_iter(), [2, 3, 7, 10].into_iter())
+            .collect::<Vec<_>>(),
+        [1, 2, 3, 7, 9, 10]
+    );
+    assert_eq!(
+        game_storage::merge_unique(std::iter::empty(), [2, 3].into_iter()).collect::<Vec<_>>(),
+        [2, 3]
+    );
+}

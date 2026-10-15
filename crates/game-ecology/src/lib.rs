@@ -1,15 +1,16 @@
 //! Renewable resource patches and timed gathering with reservations.
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
+mod indexes;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Patch {
     pub area: AreaId,
-    pub good: GoodId,
-    pub stock: u64,
     pub capacity: u64,
+    pub good: GoodId,
     pub renew: u64,
+    pub stock: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gathering {
@@ -20,10 +21,15 @@ pub struct Gathering {
     pub reservation: u64,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "indexes::SavedEcology")]
 pub struct Ecology {
     pub patches: Table<u64, Patch>,
     pub gathering: Table<PersonId, Gathering>,
     pub renewing: bool,
+    #[serde(skip)]
+    by_area: Records<AreaId, Table<u64, ()>>,
+    #[serde(skip)]
+    reserved: Table<u64, u64>,
 }
 impl Resource for Ecology {
     fn allocated_ids(&self) -> Vec<u64> {
@@ -31,7 +37,8 @@ impl Resource for Ecology {
     }
     const KEY: &'static str = "ecology.patches";
     fn validate(&self) -> Result<()> {
-        self.validate_rows(self.patches.values())
+        self.validate_rows(self.patches.values())?;
+        self.validate_indexes()
     }
     fn validate_changes(&self, previous: &Self) -> Result<()> {
         self.validate_rows(self.patches.changed(&previous.patches).map(|(_, row)| row))
@@ -43,13 +50,7 @@ impl Ecology {
             .patches
             .get(&id)
             .ok_or_else(|| Error::Missing("patch".into()))?;
-        let reserved = self
-            .gathering
-            .values()
-            .filter(|g| g.patch == id)
-            .try_fold(0u64, |sum, g| {
-                sum.checked_add(g.quantity).ok_or(Error::Overflow)
-            })?;
+        let reserved = self.reserved.get(&id).copied().unwrap_or(0);
         patch
             .stock
             .checked_sub(reserved)
@@ -127,7 +128,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Create>(|tx, r| {
         require(r.0.stock <= r.0.capacity, "invalid patch")?;
         let id = tx.allocate()?;
-        tx.edit::<Ecology>()?.patches.insert(id, r.0);
+        let state = tx.edit::<Ecology>()?;
+        state.by_area.entry(r.0.area).or_default().insert(id, ());
+        state.patches.insert(id, r.0);
         Ok(id)
     })?;
     b.request::<Gather>(|tx, r| {
@@ -157,6 +160,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.start_action(r.person, "gather", Some(until), Cancel { person: r.person })?;
         let job = tx.schedule(until, 10, Finish { person: r.person })?;
         let state = tx.edit::<Ecology>()?;
+        let reserved = state.reserved.entry(r.patch).or_default();
+        *reserved = reserved.checked_add(r.quantity).ok_or(Error::Overflow)?;
         state.gathering.insert(
             r.person,
             Gathering {
@@ -184,7 +189,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .unwrap()
             .stock -= work.quantity;
         tx.finish_action(r.person, "gather")?;
-        tx.edit::<Ecology>()?.gathering.remove(&r.person);
+        let state = tx.edit::<Ecology>()?;
+        state.gathering.remove(&r.person);
+        state.release(work.patch, work.quantity);
         tx.call(game_skills::Practice {
             person: r.person,
             skill: "forage".into(),
@@ -195,6 +202,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Cancel>(|tx, r| {
         if let Some(work) = tx.edit::<Ecology>()?.gathering.remove(&r.person) {
+            tx.edit::<Ecology>()?.release(work.patch, work.quantity);
             tx.unschedule(work.job);
             tx.call(game_cargo::ReleaseSpace {
                 inventory: work.destination,

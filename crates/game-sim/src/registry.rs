@@ -26,7 +26,7 @@ pub trait Event: Serialize + DeserializeOwned + 'static {
 type TypedOperation<R> =
     dyn Fn(&mut Transaction<'_>, R) -> Result<<R as Request>::Response> + Send + Sync;
 pub(crate) struct Typed<R: Request> {
-    pub owner: String,
+    pub owner: Arc<str>,
     pub run: Box<TypedOperation<R>>,
 }
 pub(crate) type Stored = Arc<dyn Any + Send + Sync>;
@@ -36,21 +36,20 @@ type Guard = Box<dyn Fn(&Host, &Envelope) -> Result<()> + Send + Sync>;
 type Stopper = Box<dyn Fn(&Host) -> Result<Option<String>> + Send + Sync>;
 pub(crate) struct Codec {
     pub key: &'static str,
-    pub owner: String,
-    pub copy: fn(&Stored) -> Box<dyn Any + Send + Sync>,
-    pub copy_borrowed: fn(&(dyn Any + Send + Sync)) -> Box<dyn Any + Send + Sync>,
+    pub owner: Arc<str>,
     pub encode: fn(&Stored) -> Result<Box<serde_json::value::RawValue>>,
     pub decode: fn(&str) -> Result<Stored>,
     pub ids: fn(&Stored) -> Vec<u64>,
     pub validate: fn(&Stored) -> Result<()>,
-    pub validate_borrowed: fn(&(dyn Any + Send + Sync), &Stored) -> Result<()>,
+    pub validate_changes: fn(&Stored, &Stored) -> Result<()>,
 }
 #[derive(Default)]
 pub(crate) struct Registry {
-    pub resources: BTreeMap<TypeId, Codec>,
+    pub resources: HashMap<TypeId, Codec>,
     pub handlers: BTreeMap<String, Handler>,
-    pub typed: BTreeMap<TypeId, Stored>,
-    pub request_owners: BTreeMap<String, String>,
+    pub typed: HashMap<TypeId, Stored>,
+    pub batches: BTreeMap<String, usize>,
+    pub request_owners: BTreeMap<String, Arc<str>>,
     pub listeners: BTreeMap<String, BTreeMap<String, Listener>>,
     pub save_checks: Vec<fn(&Host) -> Result<()>>,
     pub guards: Vec<Guard>,
@@ -61,15 +60,15 @@ pub(crate) struct Registry {
 }
 pub struct Builder {
     pub(crate) registry: Registry,
-    owner: String,
-    data: BTreeMap<TypeId, Stored>,
+    owner: Arc<str>,
+    data: HashMap<TypeId, Stored>,
 }
 impl Builder {
     pub fn new() -> Self {
         let mut b = Self {
             registry: Registry::default(),
             owner: "sim".into(),
-            data: BTreeMap::new(),
+            data: HashMap::new(),
         };
         b.plugin("sim", 1).expect("fresh builder");
         b.resource::<Actions>().expect("fresh builder");
@@ -95,10 +94,6 @@ impl Builder {
             Codec {
                 key: T::KEY,
                 owner: self.owner.clone(),
-                copy: |s| Box::new(s.downcast_ref::<T>().expect("registered type").clone()),
-                copy_borrowed: |s| {
-                    Box::new(s.downcast_ref::<T>().expect("registered type").clone())
-                },
                 encode: |s| {
                     serde_json::value::to_raw_value(s.downcast_ref::<T>().expect("registered type"))
                         .map_err(json_error)
@@ -114,7 +109,7 @@ impl Builder {
                         .allocated_ids()
                 },
                 validate: |s| s.downcast_ref::<T>().expect("registered type").validate(),
-                validate_borrowed: |s, old| {
+                validate_changes: |s, old| {
                     s.downcast_ref::<T>()
                         .expect("registered type")
                         .validate_changes(old.downcast_ref::<T>().expect("registered type"))
@@ -152,6 +147,17 @@ impl Builder {
                 serde_json::to_value(tx.call(request)?).map_err(json_error)
             }),
         );
+        Ok(())
+    }
+    /// Opt into atomic, ordered batches of adjacent due requests. Public commands
+    /// remain individual transactions. A failure rejects the entire due phase.
+    pub fn batch<R: Request>(&mut self, limit: usize) -> Result<()> {
+        require((1..=128).contains(&limit), "batch limit must be 1..=128")?;
+        require(
+            self.registry.request_owners.get(R::KEY) == Some(&self.owner),
+            "batch belongs to request owner",
+        )?;
+        self.registry.batches.insert(R::KEY.into(), limit);
         Ok(())
     }
     pub fn subscribe<E: Event>(

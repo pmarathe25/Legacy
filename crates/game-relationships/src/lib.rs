@@ -1,9 +1,9 @@
 //! Directed relationships, distinct beliefs, and learned values.
 use game_core::*;
 use game_sim::*;
-use game_storage::{Records, Table};
+use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::sync::Arc;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Relationship {
     pub trust: i32,
@@ -19,9 +19,9 @@ pub struct Beliefs {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Social {
-    pub relationships: Records<PersonId, BTreeMap<PersonId, Relationship>>,
+    pub relationships: Table<PersonId, Table<PersonId, Relationship>>,
     pub beliefs: Table<PersonId, Beliefs>,
-    pub values: Records<PersonId, BTreeMap<String, i32>>,
+    pub values: Table<PersonId, Table<Arc<str>, i32>>,
 }
 impl Resource for Social {
     const KEY: &'static str = "relationships.social";
@@ -103,7 +103,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .values
             .entry(r.person)
             .or_default()
-            .entry(r.concept)
+            .entry(r.concept.into())
             .or_default();
         *value = value
             .saturating_add(r.outcome.clamp(-5, 5))

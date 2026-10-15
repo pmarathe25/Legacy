@@ -8,4 +8,6 @@ Scenarios select a `characters` profile from [content/characters](../../content/
 
 Run `cargo test -p game-characters`. Tests cover plan continuation, stale-stock alternatives, blocked routes, partial travel, gathering, urgent hunger, learned values, and save/load with different workers, using only required feature plugins.
 
-Reviews process at most 128 people per committed request, in stable person order. Continuations run at the same simulation time; the next review interval starts after the full review. Save/load preserves the continuation cursor. This bounds input delays without changing anyone’s review frequency.
+Reviews process at most 128 due people per committed request, in stable person order. Idle minds retain their authored observation and decision cadence. Active minds use a compact ordered set; sleeping minds use an indexed deadline queue. Busy minds sleep until the action deadline or a hunger interruption threshold supplied by physiology. Completion and cancellation send an internal signal that wakes the mind on the authored grid. Cursor state prevents reviewing an earlier actor twice at the same clock time. Save/load restores these deadlines.
+
+Candidate inputs are 56-byte numeric records. Trait weights use five numeric channels and visit only recorded deviations from authored defaults. Decision explanations are built after selection. New mechanics that invalidate a physiological forecast must also invalidate the corresponding mind's deadline; ordinary progress does not require waking every actor.

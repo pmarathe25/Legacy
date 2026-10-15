@@ -8,7 +8,7 @@ import re
 import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--workload", choices=["all", "economy", "latency", "storage", "ledger"], default="all")
+parser.add_argument("--workload", choices=["all", "economy", "latency", "storage", "ledger", "perception", "traits"], default="all")
 parser.add_argument("--population", nargs="+", type=int, default=[15, 1000, 10000, 20000])
 parser.add_argument("--workers", nargs="+", type=int, default=sorted({1, 2, 4, min(8, os.cpu_count() or 1)}))
 parser.add_argument("--repeats", type=int, default=3)
@@ -57,6 +57,18 @@ if args.workload in ["all", "latency"]:
             for repeat in range(args.repeats):
                 print(f"workload=latency repeat={repeat}", flush=True)
                 run("latency", {"LEGACY_POPULATION": str(population), "LEGACY_WORKERS": str(workers)})
-for name in ["storage", "ledger"]:
+for name in ["storage", "ledger", "traits"]:
     if args.workload in ["all", name]:
         run(name, {})
+
+if args.workload in ["all", "perception"]:
+    for memories, patches, roads in [(0, 1, 0), (1000, 1, 1000), (1000, 10000, 1000)]:
+        for workers in args.workers:
+            for repeat in range(args.repeats):
+                print(f"workload=perception repeat={repeat} memories={memories} patches={patches}", flush=True)
+                output = run("perception", {"LEGACY_POPULATION": "1000", "LEGACY_WORKERS": str(workers), "LEGACY_MEMORIES": str(memories), "LEGACY_PATCHES": str(patches), "LEGACY_ROADS": str(roads)})
+                state = re.search(r"hash=([0-9a-f]+)", output)[1]
+                key = ("perception", memories, patches, roads)
+                if key in canonical and canonical[key] != state:
+                    raise SystemExit(f"perception canonical state differs for {key}, workers={workers}")
+                canonical[key] = state

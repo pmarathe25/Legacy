@@ -4,11 +4,15 @@ Persistent ordered tables keep transaction snapshots cheap while preserving stab
 
 `Table<K, V>` stores numeric records in contiguous leaves of at most 64 rows. Branches hold at most 32 child references. Cloning a table shares its immutable root. A write copies the path and affected leaf; splits trim spare allocation capacity, and deletion merges adjacent nodes when they fit. Storage scales with occupied records, including when IDs have large gaps.
 
-`Records<K, V>` uses the same table with individually shared values for sparse, heap-owning records. Editing one person's knowledge copies that person's map, without copying other people's facts. Ordinary per-record collections can remain small standard maps.
+`Records<K, V>` uses the same table with individually shared values for sparse, heap-owning records. A mutation copies one sparse value. Replacement and removal return a shared snapshot, avoiding a deep copy when the old value is discarded. Growing personal histories, relationships, and skill profiles use nested persistent tables so an update also stays bounded within one person.
 
-`get`, `insert`, `remove`, `entry`, ordered scans, and `changed(previous)` support owner requests and incremental validation. `changed` conservatively includes numeric rows from touched leaves; sparse records filter unchanged shared values. Removed records are absent, so cross-record constraints involving deletion need owner checks. Save loading validates complete resources.
+Borrowed-key lookups, `insert`, `remove`, `entry`, ordered ranges, and `changed(previous)` support owner requests and incremental validation. `changed` conservatively includes numeric rows from touched leaves; sparse records filter unchanged shared values. Removed records are absent, so cross-record constraints involving deletion need owner checks. Save loading validates complete resources.
+
+`Agenda<K, T>` stores one deadline per key and derives its time index on load. Due scans visit time and key order; replacing or cancelling a deadline uses bounded table updates.
 
 `update` stages disjoint leaves with the host's bounded Rayon pool. Small tables run inline. The callback reads its key and changes its own row. Shared-resource arbitration and structural changes remain outside this numeric phase. A worker panic discards the transaction.
+
+Range scans seek to their lower bound. Traversal keeps one frame per tree level and allocates nothing for a single leaf.
 
 Serialization writes logical records in key order and excludes tree layout. Loading rebuilds the table and rejects duplicate keys. Physical placement and worker completion order never assign identity or event order.
 

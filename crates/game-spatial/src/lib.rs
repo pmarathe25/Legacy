@@ -1,6 +1,7 @@
 //! Deterministic shortest paths over the strategic area graph.
 use game_core::*;
-use game_land::Land;
+use game_land::{Area, Land};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Route {
@@ -12,6 +13,15 @@ pub fn route(land: &Land, from: AreaId, to: AreaId) -> Result<Route> {
         land.0.contains_key(&from) && land.0.contains_key(&to),
         "unknown area",
     )?;
+    route_with(from, to, |id| land.0.get(&id).map(Cow::Borrowed))
+}
+/// A read view may expose only known outgoing roads. Reaching a known endpoint
+/// does not require knowing that destination's outgoing roads.
+pub fn route_with<'a>(
+    from: AreaId,
+    to: AreaId,
+    mut area_at: impl FnMut(AreaId) -> Option<Cow<'a, Area>>,
+) -> Result<Route> {
     let mut costs = BTreeMap::from([(from, 0u64)]);
     let mut parents = BTreeMap::new();
     let mut queue = BTreeSet::from([(0u64, from)]);
@@ -32,7 +42,8 @@ pub fn route(land: &Land, from: AreaId, to: AreaId) -> Result<Route> {
         if costs[&area] != cost {
             continue;
         }
-        for (next, duration) in &land.0[&area].links {
+        let Some(known) = area_at(area) else { continue };
+        for (next, duration) in &known.links {
             let sum = cost.checked_add(duration.0).ok_or(Error::Overflow)?;
             if costs.get(next).is_none_or(|old| sum < *old) {
                 costs.insert(*next, sum);

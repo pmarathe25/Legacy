@@ -1,9 +1,9 @@
 use super::*;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct StoreLocation {
     pub area: AreaId,
-    pub carrier: Option<PersonId>,
     pub capacity: u64,
+    pub carrier: Option<PersonId>,
     pub mass: u64,
 }
 pub fn location_key(id: InventoryId) -> String {
@@ -15,22 +15,51 @@ pub fn roads_key(id: AreaId) -> String {
 pub fn patch_key(id: u64) -> String {
     format!("patch:{id}")
 }
-pub fn known<T: serde::de::DeserializeOwned>(
-    facts: &BTreeMap<String, Fact>,
+/// Seek directly to a semantic key namespace; unrelated memories stay cold.
+pub fn with_prefix<'a>(
+    facts: &'a Facts,
+    prefix: &'a str,
+) -> impl Iterator<Item = (&'a Arc<str>, &'a Fact)> {
+    facts
+        .range((
+            std::ops::Bound::Included(prefix),
+            std::ops::Bound::Unbounded,
+        ))
+        .take_while(move |(key, _)| key.starts_with(prefix))
+}
+pub fn known<T: serde::de::DeserializeOwned + Clone + 'static>(
+    facts: &Facts,
     key: &str,
 ) -> Option<T> {
-    T::deserialize(facts.get(key)?.value.as_ref()).ok()
+    facts.get(key)?.value.decode()
 }
-pub(super) fn remember<T: Serialize>(
+pub(super) fn remember(
     tx: &mut Transaction<'_>,
     person: PersonId,
-    key: String,
-    data: &T,
+    subject: Subject,
+    data: FactValue,
 ) -> Result<()> {
+    let cached = tx.get::<Knowledge>()?.1.get(&subject);
+    let key = cached
+        .map(|c| c.key.clone())
+        .unwrap_or_else(|| subject.key().into());
+    let changed = cached.is_none_or(|c| c.value.as_ref() != &data);
+    let value = if changed {
+        Arc::new(data)
+    } else {
+        cached.unwrap().value.clone()
+    };
+    if changed {
+        tx.edit::<Knowledge>()?.1.insert(
+            subject,
+            Cached {
+                key: key.clone(),
+                value: value.clone(),
+            },
+        );
+    }
     let fact = Fact {
-        value: serde_json::to_value(data)
-            .map_err(|e| Error::Rejected(e.to_string()))?
-            .into(),
+        value,
         source: person,
         observed: tx.now(),
         revision: tx.revision_after(),
@@ -43,44 +72,21 @@ pub(super) fn remember<T: Serialize>(
         .insert(key, fact);
     Ok(())
 }
-/// Construct only the graph represented in this person's observations and reports.
-/// Destination placeholders allow taking a known road into an unvisited area.
-pub fn route(
-    facts: &BTreeMap<String, Fact>,
-    from: AreaId,
-    to: AreaId,
-) -> Result<game_spatial::Route> {
-    if from == to {
-        return Ok(game_spatial::Route {
-            areas: vec![from],
-            duration: SimDuration(0),
-        });
-    }
-    let mut land = game_land::Land::default();
-    for key in facts.keys() {
-        let Some(id) = key
-            .strip_prefix("roads:")
-            .and_then(|id| id.parse::<u64>().ok())
-        else {
-            continue;
-        };
-        if let Some(area) = known::<game_land::Area>(facts, key) {
-            land.0.insert(AreaId(id), area);
+/// Traverse recorded roads lazily. A known road may reach an endpoint whose
+/// outgoing roads have not yet been observed.
+pub fn route(facts: &Facts, from: AreaId, to: AreaId) -> Result<game_spatial::Route> {
+    game_spatial::route_with(from, to, |id| {
+        let fact = facts.get(roads_key(id).as_str())?;
+        match fact.value.as_ref() {
+            FactValue::Roads(area) => Some(std::borrow::Cow::Borrowed(area.as_ref())),
+            _ => fact
+                .value
+                .decode::<game_land::Area>()
+                .map(std::borrow::Cow::Owned),
         }
-    }
-    let endpoints: Vec<_> = land
-        .0
-        .values()
-        .flat_map(|a| a.links.keys().copied())
-        .collect();
-    for id in endpoints {
-        land.0.entry(id).or_insert_with(|| game_land::Area {
-            name: String::new(),
-            links: BTreeMap::new(),
-        });
-    }
-    game_spatial::route(&land, from, to)
+    })
 }
+
 #[derive(Serialize, Deserialize)]
 pub struct ObserveSurroundings {
     pub person: PersonId,
@@ -104,20 +110,13 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         let roads = tx
             .get::<game_land::Land>()?
             .0
-            .get(&area)
-            .ok_or_else(|| Error::Missing("area".into()))?
-            .clone();
-        remember(tx, r.person, roads_key(area), &roads)?;
+            .shared(&area)
+            .ok_or_else(|| Error::Missing("area".into()))?;
+        remember(tx, r.person, Subject::Roads(area), FactValue::Roads(roads))?;
         // Patches here are exposed resources; distant patches are never enumerated into memory.
         let patches: Vec<_> = tx
             .get::<game_ecology::Ecology>()
-            .map(|s| {
-                s.patches
-                    .iter()
-                    .filter(|(_, p)| p.area == area)
-                    .map(|(id, _)| *id)
-                    .collect()
-            })
+            .map(|s| s.in_area(area).collect())
             .unwrap_or_default();
         for patch in patches {
             tx.call(ObservePatch {
@@ -127,17 +126,18 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         }
         // Inspect newly encountered accessible containers; refreshing a known stock
         // requires deliberate inspection, so remembered stock can still become stale.
+        let memory = tx.get::<Knowledge>()?;
+        let facts = &memory.0[&r.person];
         let inventories: Vec<_> = tx
             .get::<game_property::Property>()?
             .permitted(r.person)
             .filter(|id| {
-                tx.get::<game_property::Property>()
-                    .is_ok_and(|p| p.allowed(r.person, *id))
-                    && game_cargo::locality(tx, *id).is_ok_and(|a| a == area)
-                    && tx.get::<Knowledge>().is_ok_and(|k| {
-                        k.0.get(&r.person)
-                            .is_none_or(|m| !m.contains_key(&store_key(*id)))
-                    })
+                let known = memory
+                    .1
+                    .get(&Subject::Stock(*id))
+                    .map(|cached| facts.contains_key(cached.key.as_ref()))
+                    .unwrap_or_else(|| facts.contains_key(store_key(*id).as_str()));
+                !known && game_cargo::locality(tx, *id).is_ok_and(|a| a == area)
             })
             .collect();
         for inventory in inventories {
@@ -159,47 +159,11 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             game_transport::area(tx.get()?, r.person)? == patch.area,
             "cannot observe distant patch",
         )?;
-        remember(tx, r.person, patch_key(r.patch), &patch)
+        remember(
+            tx,
+            r.person,
+            Subject::Patch(r.patch),
+            FactValue::Patch(patch),
+        )
     })
-}
-
-/// Choose the next known road, including resuming an interrupted journey.
-pub fn next_step(
-    facts: &BTreeMap<String, Fact>,
-    location: &game_transport::Location,
-    target: AreaId,
-) -> Result<(Option<AreaId>, SimDuration)> {
-    use game_transport::Location;
-    match location {
-        Location::At(area) => {
-            let route = route(facts, *area, target)?;
-            Ok((route.areas.get(1).copied(), route.duration))
-        }
-        Location::Road {
-            from,
-            to,
-            elapsed,
-            duration,
-        } => [
-            (*from, elapsed.0),
-            (
-                *to,
-                duration
-                    .0
-                    .checked_sub(elapsed.0)
-                    .ok_or_else(|| Error::Rejected("invalid road progress".into()))?,
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(area, offset)| {
-            let route = route(facts, area, target).ok()?;
-            Some((
-                Some(area),
-                SimDuration(offset.checked_add(route.duration.0)?),
-            ))
-        })
-        .min_by_key(|(area, cost)| (cost.0, *area))
-        .ok_or_else(|| Error::Rejected("no known route from road".into())),
-        _ => Err(Error::Rejected("already travelling".into())),
-    }
 }

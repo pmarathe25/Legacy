@@ -116,7 +116,7 @@ fn ordinary_views_do_not_reveal_distant_unreported_stock() {
         !s.observe()
             .unwrap()
             .facts
-            .contains_key(&game_knowledge::store_key(distant))
+            .contains_key(game_knowledge::store_key(distant).as_str())
     );
     assert!(
         !serde_json::to_string(&s.observe().unwrap())

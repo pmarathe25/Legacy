@@ -1,7 +1,7 @@
 //! Needs, bodily harm, rest, and guardian recovery.
 use game_storage::Table;
 mod compute;
-pub use compute::advance_body;
+pub use compute::{advance_body, hunger_threshold};
 use game_core::*;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
@@ -363,6 +363,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .resting = false;
         Ok(())
     })?;
+    b.batch::<Wake>(128)?;
     b.request::<CancelRest>(|tx, r| {
         tx.unschedule(r.job);
         tx.edit::<Bodies>()?

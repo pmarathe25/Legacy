@@ -27,9 +27,12 @@ pub struct Definitions {
     pub objects: BTreeMap<String, Object>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "SavedObjects")]
 pub struct Objects {
     pub items: BTreeMap<String, Object>,
     pub stamps: Vec<Stamp>,
+    #[serde(skip)]
+    ids: BTreeMap<GoodId, String>,
 }
 impl Resource for Objects {
     const KEY: &'static str = "objects.catalog";
@@ -48,14 +51,40 @@ impl Resource for Objects {
                 require(food.portion > 0 && food.relief > 0, "invalid edible object")?;
             }
         }
-        Ok(())
+        require(
+            self.ids.len() == self.items.len()
+                && self
+                    .items
+                    .iter()
+                    .all(|(key, o)| self.ids.get(&o.id) == Some(key)),
+            "invalid object index",
+        )
+    }
+}
+#[derive(Deserialize)]
+struct SavedObjects {
+    items: BTreeMap<String, Object>,
+    stamps: Vec<Stamp>,
+}
+impl From<SavedObjects> for Objects {
+    fn from(saved: SavedObjects) -> Self {
+        let ids = saved
+            .items
+            .iter()
+            .map(|(key, object)| (object.id, key.clone()))
+            .collect();
+        Self {
+            items: saved.items,
+            stamps: saved.stamps,
+            ids,
+        }
     }
 }
 impl Objects {
     pub fn by_id(&self, id: GoodId) -> Result<&Object> {
-        self.items
-            .values()
-            .find(|o| o.id == id)
+        self.ids
+            .get(&id)
+            .and_then(|key| self.items.get(key))
             .ok_or_else(|| Error::InvalidConfiguration(format!("unknown object ID {}", id.0)))
     }
     pub fn resolve(&self, key: &str) -> Result<GoodId> {
@@ -97,7 +126,7 @@ pub fn load(store: &mut Store) -> Result<Objects> {
             )?;
         }
     }
-    let catalog = Objects { items, stamps };
+    let catalog = Objects::from(SavedObjects { items, stamps });
     catalog.validate()?;
     require(!catalog.items.is_empty(), "no object definitions")?;
     Ok(catalog)

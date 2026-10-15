@@ -25,7 +25,7 @@ fn reports_deliver_known_facts_only_after_travel_delay() {
     assert!(view(&f.host, f.other).unwrap().is_empty());
     run(&mut f.host, SimTime(1000));
     let facts = view(&f.host, f.other).unwrap();
-    assert_eq!(facts[&store_key(f.store)].source, f.ruler);
+    assert_eq!(facts[store_key(f.store).as_str()].source, f.ruler);
     f.host
         .dispatch(game_cargo::Consume {
             inventory: f.store,
@@ -136,9 +136,9 @@ fn spoken_reports_are_local_and_reveal_only_the_selected_fact() {
     let now = f.host.now();
     run(&mut f.host, now);
     let facts = view(&f.host, f.other).unwrap();
-    assert!(facts.contains_key(&store_key(f.store)));
+    assert!(facts.contains_key(store_key(f.store).as_str()));
     assert!(
-        !facts.contains_key(&location_key(f.store)),
+        !facts.contains_key(location_key(f.store).as_str()),
         "stock report does not also disclose location"
     );
     let arrives = f
@@ -192,7 +192,7 @@ fn arriving_discovers_accessible_local_containers_but_does_not_refresh_every_rem
     assert!(
         !view(&f.host, f.other)
             .unwrap()
-            .contains_key(&store_key(inventory))
+            .contains_key(store_key(inventory).as_str())
     );
     let arrives = f
         .host
@@ -205,7 +205,7 @@ fn arriving_discovers_accessible_local_containers_but_does_not_refresh_every_rem
     f.host
         .dispatch(ObserveSurroundings { person: f.other })
         .unwrap();
-    let remembered = view(&f.host, f.other).unwrap()[&store_key(inventory)].clone();
+    let remembered = view(&f.host, f.other).unwrap()[store_key(inventory).as_str()].clone();
     f.host
         .dispatch(game_cargo::Consume {
             inventory,
@@ -217,7 +217,7 @@ fn arriving_discovers_accessible_local_containers_but_does_not_refresh_every_rem
         .dispatch(ObserveSurroundings { person: f.other })
         .unwrap();
     assert_eq!(
-        view(&f.host, f.other).unwrap()[&store_key(inventory)],
+        view(&f.host, f.other).unwrap()[store_key(inventory).as_str()],
         remembered
     );
     f.host
@@ -261,8 +261,162 @@ fn a_delayed_report_cannot_overwrite_newer_observation_from_the_same_clock_time(
             inventory: f.store,
         })
         .unwrap();
-    let newer = view(&f.host, f.other).unwrap()[&store_key(f.store)].clone();
+    let newer = view(&f.host, f.other).unwrap()[store_key(f.store).as_str()].clone();
     assert_eq!(newer.observed, SimTime(0));
     run(&mut f.host, SimTime(MINUTE.0));
-    assert_eq!(view(&f.host, f.other).unwrap()[&store_key(f.store)], newer);
+    assert_eq!(
+        view(&f.host, f.other).unwrap()[store_key(f.store).as_str()],
+        newer
+    );
+}
+
+#[test]
+fn observers_share_unchanged_payloads_but_keep_individual_evidence_and_stale_snapshots() {
+    use std::sync::Arc;
+    let mut f = setup();
+    for person in [f.ruler, f.other] {
+        f.host.dispatch(ObserveSurroundings { person }).unwrap();
+        f.host
+            .dispatch(ObserveStore {
+                person,
+                inventory: f.store,
+            })
+            .unwrap();
+    }
+    let first = view(&f.host, f.ruler).unwrap();
+    let other = view(&f.host, f.other).unwrap();
+    let roads = roads_key(f.home);
+    let stock = store_key(f.store);
+    assert!(Arc::ptr_eq(
+        &first[roads.as_str()].value,
+        &other[roads.as_str()].value
+    ));
+    assert!(Arc::ptr_eq(
+        &first[stock.as_str()].value,
+        &other[stock.as_str()].value
+    ));
+    assert_eq!(first[roads.as_str()].source, f.ruler);
+    assert_eq!(other[roads.as_str()].source, f.other);
+    assert!(other[roads.as_str()].revision > first[roads.as_str()].revision);
+    let reloaded = builder().load(&f.host.save().unwrap(), 2).unwrap();
+    let a = view(&reloaded, f.ruler).unwrap();
+    let b = view(&reloaded, f.other).unwrap();
+    assert!(Arc::ptr_eq(
+        &a[roads.as_str()].value,
+        &b[roads.as_str()].value
+    ));
+    assert!(Arc::ptr_eq(
+        a.keys().next().unwrap(),
+        b.keys().next().unwrap()
+    ));
+    f.host
+        .dispatch(game_land::Link {
+            from: f.home,
+            to: f.away,
+            duration: MINUTE,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_cargo::Consume {
+            inventory: f.store,
+            good: game_cargo::FOOD,
+            quantity: 10,
+        })
+        .unwrap();
+    f.host
+        .dispatch(ObserveSurroundings { person: f.ruler })
+        .unwrap();
+    f.host
+        .dispatch(ObserveStore {
+            person: f.ruler,
+            inventory: f.store,
+        })
+        .unwrap();
+    let refreshed = view(&f.host, f.ruler).unwrap();
+    assert!(!Arc::ptr_eq(
+        &first[roads.as_str()].value,
+        &refreshed[roads.as_str()].value
+    ));
+    assert!(!Arc::ptr_eq(
+        &first[stock.as_str()].value,
+        &refreshed[stock.as_str()].value
+    ));
+    assert_eq!(view(&f.host, f.other).unwrap(), other);
+    assert_eq!(
+        route(&first, f.home, f.away).unwrap().duration,
+        SimDuration(120_000)
+    );
+    assert_eq!(route(&refreshed, f.home, f.away).unwrap().duration, MINUTE);
+    let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    // Reconstructing an empty cache cannot affect recorded facts or future output.
+    for host in [&mut f.host, &mut loaded] {
+        host.dispatch(ObserveSurroundings { person: f.ruler })
+            .unwrap();
+        host.dispatch(ObserveStore {
+            person: f.ruler,
+            inventory: f.store,
+        })
+        .unwrap();
+    }
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn typed_loading_preserves_opaque_extensions_and_numeric_evidence() {
+    let data = serde_json::json!({"roads:1": {"value": {"name": "home", "links": {}, "unrecognized": 7}, "source": 1, "observed": 0, "revision": 0, "confidence": 90}});
+    let facts: Facts = serde_json::from_value(data.clone()).unwrap();
+    assert_eq!(serde_json::to_value(&facts).unwrap(), data);
+    assert!(matches!(
+        facts["roads:1"].value.as_ref(),
+        FactValue::Other(_)
+    ));
+    let f = setup();
+    let mut host = f.host;
+    host.dispatch(ObserveStore {
+        person: f.ruler,
+        inventory: f.store,
+    })
+    .unwrap();
+    assert!(matches!(
+        view(&host, f.ruler).unwrap()[store_key(f.store).as_str()]
+            .value
+            .as_ref(),
+        FactValue::Stock(_)
+    ));
+}
+
+#[test]
+fn numeric_payloads_and_opaque_sources_keep_canonical_wire_order_across_loading() {
+    use std::sync::Arc;
+    let mut facts = Facts::default();
+    for (key, value) in [
+        (
+            "roads:1",
+            serde_json::json!({"name": "home", "links": {"2": 10, "10": 20}}),
+        ),
+        ("store:1", serde_json::json!({"2": 10, "10": 20})),
+        (
+            "store-location:1",
+            serde_json::json!({"area": 1, "carrier": null, "capacity": 50, "mass": 30}),
+        ),
+        (
+            "patch:1",
+            serde_json::json!({"area": 1, "good": 1, "stock": 10, "capacity": 50, "renew": 2}),
+        ),
+    ] {
+        facts.insert(
+            key.into(),
+            Fact {
+                value: Arc::new(value.into()),
+                source: PersonId(1),
+                observed: SimTime(0),
+                revision: 0,
+                confidence: 100,
+            },
+        );
+    }
+    let encoded = serde_json::to_string(&facts).unwrap();
+    let loaded: Facts = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(facts, loaded);
+    assert_eq!(serde_json::to_string(&loaded).unwrap(), encoded);
 }

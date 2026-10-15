@@ -188,3 +188,59 @@ fn a_large_reservation_book_keeps_cached_capacity_atomic_and_validated_on_load()
     bad["resources"]["cargo.inventories"][inventory.0.to_string()]["reserved_mass"] = 1.into();
     assert!(builder().load(&bad.to_string(), 1).is_err());
 }
+
+#[test]
+fn carrier_lookup_and_drop_ignore_unrelated_inventories_and_rebuild_on_loading() {
+    let mut f = setup();
+    for _ in 0..1000 {
+        f.host
+            .dispatch(Create {
+                custody: Custody::Area(f.home),
+                capacity: 100,
+            })
+            .unwrap();
+    }
+    let mut carried = vec![];
+    for _ in 0..100 {
+        let id = f
+            .host
+            .dispatch(Create {
+                custody: Custody::Carried(f.other),
+                capacity: 100,
+            })
+            .unwrap();
+        f.host
+            .dispatch(Deposit {
+                inventory: id,
+                good: FOOD,
+                quantity: 10,
+            })
+            .unwrap();
+        carried.push(id);
+    }
+    assert_eq!(
+        f.host
+            .get::<Cargo>()
+            .unwrap()
+            .carried(f.other)
+            .collect::<Vec<_>>(),
+        carried
+    );
+    let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    for host in [&mut f.host, &mut loaded] {
+        host.dispatch(DropCarried { person: f.other }).unwrap();
+        assert!(
+            host.get::<Cargo>()
+                .unwrap()
+                .carried(f.other)
+                .next()
+                .is_none()
+        );
+        for id in &carried {
+            let inventory = &host.get::<Cargo>().unwrap().0[id];
+            assert_eq!(inventory.custody, Custody::Area(f.home));
+            assert_eq!(inventory.amount(FOOD), 10);
+        }
+    }
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
+}

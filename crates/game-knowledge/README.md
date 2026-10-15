@@ -6,8 +6,10 @@ Owns per-person facts with source, observation time, and confidence. Views retur
 
 `Tell` requires both people at the same place and passes only the selected fact. `Report` is the lower-level delayed-delivery operation used by communication systems and fixtures. Neither operation also transfers unrelated knowledge. Reports retain the original observation time and commit order, with reduced confidence. A delayed report cannot replace newer evidence recorded at the same clock time.
 
-`route` and `next_step` construct routes from recorded roads, including known endpoints not yet visited. Actual transport validates each road separately. Newly closed roads remain believed open until observation or communication supplies the change.
+`route` constructs routes from recorded roads, including known endpoints not yet visited. Routing looks up only reached areas in these recorded snapshots; it does not reconstruct or copy the whole known graph for each query. Actual transport validates each road separately. Newly closed roads remain believed open until observation or communication supplies the change.
 
 Run `cargo test -p game-knowledge`. Tests cover local discovery, stale stock, report delivery, spoken locality, and unknown intermediate roads without the application.
 
-Facts share immutable value payloads when records or reports are copied. Observation time, source, confidence, and revision remain individual evidence. The permission owner indexes accessible inventories, so local discovery does not scan all world containers.
+Road, patch, stock, and location payloads are typed numeric snapshots in memory. JSON stays at serialization boundaries; unknown schemas retain their JSON data. Facts share immutable payloads across observers while keeping individual source, time, confidence, and revision. A source change replaces the cached payload; existing beliefs and delayed reports retain their previous snapshot.
+
+Personal fact tables support namespace ranges so planning avoids unrelated memories. Streaming load restores shared keys and payloads, including past-life memories. The permission owner indexes accessible inventories and ecology indexes patches by area, so local discovery avoids world-wide scans.

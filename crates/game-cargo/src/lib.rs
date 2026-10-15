@@ -2,6 +2,7 @@
 use game_core::*;
 use game_sim::*;
 use game_storage::{Records, Table};
+mod carriers;
 use serde::{Deserialize, Serialize};
 pub const FOOD: GoodId = GoodId(1);
 pub const TIMBER: GoodId = GoodId(2);
@@ -42,8 +43,12 @@ impl Inventory {
             .try_fold(0u64, |sum, q| sum.checked_add(*q).ok_or(Error::Overflow))
     }
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Cargo(pub Records<InventoryId, Inventory>);
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(transparent)]
+pub struct Cargo(
+    pub Records<InventoryId, Inventory>,
+    #[serde(skip)] Table<PersonId, Table<InventoryId, ()>>,
+);
 impl Resource for Cargo {
     fn allocated_ids(&self) -> Vec<u64> {
         self.0
@@ -54,6 +59,7 @@ impl Resource for Cargo {
     const KEY: &'static str = "cargo.inventories";
     fn validate(&self) -> Result<()> {
         self.validate_rows(self.0.values())?;
+        require(self.1 == carriers::index(&self.0), "invalid carrier index")?;
         for inventory in self.0.values() {
             let reserved = inventory
                 .reserved
@@ -172,7 +178,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     });
     b.request::<Create>(|tx, r| {
         let id = InventoryId(tx.allocate()?);
-        tx.edit::<Cargo>()?.0.insert(
+        let state = tx.edit::<Cargo>()?;
+        if let Custody::Carried(person) = r.custody {
+            state.1.entry(person).or_default().insert(id, ());
+        }
+        state.0.insert(
             id,
             Inventory {
                 custody: r.custody,
@@ -283,6 +293,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<DropCarried>(|tx, r| {
+        if tx.get::<Cargo>()?.carried(r.person).next().is_none() {
+            return Ok(());
+        }
         let location = tx
             .get::<game_transport::Positions>()?
             .0
@@ -315,16 +328,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             },
             None => return Ok(()),
         };
-        let carried: Vec<_> = tx
-            .get::<Cargo>()?
-            .0
-            .iter()
-            .filter(|(_, inv)| inv.custody == Custody::Carried(r.person))
-            .map(|(id, _)| *id)
-            .collect();
+        let carried: Vec<_> = tx.get::<Cargo>()?.carried(r.person).collect();
+        let state = tx.edit::<Cargo>()?;
         for id in carried {
-            tx.edit::<Cargo>()?.0.get_mut(&id).unwrap().custody = custody.clone();
+            state.0.get_mut(&id).unwrap().custody = custody.clone();
         }
+        state.1.remove(&r.person);
         Ok(())
     })?;
     b.request::<Transfer>(|tx, r| {

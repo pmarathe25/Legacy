@@ -2,6 +2,7 @@
 use game_provisioning as plans;
 use game_storage::Records;
 mod rules;
+mod scheduling;
 mod utility;
 use game_core::*;
 pub use game_provisioning::Plan;
@@ -22,10 +23,32 @@ pub struct Minds {
     pub people: Records<PersonId, Mind>,
     pub rules: Rules,
     pub running: bool,
+    schedule: scheduling::Schedule,
 }
 impl Resource for Minds {
     const KEY: &'static str = "characters.minds";
     fn validate(&self) -> Result<()> {
+        self.rules.validate()?;
+        require(
+            self.running || self.schedule == scheduling::Schedule::default(),
+            "unstarted review clock",
+        )?;
+        require(
+            self.schedule.agenda.valid()
+                && self
+                    .schedule
+                    .ready
+                    .keys()
+                    .all(|p| self.people.contains_key(p) && self.schedule.agenda.get(p).is_none())
+                && self
+                    .schedule
+                    .agenda
+                    .iter()
+                    .all(|(person, _)| self.people.contains_key(person)),
+            "invalid review agenda",
+        )
+    }
+    fn validate_changes(&self, _previous: &Self) -> Result<()> {
         self.rules.validate()
     }
 }
@@ -71,22 +94,25 @@ fn proceed(tx: &mut Transaction<'_>, person: PersonId, mut plan: Plan, id: u64) 
     Ok(())
 }
 fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
-    if game_physiology::capable(tx, person).is_err() {
+    let Some(body) = tx.get::<game_physiology::Bodies>()?.people.get(&person) else {
+        return Ok(());
+    };
+    if !body.alive || body.health == 0 {
         return Ok(());
     }
     let ruler = tx.get::<game_lineage::Lineage>()?.current;
     if ruler == Some(person) && game_invocation::controlled(tx.get()?, tx.now()) {
         return Ok(());
     }
-    let rules = &tx.get::<Minds>()?.rules;
-    let body = &tx.get::<game_physiology::Bodies>()?.people[&person];
+    let state = tx.get::<Minds>()?;
+    let rules = &state.rules;
     let hunger = body.hunger.min((i64::MAX / 4) as u64);
     let fatigue = body.fatigue.min(i64::MAX as u64);
     // Keep food acquisition committed; interrupt other actions only by the authored policy.
     if let Some(action) = tx.get::<Actions>()?.0.get(&person) {
         if hunger < rules.urgent_hunger
             || !rules.hunger_interrupts.contains(&action.kind)
-            || tx.get::<Minds>()?.people[&person].plan.is_some()
+            || state.people[&person].plan.is_some()
         {
             return Ok(());
         }
@@ -99,11 +125,14 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     if game_transport::area(tx.get()?, person).is_ok() {
         tx.call(game_knowledge::ObserveSurroundings { person })?;
     }
-    let mind = tx.get::<Minds>()?.people[&person].clone();
-    if let Some(plan) = mind.plan {
-        return proceed(tx, person, plan, mind.last.as_ref().unwrap().id);
+    let mind = &tx.get::<Minds>()?.people[&person];
+    if let Some(plan) = &mind.plan {
+        return proceed(tx, person, plan.clone(), mind.last.as_ref().unwrap().id);
     }
     let rules = &tx.get::<Minds>()?.rules;
+    if hunger < rules.meal_hunger && fatigue <= rules.rest_fatigue {
+        return Ok(());
+    }
     let mut candidates = vec![];
     if fatigue > rules.rest_fatigue {
         candidates.push(Candidate {
@@ -114,7 +143,6 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             effort: 1,
             risk: 0,
             survival: hunger < rules.urgent_hunger,
-            reasons: vec!["fatigue".into()],
         });
     }
     let value = tx
@@ -159,15 +187,6 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
                 .min(i64::MAX as u64) as i64,
             risk: if foraging { risk } else { 0 },
             survival: true,
-            reasons: vec![
-                if foraging {
-                    "obtain own food"
-                } else {
-                    "known meal"
-                }
-                .into(),
-                format!("known travel {} ms", o.travel.0),
-            ],
         }
     }));
     candidates.retain(|c| {
@@ -191,7 +210,7 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             c.risk = apply("risk", c.risk);
         }
     }
-    let Some(decision) = choose(
+    let Some(mut decision) = choose(
         &candidates,
         mind.last.as_ref().map(|d| d.id),
         rules.switching_margin,
@@ -200,6 +219,12 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
         return Ok(());
     };
     let id = decision.id;
+    // Keep text out of candidate scoring and explain only the selected option.
+    decision.reasons = if id == 1 {
+        vec!["fatigue".into()]
+    } else {
+        options.iter().find(|o| o.id == id).unwrap().reasons()
+    };
     let retry_delay = rules.retry;
     let now = tx.now();
     let m = tx.edit::<Minds>()?.people.get_mut(&person).unwrap();
@@ -243,13 +268,30 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         require(r.mind.plan.is_none(), "register without an active plan")?;
         tx.call(game_knowledge::ObserveSurroundings { person: r.person })?;
         tx.edit::<Minds>()?.people.insert(r.person, r.mind);
-        Ok(())
+        scheduling::wake(tx, r.person)
     })?;
     b.subscribe::<game_physiology::Died>("forget-dead-mind", |tx, event| {
-        tx.edit::<Minds>()?.people.remove(&event.person);
+        let state = tx.edit::<Minds>()?;
+        state.people.remove(&event.person);
+        state.schedule.agenda.set(event.person, None);
+        state.schedule.ready.remove(&event.person);
         Ok(())
     })?;
+    b.subscribe::<ActionFinished>("characters.wake", |tx, event| {
+        scheduling::wake(tx, event.person)
+    })?;
     b.validate_save(|host| {
+        let state = host.get::<Minds>()?;
+        let actions = &host.get::<Actions>()?.0;
+        require(
+            !state.running
+                || (state.schedule.valid_at(host.now(), state.rules.review)
+                    && state
+                        .people
+                        .keys()
+                        .all(|p| state.schedule.ready.contains_key(p) || actions.contains_key(p))),
+            "invalid review clock",
+        )?;
         for (person, mind) in &host.get::<Minds>()?.people {
             require(
                 host.get::<game_physiology::Bodies>()?
@@ -266,7 +308,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     });
     b.request::<Start>(|tx, _| {
         require(!tx.get::<Minds>()?.running, "already reviewing")?;
-        tx.edit::<Minds>()?.running = true;
+        let now = tx.now();
+        let state = tx.edit::<Minds>()?;
+        state.running = true;
+        state.schedule.epoch = now;
+        state.schedule.ready = state.people.keys().map(|p| (*p, ())).collect();
         tx.schedule(
             tx.now().after(tx.get::<Minds>()?.rules.review)?,
             50,
@@ -274,24 +320,35 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         )?;
         Ok(())
     })?;
-    b.request::<Review>(|tx, r| {
-        let people: Vec<_> = tx
-            .get::<Minds>()?
-            .people
-            .scan_after(r.after.as_ref())
-            .take(128)
-            .map(|(id, _)| *id)
-            .collect();
-        let last = people.last().copied();
-        let full = people.len() == 128;
-        for person in people {
-            review(tx, person)?;
+    b.request::<Review>(|tx, _| {
+        let now = tx.now();
+        let people: Vec<_> = tx.get::<Minds>()?.schedule.due(&now).take(128).collect();
+        let state = tx.edit::<Minds>()?;
+        if state.schedule.cycle != now {
+            state.schedule.cycle = now;
+            state.schedule.cursor = None;
         }
-        if full {
-            tx.schedule(tx.now(), 50, Review { after: last })?;
-        } else {
+        for person in people {
+            let state = tx.edit::<Minds>()?;
+            state.schedule.cursor = Some(person);
+            review(tx, person)?;
+            if tx.get::<Minds>()?.people.contains_key(&person) {
+                let next = scheduling::next(tx, person)?;
+                tx.edit::<Minds>()?.schedule.set(person, next);
+            }
+        }
+        if tx.get::<Minds>()?.schedule.due(&now).next().is_some() {
             tx.schedule(
-                tx.now().after(tx.get::<Minds>()?.rules.review)?,
+                now,
+                50,
+                Review {
+                    after: tx.get::<Minds>()?.schedule.cursor,
+                },
+            )?;
+        } else {
+            tx.edit::<Minds>()?.schedule.cursor = Some(PersonId(u64::MAX));
+            tx.schedule(
+                now.after(tx.get::<Minds>()?.rules.review)?,
                 50,
                 Review { after: None },
             )?;

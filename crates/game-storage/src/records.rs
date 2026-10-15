@@ -25,22 +25,38 @@ impl<K: Ord + Clone, V: Clone> Records<K, V> {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn shared<Q: Ord + ?Sized>(&self, key: &Q) -> Option<Arc<V>>
+    where
+        K: Borrow<Q>,
+    {
+        self.0.get(key).cloned()
+    }
+    pub fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&V>
+    where
+        K: Borrow<Q>,
+    {
         self.0.get(key).map(AsRef::as_ref)
     }
-    pub fn get_mut(&mut self, key: &K) -> Option<&mut V> {
+    pub fn get_mut<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<&mut V>
+    where
+        K: Borrow<Q>,
+    {
         self.0.get_mut(key).map(Arc::make_mut)
     }
-    pub fn contains_key(&self, key: &K) -> bool {
+    pub fn contains_key<Q: Ord + ?Sized>(&self, key: &Q) -> bool
+    where
+        K: Borrow<Q>,
+    {
         self.0.contains_key(key)
     }
-    pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        self.0
-            .insert(key, Arc::new(value))
-            .map(Arc::unwrap_or_clone)
+    pub fn insert(&mut self, key: K, value: V) -> Option<Arc<V>> {
+        self.0.insert(key, Arc::new(value))
     }
-    pub fn remove(&mut self, key: &K) -> Option<V> {
-        self.0.remove(key).map(Arc::unwrap_or_clone)
+    pub fn remove<Q: Ord + ?Sized>(&mut self, key: &Q) -> Option<Arc<V>>
+    where
+        K: Borrow<Q>,
+    {
+        self.0.remove(key)
     }
     pub fn iter(&self) -> impl ExactSizeIterator<Item = (&K, &V)> {
         self.0.iter().map(|(k, v)| (k, v.as_ref()))
@@ -82,9 +98,9 @@ impl<'a, K: Ord + Clone, V: Clone> RecordEntry<'a, K, V> {
         self.or_insert_with(V::default)
     }
 }
-impl<K: Ord + Clone, V: Clone> Index<&K> for Records<K, V> {
+impl<K: Ord + Clone + Borrow<Q>, V: Clone, Q: Ord + ?Sized> Index<&Q> for Records<K, V> {
     type Output = V;
-    fn index(&self, key: &K) -> &V {
+    fn index(&self, key: &Q) -> &V {
         self.get(key).expect("missing record key")
     }
 }
