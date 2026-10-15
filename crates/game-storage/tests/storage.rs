@@ -258,3 +258,64 @@ fn ordered_stream_merge_retains_tails_and_suppresses_shared_keys() {
         [2, 3]
     );
 }
+
+#[test]
+fn paired_changes_match_point_lookups_across_different_tree_shapes() {
+    let mut before: Table<u64, u64> = (0..20_000).map(|k| (k * 2, k)).collect();
+    for round in 0..30 {
+        let mut after = before.clone();
+        for k in (round..40_000).step_by(97) {
+            if k % 3 == 0 {
+                after.remove(&k);
+            } else {
+                after.modify(k, || 0, |v| *v += 7);
+            }
+        }
+        for (k, v, old) in after.changed_pairs(&before) {
+            assert_eq!(after.get(k), Some(v));
+            assert_eq!(old, before.get(k));
+        }
+        let changed: BTreeMap<_, _> = after
+            .changed_pairs(&before)
+            .map(|(k, v, _)| (*k, *v))
+            .collect();
+        assert!(
+            after
+                .iter()
+                .all(|(k, v)| before.get(k) == Some(v) || changed.get(k) == Some(v))
+        );
+        before = after;
+    }
+    let empty = Table::new();
+    assert!(
+        before
+            .changed_pairs(&empty)
+            .all(|(_, _, old)| old.is_none())
+    );
+    assert_eq!(empty.changed_pairs(&before).count(), 0);
+    assert_eq!(before.changed_pairs(&before.clone()).count(), 0);
+}
+
+#[test]
+fn cache_versions_invalidate_on_writes_and_do_not_retain_rows() {
+    let record = Arc::new(());
+    let mut table = Table::from([(1, record.clone())]);
+    let original = table.version();
+    assert!(original.matches(&table));
+    let snapshot = table.clone();
+    *table.get_mut(&1).unwrap() = record.clone();
+    assert!(!original.matches(&table));
+    assert!(original.matches(&snapshot));
+    let version = table.version();
+    drop(table);
+    drop(snapshot);
+    assert_eq!(Arc::strong_count(&record), 1);
+    let empty = Table::<u64, ()>::new();
+    assert!(empty.version().matches(&Table::new()));
+    for _ in 0..1000 {
+        let mut replacement = Table::from([(1, record.clone())]);
+        assert!(!version.matches(&replacement));
+        replacement.get_mut(&1).unwrap();
+        assert!(!version.matches(&replacement));
+    }
+}

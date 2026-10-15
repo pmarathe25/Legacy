@@ -1,6 +1,8 @@
 //! Ordered, persistent tables with dense leaves and bounded copy-on-write paths.
 mod merge;
 pub use merge::merge_unique;
+mod version;
+pub use version::Version;
 mod agenda;
 pub use agenda::Agenda;
 mod iteration;
@@ -24,15 +26,12 @@ enum Node<K, V> {
 }
 #[derive(Clone, Debug)]
 pub struct Table<K, V> {
-    root: Arc<Node<K, V>>,
+    root: Option<Arc<Node<K, V>>>,
     len: usize,
 }
 impl<K, V> Default for Table<K, V> {
     fn default() -> Self {
-        Self {
-            root: Arc::new(Node::Leaf(Vec::new())),
-            len: 0,
-        }
+        Self { root: None, len: 0 }
     }
 }
 impl<K: Ord, V> Table<K, V> {
@@ -40,7 +39,11 @@ impl<K: Ord, V> Table<K, V> {
         Self::default()
     }
     pub fn ptr_eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.root, &other.root)
+        match (&self.root, &other.root) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
     }
     pub fn len(&self) -> usize {
         self.len
@@ -48,12 +51,14 @@ impl<K: Ord, V> Table<K, V> {
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }
+    #[inline]
     pub fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
     {
-        self.root.get(key)
+        self.root.as_deref()?.get(key)
     }
+    #[inline]
     pub fn contains_key<Q: Ord + ?Sized>(&self, key: &Q) -> bool
     where
         K: Borrow<Q>,
@@ -62,7 +67,7 @@ impl<K: Ord, V> Table<K, V> {
     }
     pub fn iter(&self) -> Iter<'_, K, V> {
         Iter {
-            cursor: Cursor::new(&self.root),
+            cursor: Cursor::new(self.root.as_deref()),
             remaining: self.len,
         }
     }
@@ -73,7 +78,7 @@ impl<K: Ord, V> Table<K, V> {
     where
         K: Borrow<Q>,
     {
-        let cursor = Cursor::from_bound(&self.root, bounds.0);
+        let cursor = Cursor::from_bound(self.root.as_deref(), bounds.0);
         cursor.take_while(move |(k, _)| match bounds.1 {
             Bound::Included(end) => (*k).borrow() <= end,
             Bound::Excluded(end) => (*k).borrow() < end,
@@ -89,27 +94,57 @@ impl<K: Ord, V> Table<K, V> {
     /// Visits only leaves on changed paths. Structural changes are safe: values
     /// from a changed leaf may be reported conservatively, never omitted.
     pub fn changed<'a>(&'a self, previous: &'a Self) -> impl Iterator<Item = (&'a K, &'a V)> {
+        self.changed_pairs(previous).map(|(k, v, _)| (k, v))
+    }
+    /// Pair changed rows with their previous values. Aligned leaves merge in
+    /// order, avoiding a second tree search per row during owner validation.
+    pub fn changed_pairs<'a>(
+        &'a self,
+        previous: &'a Self,
+    ) -> impl Iterator<Item = (&'a K, &'a V, Option<&'a V>)> {
         let mut stack = Vec::new();
-        let mut next = (!self.ptr_eq(previous)).then_some(self.root.as_ref());
+        let mut next = self.root.as_deref().filter(|_| !self.ptr_eq(previous));
         let mut rows = [].iter();
+        let mut old_rows = None;
         std::iter::from_fn(move || {
             loop {
                 if let Some((k, v)) = rows.next() {
-                    return Some((k, v));
+                    let old = if let Some(rows) = &mut old_rows {
+                        let rows: &mut std::iter::Peekable<std::slice::Iter<'a, (K, V)>> = rows;
+                        while rows.peek().is_some_and(|(key, _)| key < k) {
+                            rows.next();
+                        }
+                        rows.peek().filter(|(key, _)| key == k).map(|(_, v)| v)
+                    } else {
+                        previous.get(k)
+                    };
+                    return Some((k, v, old));
                 }
                 let node = next.take().or_else(|| stack.pop())?;
                 if node.size() == 0 {
                     continue;
                 }
-                if previous
+                let old = previous
                     .root
-                    .at_height(node.last(), node.height())
-                    .is_some_and(|old| std::ptr::eq(old, node))
-                {
+                    .as_deref()
+                    .and_then(|old| old.at_height(node.last(), node.height()));
+                if old.is_some_and(|old| std::ptr::eq(old, node)) {
                     continue;
                 }
                 match node {
-                    Node::Leaf(leaf) => rows = leaf.iter(),
+                    Node::Leaf(leaf) => {
+                        rows = leaf.iter();
+                        old_rows = match old {
+                            Some(Node::Leaf(old))
+                                if !old.is_empty()
+                                    && old[0].0 <= leaf[0].0
+                                    && old.last().unwrap().0 >= leaf.last().unwrap().0 =>
+                            {
+                                Some(old.iter().peekable())
+                            }
+                            _ => None,
+                        };
+                    }
                     Node::Branch(children) => {
                         stack.extend(children.iter().rev().map(|(_, n)| n.as_ref()))
                     }
@@ -130,18 +165,23 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
         K: Borrow<Q>,
     {
         // Search each level once; an absent key never copies a leaf.
-        Node::get_mut(&mut self.root, key)
+        Node::get_mut(self.root.as_mut()?, key)
     }
     pub fn insert(&mut self, key: K, value: V) -> Option<V> {
-        let (old, split) = Arc::make_mut(&mut self.root).insert(key, value);
+        let Some(root) = self.root.as_mut() else {
+            self.root = Some(Arc::new(Node::Leaf(vec![(key, value)])));
+            self.len = 1;
+            return None;
+        };
+        let (old, split) = Arc::make_mut(root).insert(key, value);
         if old.is_none() {
             self.len += 1;
         }
         if let Some(right) = split {
-            self.root = Arc::new(Node::Branch(vec![
-                (self.root.last().clone(), self.root.clone()),
+            self.root = Some(Arc::new(Node::Branch(vec![
+                (root.last().clone(), root.clone()),
                 (right.last().clone(), right),
-            ]));
+            ])));
         }
         old
     }
@@ -150,18 +190,35 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
         K: Borrow<Q>,
     {
         self.get(key)?;
-        let old = Arc::make_mut(&mut self.root).remove(key);
+        let root = self.root.as_mut().expect("present key");
+        let old = Arc::make_mut(root).remove(key);
         self.len -= 1;
-        while let Node::Branch(children) = self.root.as_ref() {
+        while let Node::Branch(children) = root.as_ref() {
             if children.len() != 1 {
                 break;
             }
-            self.root = children[0].1.clone();
+            *root = children[0].1.clone();
+        }
+        if self.len == 0 {
+            self.root = None;
         }
         old
     }
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
         Entry { table: self, key }
+    }
+    /// Update an existing value with one search. Construct a default only when absent.
+    pub fn modify<R>(
+        &mut self,
+        key: K,
+        default: impl FnOnce() -> V,
+        f: impl FnOnce(&mut V) -> R,
+    ) -> R {
+        if let Some(value) = self.get_mut(&key) {
+            return f(value);
+        }
+        self.insert(key.clone(), default());
+        f(self.get_mut(&key).expect("inserted"))
     }
     /// Evaluates disjoint leaves with the caller's bounded worker pool. The caller
     /// owns this staged table; a panic cannot mutate any shared committed leaf.
@@ -170,10 +227,13 @@ impl<K: Ord + Clone, V: Clone> Table<K, V> {
         K: Send + Sync,
         V: Send + Sync,
     {
+        let Some(root) = self.root.as_mut() else {
+            return;
+        };
         if self.len < 4096 || pool.current_num_threads() == 1 {
-            Arc::make_mut(&mut self.root).update(&f, false);
+            Arc::make_mut(root).update(&f, false);
         } else {
-            pool.install(|| Arc::make_mut(&mut self.root).update(&f, true));
+            pool.install(|| Arc::make_mut(root).update(&f, true));
         }
     }
 }
@@ -219,16 +279,22 @@ impl<K: Ord, V> Node<K, V> {
             .partition_point(|(max, _)| max.borrow() < key)
             .min(children.len() - 1)
     }
+    #[inline]
     fn get<Q: Ord + ?Sized>(&self, key: &Q) -> Option<&V>
     where
         K: Borrow<Q>,
     {
-        match self {
-            Self::Leaf(rows) => rows
-                .binary_search_by(|(k, _)| k.borrow().cmp(key))
-                .ok()
-                .map(|i| &rows[i].1),
-            Self::Branch(children) => children[Self::child(children, key)].1.get(key),
+        let mut node = self;
+        loop {
+            match node {
+                Self::Leaf(rows) => {
+                    return rows
+                        .binary_search_by(|(k, _)| k.borrow().cmp(key))
+                        .ok()
+                        .map(|i| &rows[i].1);
+                }
+                Self::Branch(children) => node = &children[Self::child(children, key)].1,
+            }
         }
     }
 }

@@ -66,9 +66,9 @@ impl<K: Ord + Clone, V: Clone> Records<K, V> {
     }
     pub fn changed<'a>(&'a self, previous: &'a Self) -> impl Iterator<Item = (&'a K, &'a V)> {
         self.0
-            .changed(&previous.0)
-            .filter(move |(k, v)| previous.0.get(k).is_none_or(|old| !Arc::ptr_eq(old, v)))
-            .map(|(k, v)| (k, v.as_ref()))
+            .changed_pairs(&previous.0)
+            .filter(|(_, v, old)| old.is_none_or(|old| !Arc::ptr_eq(old, v)))
+            .map(|(k, v, _)| (k, v.as_ref()))
     }
     pub fn keys(&self) -> impl ExactSizeIterator<Item = &K> {
         self.0.keys()

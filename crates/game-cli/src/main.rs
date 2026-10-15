@@ -2,6 +2,9 @@ use game_assembly::Simulation;
 use game_cli::{Input, parse};
 use game_core::*;
 use std::io::{self, BufRead};
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;
 fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");

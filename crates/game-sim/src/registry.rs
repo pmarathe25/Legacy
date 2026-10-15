@@ -31,7 +31,7 @@ pub(crate) struct Typed<R: Request> {
 }
 pub(crate) type Stored = Arc<dyn Any + Send + Sync>;
 type Handler = Arc<dyn Fn(&mut Transaction<'_>, Value) -> Result<Value> + Send + Sync>;
-type Listener = Arc<dyn Fn(&mut Transaction<'_>, Value) -> Result<()> + Send + Sync>;
+type Listener = Arc<dyn Fn(&mut Transaction<'_>, &dyn Any) -> Result<()> + Send + Sync>;
 type Guard = Box<dyn Fn(&Host, &Envelope) -> Result<()> + Send + Sync>;
 type Stopper = Box<dyn Fn(&Host) -> Result<Option<String>> + Send + Sync>;
 pub(crate) struct Codec {
@@ -68,7 +68,7 @@ impl Builder {
         let mut b = Self {
             registry: Registry::default(),
             owner: "sim".into(),
-            data: HashMap::new(),
+            data: HashMap::default(),
         };
         b.plugin("sim", 1).expect("fresh builder");
         b.resource::<Actions>().expect("fresh builder");
@@ -163,7 +163,7 @@ impl Builder {
     pub fn subscribe<E: Event>(
         &mut self,
         name: &str,
-        listener: impl Fn(&mut Transaction<'_>, E) -> Result<()> + Send + Sync + 'static,
+        listener: impl Fn(&mut Transaction<'_>, &E) -> Result<()> + Send + Sync + 'static,
     ) -> Result<()> {
         let listeners = self.registry.listeners.entry(E::KEY.into()).or_default();
         if listeners.contains_key(name) {
@@ -174,7 +174,12 @@ impl Builder {
             name.into(),
             Arc::new(move |tx, value| {
                 tx.with_owner(&owner, |tx| {
-                    listener(tx, serde_json::from_value(value).map_err(json_error)?)
+                    listener(
+                        tx,
+                        value
+                            .downcast_ref::<E>()
+                            .ok_or_else(|| Error::Rejected("event type mismatch".into()))?,
+                    )
                 })
             }),
         );
@@ -183,7 +188,7 @@ impl Builder {
     pub fn before<R: Request>(
         &mut self,
         name: &str,
-        check: impl Fn(&mut Transaction<'_>, R) -> Result<()> + Send + Sync + 'static,
+        check: impl Fn(&mut Transaction<'_>, &R) -> Result<()> + Send + Sync + 'static,
     ) -> Result<()> {
         let checks = self.registry.before.entry(R::KEY.into()).or_default();
         if checks.contains_key(name) {
@@ -194,7 +199,10 @@ impl Builder {
             name.into(),
             Arc::new(move |tx, value| {
                 tx.with_owner(&owner, |tx| {
-                    check(tx, serde_json::from_value(value).map_err(json_error)?)
+                    check(
+                        tx,
+                        value.downcast_ref::<R>().expect("registered request type"),
+                    )
                 })
             }),
         );

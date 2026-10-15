@@ -140,11 +140,10 @@ impl<'a> Transaction<'a> {
             .expect("registered request type");
         self.depth += 1;
         let result = (|| {
-            if let Some(checks) = self.host.registry.before.get(R::KEY) {
-                let data = serde_json::to_value(&request).map_err(registry::json_error)?;
-                let checks: Vec<_> = checks.values().cloned().collect();
-                for check in checks {
-                    check(self, data.clone())?;
+            let host = self.host;
+            if let Some(checks) = host.registry.before.get(R::KEY) {
+                for check in checks.values() {
+                    check(self, &request)?;
                 }
             }
             self.with_owner(&handler.owner, |tx| (handler.run)(tx, request))
@@ -225,7 +224,7 @@ impl<'a> Transaction<'a> {
     }
     pub fn emit<E: Event>(&mut self, event: E, witnesses: Vec<PersonId>) -> Result<()> {
         self.notification_budget()?;
-        let data = serde_json::to_value(event).map_err(registry::json_error)?;
+        let data = serde_json::to_value(&event).map_err(registry::json_error)?;
         let sequence = self.next_notice;
         self.next_notice = sequence.checked_add(1).ok_or(Error::Overflow)?;
         self.notices.insert(
@@ -234,20 +233,16 @@ impl<'a> Transaction<'a> {
                 sequence,
                 at: self.at,
                 kind: E::KEY.into(),
-                data: data.clone(),
+                data,
                 witnesses,
             },
         );
-        self.notify_data(E::KEY, data)
+        self.notify_event(&event)
     }
     /// Notify feature subscribers without publishing a notice.
     pub fn notify<E: Event>(&mut self, event: E) -> Result<()> {
         self.notification_budget()?;
-        if !self.host.registry.listeners.contains_key(E::KEY) {
-            return Ok(());
-        }
-        let data = serde_json::to_value(event).map_err(registry::json_error)?;
-        self.notify_data(E::KEY, data)
+        self.notify_event(&event)
     }
     fn notification_budget(&mut self) -> Result<()> {
         self.calls += 1;
@@ -257,19 +252,15 @@ impl<'a> Transaction<'a> {
         )?;
         Ok(())
     }
-    fn notify_data(&mut self, key: &str, data: Value) -> Result<()> {
-        let listeners: Vec<_> = self
-            .host
-            .registry
-            .listeners
-            .get(key)
-            .into_iter()
-            .flat_map(|m| m.values().cloned())
-            .collect();
+    fn notify_event<E: Event>(&mut self, event: &E) -> Result<()> {
+        let host = self.host;
+        let Some(listeners) = host.registry.listeners.get(E::KEY) else {
+            return Ok(());
+        };
         self.depth += 1;
         let result = (|| {
-            for listener in listeners {
-                listener(self, data.clone())?;
+            for listener in listeners.values() {
+                listener(self, event)?;
             }
             Ok(())
         })();

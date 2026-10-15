@@ -22,6 +22,12 @@ pub fn route_with<'a>(
     to: AreaId,
     mut area_at: impl FnMut(AreaId) -> Option<Cow<'a, Area>>,
 ) -> Result<Route> {
+    if from == to {
+        return Ok(Route {
+            areas: vec![from],
+            duration: SimDuration(0),
+        });
+    }
     let mut costs = BTreeMap::from([(from, 0u64)]);
     let mut parents = BTreeMap::new();
     let mut queue = BTreeSet::from([(0u64, from)]);

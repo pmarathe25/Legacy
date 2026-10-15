@@ -8,6 +8,10 @@ Persistent ordered tables keep transaction snapshots cheap while preserving stab
 
 Borrowed-key lookups, `insert`, `remove`, `entry`, ordered ranges, and `changed(previous)` support owner requests and incremental validation. `changed` conservatively includes numeric rows from touched leaves; sparse records filter unchanged shared values. Removed records are absent, so cross-record constraints involving deletion need owner checks. Save loading validates complete resources.
 
+Empty tables allocate nothing. `modify` updates an existing row with one search and creates its default only when absent. `changed_pairs` supplies previous values by merging aligned leaves; structural changes fall back to keyed lookup. Validation avoids searching the previous tree for every unchanged neighbour.
+
+`version` returns a weak cache token. Writes invalidate it, including writes made without a strong snapshot. It keeps the allocation identity available for comparison without retaining records. Tokens are process-local and excluded from saves and game ordering.
+
 `Agenda<K, T>` stores one deadline per key and derives its time index on load. Due scans visit time and key order; replacing or cancelling a deadline uses bounded table updates.
 
 `update` stages disjoint leaves with the host's bounded Rayon pool. Small tables run inline. The callback reads its key and changes its own row. Shared-resource arbitration and structural changes remain outside this numeric phase. A worker panic discards the transaction.

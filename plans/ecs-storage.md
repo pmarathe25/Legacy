@@ -1,10 +1,12 @@
 # Plan: evaluate ECS storage for Legacy
 
-**Recommendation:** Evaluate standalone `bevy_ecs` as the leading candidate for frequently updated entity state. Compare it with dense custom tables and the small Legion candidate required by the [performance design](../docs/design/performance.md). Keep one production implementation after the comparison.
+**Status:** The initial Bevy/Legion/custom comparison is complete; production uses persistent ordered leaves and sparse records. See the [retained results](../tools/performance/README.md#storage-choice). The follow-up [architecture evaluation](../tools/performance/ARCHITECTURE.md) finds larger gains in compact runtime requests, packed hot data, and row-level undo. Its prototypes are benchmark-only; full-game migration remains to be measured. The sections below record the original evaluation procedure.
+
+**Original recommendation:** Evaluate standalone `bevy_ecs` as the leading candidate for frequently updated entity state. Compare it with dense custom tables and the small Legion candidate required by the [performance design](../docs/design/performance.md). Keep one production implementation after the comparison.
 
 The intended architecture combines compact entity storage with dedicated sparse records and immutable content definitions. Feature crates continue to own their mechanics and tests. Sharing an ECS world does not require moving gameplay into a large simulation or assembly crate.
 
-This is a proposed engineering direction. No representative benchmark currently establishes a winning storage implementation.
+The original proposal below predates those measurements; its invariants and comparison criteria remain relevant to a follow-up migration.
 
 ## 1. Address the current copying cost
 

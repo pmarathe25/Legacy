@@ -21,6 +21,9 @@ impl Resource for Property {
     const KEY: &'static str = "property.claims";
 }
 impl Property {
+    pub fn permitted_set(&self, person: PersonId) -> Option<&game_storage::Table<InventoryId, ()>> {
+        self.permitted.get(&person)
+    }
     pub fn permitted(&self, person: PersonId) -> impl Iterator<Item = InventoryId> + '_ {
         self.permitted
             .get(&person)

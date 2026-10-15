@@ -6,9 +6,12 @@ license.workspace = true
 publish = false
 
 [features]
+default = ["mimalloc"]
+mimalloc = ["dep:mimalloc"]
 allocation-profile = []
 
 [dependencies]
+mimalloc = { workspace = true, optional = true }
 game-ecology.workspace = true
 game-provisioning.workspace = true
 game-skills.workspace = true
@@ -55,4 +58,8 @@ harness = false
 
 [[bench]]
 name = "traits"
+harness = false
+
+[[bench]]
+name = "architecture"
 harness = false

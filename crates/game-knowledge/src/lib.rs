@@ -11,9 +11,18 @@ use game_core::*;
 use game_sim::*;
 pub use geography::*;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, Default, Serialize)]
 #[serde(transparent)]
-pub struct Facts(Table<Arc<str>, Fact>);
+pub struct Facts(
+    Table<Arc<str>, Fact>,
+    #[serde(skip)] Option<game_storage::Version<InventoryId, ()>>,
+);
+impl PartialEq for Facts {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl Eq for Facts {}
 impl Facts {
     pub fn insert(&mut self, key: Arc<str>, mut fact: Fact) -> Option<Fact> {
         fact.value = FactValue::promote(fact.value, &key);
@@ -58,18 +67,22 @@ impl Eq for Knowledge {}
 impl Resource for Knowledge {
     const KEY: &'static str = "knowledge.facts";
     fn validate(&self) -> Result<()> {
-        self.validate_rows(self.0.values())
+        require(
+            self.0
+                .values()
+                .all(|m| m.values().all(|f| f.confidence <= 100)),
+            "invalid confidence",
+        )
     }
     fn validate_changes(&self, previous: &Self) -> Result<()> {
-        for (person, facts) in self.0.changed(&previous.0) {
-            if let Some(old) = previous.0.get(person) {
-                require(
-                    facts.changed(old).all(|(_, f)| f.confidence <= 100),
-                    "invalid confidence",
-                )?;
-            } else {
-                self.validate_rows(std::iter::once(facts))?;
-            }
+        let empty = Facts::default();
+        for (_, facts, old) in self.0.changed_pairs(&previous.0) {
+            require(
+                facts
+                    .changed(old.unwrap_or(&empty))
+                    .all(|(_, f)| f.confidence <= 100),
+                "invalid confidence",
+            )?;
         }
         Ok(())
     }
@@ -141,11 +154,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     });
     geography::register(b)?;
     b.request::<ObserveStore>(|tx, r| {
+        let area = game_cargo::locality(tx, r.inventory)?;
         require(
-            game_transport::area(tx.get()?, r.person)? == game_cargo::locality(tx, r.inventory)?,
+            game_transport::area(tx.get()?, r.person)? == area,
             "cannot observe distant inventory",
         )?;
-        let area = game_cargo::locality(tx, r.inventory)?;
         let carrier = match tx.get::<game_cargo::Cargo>()?.0[&r.inventory].custody {
             game_cargo::Custody::Carried(p) => Some(p),
             _ => None,
@@ -209,8 +222,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         )?;
         Ok(at)
     })?;
-    b.request::<Deliver>(|tx, mut r| {
-        r.fact.value = FactValue::promote(r.fact.value, &r.key);
+    b.request::<Deliver>(|tx, r| {
         let facts = tx.edit::<Knowledge>()?.0.entry(r.recipient).or_default();
         if facts.get(r.key.as_str()).is_none_or(|old| {
             (old.observed, old.revision, old.confidence)
@@ -220,13 +232,4 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
-}
-
-impl Knowledge {
-    fn validate_rows<'a>(&'a self, mut rows: impl Iterator<Item = &'a Facts>) -> Result<()> {
-        require(
-            rows.all(|m| m.values().all(|f| f.confidence <= 100)),
-            "invalid confidence",
-        )
-    }
 }

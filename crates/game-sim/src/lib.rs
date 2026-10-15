@@ -8,9 +8,11 @@ pub use registry::{Builder, Event, Request, Resource};
 use registry::{Registry, Stored};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+// Keys come only from compiled Rust types; external keys retain ordered maps.
+use rustc_hash::FxHashMap as HashMap;
 use std::{
     any::TypeId,
-    collections::{BTreeMap, HashMap, VecDeque},
+    collections::{BTreeMap, VecDeque},
     sync::Arc,
 };
 pub use transaction::Transaction;

@@ -7,14 +7,14 @@ pub(crate) struct Cursor<'a, K, V> {
     rows: std::slice::Iter<'a, (K, V)>,
 }
 impl<'a, K, V> Cursor<'a, K, V> {
-    pub fn new(root: &'a Node<K, V>) -> Self {
+    pub fn new(root: Option<&'a Node<K, V>>) -> Self {
         Self {
             stack: Vec::new(),
-            next: Some(root),
+            next: root,
             rows: [].iter(),
         }
     }
-    pub fn from_bound<Q: Ord + ?Sized>(root: &'a Node<K, V>, lower: Bound<&Q>) -> Self
+    pub fn from_bound<Q: Ord + ?Sized>(root: Option<&'a Node<K, V>>, lower: Bound<&Q>) -> Self
     where
         K: Borrow<Q>,
     {
@@ -24,6 +24,7 @@ impl<'a, K, V> Cursor<'a, K, V> {
             Bound::Unbounded => false,
         };
         let mut cursor = Self::new(root);
+        let Some(root) = root else { return cursor };
         let mut node = root;
         while let Node::Branch(children) = node {
             let i = children

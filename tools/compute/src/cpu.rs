@@ -63,24 +63,38 @@ impl Input {
             urgent: (0..people).map(|i| i % 3 == 0).collect(),
         }
     }
+    fn pick(&self, i: usize, rows: &[Packed]) -> Answer {
+        choose(
+            rows,
+            (self.current[i] != u64::MAX).then_some(self.current[i]),
+            5,
+            self.urgent[i],
+        )
+        .map_or(Answer::NONE, |r| Answer {
+            id: r.id,
+            score: r.score,
+        })
+    }
     pub fn reference(&self) -> Vec<Answer> {
         self.rows
             .chunks(self.choices)
             .enumerate()
-            .map(|(i, rows)| {
-                choose(
-                    rows,
-                    (self.current[i] != u64::MAX).then_some(self.current[i]),
-                    5,
-                    self.urgent[i],
-                )
-                .map_or(Answer::NONE, |r| Answer {
-                    id: r.id,
-                    score: r.score,
-                })
-            })
+            .map(|(i, rows)| self.pick(i, rows))
             .collect()
     }
+    pub fn parallel(&self, pool: &rayon::ThreadPool) -> Vec<Answer> {
+        if pool.current_num_threads() == 1 {
+            return self.packed();
+        }
+        pool.install(|| {
+            self.rows
+                .par_chunks(self.choices)
+                .enumerate()
+                .map(|(i, rows)| self.pick(i, rows))
+                .collect()
+        })
+    }
+
     pub fn packed(&self) -> Vec<Answer> {
         self.reference()
     }
@@ -415,6 +429,7 @@ mod tests {
                         .num_threads(workers)
                         .build()
                         .unwrap();
+                    assert_eq!(input.parallel(&pool), expected);
                     for vector in [false, true] {
                         for tile in [128, 4096] {
                             assert_eq!(columns.evaluate(&input, &pool, vector, tile), expected);

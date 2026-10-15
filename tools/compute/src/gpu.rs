@@ -29,6 +29,12 @@ pub struct Gpu {
     pipeline: wgpu::ComputePipeline,
     limit: u64,
 }
+pub struct Timings {
+    pub elapsed: f64,
+    pub packing: f64,
+    pub upload_enqueue: f64,
+    pub submit_readback: f64,
+}
 pub struct Prepared<'a> {
     gpu: &'a Gpu,
     input: wgpu::Buffer,
@@ -53,16 +59,31 @@ impl Gpu {
                 adapter.limits().max_storage_buffer_binding_size
             );
         }
-        let adapter = adapters.into_iter().find(|a| {
-            matches!(
-                a.get_info().device_type,
-                wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu
-            ) && a.features().contains(wgpu::Features::SHADER_INT64)
-        });
+        let preferred = std::env::var("LEGACY_COMPUTE_ADAPTER")
+            .ok()
+            .map(|s| s.to_lowercase());
+        let adapter = adapters
+            .into_iter()
+            .filter(|a| {
+                matches!(
+                    a.get_info().device_type,
+                    wgpu::DeviceType::IntegratedGpu | wgpu::DeviceType::DiscreteGpu
+                ) && a.features().contains(wgpu::Features::SHADER_INT64)
+                    && preferred
+                        .as_ref()
+                        .is_none_or(|s| a.get_info().name.to_lowercase().contains(s))
+            })
+            .min_by_key(|a| {
+                (
+                    a.get_info().device_type != wgpu::DeviceType::DiscreteGpu,
+                    a.get_info().name,
+                )
+            });
         let Some(adapter) = adapter else {
             println!("gpu_skipped=no_hardware_adapter_with_native_int64");
             return None;
         };
+        println!("gpu_selected_adapter={:?}", adapter.get_info());
         let caps = adapter.limits();
         let capacity = u64::from(caps.max_storage_buffer_binding_size)
             .min(caps.max_buffer_size)
@@ -114,6 +135,12 @@ impl Gpu {
         })
     }
     pub fn prepare(&self, input: &Input) -> Option<Prepared<'_>> {
+        if input.people.div_ceil(64)
+            > self.device.limits().max_compute_workgroups_per_dimension as usize
+        {
+            println!("gpu_skipped=dispatch_limit population={}", input.people);
+            return None;
+        }
         let size = (2 + 7 * input.rows.len() + 2 * input.people) as u64 * 8;
         if size > self.limit {
             println!(
@@ -217,7 +244,7 @@ impl Prepared<'_> {
         self.readback.unmap();
         answers
     }
-    pub fn evaluate(&mut self, input: &Input, lanes: &Lanes, expected: &[Answer], repeat: usize) {
+    pub fn round_trip(&mut self, input: &Input, lanes: &Lanes, expected: &[Answer]) -> Timings {
         let total = Instant::now();
         let start = Instant::now();
         let mut upload = self
@@ -254,6 +281,20 @@ impl Prepared<'_> {
         self.read(expected);
         let submit_readback = start.elapsed().as_secs_f64() * 1000.;
         let elapsed = total.elapsed().as_secs_f64() * 1000.;
+        Timings {
+            elapsed,
+            packing,
+            upload_enqueue,
+            submit_readback,
+        }
+    }
+    pub fn evaluate(&mut self, input: &Input, lanes: &Lanes, expected: &[Answer], repeat: usize) {
+        let Timings {
+            elapsed,
+            packing,
+            upload_enqueue,
+            submit_readback,
+        } = self.round_trip(input, lanes, expected);
         let start = Instant::now();
         self.submit(input.people, 32);
         self.read(expected);

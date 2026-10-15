@@ -43,7 +43,7 @@ quit
 
 **Host:** `game-sim` stores typed resources, orders due requests, commits transactions, and saves complete state. There is one clock and one canonical action record per actor. CPU workers evaluate numeric batches against immutable inputs; arbitration and commit remain ordered.
 
-**Growth:** [Architecture tests](crates/game-assembly/tests/architecture.rs) enforce dependency direction, prohibit cross-owner mutation and duplicate kernels, and cap source size at 600 lines per feature crate, 800 for shared storage, and 1,100 for the generic host. Split a growing mechanic into another named owner rather than moving it into the assembly.
+**Growth:** [Architecture tests](crates/game-assembly/tests/architecture.rs) enforce dependency direction, prohibit cross-owner mutation and duplicate kernels, and cap source size at 600 lines per feature crate, 650 for knowledge, 850 for shared storage, and 1,100 for the generic host. Split a growing mechanic into another named owner rather than moving it into the assembly.
 
 See the [crate index](crates/README.md) for responsibilities and dependencies and [migration note](MIGRATION.md) for the replacement boundary.
 

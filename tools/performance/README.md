@@ -8,6 +8,7 @@ cargo bench -p game-performance --bench ledger --locked --offline
 cargo bench -p game-performance --bench storage --locked --offline
 cargo bench -p game-performance --bench perception --locked --offline
 cargo bench -p game-performance --bench traits --locked --offline
+cargo bench -p game-performance --bench architecture --locked --offline
 LEGACY_POPULATION=10000 LEGACY_WORKERS=1 cargo bench -p game-performance --bench economy --locked --offline
 LEGACY_POPULATION=10000 LEGACY_WORKERS=4 LEGACY_DISTRIBUTED=true cargo bench -p game-performance --bench economy --locked --offline
 LEGACY_POPULATION=10000 cargo bench -p game-performance --bench latency --locked --offline
@@ -15,6 +16,8 @@ cargo bench -p game-performance --features allocation-profile --bench economy --
 ```
 
 Use `LEGACY_POPULATION` values 15, 1000, 10000, and 20000, and worker counts 1, 2, 4, and the available bounded budget. Repeat each economy and latency run at least three times. `LEGACY_MINUTES` defaults to 120. The storage bench runs this population/worker matrix with three repeats and distributed/contested stock automatically.
+
+The CLI and performance fixtures default to bundled [mimalloc](https://github.com/purpleprotocol/mimalloc_rust); building them needs a C compiler. Feature libraries select no global allocator. Use `run.py --system-allocator` or Cargo's `--no-default-features` for a controlled system-allocator comparison. Metadata identifies the allocator. Optional allocation instrumentation wraps the selected allocator, preserving that choice.
 
 **Storage:** The shared protocol fixture includes needs, progress, scoring from four known choices, two sparse relationship edges per person, stable transfer arbitration, arrivals, membership changes, structural replacement, observation extraction, and a checkpoint followed by continued execution. It compares canonical records, conserved quantities, and event hashes across workers and reversed evaluation output. This is a storage workload; its progress and transfers are fixture rules. It does not run the complete economy.
 
@@ -48,26 +51,29 @@ These comparison runs instrumented allocations equally; their elapsed times incl
 
 ## Production measurements
 
-Measured on the same i7-8550U laptop, 4 cores/8 threads, 7.15 GiB RAM, Linux, Rust 1.98.1. Release builds use optimization level 3, thin LTO, and one codegen unit, with portable CPU defaults. This machine is below the provisional six-core/16-GiB reference. The composed survival workload runs 120 minutes; values are three-run medians with one worker.
+Measured on the i7-8550U laptop, 4 cores/8 threads, 7.15 GiB RAM, Linux, Rust 1.98.1. Release builds use optimization level 3, thin LTO, one codegen unit, portable CPU defaults, and bundled mimalloc. This machine is below the provisional six-core/16-GiB reference. The composed survival workload runs 120 minutes; values are three-run medians with one worker.
 
 | People | Layout | Simulated minutes/s | Active RSS MiB | Peak RSS through save/load MiB |
 | --- | --- | ---: | ---: | ---: |
-| 1,000 | Shared store | 1,995.7 | 12.5 | 19.9 |
-| 1,000 | 32 settlements | 1,694.1 | 12.5 | 19.6 |
-| 10,000 | Shared store | 137.1 | 39.9 | 114.4 |
-| 10,000 | 32 settlements | 128.8 | 39.0 | 111.7 |
-| 20,000 | Shared store | 62.2 | 69.2 | 219.8 |
-| 20,000 | 32 settlements | 58.2 | 68.4 | 214.3 |
+| 1,000 | Shared store | 2,570.6 | 16.9 | 43.0 |
+| 1,000 | 32 settlements | 2,439.3 | 16.9 | 35.1 |
+| 10,000 | Shared store | 201.3 | 44.9 | 144.9 |
+| 10,000 | 32 settlements | 196.9 | 44.9 | 143.7 |
+| 20,000 | Shared store | 93.1 | 72.4 | 261.3 |
+| 20,000 | 32 settlements | 90.9 | 72.4 | 268.1 |
+| 100,000 | Shared store | 15.7 | 301.3 | 1,114.3 |
 
-The preceding committed implementation measured 61.0 minutes/s and 76.6 MiB active RSS at 10,000 people, and 28.1 minutes/s and 143.3 MiB at 20,000. The optimization pass includes compiler settings as well as representation, indexing, and scheduling changes. It more than doubles ordinary survival throughput and roughly halves active memory in this fixture.
+Commit `9d2d042` measured 137.1 minutes/s at 10,000 people and 62.2 at 20,000. This pass improves ordinary survival throughput by roughly 50%. A frozen executable also checked the 100,000-person case: 11.1 → 15.7 minutes/s, with identical saved state and continued execution. The 100,000-person run is a stress case, not the 10,000-person design target.
 
-Recorded facts use typed immutable payloads rather than repeated JSON conversion. Personal histories, relationships, and skills use bounded persistent updates. Trait profiles compile into five numeric weights. Object IDs, local patches, standing access, carried containers, and reservations have owner-maintained indexes. Active minds use a compact ID set; waiting minds wake on action completion or a physiological threshold. Nested attempts share immutable resource checkpoints, and adjacent wake completions share bounded commits.
+Empty persistent tables allocate nothing; aligned validation pairs avoid repeated tree searches. Observation refreshes update provenance without replacing unchanged payloads. Completed container discovery uses weak permission-version tokens. Provisioning reads locations once per query and reuses routes to a destination. Typed internal hooks and signals avoid JSON conversion and temporary subscriber lists. Content, observation cadence, stale knowledge, transaction boundaries, and arbitration order retain their tested behavior.
 
-The final matrix checked 96 economy runs at 1, 2, 4, and 8 workers, exact meals and live bodies, actual births/deaths, in-flight shipments and reservations, and continued canonical state after loading. The largest committed boundary was 4.8 ms. Across measured workers and repeats, pause p99 stayed below 3.0 ms at 20,000 people; public look-command p99 stayed below 0.36 ms at 10,000 and 20,000. These were 100 queued samples per run, not every possible command. Maximum individual pause latency was 3.9 ms.
+A same-source allocator comparison measured approximately 153/69 minutes/s with the system allocator and 200/94 with mimalloc at 10,000/20,000 people. Thus the allocator accounts for much of the improvement. A separate dynamic-library probe found TCMalloc faster than mimalloc on this machine, with greater retained and peak RSS. Mimalloc is the bundled portable default; the system allocator remains a build option. At 20,000 people the default raises active RSS by about 3 MiB and save/load peak by about 45 MiB compared with the preceding commit. At 100,000, active RSS falls from 307.5 to 301.3 MiB. These are workload-dependent allocator tradeoffs.
 
-Shared-store save/load medians were 74/138 ms at 10,000 people and 156/281 ms at 20,000. Peak RSS across normal runs stayed below 225 MiB. Load reconstructs shared payloads and derived indexes; it trades some CPU work for a smaller retained footprint. Save/load temporarily holds both simulations and snapshots.
+The matrix checked 96 economy runs at 1, 2, 4, and 8 workers, exact meals and live bodies, actual births/deaths, in-flight shipments and reservations, and continued canonical state after loading. All corresponding hashes match the preceding executable. The largest committed boundary through 20,000 people was 5.5 ms. Across measured workers and repeats, pause p99 stayed below 3.1 ms and look-command p99 below 0.43 ms at 10,000 and 20,000. These were 100 queued samples per run, not every possible command. Maximum individual pause latency was 3.8 ms. At 100,000 people the largest advancement boundary was 14.1 ms; session acknowledgement latency was not measured there.
 
-Optional allocation instrumentation preserved all 12 corresponding economy hashes. At 10,000 people, advancement made 1.90 million allocations, down from 7.69 million in the preceding pass, with 26.1 MiB requested live heap and 26.8 MiB peak. At 20,000 people those values were 52.0/53.4 MiB. Save/load/continued execution peaked at 105.5/211.6 MiB requested heap at 10,000/20,000 people. This instrumentation adds atomic accounting overhead; throughput above comes from uninstrumented builds. Reconstructing shared typed payloads makes more small allocations during loading, despite the smaller live footprint.
+Shared-store save/load medians were 50/137 ms at 10,000 people, 110/261 ms at 20,000, and 881/1,473 ms at 100,000. Peak RSS across the ordinary population matrix stayed below 282 MiB. Save/load temporarily retains both simulations and serialized snapshots.
+
+Optional allocation instrumentation preserved all six corresponding economy hashes. At 10,000 people, advancement made 1.77 million allocations, down from 1.90 million, with 25.8 MiB requested live heap and 26.5 MiB peak. At 20,000 people those values were 51.4/52.8 MiB. Save/load/continued execution peaked at 104.9/210.3 MiB requested heap at 10,000/20,000. Instrumentation adds atomic accounting overhead; throughput above comes from uninstrumented builds.
 
 ### Headroom for richer records
 
@@ -75,10 +81,10 @@ Three-run medians against commit `9fc5f07`, with the same fixture and integer ru
 
 | Workload | Before ms | After ms |
 | --- | ---: | ---: |
-| 10,000 local observations with 1,000 historical accounts, 1,000 maps, 10,000 world patches | 2,840.3 | 97.1 |
-| 10,000 provisioning queries with those histories | 465.7 | 26.7 |
-| 10,000 known-road routes with those histories | 4,127.8 | 8.8 |
-| 10,000 effective-weight reads from fully populated 1,000-trait profiles | 2,128.3 | 0.57 |
+| 10,000 local observations with 1,000 historical accounts, 1,000 maps, 10,000 world patches | 2,840.3 | 79.9 |
+| 10,000 provisioning queries with those histories | 465.7 | 17.0 |
+| 10,000 known-road routes with those histories | 4,127.8 | 6.5 |
+| 10,000 effective-weight reads from fully populated 1,000-trait profiles | 2,128.3 | 0.41 |
 
 Routing looks up reached records instead of reconstructing the whole known graph. Decision preparation seeks relevant fact namespaces. Repeated trait reads use compiled numeric effects. These gains remove work proportional to unrelated history and definition count. The reference comparison also checked complete logical perception state; physical JSON field order is not gameplay state.
 
@@ -88,4 +94,8 @@ The [numeric decision experiment](../compute/README.md) compares packed records,
 
 See the compute tool for measured arithmetic, packing, GPU transfers, resident dispatches, and a component-level Bevy comparison. Packed numeric inputs are in production. SIMD columns and GPU execution remain experiments: their conversion costs must be included before changing the simulation backend.
 
-**Limits:** Extra workers still produce little whole-survival scaling. Shared-store medians at 10,000 people were 137.1, 138.2, 137.4, and 136.7 minutes/s at 1, 2, 4, and 8 workers; at 20,000 they were 62.2, 62.6, 64.3, and 63.7. Decisions, observations, and receiver commits remain mostly serial. The distributed 20,000-person case still sits near the 60-minute target. Full late-game production, tactical load, unique long histories, campaign catch-up, and mass-death latency remain unmeasured. The configured memory and ordinary-input budgets are met for these fixtures, not established for the complete design.
+## Fundamental architecture evaluation
+
+The [architecture experiments](ARCHITECTURE.md) compare persistent hot tables with packed columns and row-level undo, exact analytical physiology, and compact typed pending messages. They retain stable IDs and test rollback, structural changes, retained readers, and continued execution after a checkpoint. These isolated kernels establish promising directions; they are not whole-game speedups or a second production engine.
+
+**Limits:** Extra workers still produce little whole-survival scaling. Shared-store medians at 10,000 people were 201.3, 200.5, 200.0, and 195.6 minutes/s at 1, 2, 4, and 8 workers; at 20,000 they were 93.1, 91.5, 90.7, and 91.4. Decisions, observations, and receiver commits remain mostly serial. Full late-game production, tactical load, unique long histories, campaign catch-up, and mass-death latency remain unmeasured. The configured memory and ordinary-input budgets are met for these fixtures, not established for the complete design.

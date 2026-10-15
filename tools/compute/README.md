@@ -12,13 +12,27 @@ The fixture supplies 4, 16, or 64 candidates per person. It compares every outpu
 
 **CPU layouts:** The packed path uses the production 56-byte `Candidate` record. Columns keep seven arrays of IDs, five signed numeric terms, and survival flags: 49 bytes per candidate. The person-major layout vectorizes candidate arithmetic before selection. The choice-major layout vectorizes scoring and arbitration across people, with 128- and 4,096-person tiles and bounded stack buffers. Workers share one bounded Rayon pool. The portable path permits compiler vectorization; the AVX2 path uses runtime detection and compiles the same arithmetic for that instruction set. Release disassembly must contain vector instructions before treating it as SIMD.
 
-**GPU:** The optional `gpu` feature uses wgpu 27 with Vulkan and native 64-bit integer support. It selects a hardware adapter and prints its identity and limits; software adapters do not count as GPU measurements. Unsupported devices retain the CPU experiment. This dependency does not enter the game CLI or production feature crates. Device buffer limits use available hardware capacity, capped at 512 MiB per binding. Choice-major input coalesces adjacent GPU threads' reads; only buffer offsets use 32-bit arithmetic, while values and IDs retain all 64 bits.
+**GPU:** The optional `gpu` feature uses wgpu 27 with Vulkan and native 64-bit integer support. It prints available adapters and the selected adapter's identity and limits. Unsupported devices retain CPU execution in automatic mode. This dependency does not enter the game CLI or production feature crates. Device buffer limits use available hardware capacity, capped at 512 MiB per binding; oversized dispatches also fall back. Choice-major input coalesces adjacent GPU threads' reads; only buffer offsets use 32-bit arithmetic, while values and IDs retain all 64 bits.
 
 Device creation, pipeline setup, and reusable buffer allocation are reported separately. Each full evaluation packs directly into upload staging memory, dispatches, waits, maps readback, constructs output, and checks exact equality. `upload_enqueue_ms` measures staging allocation; `packing_ms` includes filling and closing that upload view. `submit_readback_ms` includes deferred transfer and driver work. `resident_dispatch_ms` amortizes 32 identical dispatches with one readback: it is a favorable residency experiment without intervening simulation commits. It cannot be substituted for full round-trip cost.
 
 The GPU receives recorded numeric inputs only. Provenance, text, unknown schemas, and sparse histories remain CPU data. A future accelerator integration would require independent decision phases with revision-tagged inputs, bounded buffers, CPU fallback, stable conflict arbitration, and measured end-to-end benefit.
 
 The current numeric observation representation and packed decision inputs provide a path to those batches. They preserve stale knowledge and keep additional authored crops, traits, and objects as data. The existing [ECS comparison](../performance/README.md#storage-choice) also measures Bevy archetypes and Legion against persistent dense leaves; this experiment studies temporary packed views rather than adding another world implementation.
+
+## Backend calibration
+
+```sh
+LEGACY_COMPUTE_POPULATIONS=20000 cargo run --release -p game-compute-experiment --features gpu --locked --offline -- --calibrate
+LEGACY_COMPUTE_BACKEND=cpu LEGACY_COMPUTE_POPULATIONS=20000 cargo run --release -p game-compute-experiment --features gpu --locked --offline -- --calibrate
+```
+
+`--calibrate` measures each requested population with `LEGACY_COMPUTE_CHOICES` candidates per actor (default 16), at least three repeats, and `LEGACY_COMPUTE_WORKERS` workers (default up to four). It compares serial packed CPU, parallel packed CPU, SIMD columns including construction, and GPU execution including column construction, upload, dispatch, readback, validation, and temporary-buffer cleanup. Driver/pipeline initialization and reusable device-buffer creation happen before timing. Each batch is bounded to eight million candidates.
+
+`LEGACY_COMPUTE_BACKEND=auto|cpu|gpu` controls selection. Auto requires a GPU median more than 20% faster than the best measured CPU median. CPU avoids GPU initialization; a forced unavailable GPU returns an error. Hardware adapters need native 64-bit integer support. Selection prefers a discrete adapter; `LEGACY_COMPUTE_ADAPTER` can filter adapter names, including when comparing multiple GPUs. Software Vulkan devices do not count.
+
+This is a prototype for launch-time selection at actual independent batch sizes. It reports a choice in this experiment; the simulation's character reviews still prepare observations and commit contested actions on CPU. The calibration cannot accelerate that serial work. A future game integration must calibrate the same input representation, allocator, worker budget, and batch shapes it will actually submit. The compute tool currently uses the system allocator; the game CLI defaults to mimalloc. Backend preference belongs to runtime configuration, outside saved gameplay state.
+
 
 ## Measured layouts
 

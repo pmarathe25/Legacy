@@ -65,43 +65,80 @@ impl Opportunity {
 }
 pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec<Opportunity>> {
     require(meals > 0, "gather a positive number of meals")?;
-    let empty = Facts::default();
-    let facts = tx
-        .get::<game_knowledge::Knowledge>()?
-        .0
-        .get(&person)
-        .unwrap_or(&empty);
+    let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) else {
+        return Ok(vec![]);
+    };
+    struct Store {
+        id: InventoryId,
+        location: Option<StoreLocation>,
+        meal: bool,
+    }
     let inventories: Vec<_> = with_prefix(facts, "store:")
-        .filter_map(|(key, _)| {
-            key.strip_prefix("store:")?
-                .parse::<u64>()
-                .ok()
-                .map(InventoryId)
+        .filter_map(|(key, fact)| {
+            let id = InventoryId(key.strip_prefix("store:")?.parse::<u64>().ok()?);
+            Some(Store {
+                id,
+                location: known(facts, &location_key(id)),
+                meal: (if key.as_bytes()[6] == b'+' || (key.len() > 7 && key.as_bytes()[6] == b'0')
+                {
+                    known::<game_knowledge::Stock>(facts, &store_key(id))
+                } else {
+                    fact.value.decode::<game_knowledge::Stock>()
+                })
+                .is_some_and(|s| {
+                    tx.get::<game_objects::Objects>()
+                        .is_ok_and(|o| o.meal(&s).is_some())
+                }),
+            })
         })
         .collect();
+    let position = tx
+        .get::<game_transport::Positions>()
+        .ok()
+        .and_then(|p| p.0.get(&person));
+    // One immutable fact view per query: reuse routes to a destination across
+    // stores and crops. Unknown or unreachable destinations remain unavailable.
+    let mut costs = std::collections::BTreeMap::new();
+    let mut duration = |target: AreaId| {
+        let position = position?;
+        if matches!(position, game_transport::Location::At(here) if *here == target) {
+            return Some(SimDuration(0));
+        }
+        *costs.entry(target).or_insert_with(|| {
+            next_step(facts, position, target)
+                .ok()
+                .map(|(_, duration)| duration)
+        })
+    };
     let mut options = vec![];
     for inventory in &inventories {
-        let stock = known::<game_knowledge::Stock>(facts, &store_key(*inventory));
-        if !stock.is_some_and(|s| {
-            tx.get::<game_objects::Objects>()
-                .is_ok_and(|o| o.meal(&s).is_some())
-        }) {
+        if !inventory.meal {
             continue;
         }
-        let Ok((_, duration)) =
-            location(tx, person, facts, *inventory).and_then(|a| travel(tx, person, facts, a))
-        else {
+        let Some(location) = &inventory.location else {
+            continue;
+        };
+        let target = if location.carrier == Some(person) {
+            let Ok(area) = game_transport::area(tx.get()?, person) else {
+                continue;
+            };
+            area
+        } else {
+            location.area
+        };
+        let Some(travel) = duration(target) else {
             continue;
         };
         options.push(Opportunity {
             id: inventory
+                .id
                 .0
                 .checked_mul(2)
                 .and_then(|n| n.checked_add(10))
                 .ok_or(Error::Overflow)?,
-            travel: duration,
+            travel,
             plan: Plan::Meal {
-                inventory: *inventory,
+                inventory: inventory.id,
             },
         });
     }
@@ -127,20 +164,20 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
         if p.stock < quantity {
             continue;
         }
-        let Ok((_, duration)) = travel(tx, person, facts, p.area) else {
+        let Some(travel) = duration(p.area) else {
             continue;
         };
         let mass = tx.get::<game_objects::Objects>()?.mass(p.good, quantity)?;
         // Prefer one's own carried container, then a known container at the patch.
         let inventory = inventories
             .iter()
-            .filter_map(|id| {
-                let l: StoreLocation = known(facts, &location_key(*id))?;
+            .filter_map(|store| {
+                let l = store.location.as_ref()?;
                 ((l.carrier == Some(person) || l.area == p.area)
                     && l.mass
                         .checked_add(mass)
                         .is_some_and(|used| used <= l.capacity))
-                .then_some((l.carrier != Some(person), *id))
+                .then_some((l.carrier != Some(person), store.id))
             })
             .min()
             .map(|(_, id)| id);
@@ -150,7 +187,7 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
                 .checked_mul(2)
                 .and_then(|n| n.checked_add(11))
                 .ok_or(Error::Overflow)?,
-            travel: duration,
+            travel,
             plan: Plan::Forage {
                 patch,
                 inventory,
@@ -224,6 +261,7 @@ fn next_step(
 ) -> Result<(Option<AreaId>, SimDuration)> {
     use game_transport::Location;
     match location {
+        Location::At(area) if *area == target => Ok((None, SimDuration(0))),
         Location::At(area) => {
             let route = game_knowledge::route(facts, *area, target)?;
             Ok((route.areas.get(1).copied(), route.duration))

@@ -1,6 +1,7 @@
 mod cpu;
 #[cfg(feature = "gpu")]
 mod gpu;
+mod selection;
 use cpu::*;
 use std::{hint::black_box, time::Instant};
 fn main() {
@@ -25,6 +26,18 @@ fn main() {
         .unwrap_or("5".into())
         .parse()
         .unwrap();
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    if !args.is_empty() {
+        if args == ["--calibrate"] {
+            if let Err(error) = selection::run(&populations, repeats) {
+                eprintln!("{error}");
+                std::process::exit(2);
+            }
+            return;
+        }
+        eprintln!("usage: game-compute-experiment [--calibrate]");
+        std::process::exit(2);
+    }
     #[cfg(feature = "gpu")]
     let gpu = gpu::Gpu::open();
     for population in populations {

@@ -72,3 +72,62 @@ fn lifecycle_signals_are_atomic_private_and_not_duplicated_by_cancellation() {
     assert_eq!(host.get::<Count>().unwrap().completions, 3);
     assert_eq!(host.notices().count(), 0);
 }
+
+#[test]
+fn typed_hooks_and_private_signals_borrow_payloads_without_json_roundtrips() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static SERIALIZATIONS: AtomicUsize = AtomicUsize::new(0);
+    #[derive(Deserialize)]
+    struct Numeric(u64);
+    impl Serialize for Numeric {
+        fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+            SERIALIZATIONS.fetch_add(1, Ordering::Relaxed);
+            s.serialize_u64(self.0)
+        }
+    }
+    impl Request for Numeric {
+        const KEY: &'static str = "signals.numeric.request";
+        type Response = ();
+    }
+    impl Event for Numeric {
+        const KEY: &'static str = "signals.numeric.event";
+    }
+    #[derive(Serialize, Deserialize)]
+    struct Exercise(bool);
+    impl Request for Exercise {
+        const KEY: &'static str = "signals.exercise";
+        type Response = ();
+    }
+    let mut b = Builder::new();
+    b.plugin("signals", 1).unwrap();
+    b.resource::<Count>().unwrap();
+    b.request::<Numeric>(|_, _| Ok(())).unwrap();
+    b.before::<Numeric>("check", |tx, n| {
+        tx.edit::<Count>()?.completions += n.0;
+        Ok(())
+    })
+    .unwrap();
+    b.subscribe::<Numeric>("receive", |tx, n| {
+        tx.edit::<Count>()?.completions += n.0;
+        Ok(())
+    })
+    .unwrap();
+    b.request::<Exercise>(|tx, r| {
+        tx.call(Numeric(7))?;
+        if r.0 {
+            tx.emit(Numeric(11), vec![])
+        } else {
+            tx.notify(Numeric(11))
+        }
+    })
+    .unwrap();
+    let mut host = b.build(1, 1).unwrap();
+    host.dispatch(Exercise(false)).unwrap();
+    assert_eq!(SERIALIZATIONS.load(Ordering::Relaxed), 0);
+    assert_eq!(host.get::<Count>().unwrap().completions, 18);
+    assert_eq!(host.notices().count(), 0);
+    host.dispatch(Exercise(true)).unwrap();
+    assert_eq!(SERIALIZATIONS.load(Ordering::Relaxed), 1);
+    assert_eq!(host.get::<Count>().unwrap().completions, 36);
+    assert_eq!(host.notices().next().unwrap().data, serde_json::json!(11));
+}

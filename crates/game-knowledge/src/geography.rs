@@ -39,37 +39,48 @@ pub(super) fn remember(
     subject: Subject,
     data: FactValue,
 ) -> Result<()> {
-    let cached = tx.get::<Knowledge>()?.1.get(&subject);
-    let key = cached
-        .map(|c| c.key.clone())
-        .unwrap_or_else(|| subject.key().into());
-    let changed = cached.is_none_or(|c| c.value.as_ref() != &data);
-    let value = if changed {
-        Arc::new(data)
+    let cached = tx.get::<Knowledge>()?.1.shared(&subject);
+    let cached = if cached.as_ref().is_some_and(|c| c.value.as_ref() == &data) {
+        cached.unwrap()
     } else {
-        cached.unwrap().value.clone()
-    };
-    if changed {
+        let key = cached
+            .map(|c| c.key.clone())
+            .unwrap_or_else(|| subject.key().into());
         tx.edit::<Knowledge>()?.1.insert(
-            subject,
+            subject.clone(),
             Cached {
-                key: key.clone(),
-                value: value.clone(),
+                key,
+                value: Arc::new(data),
             },
         );
-    }
-    let fact = Fact {
-        value,
-        source: person,
-        observed: tx.now(),
-        revision: tx.revision_after(),
-        confidence: 100,
+        tx.get::<Knowledge>()?.1.shared(&subject).unwrap()
     };
+    let observed = tx.now();
+    let revision = tx.revision_after();
     tx.edit::<Knowledge>()?
         .0
-        .entry(person)
-        .or_default()
-        .insert(key, fact);
+        .modify(person, Facts::default, |facts| {
+            if let Some(fact) = facts.0.get_mut(cached.key.as_ref()) {
+                if !Arc::ptr_eq(&fact.value, &cached.value) {
+                    fact.value = cached.value.clone();
+                }
+                fact.source = person;
+                fact.observed = observed;
+                fact.revision = revision;
+                fact.confidence = 100;
+            } else {
+                facts.insert(
+                    cached.key.clone(),
+                    Fact {
+                        value: cached.value.clone(),
+                        source: person,
+                        observed,
+                        revision,
+                        confidence: 100,
+                    },
+                );
+            }
+        });
     Ok(())
 }
 /// Traverse recorded roads lazily. A known road may reach an endpoint whose
@@ -126,25 +137,45 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         }
         // Inspect newly encountered accessible containers; refreshing a known stock
         // requires deliberate inspection, so remembered stock can still become stale.
+        let empty = Table::new();
+        let permitted = tx
+            .get::<game_property::Property>()?
+            .permitted_set(r.person)
+            .unwrap_or(&empty);
         let memory = tx.get::<Knowledge>()?;
         let facts = &memory.0[&r.person];
-        let inventories: Vec<_> = tx
-            .get::<game_property::Property>()?
-            .permitted(r.person)
+        // Membership is immutable until permissions change. Once every permitted
+        // store is known, container motion cannot introduce an unknown store.
+        if facts.1.as_ref().is_some_and(|old| old.matches(permitted)) {
+            return Ok(());
+        }
+        let mut all_known = true;
+        let inventories: Vec<_> = permitted
+            .keys()
+            .copied()
             .filter(|id| {
                 let known = memory
                     .1
                     .get(&Subject::Stock(*id))
                     .map(|cached| facts.contains_key(cached.key.as_ref()))
                     .unwrap_or_else(|| facts.contains_key(store_key(*id).as_str()));
-                !known && game_cargo::locality(tx, *id).is_ok_and(|a| a == area)
+                if known {
+                    return false;
+                }
+                let local = game_cargo::locality(tx, *id).is_ok_and(|a| a == area);
+                all_known &= local;
+                local
             })
             .collect();
+        let completed = (all_known && !permitted.is_empty()).then(|| permitted.version());
         for inventory in inventories {
             tx.call(ObserveStore {
                 person: r.person,
                 inventory,
             })?;
+        }
+        if let Some(version) = completed {
+            tx.edit::<Knowledge>()?.0.get_mut(&r.person).unwrap().1 = Some(version);
         }
         Ok(())
     })?;
