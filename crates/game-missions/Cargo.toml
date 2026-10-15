@@ -6,15 +6,15 @@ license.workspace = true
 
 [dependencies]
 game-core.workspace = true
-game-ecs.workspace = true
+game-sim.workspace = true
+game-physiology.workspace = true
+game-transport.workspace = true
+game-land.workspace = true
 game-spatial.workspace = true
 game-cargo.workspace = true
-game-agreements.workspace = true
-game-logistics.workspace = true
-game-transport.workspace = true
-game-conflict.workspace = true
-game-characters.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+game-objects.workspace = true
+game-property.workspace = true
+game-skills.workspace = true

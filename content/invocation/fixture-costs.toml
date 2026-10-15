@@ -1,0 +1,29 @@
+id = "invocation/fixture-costs"
+version = 1
+[data]
+repeat = 2592000000
+[[data.costs]]
+after = 60000
+cost = "Strain"
+amount = 10
+duration = 0
+[[data.costs]]
+after = 120000
+cost = "ControlLoss"
+amount = 1
+duration = 180000
+[[data.costs]]
+after = 180000
+cost = "Identity"
+amount = 5
+duration = 0
+[[data.costs]]
+after = 240000
+cost = "Emotion"
+amount = 5
+duration = 0
+[[data.costs]]
+after = 2592000000
+cost = "Lifespan"
+amount = 86400000
+duration = 0

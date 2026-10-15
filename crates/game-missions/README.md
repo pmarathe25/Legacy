@@ -1,11 +1,9 @@
 # game-missions
 
-Missions owns recruitment, directives, individual service choices, communication, observation, cargo attribution, and progress from committed physical receipts. Member decisions compose Logistics and Transport intentions; engagement, tactics, and reinforcement selection use Conflict facts. The assembly binds factual rows and executes these prepared effects.
+Consenting parties, preparation, shared strategic travel, arrival, return, and mortality consequences. Mission members occupy real actions; the rest of the world continues independently.
 
-`Mission` and `Recruitment` live on their stable entity IDs in the shared component store. `Knowledge` and `PendingTalk` live on person IDs. A bounded companion roster stays inside its mission record. `Runtime` contains only event and review cursors; the membership index holds derived IDs and reads live status and dated knowledge from the store.
+**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-physiology](../game-physiology/README.md), [game-transport](../game-transport/README.md), [game-land](../game-land/README.md), [game-spatial](../game-spatial/README.md), [game-cargo](../game-cargo/README.md).
 
-Public entry points cover commands, available intentions, elapsed conversations, cancellation, local perception, review selection, deadlines, budgets, contextual validation, and receipt and outcome preparation. Sparse prepared changes guard the affected rows and reject foreign batch writes before publication. Physical transfer receipts qualify actual origin cargo; promised supplies alone cannot prove delivery. Reports retain their original observation date and provenance.
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
-Owner tests use the native store directly. Composed game tests preserve local consent, supply conservation, force and guardian obligations, worker and storage ordering, equivalent time slices, and save/resume behavior.
-
-`MissionExecution` supplies borrowed canonical state, body and scene facts, command entry points and transaction publication. The owner iterates receipts, elapsed talks, outcomes, observations and autonomous reviews through this port. `MemberExecution` binds physical intentions while the owner controls attempt and fallback progression. `AssetFacts` and `ObjectiveFacts` supply focused rows; the service owner selects the joins and local visibility.
+**Verification:** Run `cargo test -p game-missions`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.

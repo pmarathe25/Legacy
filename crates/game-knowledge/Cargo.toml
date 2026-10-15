@@ -1,0 +1,22 @@
+[package]
+name = "game-knowledge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-land.workspace = true
+game-spatial.workspace = true
+game-ecology.workspace = true
+game-property.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-cargo.workspace = true
+game-transport.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+game-objects.workspace = true
+game-physiology.workspace = true
+game-skills.workspace = true

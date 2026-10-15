@@ -5,4 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-core.workspace = true
 game-api.workspace = true
+game-assembly.workspace = true
+game-sim.workspace = true

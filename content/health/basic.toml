@@ -1,0 +1,7 @@
+id = "health/basic"
+version = 1
+[data]
+supply_object = "medicine"
+duration = 3600000
+supply = 1
+healing = 10

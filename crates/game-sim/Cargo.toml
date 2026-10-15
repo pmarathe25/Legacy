@@ -6,10 +6,10 @@ license.workspace = true
 
 [dependencies]
 game-core.workspace = true
-rayon.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
-game-ecs.workspace = true
-game-environment.workspace = true
 serde_json.workspace = true
+rayon.workspace = true
+
+[[bench]]
+name = "kernel"
+harness = false

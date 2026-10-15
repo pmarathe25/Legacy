@@ -4,23 +4,19 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = []
-content = ["dep:game-content"]
-
 [dependencies]
+game-content.workspace = true
+game-objects.workspace = true
+
 game-core.workspace = true
-game-land.workspace = true
-game-ecs.workspace = true
-game-content = { workspace = true, optional = true }
+game-sim.workspace = true
+game-transport.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-physiology.workspace = true
+game-environment.workspace = true
+game-skills.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-game-cargo.workspace = true
-serde_json.workspace = true
-game-sim.workspace = true
-
-[[bench]]
-name = "components"
-harness = false
-required-features = ["content"]
+game-land.workspace = true

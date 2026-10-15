@@ -1,207 +1,110 @@
-//! A bounded host queue and one engine owner. Control input is serviced between
-//! committed quanta; no world lock is held by clients while printing or drawing.
+//! Threading policy and responsive control; game rules remain in feature crates.
 use game_api::*;
-use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError};
-
-type Reply<T> = Sender<Result<T, Error>>;
-enum Request {
-    Observe(Reply<PlayerView>),
-    Submit(Submission, Reply<CommandReceipt>),
-    Command(Command, Reply<CommandReceipt>),
-    Run(SimDuration, Reply<AdvanceResult>),
-    Pause(Reply<PlayerView>),
-    Save(Reply<Vec<u8>>),
-    Load(Vec<u8>, Reply<PlayerView>),
-    Debug(Reply<String>),
+use game_assembly::Simulation;
+use game_sim::{Progress, Stop};
+use std::sync::{Arc, Mutex, mpsc};
+pub enum Input {
+    Command { sequence: u64, command: Command },
+    Advance(SimTime),
+    Pause,
+    Observe,
+    Save,
     Shutdown,
 }
+pub enum Output {
+    Command(Result<CommandResult>),
+    Progress(Result<Progress>),
+    View(Result<Box<PlayerView>>),
+    Save(Result<String>),
+    Paused(SimTime),
+}
 pub struct Session {
-    tx: SyncSender<Request>,
+    pub input: mpsc::Sender<Input>,
+    pub output: mpsc::Receiver<Output>,
+    progress: Arc<Mutex<Option<Progress>>>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
-pub struct RunHandle {
-    rx: Receiver<Result<AdvanceResult, Error>>,
-}
-impl RunHandle {
-    pub fn wait(self) -> Result<AdvanceResult, Error> {
-        self.rx.recv().map_err(|_| Error::HostDisconnected)?
-    }
-}
-
 impl Session {
-    pub fn spawn<E: SessionEngine>(mut simulation: E) -> Result<Self, Error> {
-        let (tx, rx) = mpsc::sync_channel(64);
+    /// Ordinary progress occupies one slot even when the consumer is slow.
+    pub fn progress(&self) -> Option<Progress> {
+        self.progress.lock().expect("session progress lock").clone()
+    }
+    pub fn spawn(mut simulation: Simulation) -> Result<Self> {
+        let (sender, receiver) = mpsc::channel();
+        let (out, output) = mpsc::channel();
+        let progress = Arc::new(Mutex::new(None));
+        let latest = progress.clone();
         let thread = std::thread::Builder::new()
-            .name("game-session".into())
+            .name("legacy-session".into())
             .spawn(move || {
-                let mut active: Option<(SimTime, Reply<AdvanceResult>)> = None;
+                let mut target = None;
                 loop {
-                    let request = if active.is_some() {
-                        match rx.try_recv() {
-                            Ok(r) => Some(r),
-                            Err(TryRecvError::Empty) => None,
-                            Err(TryRecvError::Disconnected) => break,
+                    let input = if target.is_some() {
+                        match receiver.try_recv() {
+                            Ok(i) => Some(i),
+                            Err(mpsc::TryRecvError::Empty) => None,
+                            Err(_) => break,
                         }
                     } else {
-                        match rx.recv() {
-                            Ok(r) => Some(r),
+                        match receiver.recv() {
+                            Ok(i) => Some(i),
                             Err(_) => break,
                         }
                     };
-                    if let Some(request) = request {
-                        match request {
-                            Request::Shutdown => {
-                                if let Some((requested, reply)) = active.take() {
-                                    let _ = reply.send(Ok(AdvanceResult {
-                                        requested,
-                                        reached: simulation.time(),
-                                        revision: simulation.revision(),
-                                        reason: StopReason::Paused,
-                                    }));
-                                }
-                                break;
-                            }
-                            Request::Observe(reply) => {
-                                let _ = reply.send(Ok(simulation.observe()));
-                            }
-                            Request::Submit(command, reply) => {
-                                let _ = reply.send(simulation.submit(command));
-                            }
-                            Request::Command(command, reply) => {
-                                let result =
-                                    simulation
-                                        .next_caller_sequence()
-                                        .and_then(|caller_sequence| {
-                                            simulation.submit(Submission {
-                                                caller_sequence,
-                                                command,
-                                            })
-                                        });
-                                let _ = reply.send(result);
-                            }
-                            Request::Debug(reply) => {
-                                let result = simulation.debug_json();
-                                let _ = reply.send(result);
-                            }
-                            Request::Load(bytes, reply) => match simulation.restored(&bytes) {
-                                Ok(loaded) => {
-                                    if let Some((requested, run_reply)) = active.take() {
-                                        let _ = run_reply.send(Ok(AdvanceResult {
-                                            requested,
-                                            reached: simulation.time(),
-                                            revision: simulation.revision(),
-                                            reason: StopReason::Paused,
-                                        }));
-                                    }
-                                    simulation = loaded;
-                                    let _ = reply.send(Ok(simulation.observe()));
-                                }
-                                Err(error) => {
-                                    let _ = reply.send(Err(error));
-                                }
-                            },
-                            Request::Save(reply) => {
-                                let _ = reply.send(simulation.save());
-                            }
-                            Request::Pause(reply) => {
-                                if let Some((target, run_reply)) = active.take() {
-                                    let _ = run_reply.send(Ok(AdvanceResult {
-                                        requested: target,
-                                        reached: simulation.time(),
-                                        revision: simulation.revision(),
-                                        reason: StopReason::Paused,
-                                    }));
-                                }
-                                let _ = reply.send(Ok(simulation.observe()));
-                            }
-                            Request::Run(duration, reply) => {
-                                if active.is_some() {
-                                    let _ = reply.send(Err(Error::InvalidConfiguration(
-                                        "an advance is already active".into(),
-                                    )));
-                                } else if let Some(target) =
-                                    simulation.time().0.checked_add(duration.0)
-                                {
-                                    active = Some((SimTime(target), reply));
-                                } else {
-                                    let _ = reply.send(Err(Error::Overflow));
-                                }
-                            }
+                    let message = match input {
+                        Some(Input::Command { sequence, command }) => {
+                            Some(Output::Command(simulation.submit(sequence, command)))
                         }
+                        Some(Input::Advance(time)) => {
+                            target = Some(time);
+                            None
+                        }
+                        Some(Input::Pause) => {
+                            target = None;
+                            Some(Output::Paused(simulation.now()))
+                        }
+                        Some(Input::Observe) => {
+                            Some(Output::View(simulation.observe().map(Box::new)))
+                        }
+                        Some(Input::Save) => Some(Output::Save(simulation.save())),
+                        Some(Input::Shutdown) => break,
+                        None => None,
+                    };
+                    if let Some(message) = message
+                        && out.send(message).is_err()
+                    {
+                        break;
                     }
-                    // Service one bounded interval even with a stream of passive queries.
-                    if let Some((target, _)) = &active {
-                        let target = *target;
-                        let quantum = SimDuration((target.0 - simulation.time().0).min(60_000));
-                        match simulation.advance(quantum) {
-                            Err(error) => {
-                                let (_, reply) = active.take().unwrap();
-                                let _ = reply.send(Err(error));
-                            }
-                            Ok(mut result)
-                                if simulation.time() == target
-                                    || result.reason != StopReason::TargetReached =>
-                            {
-                                result.requested = target;
-                                let (_, reply) = active.take().unwrap();
-                                let _ = reply.send(Ok(result));
-                            }
-                            _ => {}
+                    if let Some(time) = target {
+                        let progress = simulation.advance(time, 32);
+                        if !progress.as_ref().is_ok_and(|p| p.stop == Stop::Budget) {
+                            target = None;
+                        }
+                        if let Ok(ref progress) = progress {
+                            *latest.lock().expect("session progress lock") = Some(progress.clone());
+                        }
+                        if !progress.as_ref().is_ok_and(|p| p.stop == Stop::Budget)
+                            && out.send(Output::Progress(progress)).is_err()
+                        {
+                            break;
                         }
                     }
                 }
             })
-            .map_err(|e| Error::InvalidConfiguration(e.to_string()))?;
+            .map_err(|_| Error::WorkerFailure)?;
         Ok(Self {
-            tx,
+            input: sender,
+            output,
+            progress,
             thread: Some(thread),
         })
-    }
-
-    fn ask<T>(&self, build: impl FnOnce(Reply<T>) -> Request) -> Result<T, Error> {
-        let (tx, rx) = mpsc::channel();
-        self.tx
-            .send(build(tx))
-            .map_err(|_| Error::HostDisconnected)?;
-        rx.recv().map_err(|_| Error::HostDisconnected)?
-    }
-    pub fn observe(&self) -> Result<PlayerView, Error> {
-        self.ask(Request::Observe)
-    }
-    pub fn submit(&self, command: Submission) -> Result<CommandReceipt, Error> {
-        self.ask(|r| Request::Submit(command, r))
-    }
-    pub fn submit_command(&self, command: Command) -> Result<CommandReceipt, Error> {
-        self.ask(|r| Request::Command(command, r))
-    }
-    pub fn load(&self, bytes: Vec<u8>) -> Result<PlayerView, Error> {
-        self.ask(|r| Request::Load(bytes, r))
-    }
-    pub fn debug_json(&self) -> Result<String, Error> {
-        self.ask(Request::Debug)
-    }
-    pub fn pause(&self) -> Result<PlayerView, Error> {
-        self.ask(Request::Pause)
-    }
-    pub fn save(&self) -> Result<Vec<u8>, Error> {
-        self.ask(Request::Save)
-    }
-    pub fn run(&self, duration: SimDuration) -> Result<RunHandle, Error> {
-        let (tx, rx) = mpsc::channel();
-        self.tx
-            .send(Request::Run(duration, tx))
-            .map_err(|_| Error::HostDisconnected)?;
-        Ok(RunHandle { rx })
     }
 }
 impl Drop for Session {
     fn drop(&mut self) {
-        let _ = self.tx.send(Request::Shutdown);
+        let _ = self.input.send(Input::Shutdown);
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
     }
 }
-
-#[cfg(test)]
-mod tests;

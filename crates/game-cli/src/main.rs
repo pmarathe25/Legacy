@@ -1,163 +1,126 @@
-use game_assembly::{Execution, Simulation};
-use std::io::{self, BufRead, IsTerminal, Write};
-
+use game_assembly::Simulation;
+use game_cli::{Input, parse};
+use game_core::*;
+use std::io::{self, BufRead};
 fn main() {
     if let Err(error) = run() {
-        eprintln!("error: {error}");
+        eprintln!("{error}");
         std::process::exit(1);
     }
 }
-fn run() -> Result<(), Box<dyn std::error::Error>> {
-    let mut scenario = "settlement-founder".to_owned();
+fn run() -> Result<()> {
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let mut scenario = None;
+    let mut content = None;
+    let mut mods = vec![];
+    let mut list = false;
     let mut seed = 1;
-    let mut execution = Execution::default();
+    let mut workers = 1;
     let mut script = None;
-    let mut environment_config = None;
-    let mut scenario_config = None;
-    let mut content_root =
-        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../content");
-    let mut args = std::env::args().skip(1);
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--scenario" => scenario = args.next().ok_or("missing scenario")?,
-            "--seed" => seed = args.next().ok_or("missing seed")?.parse()?,
-            "--workers" => execution.workers = args.next().ok_or("missing workers")?.parse()?,
-            "--script" => script = Some(args.next().ok_or("missing script path")?),
-            "--config" => {
-                scenario_config = Some(args.next().ok_or("missing scenario config path")?)
+    let mut i = 0;
+    while i < args.len() {
+        let value = || {
+            args.get(i + 1)
+                .ok_or_else(|| Error::Rejected("missing option value".into()))
+        };
+        match args[i].as_str() {
+            "--scenario" => scenario = Some(value()?.clone()),
+            "--content" => content = Some(value()?.clone()),
+            "--mod" => mods.push(value()?.clone()),
+            "--seed" => {
+                seed = value()?
+                    .parse()
+                    .map_err(|_| Error::Rejected("invalid seed".into()))?
             }
-            "--content" => {
-                content_root = args.next().ok_or("missing content directory")?.into();
+            "--workers" => {
+                workers = value()?
+                    .parse()
+                    .map_err(|_| Error::Rejected("invalid workers".into()))?
             }
-            "--environment" => {
-                environment_config = Some(args.next().ok_or("missing environment config path")?)
+            "--script" => script = Some(value()?.clone()),
+            "--list" => {
+                list = true;
+                i += 1;
+                continue;
             }
-            "--help" => {
-                println!(
-                    "game-cli [--scenario OPENING_ID|random] [--seed N] [--workers N] [--script PATH] [--config SCENARIO.json] [--environment ENVIRONMENT.toml] [--content DIRECTORY]\nDefault: settlement-founder. Debug fixtures remain selectable by their fixture IDs. Type help for commands."
-                );
-                return Ok(());
-            }
-            _ => return Err(format!("unknown option {arg}").into()),
+            _ => return Err(Error::Rejected("unknown option".into())),
         }
+        i += 2;
     }
-    let mut environment_document = None;
-    let explicit_config = scenario_config.is_some();
-    let mut config: game_assembly::scenarios::Config = if let Some(path) = scenario_config {
-        serde_json::from_slice(&std::fs::read(path)?)?
-    } else {
-        game_assembly::scenarios::Config::default()
-    };
-    if !explicit_config {
-        config.openings = game_content::DefinitionSource::File {
-            path: content_root.join("openings/temperate.toml"),
-        };
-        config.workshops = game_content::DefinitionSource::File {
-            path: content_root.join("workshop/temperate.toml"),
-        };
+    let mut store = content.map_or_else(game_content::Store::standard, game_content::Store::new);
+    for directory in mods {
+        store.overlay(directory)?;
     }
-    let catalog = config.openings.resolve()?;
-    let playable = catalog.data.openings.contains_key(&scenario) || scenario == "random";
-    config.openings = game_content::DefinitionSource::Inline { document: catalog };
-    let mut sim = if playable {
-        if !explicit_config {
-            config.agriculture = game_assembly::agriculture::catalog_source(
-                content_root.join("agriculture/crops.toml"),
+    if list {
+        for scenario in game_assembly::scenarios_with_content(&mut store)? {
+            println!(
+                "{}: {} ({}, version {})",
+                scenario.id,
+                scenario.label,
+                if scenario.fixture {
+                    "fixture"
+                } else {
+                    "scenario"
+                },
+                scenario.version
             );
         }
-        if let Some(genetics) = &mut config.genetics {
-            genetics.content_dir = content_root.join("human");
-        }
-        if environment_config.is_some() || !explicit_config {
-            let path = environment_config
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|| content_root.join("environment/temperate.toml"));
-            let document = game_assembly::environment::Config::read(path)?;
-            config.environment = document.data.clone();
-            environment_document = Some(document);
-        }
-        Simulation::playable_scenario(&scenario, seed, execution.clone(), config)?
-    } else {
-        if explicit_config {
-            return Err("scenario configuration requires a playable opening".into());
-        }
-        if let Some(path) = environment_config {
-            if scenario != "farming-fixture" {
-                return Err(
-                    "environment configuration requires a playable opening or farming-fixture"
-                        .into(),
-                );
-            }
-            let document = game_assembly::environment::Config::read(path)?;
-            let config = document.data.clone();
-            environment_document = Some(document);
-            Simulation::farming_with_config(
-                seed,
-                execution.clone(),
-                game_assembly::agriculture::FarmingConfig {
-                    environment: config,
-                    ..Default::default()
-                },
-            )?
-        } else {
-            Simulation::new(&scenario, seed, execution.clone())?
-        }
-    };
-    if let Some(document) = environment_document {
-        sim.attach_environment_content(document)?;
+        return Ok(());
     }
-    let selected = sim.canonical_state().state.scenario.clone();
-    let session = game_session::Session::spawn(sim)?;
-    let interactive = script.is_none() && io::stdin().is_terminal();
-    let reader: Box<dyn BufRead> = if let Some(path) = script {
-        Box::new(io::BufReader::new(std::fs::File::open(path)?))
-    } else {
-        Box::new(io::BufReader::new(io::stdin()))
+    let scenario = match scenario {
+        Some(id) => id,
+        None => game_assembly::default_scenario(&mut store)?,
     };
-    println!(
-        "{}: {}",
-        if selected.debug_fixture {
-            "debug fixture"
-        } else {
-            "opening"
-        },
-        selected.id
-    );
-    if interactive {
-        print!("> ");
-        io::stdout().flush()?;
-    }
-    for line in reader.lines() {
-        let line = line?;
-        if line.trim() == "quit" {
-            break;
+    let mut sim = Simulation::with_content(&scenario, seed, workers, &mut store)?;
+    let mut sequence = 1;
+    let input: Box<dyn BufRead> = match script {
+        Some(path) => Box::new(io::BufReader::new(
+            std::fs::File::open(path).map_err(|e| Error::Rejected(e.to_string()))?,
+        )),
+        None => Box::new(io::BufReader::new(io::stdin())),
+    };
+    for line in input.lines() {
+        let line = line.map_err(|e| Error::Rejected(e.to_string()))?;
+        if line.trim().is_empty() || line.starts_with('#') {
+            continue;
         }
-        if !line.trim_start().starts_with('#') {
-            match game_cli::execute_session(&session, &line) {
-                Ok(game_cli::SessionOutput::Text(output)) => {
-                    if !output.is_empty() {
-                        println!("{output}");
+        let result = (|| -> Result<Option<serde_json::Value>> {
+            match parse(&line)? {
+                Input::Quit => Ok(None),
+                Input::Status => Ok(Some(serde_json::to_value(sim.observe()?).unwrap())),
+                Input::Debug => Ok(Some(serde_json::from_str(&sim.save()?).unwrap())),
+                Input::Run(duration) => {
+                    let target = sim.now().after(duration)?;
+                    loop {
+                        let p = sim.advance(target, 256)?;
+                        if p.stop != game_sim::Stop::Budget {
+                            return Ok(Some(serde_json::to_value(p).unwrap()));
+                        }
                     }
                 }
-                Ok(game_cli::SessionOutput::Advancing(handle)) if interactive => {
-                    std::thread::spawn(move || match handle.wait() {
-                        Ok(result) => println!(
-                            "{}",
-                            serde_json::to_string(&result).expect("advance result JSON")
-                        ),
-                        Err(error) => eprintln!("error: {error}"),
-                    });
+                Input::Command(command) => {
+                    let response = sim.submit(sequence, command);
+                    sequence += 1;
+                    Ok(Some(serde_json::to_value(response?).unwrap()))
                 }
-                Ok(game_cli::SessionOutput::Advancing(handle)) => {
-                    println!("{}", serde_json::to_string(&handle.wait()?)?)
+                Input::Save(path) => {
+                    std::fs::write(path, sim.save()?)
+                        .map_err(|e| Error::Rejected(e.to_string()))?;
+                    Ok(Some(serde_json::json!({"saved":true})))
                 }
-                Err(error) if interactive => eprintln!("error: {error}"),
-                Err(error) => return Err(error),
+                Input::Load(path) => {
+                    let source = std::fs::read_to_string(path)
+                        .map_err(|e| Error::Rejected(e.to_string()))?;
+                    sim = Simulation::load(&source, workers)?;
+                    sequence = sim.debug_host().next_sequence();
+                    Ok(Some(serde_json::json!({"loaded":true})))
+                }
             }
-        }
-        if interactive {
-            print!("> ");
-            io::stdout().flush()?;
+        })();
+        match result {
+            Ok(Some(value)) => println!("{value}"),
+            Ok(None) => break,
+            Err(error) => eprintln!("{error}"),
         }
     }
     Ok(())

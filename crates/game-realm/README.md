@@ -1,13 +1,9 @@
 # game-realm
 
-Realm owns regional negotiation, ratification evidence, personal judgments, work selection, reports, deadlines, and reconciliation. Commitments promise deliveries, passage, or patrols between institutions. Institutional ratification permits a term to proceed; the people performing it still decide whether to consent.
+Mandates attach to recognized offices and impose jurisdiction and spending limits. Delegates must physically deliver goods. Lineage continuity cannot restore an office or budget.
 
-The shared store holds `Commitment`, `PersonalKnowledge`, `Requests`, and `PendingTalk`. A commitment contains its bounded revisions and their pending work references. A talk freezes the sender's dated reports. `Runtime` retains rules and an event cursor. People learn through local observations and elapsed reports, preserving each source and date.
+**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-institutions](../game-institutions/README.md), [game-property](../game-property/README.md), [game-cargo](../game-cargo/README.md).
 
-Typed plans recheck admission, remembered foreign work, and selected source rows before staging. Realm and receiving owners append their canonical changes to one batch. Guards bind finalization to that batch and reject conflicting source or recipient writes. The assembly supplies current facts, spatial candidate IDs, counters, and ordered events. Realm filters candidates and chooses behavior; agreements, missions, institutions, and characters apply their own receiving effects.
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
-Production providers are `game-ecs`, `game-cargo`, `game-society`, `game-characters`, `game-agreements`, and `game-missions`, plus shared types from `game-core`. Spatial candidates enter through a factual provider backed by the shared `LocalRoster`. The crate retains no separate location index.
-
-`RealmExecution` binds canonical storage, presence, authority, judgment facts and selected owner operations. Realm owns the observation, reconciliation, expiration and autonomous-review iteration through this port. The same entry points run in native store tests without the assembly.
-
-`prepare_newborn` prepares absent regional knowledge and request rows for the shared birth batch. Its generic guard permits the other owners to create their child components while protecting Realm's personal rows.
+**Verification:** Run `cargo test -p game-realm`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.

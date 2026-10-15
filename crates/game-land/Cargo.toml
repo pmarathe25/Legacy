@@ -6,8 +6,5 @@ license.workspace = true
 
 [dependencies]
 game-core.workspace = true
-game-ecs.workspace = true
+game-sim.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true

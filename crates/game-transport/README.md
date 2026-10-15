@@ -1,21 +1,9 @@
-# Transport
+# game-transport
 
-Transport owns pending routes, carrying groups, offers, timed lifts, road approaches, paused intentions and personal support knowledge as eight optional components on existing person entities in the shared store. An empty pending route has no component. Carrying `Runtime` holds rules and a bounded response journal; routes also work without that optional runtime.
+Owns strategic positions, timed movement, arrival notifications, and cancellation on roads. Other features ask for movement and subscribe to arrivals.
 
-Typed route replacements guard their opening rows and issue admissions bound to the staging batch. Transport plans itineraries through Spatial's directed graph path function and consumes the first leg in the same edit as a prepared departure. `BodyInput` and `CarryWork` supply actual body limits and activity facts; Transport owns their interpretation. `BodyFacts` reads only affected people during ordinary group operations.
+**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-land](../game-land/README.md), [game-spatial](../game-spatial/README.md).
 
-Prepared motion handles stopping, arrival, birth attachment, lift completion, departure, approach, retreat, resume, putdown, confinement release and load reconciliation. `prepare_reserved_birth_motion` composes an absent newborn’s attachment with its connected capacity stops before publication; other owners stage identity and body rows into the same batch. `measured_unplaced_body` interprets planned native measurements without requiring a published entity. Spatial remains the Location authority. Motion stages Transport and Location edits together, provides projected location facts for receiving owners, and emits ordered effects for activity interruption, shelter movement, deadlines, dependent indexing and public events.
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
-`MotionPlan` owns the prepared variants and their staging dispatcher. Transport also owns automatic lifting after an offer, the closing failure reaction, interrupted continuation, personal views and arrival overflow preflight. `IncomingCargo` supplies only carrying admission over Cargo's proposed conserved prefix; Cargo retains inventory balances, transfer selection and physical stock effects.
-
-`review_choices` owns stable offer and support actor loops through `ReviewHost`. Its factual ports read bodily needs, personal relations and actual duties; operation ports apply prepared review effects and invoke the command binding. Transport determines admission, offer response, voluntary support and unavailable-attempt handling. `local_bodies` retains the existing exact directed road candidates for command choices. Physical contact and support witnesses compare carrier-resolved physical points.
-
-Support review captures common Spatial candidate IDs once, then reads current placement and tactical contact before its stable witness bound. A stationary review finalization rejects actual Location changes or any undeclared Location edit before publication, so subsequent recipients can reuse the shared per-cell candidates while evaluating their current eligibility.
-
-A `MotionBatch` collects independent plans and coalesces compatible sparse rows. Its finalization must validate the complete CarryGroup/Lift footprint after all participants stage and before the host applies the shared batch. Undeclared carrying edges reject publication. Exact Location/Route read reservations reject conflicting foreign writes or removals through ordinary host admission. Shared `ReadSet` and `ReadGuard` protect selected opening component values, absent rows, scoped topology membership and exact owner-admitted projections. Finalization takes the canonical Store and complete batch, then rejects stale opening rows or conflicting foreign writes before publication. Selected body, road, time and lift action facts also reject stale plans.
-
-Health owns effective-shelter selection, occupancy and observations through its own prepared placement interface. Motion never chooses a shelter. Tactical reach and obstacles belong to Conflict; its contact result accompanies Spatial-resolved anchor identities.
-
-`MeasuredBodyFacts` supplies native measurements while Transport reconstructs actual positions and growth-dependent mass. `validate_save` owns the complete movement, route, body and reciprocal-link review.
-
-Intrinsic schemas validate native rows. `validate_routes` checks actual actor placements and directed topology. `validate_composition` checks both sides of carrier/group and lift/action links. Owner tests and a composed Transport–Health–generic host proof exercise these interfaces without the game assembly.
+**Verification:** Run `cargo test -p game-transport`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.

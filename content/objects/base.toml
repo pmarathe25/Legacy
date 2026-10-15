@@ -1,0 +1,33 @@
+id = "objects/base"
+version = 1
+[data.objects.grain]
+id = 1
+name = "Grain"
+mass = 1
+tags = ["food"]
+food = { portion = 10, relief = 60 }
+[data.objects.timber]
+id = 2
+name = "Timber"
+mass = 1
+tags = ["material"]
+[data.objects.grain-seed]
+id = 3
+name = "Grain seed"
+mass = 1
+tags = ["seed"]
+[data.objects.medicine]
+id = 4
+name = "Medicine"
+mass = 1
+tags = ["medicine"]
+[data.objects.tool]
+id = 5
+name = "Tool"
+mass = 1
+tags = ["tool"]
+[data.objects.training-tool]
+id = 8
+name = "Training tool"
+mass = 1
+tags = ["tool"]

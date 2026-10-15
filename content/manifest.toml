@@ -1,0 +1,4 @@
+id = "legacy/content"
+version = 1
+[data]
+default_scenario = "kernel-fixture"

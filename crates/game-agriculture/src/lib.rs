@@ -1,839 +1,292 @@
-//! Agricultural production: crop state and work produce explicit material effects.
+//! Crop phases, paid seed inputs, seasonal growth, and real harvest labor.
+mod catalog;
+pub use catalog::{Crop, CropSpec, Crops, InstallCrops, load};
 use game_core::*;
-pub use game_land::Soil;
+use game_sim::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
-mod access_reads;
-pub use access_reads::{FarmingAccessRead, prepare_farming_access};
-mod advancing;
-mod storage;
-pub use advancing::{GrowthInput, GrowthOutput, PreparedAdvance};
-pub use storage::{Queries, register_components};
-pub use storage::{
-    cultivation, cultivation_mut, cultivations, insert_cultivation, remove_cultivation,
-};
-/// Facts supplied by a local weather provider; no climate runtime is required.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct WeatherFacts {
-    pub temperature: i32,
-    pub rain: u64,
-    pub evaporation: u64,
-}
-impl WeatherFacts {
-    pub fn validate(&self) -> Result<(), Error> {
-        if !(-200..=200).contains(&self.temperature) {
-            return Err(Error::InvalidConfiguration(
-                "invalid local crop weather".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct LocalWeatherDay {
-    pub day: u64,
-    pub day_of_year: u64,
-    pub cells: BTreeMap<AreaId, WeatherFacts>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FarmOperation {
-    Prepare,
-    Plant,
-    Tend,
-    Irrigate,
-    Harvest,
+use std::collections::BTreeMap;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Phase {
     Fallow,
+    Sowing,
+    Growing { ready: SimTime },
+    Ripe { yield_units: u64 },
+    Harvesting { yield_units: u64 },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CropRules {
-    pub planting_first_day: u32,
-    pub planting_last_day: u32,
-    pub prepare_labor: SimDuration,
-    pub plant_labor: SimDuration,
-    pub tend_labor: SimDuration,
-    pub irrigation_labor: SimDuration,
-    pub harvest_labor: SimDuration,
-    pub seed_input: Quantity,
-    pub irrigation_input: Quantity,
-    pub irrigation_water: u64,
-    pub base_temperature: i32,
-    pub ripe_degree_days: u64,
-    pub optimal_water: u64,
-    pub failure_stress_days: u64,
-    pub food_yield: Quantity,
-    pub seed_yield: Quantity,
-    pub soil_depletion: u16,
-    pub soil_recovery: u16,
-    pub fallow_labor: SimDuration,
-}
-impl CropRules {
-    pub fn labor(&self, operation: FarmOperation) -> u64 {
-        match operation {
-            FarmOperation::Fallow => self.fallow_labor.0,
-            FarmOperation::Prepare => self.prepare_labor.0,
-            FarmOperation::Plant => self.plant_labor.0,
-            FarmOperation::Tend => self.tend_labor.0,
-            FarmOperation::Irrigate => self.irrigation_labor.0,
-            FarmOperation::Harvest => self.harvest_labor.0,
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CropPhase {
-    Fallow,
-    Prepared,
-    Planting,
-    Growing,
-    Ripe,
-    Failed,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Field {
-    pub id: SiteId,
+pub struct Plot {
     pub area: AreaId,
-    pub access: BTreeSet<PersonId>,
-    #[serde(default)]
-    pub custodian: Option<PersonId>,
+    pub steward: PersonId,
+    pub phase: Phase,
+    pub crop: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Work {
+    plot: PlotId,
+    job: ScheduleId,
+    destination: InventoryId,
+    reservation: Option<u64>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Farms {
+    pub plots: BTreeMap<PlotId, Plot>,
+    work: BTreeMap<PersonId, Work>,
+    pub lost_seed: u64,
+}
+impl Resource for Farms {
+    fn allocated_ids(&self) -> Vec<u64> {
+        self.plots.keys().map(|id| id.0).collect()
+    }
+    const KEY: &'static str = "agriculture.plots";
+    fn validate(&self) -> Result<()> {
+        require(
+            self.plots.values().all(|p| !p.crop.is_empty()),
+            "invalid crop reference",
+        )
+    }
+}
+#[derive(Serialize, Deserialize)]
+pub struct Create(pub Plot);
+impl Request for Create {
+    const KEY: &'static str = "agriculture.create";
+    type Response = PlotId;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Sow {
+    pub person: PersonId,
+    pub plot: PlotId,
     pub seed: InventoryId,
-    pub tool: InventoryId,
-    pub water: InventoryId,
-    pub food: InventoryId,
 }
-/// Pure crop state, attached to the same site entity as its field and soil.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Crop {
-    pub definition: CropId,
-    pub phase: CropPhase,
-    pub preparation_ms: u64,
-    pub planting_ms: u64,
-    pub harvest_ms: u64,
-    pub degree_days_milli: u64,
-    pub stress_days: u64,
-    pub tending: u16,
-    /// Actual eligible cultivation time; no travel or idle time is credited.
-    pub contributions: BTreeMap<PersonId, u64>,
+impl Request for Sow {
+    const KEY: &'static str = "agriculture.sow";
+    type Response = SimTime;
 }
-impl Crop {
-    pub fn new(definition: CropId) -> Self {
-        Self {
-            definition,
-            phase: CropPhase::Fallow,
-            preparation_ms: 0,
-            planting_ms: 0,
-            harvest_ms: 0,
-            degree_days_milli: 0,
-            stress_days: 0,
-            tending: 0,
-            contributions: BTreeMap::new(),
+#[derive(Serialize, Deserialize)]
+struct Planted {
+    person: PersonId,
+}
+impl Request for Planted {
+    const KEY: &'static str = "agriculture.planted";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+struct Ripe {
+    plot: PlotId,
+}
+impl Request for Ripe {
+    const KEY: &'static str = "agriculture.ripe";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Harvest {
+    pub person: PersonId,
+    pub plot: PlotId,
+    pub destination: InventoryId,
+}
+impl Request for Harvest {
+    const KEY: &'static str = "agriculture.harvest";
+    type Response = SimTime;
+}
+#[derive(Serialize, Deserialize)]
+struct Finish {
+    person: PersonId,
+}
+impl Request for Finish {
+    const KEY: &'static str = "agriculture.finish";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+struct Cancel {
+    person: PersonId,
+}
+impl Request for Cancel {
+    const KEY: &'static str = "agriculture.cancel";
+    type Response = ();
+}
+fn local(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    plot: PlotId,
+    inventory: InventoryId,
+) -> Result<()> {
+    game_physiology::capable(tx, person)?;
+    let p = tx
+        .get::<Farms>()?
+        .plots
+        .get(&plot)
+        .ok_or_else(|| Error::Missing("plot".into()))?;
+    require(person == p.steward, "no land-use permission")?;
+    require(
+        game_transport::area(tx.get()?, person)? == p.area
+            && game_cargo::locality(tx, inventory)? == p.area,
+        "farm work is not local",
+    )
+}
+pub fn plugin(b: &mut Builder) -> Result<()> {
+    b.plugin("agriculture", 1)?;
+    b.resource::<Farms>()?;
+    catalog::register(b)?;
+    b.validate_save(|h| {
+        let s = h.get::<Farms>()?;
+        for plot in s.plots.values() {
+            require(
+                h.get::<Crops>()?.items.contains_key(&plot.crop),
+                "unknown crop in saved plot",
+            )?;
         }
-    }
-    pub fn validate(&self, crop: &CropRules) -> Result<(), Error> {
-        if self.tending > 1_000
-            || self.preparation_ms > crop.prepare_labor.0
-            || self.planting_ms > crop.plant_labor.0
-            || self.harvest_ms > crop.harvest_labor.0
-        {
-            return Err(Error::InvalidConfiguration(
-                "invalid cultivated field".into(),
-            ));
-        }
-        Ok(())
-    }
-    pub fn validate_phase(&self, crop: &CropRules) -> Result<(), Error> {
-        let phase_valid = match self.phase {
-            CropPhase::Fallow => {
-                self.planting_ms == 0 && self.degree_days_milli == 0 && self.harvest_ms == 0
-            }
-            CropPhase::Prepared => {
-                self.preparation_ms == crop.prepare_labor.0
-                    && self.planting_ms == 0
-                    && self.degree_days_milli == 0
-                    && self.harvest_ms == 0
-            }
-            CropPhase::Planting => {
-                self.preparation_ms == crop.prepare_labor.0
-                    && self.planting_ms < crop.plant_labor.0
-                    && self.degree_days_milli == 0
-                    && self.harvest_ms == 0
-            }
-            CropPhase::Growing | CropPhase::Failed => {
-                self.preparation_ms == crop.prepare_labor.0
-                    && self.planting_ms == crop.plant_labor.0
-                    && self.degree_days_milli < crop.ripe_degree_days.saturating_mul(1_000)
-                    && self.harvest_ms == 0
-            }
-            CropPhase::Ripe => {
-                self.preparation_ms == crop.prepare_labor.0
-                    && self.planting_ms == crop.plant_labor.0
-                    && self.degree_days_milli >= crop.ripe_degree_days.saturating_mul(1_000)
-            }
-        };
-        if !phase_valid {
-            return Err(Error::InvalidConfiguration(
-                "inconsistent crop phase".into(),
-            ));
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Cultivation {
-    pub field: SiteId,
-    pub operation: FarmOperation,
-    pub labor_ms: u64,
-    pub completes: SimTime,
-}
-
-/// Stable authored identifier; adding a crop does not change Rust types.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct CropId(pub String);
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Catalog {
-    pub default_crop: CropId,
-    pub crops: BTreeMap<CropId, CropRules>,
-}
-impl Catalog {
-    #[cfg(feature = "content")]
-    pub fn read(path: impl AsRef<std::path::Path>) -> Result<game_content::Document<Self>, Error> {
-        let document: game_content::Document<Self> = game_content::read(path)?;
-        document.data.validate(None)?;
-        Ok(document)
-    }
-    pub fn validate(&self, year_days: Option<u64>) -> Result<(), Error> {
-        if !self.crops.contains_key(&self.default_crop)
-            || self.crops.keys().any(|id| {
-                id.0.is_empty()
-                    || !id
+        for (person, w) in &s.work {
+            require(
+                s.plots.contains_key(&w.plot)
+                    && h.get::<Actions>()?
                         .0
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b"._-/".contains(&b))
-            })
-        {
-            return Err(Error::InvalidConfiguration("invalid crop catalog".into()));
-        }
-        for crop in self.crops.values() {
-            crop.validate(year_days)?;
+                        .get(person)
+                        .is_some_and(|a| a.kind == "farm"),
+                "farm work lacks plot or action",
+            )?;
         }
         Ok(())
-    }
-}
-impl CropRules {
-    pub fn validate(&self, year_days: Option<u64>) -> Result<(), Error> {
-        let crop = self;
-        if year_days.is_some_and(|days| days == 0 || u64::from(crop.planting_last_day) >= days)
-            || crop.planting_first_day > crop.planting_last_day
-            || [
-                crop.prepare_labor.0,
-                crop.plant_labor.0,
-                crop.tend_labor.0,
-                crop.irrigation_labor.0,
-                crop.harvest_labor.0,
-                crop.seed_input.0,
-                crop.irrigation_input.0,
-                crop.ripe_degree_days,
-                crop.optimal_water,
-                crop.failure_stress_days,
-                crop.fallow_labor.0,
-            ]
-            .contains(&0)
-            || crop.ripe_degree_days > u64::MAX / 1_000
-            || crop.soil_depletion > 1_000
-            || crop.soil_recovery > 1_000
-            || !(-100..=100).contains(&crop.base_temperature)
-            || crop.food_yield.0 > u64::MAX - 3_000_000
-            || crop.seed_yield.0 > u64::MAX - 10_000
-        {
-            return Err(Error::InvalidConfiguration("invalid crop rules".into()));
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Runtime {
-    #[cfg(feature = "content")]
-    pub content: Option<game_content::Stamp>,
-    pub catalog: Catalog,
-    /// Last consumed environmental day, not an independently advanced clock.
-    pub day: u64,
-}
-impl Runtime {
-    pub fn new(catalog: Catalog, day: u64) -> Result<Self, Error> {
-        catalog.validate(None)?;
-        Ok(Self {
-            #[cfg(feature = "content")]
-            content: None,
-            catalog,
-            day,
-        })
-    }
-    #[cfg(feature = "content")]
-    pub fn from_content(
-        document: game_content::Document<Catalog>,
-        day: u64,
-    ) -> Result<Self, Error> {
-        let stamp = document.stamp()?;
-        let mut world = Self::new(document.data, day)?;
-        world.content = Some(stamp);
-        Ok(world)
-    }
-    pub fn rules_for(&self, store: &game_ecs::Store, field: SiteId) -> Result<&CropRules, Error> {
-        let crop = self.crop(store, field).ok_or(Error::Unavailable)?;
-        self.catalog
-            .crops
-            .get(&crop.definition)
-            .ok_or_else(|| Error::InvalidSave("unknown crop definition".into()))
-    }
-    pub fn field_bundle<'a>(
-        &'a self,
-        store: &'a game_ecs::Store,
-        field: SiteId,
-    ) -> Result<(&'a Field, &'a Crop, &'a Soil, &'a CropRules), Error> {
-        Ok((
-            self.field(store, field).ok_or(Error::Unavailable)?,
-            self.crop(store, field).ok_or(Error::Unavailable)?,
-            self.soil(store, field).ok_or(Error::Unavailable)?,
-            self.rules_for(store, field)?,
-        ))
-    }
-    pub fn validate(
-        &self,
-        store: &game_ecs::Store,
-        now: SimTime,
-        year_days: Option<u64>,
-    ) -> Result<(), Error> {
-        self.catalog.validate(year_days)?;
-        #[cfg(feature = "content")]
-        if let Some(stamp) = &self.content {
-            let actual = game_content::Document {
-                id: stamp.id.clone(),
-                version: stamp.version,
-                data: &self.catalog,
-            }
-            .stamp()
-            .map_err(|_| Error::InvalidSave("invalid crop content provenance".into()))?;
-            if actual != *stamp {
-                return Err(Error::InvalidSave(
-                    "crop definitions differ from content provenance".into(),
-                ));
-            }
-        }
-        let bad = || Error::InvalidSave("inconsistent cultivation progress".into());
-        for (id, crop) in self.crops(store) {
-            self.field(store, id).ok_or_else(bad)?;
-            let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
-            crop.validate(rules)?;
-            crop.validate_phase(rules)?;
-            if let Some(soil) = self.soil(store, id) {
-                soil.validate()?;
-            }
-        }
-        let mut fields_in_use = BTreeSet::new();
-        let mut contributed: BTreeMap<PersonId, u128> = BTreeMap::new();
-        for (id, field) in self.fields(store) {
-            if id != field.id {
-                return Err(bad());
-            }
-            let crop = self.crop(store, id).ok_or_else(bad)?;
-            let soil = self.soil(store, id).ok_or_else(bad)?;
-            let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
-            crop.validate(rules)?;
-            crop.validate_phase(rules)?;
-            soil.validate()?;
-            for (actor, elapsed) in &crop.contributions {
-                let total = contributed.entry(*actor).or_default();
-                *total = total
-                    .checked_add(u128::from(*elapsed))
-                    .ok_or(Error::Overflow)?;
-            }
-        }
-        if contributed
-            .values()
-            .any(|elapsed| *elapsed > u128::from(now.0))
-        {
-            return Err(bad());
-        }
-        for (_, job) in self.cultivations(store) {
-            job.validate()?;
-            self.field(store, job.field).ok_or_else(bad)?;
-            let crop = self.crop(store, job.field).ok_or_else(bad)?;
-            let rules = self.catalog.crops.get(&crop.definition).ok_or_else(bad)?;
-            if job.completes <= now || !fields_in_use.insert(job.field) {
-                return Err(bad());
-            }
-            let phase_valid = match job.operation {
-                FarmOperation::Fallow => crop.phase != CropPhase::Fallow,
-                FarmOperation::Prepare => crop.phase == CropPhase::Fallow,
-                FarmOperation::Plant => crop.phase == CropPhase::Planting,
-                FarmOperation::Tend | FarmOperation::Irrigate => {
-                    matches!(crop.phase, CropPhase::Growing | CropPhase::Failed)
-                }
-                FarmOperation::Harvest => crop.phase == CropPhase::Ripe,
-            };
-            let progress = match job.operation {
-                FarmOperation::Prepare => crop.preparation_ms,
-                FarmOperation::Plant => crop.planting_ms,
-                FarmOperation::Harvest => crop.harvest_ms,
-                _ => job.labor_ms,
-            };
-            if !phase_valid
-                || job.labor_ms > progress
-                || progress >= rules.labor(job.operation)
-                || job.completes.0 - now.0 != rules.labor(job.operation) - progress
-            {
-                return Err(bad());
-            }
-        }
-        Ok(())
-    }
-}
-/// A daily system over a crop, its local soil, its definition, and local weather.
-/// Returns component changes without touching field ownership or inventories.
-pub fn grow(
-    crop: &Crop,
-    soil: &Soil,
-    rules: &CropRules,
-    weather: &WeatherFacts,
-) -> Result<(Crop, Soil), Error> {
-    let mut next_crop = crop.clone();
-    let mut next_soil = soil.clone();
-    integrate_growth(&mut next_crop, &mut next_soil, rules, weather)?;
-    Ok((next_crop, next_soil))
-}
-fn integrate_growth(
-    state: &mut Crop,
-    soil: &mut Soil,
-    crop: &CropRules,
-    weather: &WeatherFacts,
-) -> Result<(), Error> {
-    weather.validate()?;
-    crop.validate(None)?;
-    state.validate(crop)?;
-    soil.validate()?;
-    if crop.optimal_water == 0
-        || crop.ripe_degree_days > u64::MAX / 1_000
-        || !(-100..=100).contains(&crop.base_temperature)
-        || crop.soil_recovery > 1_000
-    {
-        return Err(Error::InvalidConfiguration(
-            "invalid crop growth scale".into(),
-        ));
-    }
-    soil.water = soil
-        .water
-        .saturating_add(if weather.temperature > 0 {
-            weather.rain
-        } else {
-            0
-        })
-        .min(soil.capacity)
-        .saturating_sub(weather.evaporation);
-    if state.phase == CropPhase::Fallow
-        && weather.temperature > crop.base_temperature
-        && soil.water > 0
-    {
-        soil.fertility = soil.fertility.saturating_add(crop.soil_recovery).min(1_000);
-    }
-    if state.phase != CropPhase::Growing {
-        return Ok(());
-    }
-    if soil.water == 0 || weather.temperature < 0 {
-        state.stress_days = state.stress_days.checked_add(1).ok_or(Error::Overflow)?;
-        if state.stress_days >= crop.failure_stress_days {
-            state.phase = CropPhase::Failed;
-            return Ok(());
-        }
-    }
-    let heat = u64::try_from((weather.temperature - crop.base_temperature).max(0))
-        .map_err(|_| Error::Overflow)?;
-    let moisture = (u128::from(soil.water.min(crop.optimal_water)) * 1_000
-        / u128::from(crop.optimal_water)) as u64;
-    state.degree_days_milli = state
-        .degree_days_milli
-        .checked_add(heat.checked_mul(moisture).ok_or(Error::Overflow)?)
-        .ok_or(Error::Overflow)?;
-    if state.degree_days_milli >= crop.ripe_degree_days * 1_000 {
-        state.phase = CropPhase::Ripe;
-    }
-    Ok(())
-}
-pub fn yield_amounts(state: &Crop, soil: &Soil, crop: &CropRules) -> (Quantity, Quantity) {
-    let quality = u128::from(soil.fertility) * u128::from(500 + state.tending / 2);
-    let scale = |q: Quantity| Quantity((u128::from(q.0) * quality / 1_000_000) as u64);
-    (scale(crop.food_yield), scale(crop.seed_yield))
-}
-pub fn next_operation(state: &Crop, soil: &Soil, crop: &CropRules) -> Option<FarmOperation> {
-    match state.phase {
-        CropPhase::Fallow | CropPhase::Failed => Some(FarmOperation::Prepare),
-        CropPhase::Prepared | CropPhase::Planting => Some(FarmOperation::Plant),
-        CropPhase::Ripe => Some(FarmOperation::Harvest),
-        CropPhase::Growing if soil.water < crop.optimal_water / 2 => Some(FarmOperation::Irrigate),
-        CropPhase::Growing if state.tending < 1_000 => Some(FarmOperation::Tend),
-        _ => None,
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CropCompletion {
-    pub crop: Crop,
-    pub soil: Soil,
-    pub harvest: Option<HarvestOutput>,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct HarvestOutput {
-    pub food_inventory: InventoryId,
-    pub seed_inventory: InventoryId,
-    pub food: Quantity,
-    pub seed: Quantity,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct InputConsumption {
-    pub inventory: InventoryId,
-    pub quantity: Quantity,
-}
-/// The coordinator supplies actual external capability and stock availability;
-/// the field retains its own physical access and crop-state prerequisites.
-#[derive(Clone, Copy, Debug)]
-pub struct BeginFacts {
-    pub actor: PersonId,
-    pub now: SimTime,
-    pub area: AreaId,
-    pub capable: bool,
-    pub tool_available: bool,
-    pub field_available: bool,
-    pub seed_available: Quantity,
-    pub water_available: Quantity,
-    pub outputs_accessible: bool,
-    pub food_room: Quantity,
-    pub seed_room: Quantity,
-    pub day_of_year: Option<u64>,
-    pub temperature_c: Option<i32>,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BeginEffect {
-    pub crop: Crop,
-    pub job: Cultivation,
-    pub consumed: Option<InputConsumption>,
-}
-pub fn prepare_begin(
-    field: &Field,
-    state: &Crop,
-    soil: &Soil,
-    crop: &CropRules,
-    operation: FarmOperation,
-    facts: BeginFacts,
-) -> Result<BeginEffect, Error> {
-    state.validate(crop)?;
-    soil.validate()?;
-    if !facts.capable
-        || !facts.tool_available
-        || !facts.field_available
-        || facts.area != field.area
-        || !field.access.contains(&facts.actor)
-    {
-        return Err(Error::Unavailable);
-    }
-    let (food, seed) = yield_amounts(state, soil, crop);
-    let allowed = match operation {
-        FarmOperation::Fallow => state.phase != CropPhase::Fallow,
-        FarmOperation::Prepare => {
-            matches!(state.phase, CropPhase::Fallow | CropPhase::Failed)
-                && facts
-                    .temperature_c
-                    .is_some_and(|temperature| temperature > 0)
-        }
-        FarmOperation::Plant => {
-            state.phase == CropPhase::Planting
-                || state.phase == CropPhase::Prepared
-                    && facts.day_of_year.is_some_and(|day| {
-                        (u64::from(crop.planting_first_day)..=u64::from(crop.planting_last_day))
-                            .contains(&day)
-                    })
-                    && facts.seed_available >= crop.seed_input
-        }
-        FarmOperation::Tend => state.phase == CropPhase::Growing && state.tending < 1_000,
-        FarmOperation::Irrigate => {
-            state.phase == CropPhase::Growing
-                && soil.water < soil.capacity
-                && facts.water_available >= crop.irrigation_input
-        }
-        FarmOperation::Harvest => {
-            state.phase == CropPhase::Ripe
-                && facts.outputs_accessible
-                && facts.food_room >= food
-                && facts.seed_room >= seed
-        }
-    };
-    if !allowed {
-        return Err(Error::Unavailable);
-    }
-    let progress = match operation {
-        FarmOperation::Prepare if state.phase == CropPhase::Failed => 0,
-        FarmOperation::Prepare => state.preparation_ms,
-        FarmOperation::Plant => state.planting_ms,
-        FarmOperation::Harvest => state.harvest_ms,
-        _ => 0,
-    };
-    let remaining = crop
-        .labor(operation)
-        .checked_sub(progress)
-        .ok_or(Error::Overflow)?;
-    if remaining == 0 {
-        return Err(Error::Unavailable);
-    }
-    let completes = SimTime(facts.now.0.checked_add(remaining).ok_or(Error::Overflow)?);
-    let consumed = match operation {
-        FarmOperation::Plant if state.phase == CropPhase::Prepared => Some(InputConsumption {
-            inventory: field.seed,
+    });
+    b.request::<Create>(|tx, r| {
+        require(r.0.phase == Phase::Fallow, "new plot must be fallow")?;
+        require(
+            tx.get::<Crops>()?.items.contains_key(&r.0.crop),
+            "unknown crop",
+        )?;
+        let id = PlotId(tx.allocate()?);
+        tx.edit::<Farms>()?.plots.insert(id, r.0);
+        Ok(id)
+    })?;
+    b.request::<Sow>(|tx, r| {
+        local(tx, r.person, r.plot, r.seed)?;
+        require(
+            tx.get::<Farms>()?.plots[&r.plot].phase == Phase::Fallow,
+            "plot is occupied",
+        )?;
+        require(
+            tx.get::<game_property::Property>()?
+                .allowed(r.person, r.seed),
+            "no seed access",
+        )?;
+        let crop = catalog::crop(tx, r.plot)?;
+        tx.call(game_cargo::Consume {
+            inventory: r.seed,
+            good: crop.seed,
             quantity: crop.seed_input,
-        }),
-        FarmOperation::Irrigate => Some(InputConsumption {
-            inventory: field.water,
-            quantity: crop.irrigation_input,
-        }),
-        _ => None,
-    };
-    let mut state = state.clone();
-    if operation == FarmOperation::Plant {
-        state.phase = CropPhase::Planting;
-    }
-    if operation == FarmOperation::Prepare && state.phase == CropPhase::Failed {
-        state.phase = CropPhase::Fallow;
-        state.preparation_ms = 0;
-        state.planting_ms = 0;
-        state.harvest_ms = 0;
-        state.degree_days_milli = 0;
-        state.stress_days = 0;
-        state.tending = 0;
-    }
-    Ok(BeginEffect {
-        crop: state,
-        job: Cultivation {
-            field: field.id,
-            operation,
-            labor_ms: 0,
-            completes,
-        },
-        consumed,
-    })
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct CompletionFacts {
-    pub now: SimTime,
-    pub eligible: bool,
-    pub outputs_accessible: bool,
-    pub food_room: Quantity,
-    pub seed_room: Quantity,
-}
-/// Closing physical eligibility and storage capacity are external facts. This
-/// transition describes output; it cannot credit an inventory or release a tool.
-pub fn prepare_completion(
-    field: &Field,
-    state: &Crop,
-    soil: &Soil,
-    job: &Cultivation,
-    crop: &CropRules,
-    facts: CompletionFacts,
-) -> Result<CropCompletion, Error> {
-    state.validate(crop)?;
-    soil.validate()?;
-    if field.id != job.field || !facts.eligible || facts.now < job.completes {
-        return Err(Error::Unavailable);
-    }
-    let (food, seed) = yield_amounts(state, soil, crop);
-    let harvest_allowed =
-        facts.outputs_accessible && facts.food_room >= food && facts.seed_room >= seed;
-    let mut state = state.clone();
-    let mut soil = soil.clone();
-    let mut harvest = None;
-    match job.operation {
-        FarmOperation::Fallow => {
-            state.phase = CropPhase::Fallow;
-            state.preparation_ms = 0;
-            state.planting_ms = 0;
-            state.harvest_ms = 0;
-            state.degree_days_milli = 0;
-            state.stress_days = 0;
-            state.tending = 0;
+        })?;
+        let until = tx.now().after(crop.sow_labor)?;
+        tx.start_action(r.person, "farm", Some(until), Cancel { person: r.person })?;
+        let job = tx.schedule(until, 10, Planted { person: r.person })?;
+        let s = tx.edit::<Farms>()?;
+        s.plots.get_mut(&r.plot).unwrap().phase = Phase::Sowing;
+        s.work.insert(
+            r.person,
+            Work {
+                plot: r.plot,
+                job,
+                destination: r.seed,
+                reservation: None,
+            },
+        );
+        Ok(until)
+    })?;
+    b.request::<Planted>(|tx, r| {
+        let w = tx.edit::<Farms>()?.work.remove(&r.person).unwrap();
+        let ready = tx.now().after(catalog::crop(tx, w.plot)?.growth)?;
+        tx.edit::<Farms>()?.plots.get_mut(&w.plot).unwrap().phase = Phase::Growing { ready };
+        tx.finish_action(r.person, "farm")?;
+        tx.schedule(ready, 25, Ripe { plot: w.plot })?;
+        tx.call(game_skills::Practice {
+            person: r.person,
+            skill: "farm".into(),
+            effort: 60,
+            attribution: w.job.0,
+        })?;
+        Ok(())
+    })?;
+    b.request::<Ripe>(|tx, r| {
+        let crop = catalog::crop(tx, r.plot)?;
+        let season = tx.get::<game_environment::Climate>()?.at(tx.now())?;
+        let productive = season.warmth >= crop.minimum_warmth && season.rain >= crop.minimum_rain;
+        let plot = tx.edit::<Farms>()?.plots.get_mut(&r.plot).unwrap();
+        plot.phase = Phase::Ripe {
+            yield_units: if productive { crop.yield_units } else { 0 },
+        };
+        Ok(())
+    })?;
+    b.request::<Harvest>(|tx, r| {
+        local(tx, r.person, r.plot, r.destination)?;
+        let Phase::Ripe { yield_units } = tx.get::<Farms>()?.plots[&r.plot].phase else {
+            return Err(Error::Rejected("crop is not ripe".into()));
+        };
+        let reservation = if yield_units > 0 {
+            Some(tx.call(game_cargo::ReserveSpace {
+                good: catalog::crop(tx, r.plot)?.output,
+                inventory: r.destination,
+                quantity: yield_units,
+            })?)
+        } else {
+            None
+        };
+        let until = tx.now().after(catalog::crop(tx, r.plot)?.harvest_labor)?;
+        tx.start_action(r.person, "farm", Some(until), Cancel { person: r.person })?;
+        let job = tx.schedule(until, 10, Finish { person: r.person })?;
+        let s = tx.edit::<Farms>()?;
+        s.plots.get_mut(&r.plot).unwrap().phase = Phase::Harvesting { yield_units };
+        s.work.insert(
+            r.person,
+            Work {
+                plot: r.plot,
+                job,
+                destination: r.destination,
+                reservation,
+            },
+        );
+        Ok(until)
+    })?;
+    b.request::<Finish>(|tx, r| {
+        let w = tx.get::<Farms>()?.work[&r.person].clone();
+        let Phase::Harvesting { yield_units } = tx.get::<Farms>()?.plots[&w.plot].phase else {
+            return Err(Error::Rejected("harvest has changed".into()));
+        };
+        if yield_units > 0 {
+            tx.call(game_cargo::DepositReserved {
+                reservation: w.reservation.unwrap(),
+                inventory: w.destination,
+                good: catalog::crop(tx, w.plot)?.output,
+                quantity: yield_units,
+            })?;
         }
-        FarmOperation::Prepare => {
-            state.phase = CropPhase::Prepared;
-            state.preparation_ms = crop.prepare_labor.0;
-        }
-        FarmOperation::Plant => {
-            state.phase = CropPhase::Growing;
-            state.planting_ms = crop.plant_labor.0;
-        }
-        FarmOperation::Tend if state.phase == CropPhase::Growing => {
-            state.tending = (state.tending + 250).min(1_000)
-        }
-        FarmOperation::Irrigate if state.phase == CropPhase::Growing => {
-            soil.water = soil
-                .water
-                .saturating_add(crop.irrigation_water)
-                .min(soil.capacity)
-        }
-        FarmOperation::Harvest if state.phase == CropPhase::Ripe && harvest_allowed => {
-            let (food, seed) = yield_amounts(&state, &soil, crop);
-            harvest = Some(HarvestOutput {
-                food_inventory: field.food,
-                seed_inventory: field.seed,
-                food,
-                seed,
-            });
-            state.phase = CropPhase::Fallow;
-            soil.fertility = soil.fertility.saturating_sub(crop.soil_depletion);
-            state.preparation_ms = 0;
-            state.planting_ms = 0;
-            state.harvest_ms = 0;
-            state.degree_days_milli = 0;
-            state.stress_days = 0;
-            state.tending = 0;
-        }
-        _ => {}
-    }
-    if job.operation == FarmOperation::Harvest && harvest.is_none() {
-        state.harvest_ms = crop.harvest_labor.0.saturating_sub(1);
-    }
-    Ok(CropCompletion {
-        crop: state,
-        soil,
-        harvest,
-    })
-}
-
-#[cfg(test)]
-mod tests;
-
-/// Project a promised share from a remembered fertility measurement. Agreement
-/// preferences may discount this quantity; they never compute crop production.
-pub fn projected_food_share(
-    crop: &CropRules,
-    fertility: u16,
-    numerator: u64,
-    denominator: u64,
-) -> Result<u128, Error> {
-    if fertility > 1_000 || denominator == 0 || numerator > denominator {
-        return Err(Error::InvalidConfiguration(
-            "invalid projected crop share".into(),
-        ));
-    }
-    u128::from(crop.food_yield.0)
-        .checked_mul(u128::from(fertility))
-        .and_then(|yield_at_fertility| yield_at_fertility.checked_mul(u128::from(numerator)))
-        .map(|scaled| scaled / u128::from(denominator) / 1_000)
-        .ok_or(Error::Overflow)
-}
-
-#[cfg(test)]
-mod free_port_tests;
-
-mod cancellation;
-pub use cancellation::PreparedCultivationCancellation;
-
-/// Apply already accepted site permissions through their physical owner.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreparedSiteAccess {
-    before: BTreeMap<SiteId, Field>,
-    after: BTreeMap<SiteId, Field>,
-}
-impl Runtime {
-    pub fn prepare_site_access(
-        &self,
-        store: &game_ecs::Store,
-        changes: &[(SiteId, PersonId, PersonId, bool)],
-    ) -> Result<PreparedSiteAccess, Error> {
-        let mut before = BTreeMap::new();
-        let mut after: BTreeMap<SiteId, Field> = BTreeMap::new();
-        for (id, grantor, grantee, allowed) in changes {
-            let original = self.field(store, *id).ok_or(Error::Unavailable)?;
-            if original.custodian != Some(*grantor) || grantee.0 == 0 {
-                return Err(Error::Unavailable);
+        tx.edit::<Farms>()?.plots.get_mut(&w.plot).unwrap().phase = Phase::Fallow;
+        tx.edit::<Farms>()?.work.remove(&r.person);
+        tx.finish_action(r.person, "farm")?;
+        tx.call(game_skills::Practice {
+            person: r.person,
+            skill: "farm".into(),
+            effort: 60,
+            attribution: w.job.0,
+        })?;
+        Ok(())
+    })?;
+    b.request::<Cancel>(|tx, r| {
+        if let Some(w) = tx.edit::<Farms>()?.work.remove(&r.person) {
+            tx.unschedule(w.job);
+            if let Some(reservation) = w.reservation {
+                tx.call(game_cargo::ReleaseSpace {
+                    inventory: w.destination,
+                    reservation,
+                })?;
             }
-            before.entry(*id).or_insert_with(|| original.clone());
-            let row = after.entry(*id).or_insert_with(|| original.clone());
-            if *allowed {
-                row.access.insert(*grantee);
-            } else {
-                row.access.remove(grantee);
-            }
-        }
-        Ok(PreparedSiteAccess { before, after })
-    }
-}
-impl PreparedSiteAccess {
-    pub fn check(&self, runtime: &Runtime, store: &game_ecs::Store) -> Result<(), Error> {
-        if self
-            .before
-            .iter()
-            .any(|(id, row)| runtime.field(store, *id) != Some(row))
-        {
-            return Err(Error::Unavailable);
+            let seed_input = catalog::crop(tx, w.plot)?.seed_input;
+            let s = tx.edit::<Farms>()?;
+            let p = s.plots.get_mut(&w.plot).unwrap();
+            p.phase = match p.phase {
+                Phase::Harvesting { yield_units } => Phase::Ripe { yield_units },
+                _ => {
+                    s.lost_seed = s.lost_seed.checked_add(seed_input).ok_or(Error::Overflow)?;
+                    Phase::Fallow
+                }
+            };
         }
         Ok(())
-    }
-    /// Bind the admitted permission rows before other owners append effects.
-    /// The returned guard retains the complete selected fields and rejects late
-    /// changes to their identity, custody, resource references or access.
-    pub fn stage_into(
-        &self,
-        runtime: &Runtime,
-        store: &game_ecs::Store,
-        batch: &mut game_ecs::Batch,
-    ) -> Result<game_ecs::ReadGuard, Error> {
-        self.check(runtime, store)?;
-        let mut reads = game_ecs::ReadSet::new();
-        let mut writes = game_ecs::ReadFootprint::new();
-        for (id, row) in &self.before {
-            reads.expect_row::<Field>(game_ecs::StableId(id.0), Some(row.clone()));
-        }
-        for (id, row) in &self.after {
-            let entity = game_ecs::StableId(id.0);
-            writes.protect::<Field>(entity);
-            batch.insert(entity, row.clone());
-        }
-        reads.bind(store, batch, &writes)
-    }
+    })
 }
-/// Existing physical facts are projected once per field. This owner admits all
-/// operations in authored operation order without letting a caller select them.
-pub fn available_operations(
-    runtime: &Runtime,
-    store: &game_ecs::Store,
-    facts: &BTreeMap<SiteId, BeginFacts>,
-) -> Vec<(SiteId, FarmOperation)> {
-    runtime
-        .fields(store)
-        .map(|(id, _)| id)
-        .flat_map(|field| {
-            [
-                FarmOperation::Prepare,
-                FarmOperation::Plant,
-                FarmOperation::Tend,
-                FarmOperation::Irrigate,
-                FarmOperation::Harvest,
-                FarmOperation::Fallow,
-            ]
-            .into_iter()
-            .filter_map(move |operation| {
-                let fact = facts.get(&field)?;
-                let (land, crop, soil, rules) = runtime.field_bundle(store, field).ok()?;
-                prepare_begin(land, crop, soil, rules, operation, *fact)
-                    .is_ok()
-                    .then_some((field, operation))
-            })
-        })
-        .collect()
-}
-
-mod integration;
-pub use integration::{
-    AgriculturePublication, FinishFacts, FinishOutcome, PreparedCultivationFinish,
-    PreparedCultivationStart, PreparedFieldEstablishment, SaveLinks, StockFacts, available_stock,
-    cultivation_capable, cultivation_tool_available, known_food_share, validate_runtime_presence,
-};

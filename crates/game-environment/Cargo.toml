@@ -4,18 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = []
-content = ["dep:game-content"]
-
 [dependencies]
+game-content.workspace = true
+
 game-core.workspace = true
-game-ecs.workspace = true
-game-world.workspace = true
-game-content = { workspace = true, optional = true }
-
-serde.workspace = true
-
-[dev-dependencies]
-serde_json.workspace = true
 game-sim.workspace = true
+serde.workspace = true

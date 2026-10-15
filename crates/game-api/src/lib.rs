@@ -1,1112 +1,129 @@
-//! Renderer-independent commands and committed observations. Time is in milliseconds;
-//! quantities use 1,000 fixed-point units per whole good.
-pub use game_armies::{ArmyAction, ArmyView};
+//! Renderer-independent commands and immutable player observations.
 pub use game_core::*;
-pub use game_realm::{Action as RealmAction, View as RealmView};
 use serde::{Deserialize, Serialize};
-mod host;
-pub use host::SessionEngine;
-pub mod agreements;
-pub use agreements::*;
-pub mod property;
-pub use property::*;
-pub mod institutions;
-pub use institutions::*;
-pub mod projects;
-pub mod skills;
-pub use projects::*;
-pub mod invocation;
-pub use invocation::*;
-pub mod force;
-pub use force::*;
-pub mod missions;
-pub use missions::*;
-pub mod ecology;
-pub use ecology::*;
-pub mod health;
-pub use health::*;
-pub mod social;
-pub use social::*;
-pub mod enforcement;
-pub use enforcement::*;
-
+use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
-    Army {
-        action: ArmyAction,
-    },
-    Realm {
-        action: RealmAction,
-    },
-    Transport {
-        action: TransportAction,
-    },
-    Social {
-        action: SocialAction,
-    },
-    Enforcement {
-        action: EnforcementAction,
-    },
-    Health {
-        action: HealthAction,
-    },
-    Ecology {
-        action: EcologyAction,
-    },
-    Mission {
-        action: MissionAction,
-    },
-    Escape,
-    Restrain {
-        target: PersonId,
-    },
-    Yield {
-        captor: PersonId,
-    },
-    WithdrawYield,
-    Invocation {
-        action: InvocationAction,
-    },
-    Carry {
-        source: InventoryId,
-        quantity: Quantity,
-    },
-    Project {
-        action: ProjectAction,
-    },
-    Institution {
-        action: InstitutionAction,
-    },
-    Learn {
-        teacher: PersonId,
-        topic: LessonTopic,
-    },
-    RequestGuardian {
-        guardian: PersonId,
-        request: GuardianRequest,
-    },
-    Property {
-        action: PropertyAction,
-    },
-    Agreement {
-        action: AgreementAction,
-    },
-    Cultivate {
-        field: SiteId,
-        operation: FarmOperation,
-    },
     Move {
         destination: AreaId,
     },
-    Rest,
     Eat {
-        source: InventoryId,
-    },
-    Load {
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-    },
-    Work {
-        site: SiteId,
-    },
-    Cancel,
-    Tell {
-        recipient: PersonId,
         inventory: InventoryId,
     },
-    Conceive {
-        partner: PersonId,
+    Rest,
+    Observe {
+        inventory: InventoryId,
     },
-    Care {
-        child: PersonId,
-        source: InventoryId,
+    ObserveSurroundings,
+    ObservePatch {
+        patch: u64,
     },
-    Engage {
-        target: PersonId,
-    },
-    FreeCaptive {
-        target: PersonId,
-    },
-    Comfort {
-        child: PersonId,
-    },
-    Signal {
-        preference: ChildhoodInterest,
-    },
-    Play {
-        interest: ChildhoodInterest,
-    },
-    CombatTurn {
-        encounter: EncounterId,
-        movement: Option<Point>,
-        action: CombatAction,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Submission {
-    pub caller_sequence: u64,
-    pub command: Command,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CommandReceipt {
-    pub caller_sequence: u64,
-    pub authoritative_sequence: u64,
-    pub accepted_at: SimTime,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AreaView {
-    pub id: AreaId,
-    pub name: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TraitsView {
-    pub physical: game_physiology::traits::Phenotype,
-    pub temperament: game_characters::temperament::Temperament,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PlayerView {
-    pub armies: Vec<ArmyView>,
-    pub realm: RealmView,
-    pub transport: Option<TransportView>,
-    pub traits: Option<TraitsView>,
-    pub social: Option<SocialView>,
-    pub enforcement: EnforcementView,
-    pub health: Option<HealthView>,
-    pub ecology: EcologyView,
-    pub missions: Vec<MissionView>,
-    pub force: ForceView,
-    pub invocation: Option<InvocationView>,
-    pub projects: ProjectsView,
-    pub skills: Vec<SkillView>,
-    pub institutions: Vec<InstitutionView>,
-    pub social_cases: Vec<SocialCaseView>,
-    pub property: PropertyView,
-    pub lineage: Option<LineageView>,
-    pub agreements: Vec<AgreementView>,
-    pub environment: Option<EnvironmentView>,
-    pub agriculture: Option<AgricultureView>,
-    pub revision: u64,
-    pub time: SimTime,
-    pub ruler: PersonId,
-    pub location: Location,
-    pub known_areas: Vec<AreaView>,
-    pub available_commands: Vec<Command>,
-    pub quantity_opportunities: Vec<QuantityOpportunity>,
-    pub physical: Option<PhysicalView>,
-    pub known_stocks: Vec<StockKnowledge>,
-    pub nearby_people: Vec<(PersonId, Role)>,
-    pub nearby_life_stages: Vec<(PersonId, LifeStage)>,
-    pub combat: Option<TacticalView>,
-    pub interests: Vec<(ChildhoodInterest, u64)>,
-    pub life_stage: Option<LifeStage>,
-    pub preference: Option<ChildhoodInterest>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum QuantityAction {
-    Carry {
-        source: InventoryId,
-    },
-    Load {
-        source: InventoryId,
-        destination: InventoryId,
-    },
-    Gather {
-        resource: ResourceId,
-        unauthorized: bool,
-    },
-}
-impl QuantityAction {
-    pub fn command(&self, quantity: Quantity) -> Command {
-        match *self {
-            Self::Carry { source } => Command::Carry { source, quantity },
-            Self::Load {
-                source,
-                destination,
-            } => Command::Load {
-                source,
-                destination,
-                quantity,
-            },
-            Self::Gather {
-                resource,
-                unauthorized,
-            } => Command::Ecology {
-                action: EcologyAction::Gather {
-                    resource,
-                    quantity,
-                    unauthorized,
-                },
-            },
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct QuantityOpportunity {
-    pub action: QuantityAction,
-    /// A current stock/capacity ceiling, not a promise that every smaller
-    /// quantity is admitted. Permission, acceptance and execution may constrain it.
-    pub upper_bound: Quantity,
-    /// Whole-object quantities, such as records, have a larger increment.
-    pub increment: Quantity,
-    /// Each suggestion passed native admission when this view was produced.
-    /// Submission remains authoritative, including after time or facts change.
-    pub suggested: Vec<Quantity>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Activity {
-    ArmyApproach {
-        mission: MissionId,
-        encounter: EncounterId,
-        completes: SimTime,
-    },
-    ArmyTalk {
-        army: ArmyId,
-        listener: PersonId,
-        completes: SimTime,
-    },
-    RealmTalk {
-        commitment: RealmCommitmentId,
+    Tell {
         recipient: PersonId,
-        completes: SimTime,
-    },
-    Lift {
-        passenger: PersonId,
-        completes: SimTime,
-    },
-    Social {
-        partner: PersonId,
-        topic: SocialTopic,
-        completes: SimTime,
-    },
-    Instruction {
-        teacher: PersonId,
-        student: PersonId,
-        topic: InstructionTopic,
-        completes: SimTime,
-    },
-    Practice {
-        skill: Skill,
-        tool: Option<InventoryId>,
-        completes: SimTime,
-    },
-    EnforcementTalk {
-        case: EnforcementCaseId,
-        recipient: PersonId,
-        completes: SimTime,
-    },
-    HealthWork {
-        kind: HealthWorkKind,
-        completes: SimTime,
-    },
-    Gather {
-        resource: ResourceId,
-        destination: InventoryId,
-        quantity: Quantity,
-        completes: SimTime,
-    },
-    MissionTalk {
-        completes: SimTime,
-    },
-    Escape {
-        tool: InventoryId,
-        completes: SimTime,
-    },
-    Restrain {
-        target: PersonId,
-        binding: InventoryId,
-        completes: SimTime,
-    },
-    ReportAgreement {
-        completes: SimTime,
-    },
-    WritingMemory {
-        completes: SimTime,
-    },
-    ReadingMemory {
-        completes: SimTime,
-    },
-    TeachingMemory {
-        completes: SimTime,
-    },
-    MovingRecord {
-        completes: SimTime,
-    },
-    Construct {
-        project: ProjectId,
-        completes: SimTime,
-    },
-    Lesson {
-        teacher: PersonId,
-        student: PersonId,
-        topic: LessonTopic,
-        completes: SimTime,
+        key: String,
     },
     Take {
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-        completes: SimTime,
-    },
-    ReportIncident {
-        recipient: PersonId,
-        incident: IncidentId,
-        completes: SimTime,
-    },
-    Cultivate {
-        field: SiteId,
-        operation: FarmOperation,
-        completes: SimTime,
-    },
-    Comfort {
-        child: PersonId,
-        completes: SimTime,
-    },
-    Idle,
-    Rest,
-    Eat {
-        source: InventoryId,
-        completes: SimTime,
-    },
-    Load {
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-        completes: SimTime,
-    },
-    Work {
-        site: SiteId,
-    },
-    Tell {
-        recipient: PersonId,
-        fact: StockKnowledge,
-        completes: SimTime,
-    },
-    Conceive {
-        pregnancy: PregnancyId,
-        completes: SimTime,
-    },
-    Care {
-        child: PersonId,
-        source: InventoryId,
-        completes: SimTime,
-    },
-    Combat {
-        encounter: EncounterId,
-    },
-    Unbind {
-        target: PersonId,
-        completes: SimTime,
-    },
-    Express {
-        preference: ChildhoodInterest,
-        completes: SimTime,
-    },
-    Play {
-        interest: ChildhoodInterest,
-        completes: SimTime,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StockView {
-    pub id: InventoryId,
-    pub good: Good,
-    pub quantity: Quantity,
-    pub can_access: bool,
-    pub capacity: Quantity,
-    pub position: StockPosition,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PhysicalView {
-    pub vitals: Vitals,
-    pub activity: Activity,
-    pub local_stocks: Vec<StockView>,
-    pub local_sites: Vec<SiteId>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EventKind {
-    RealmProposed {
-        commitment: RealmCommitmentId,
-        actor: PersonId,
-        revision: u32,
-    },
-    RealmReported {
-        commitment: RealmCommitmentId,
-        sender: PersonId,
-        recipient: PersonId,
-    },
-    RealmWorkRequested {
-        key: game_realm::TermKey,
-        actor: PersonId,
-    },
-    RealmRatified {
-        commitment: RealmCommitmentId,
-        revision: u32,
-        institution: InstitutionId,
-        proposal: RuleProposalId,
-        adopted: bool,
-    },
-    Socialized {
-        first: PersonId,
-        second: PersonId,
-        topic: SocialTopic,
-    },
-    InstructionCompleted {
-        teacher: PersonId,
-        student: PersonId,
-        topic: InstructionTopic,
-    },
-    PracticeCompleted {
-        actor: PersonId,
-        skill: Skill,
-    },
-    SocialRefused {
-        actor: PersonId,
-        recipient: PersonId,
-        reason: String,
-    },
-    EnforcementPolicyChanged {
-        institution: InstitutionId,
-        office: u16,
-    },
-    EnforcementFiling {
-        case: EnforcementCaseId,
-        actor: PersonId,
-        recipient: PersonId,
-    },
-    EnforcementFiled {
-        case: EnforcementCaseId,
-        actor: PersonId,
-        institution: InstitutionId,
-    },
-    EnforcementReported {
-        case: EnforcementCaseId,
-        sender: PersonId,
-        recipient: PersonId,
-    },
-    EnforcementDecided {
-        case: EnforcementCaseId,
-        judgment: JudgmentId,
-        proposer: PersonId,
-    },
-    EnforcementResponded {
-        case: EnforcementCaseId,
-        actor: PersonId,
-        comply: bool,
-    },
-    EnforcementDispatched {
-        case: EnforcementCaseId,
-        actor: PersonId,
-        mission: MissionId,
-    },
-    EnforcementOutcome {
-        case: EnforcementCaseId,
-        status: EnforcementStatus,
-    },
-    Drank {
-        actor: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    },
-    WaterPurified {
-        actor: PersonId,
-        source: InventoryId,
-    },
-    ShelterBuilt {
-        shelter: ShelterId,
-        builder: PersonId,
-    },
-    ShelterAccessChanged {
-        shelter: ShelterId,
-        actor: PersonId,
-        person: PersonId,
-        allowed: bool,
-    },
-    ShelterEntered {
-        shelter: ShelterId,
-        actor: PersonId,
-    },
-    ShelterLeft {
-        shelter: ShelterId,
-        actor: PersonId,
-    },
-    TreatmentOffered {
-        caregiver: PersonId,
-        patient: PersonId,
-    },
-    TreatmentAccepted {
-        caregiver: PersonId,
-        patient: PersonId,
-    },
-    TreatmentRefused {
-        caregiver: PersonId,
-        patient: PersonId,
-    },
-    TreatmentCompleted {
-        caregiver: PersonId,
-        patient: PersonId,
-    },
-    IllnessStarted {
-        actor: PersonId,
-        kind: IllnessKind,
-    },
-    IllnessRecovered {
-        actor: PersonId,
-        kind: IllnessKind,
-    },
-    ObligationAccrued {
-        obligation: ObligationId,
-        actor: PersonId,
-        quantity: Quantity,
-    },
-    ResourceAccessChanged {
-        resource: ResourceId,
-        actor: PersonId,
-        recipient: PersonId,
-        allowed: bool,
-    },
-    ResourceAccessRequested {
-        resource: ResourceId,
-        actor: PersonId,
-        custodian: PersonId,
-    },
-    ResourceAccessRefused {
-        resource: ResourceId,
-        actor: PersonId,
-        custodian: PersonId,
-    },
-    GatheringStarted {
-        actor: PersonId,
-        resource: ResourceId,
+        from: InventoryId,
+        to: InventoryId,
+        good: GoodId,
+        quantity: u64,
         unauthorized: bool,
     },
-    ResourceCollected {
-        actor: PersonId,
-        resource: ResourceId,
+    Sow {
+        plot: PlotId,
+        seed: InventoryId,
+    },
+    Harvest {
+        plot: PlotId,
         destination: InventoryId,
-        good: Good,
-        quantity: Quantity,
     },
-    CombatReinforcement {
-        encounter: EncounterId,
-        actor: PersonId,
-        joins_round: u64,
-    },
-    MissionProposed {
-        mission: MissionId,
-        sponsor: PersonId,
-    },
-    MissionRecruitmentChanged {
-        mission: MissionId,
-        person: PersonId,
-        status: CompanionStatus,
-    },
-    MissionDeparted {
-        mission: MissionId,
-    },
-    MissionObjectiveChanged {
-        mission: MissionId,
-        leader: PersonId,
-    },
-    MissionFinished {
-        mission: MissionId,
-        status: MissionStatus,
-    },
-    MissionReported {
-        mission: MissionId,
-        speaker: PersonId,
-        recipient: PersonId,
-    },
-    AgreementReported {
-        sender: PersonId,
-        recipient: PersonId,
-        agreement: AgreementId,
-    },
-    Yielded {
-        actor: PersonId,
-        captor: PersonId,
-    },
-    YieldWithdrawn {
-        actor: PersonId,
-    },
-    EscapeAttempted {
-        actor: PersonId,
-    },
-    EscapeInterrupted {
-        actor: PersonId,
-    },
-    Restrained {
-        actor: PersonId,
-        target: PersonId,
-        binding: InventoryId,
-    },
-    InvocationStarted {
-        actor: PersonId,
-        lives: std::collections::BTreeSet<PersonId>,
-    },
-    InvocationDismissed {
-        actor: PersonId,
-    },
-    InvocationWarningRaised {
-        warning: WarningId,
-        actor: PersonId,
-    },
-    InvocationCostAccepted {
-        warning: WarningId,
-        actor: PersonId,
-    },
-    InvocationCostApplied {
-        actor: PersonId,
-        cost: InvocationCost,
-        severity: u8,
-        permanent: bool,
-    },
-    InvocationControlChanged {
-        actor: PersonId,
-        controlled: bool,
-        until: Option<SimTime>,
-    },
-    MemoryRecorded {
-        record: RecordId,
-        actor: PersonId,
+    Craft {
+        recipe: String,
         inventory: InventoryId,
     },
-    MemoryRead {
-        record: RecordId,
-        actor: PersonId,
+    Treat {
+        patient: PersonId,
+        supplies: InventoryId,
     },
-    MemoryTaught {
-        actor: PersonId,
-        recipient: PersonId,
-        life: PersonId,
+    Gather {
+        patch: u64,
+        destination: InventoryId,
+        quantity: u64,
     },
-    ProjectProposed {
-        project: ProjectId,
-        sponsor: PersonId,
+    Haul {
+        from: InventoryId,
+        to: InventoryId,
+        pack: InventoryId,
+        good: GoodId,
+        quantity: u64,
     },
-    ProjectSupported {
-        project: ProjectId,
-        actor: PersonId,
+    Cancel,
+    Accept {
         agreement: AgreementId,
     },
-    ConstructionStarted {
-        project: ProjectId,
-        actor: PersonId,
+    Reject {
+        agreement: AgreementId,
     },
-    ProjectCompleted {
-        project: ProjectId,
-        enterprise: EnterpriseId,
-        site: SiteId,
+    Fulfill {
+        agreement: AgreementId,
+        term: usize,
     },
-    ProjectCancelled {
-        project: ProjectId,
-        actor: PersonId,
-    },
-    ProjectFailed {
-        project: ProjectId,
-    },
-    EnterpriseInputUsed {
-        enterprise: EnterpriseId,
-        site: SiteId,
-        quantity: Quantity,
-    },
-    InstitutionProposed {
-        institution: InstitutionId,
-        proposer: PersonId,
-    },
-    InstitutionFounded {
-        institution: InstitutionId,
-    },
-    InstitutionChanged {
-        institution: InstitutionId,
-        proposal: RuleProposalId,
-    },
-    InstitutionLeft {
-        institution: InstitutionId,
-        actor: PersonId,
-    },
-    OfficeSupportChanged {
-        institution: InstitutionId,
-        office: u16,
-        actor: PersonId,
+    Vote {
+        proposal: u64,
         support: bool,
     },
-    InstitutionRuleApplied {
-        institution: InstitutionId,
-        rule: u16,
-        actor: PersonId,
-        agreement: Option<AgreementId>,
+    Build {
+        project: ProjectId,
     },
-    SocialCaseRecorded {
-        case: CaseId,
-        actor: PersonId,
-    },
-    LessonCompleted {
-        teacher: PersonId,
-        student: PersonId,
-        topic: LessonTopic,
-        gain: u64,
-    },
-    GuardianRefused {
+    GuardianOrder {
         guardian: PersonId,
-        requester: PersonId,
-        reason: String,
-    },
-    GuardianAccepted {
-        guardian: PersonId,
-        requester: PersonId,
-    },
-    PropertyClaimed {
-        claim: ClaimId,
-        actor: PersonId,
-        inventory: InventoryId,
-    },
-    ClaimRecognized {
-        claim: ClaimId,
-        actor: PersonId,
-        support: bool,
-    },
-    PermissionShared {
-        actor: PersonId,
-        inventory: InventoryId,
-        recipient: PersonId,
-        allowed: bool,
-    },
-    TakingAttempted {
-        incident: IncidentId,
-        actor: PersonId,
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-    },
-    Taken {
-        incident: IncidentId,
-        actor: PersonId,
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-    },
-    TakingInterrupted {
-        incident: IncidentId,
-        actor: PersonId,
-    },
-    IncidentReported {
-        sender: PersonId,
-        recipient: PersonId,
-        incident: IncidentId,
-    },
-    AccessRequested {
-        actor: PersonId,
-        custodian: PersonId,
-        inventory: InventoryId,
-    },
-    AccessRefused {
-        actor: PersonId,
-        custodian: PersonId,
-        inventory: InventoryId,
-    },
-    AgreementProposed {
-        agreement: AgreementId,
-        proposer: PersonId,
-    },
-    AgreementActivated {
-        agreement: AgreementId,
-    },
-    AgreementRejected {
-        agreement: AgreementId,
-        actor: PersonId,
-    },
-    AgreementAmended {
-        agreement: AgreementId,
-        amendment: AmendmentId,
-    },
-    ObligationPerformed {
-        obligation: ObligationId,
-        actor: PersonId,
-        quantity: Quantity,
-    },
-    ObligationDefaulted {
-        obligation: ObligationId,
-    },
-    Cultivated {
-        actor: PersonId,
-        field: SiteId,
-        operation: FarmOperation,
-        labor_ms: u64,
-    },
-    CropHarvested {
-        actor: PersonId,
-        field: SiteId,
-        food: Quantity,
-        seed: Quantity,
-    },
-    CropFailed {
-        field: SiteId,
-    },
-    Comforted {
-        caregiver: PersonId,
-        child: PersonId,
-    },
-    Expressed {
-        actor: PersonId,
-        preference: ChildhoodInterest,
-    },
-    Practiced {
-        actor: PersonId,
-        interest: ChildhoodInterest,
-        gain: u64,
-    },
-    EncounterStarted {
-        encounter: EncounterId,
-        area: AreaId,
-    },
-    CombatMoved {
-        encounter: EncounterId,
-        actor: PersonId,
-        position: Point,
-    },
-    Struck {
-        encounter: EncounterId,
-        actor: PersonId,
-        target: PersonId,
-        damage: u64,
-    },
-    Surrendered {
-        encounter: EncounterId,
-        actor: PersonId,
-    },
-    Captured {
-        encounter: EncounterId,
-        actor: PersonId,
-        target: PersonId,
-        binding: InventoryId,
-    },
-    Released {
-        actor: PersonId,
-        target: PersonId,
-    },
-    ObstacleDamaged {
-        map: CombatMapId,
-        obstacle: u32,
-        damage: u64,
-    },
-    RoundEnded {
-        encounter: EncounterId,
-        round: u64,
-    },
-    EncounterEnded {
-        encounter: EncounterId,
-    },
-    Departed {
-        actor: PersonId,
-        from: AreaId,
-        to: AreaId,
-        arrives: SimTime,
-    },
-    Arrived {
-        actor: PersonId,
-        area: AreaId,
-    },
-    Transferred {
-        actor: PersonId,
-        source: InventoryId,
-        destination: InventoryId,
-        quantity: Quantity,
-    },
-    TransferFailed {
-        actor: PersonId,
-        source: InventoryId,
-    },
-    Consumed {
-        actor: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    },
-    Ate {
-        actor: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    },
-    Spoiled {
-        inventory: InventoryId,
-        quantity: Quantity,
-    },
-    Produced {
-        actor: PersonId,
-        site: SiteId,
-        output: InventoryId,
-        quantity: Quantity,
-    },
-    Died {
-        actor: PersonId,
-    },
-    Interrupted {
-        actor: PersonId,
-    },
-    Recovered {
-        actor: PersonId,
-    },
-    Reported {
-        sender: PersonId,
-        recipient: PersonId,
-        inventory: InventoryId,
-    },
-    ConceptionRefused {
-        actor: PersonId,
-        partner: PersonId,
-    },
-    Conceived {
-        pregnancy: PregnancyId,
-        parents: [PersonId; 2],
-    },
-    PregnancyEnded {
-        pregnancy: PregnancyId,
-    },
-    Born {
-        pregnancy: PregnancyId,
-        child: PersonId,
-        parents: [PersonId; 2],
-    },
-    Cared {
-        caregiver: PersonId,
-        child: PersonId,
-        source: InventoryId,
-        quantity: Quantity,
-    },
-    Developed {
-        actor: PersonId,
-        stage: LifeStage,
-    },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Event {
-    pub id: EventId,
-    pub time: SimTime,
-    pub kind: EventKind,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StopReason {
-    InvocationWarning { warning: WarningId },
-    SuccessorBorn { ruler: PersonId },
-    TargetReached,
-    Paused,
-    CombatInput { encounter: EncounterId },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum CombatAction {
-    MissionObjective {
-        mission: MissionId,
-        objective: MissionObjective,
-    },
-    Attack {
-        target: PersonId,
-    },
-    Defend,
-    Wait,
-    Surrender,
-    Capture {
-        target: PersonId,
-    },
-    Release {
-        target: PersonId,
-    },
-    Retreat {
         destination: AreaId,
     },
-    Breach {
-        obstacle: u32,
+    Invoke {
+        lives: std::collections::BTreeSet<LifeId>,
+    },
+    Consent {
+        step: usize,
+        accept: bool,
+    },
+    Dismiss,
+    Combat {
+        battle: u64,
+        action: game_conflict::OrderKind,
+    },
+    Depart {
+        mission: MissionId,
+    },
+    Return {
+        mission: MissionId,
     },
 }
-
-pub use game_conflict::ObstacleView;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FighterView {
-    pub actor: PersonId,
-    pub position: Point,
-    pub team: u32,
-    pub incapacitated: bool,
-    pub surrendered: bool,
-    pub captured: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TacticalView {
-    pub location: Location,
-    pub encounter: EncounterId,
-    pub active: bool,
-    pub map: CombatMapId,
-    pub area: AreaId,
-    pub round: u64,
-    pub round_started: SimTime,
-    pub round_ends: SimTime,
-    pub turn: Option<PersonId>,
-    pub ready_to_advance: bool,
-    pub width: i64,
-    pub height: i64,
-    pub obstacles: Vec<ObstacleView>,
-    pub exits: Vec<(AreaId, Point)>,
-    pub fighters: Vec<FighterView>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AdvanceResult {
-    pub requested: SimTime,
-    pub reached: SimTime,
+pub struct PlayerView {
+    pub time: SimTime,
     pub revision: u64,
-    pub reason: StopReason,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ScenarioInfo {
-    pub id: String,
-    pub version: u32,
-    pub debug_fixture: bool,
-}
-
-pub use game_agriculture::FarmOperation;
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EnvironmentView {
-    pub day: u64,
-    pub day_of_year: u64,
-    pub season: u8,
-    pub temperature_c: i32,
-    pub rain: u64,
+    pub person: Option<PersonId>,
+    pub body: Option<game_physiology::BodyView>,
+    pub location: Option<game_transport::Location>,
+    pub action: Option<String>,
+    pub facts: BTreeMap<String, game_knowledge::Fact>,
+    pub warning: Option<game_invocation::Warning>,
+    pub control_until: Option<SimTime>,
+    pub past_lives: Vec<LifeId>,
+    pub borrowed_memories: BTreeMap<String, game_lineage::Life>,
+    pub battles: Vec<game_conflict::BattleView>,
+    pub events: Vec<PlayerEvent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AgricultureView {
-    pub fields: Vec<FieldView>,
+pub struct PlayerEvent {
+    pub sequence: u64,
+    pub at: SimTime,
+    pub kind: String,
+    pub data: serde_json::Value,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FieldView {
-    pub crop: game_agriculture::CropId,
-    pub id: SiteId,
-    pub phase: String,
-    pub soil_fertility: u16,
-    pub soil_water: u64,
-    pub degree_days_milli: u64,
-    pub preparation_ms: u64,
-    pub planting_ms: u64,
-    pub harvest_ms: u64,
+pub struct CommandResult {
+    pub time: SimTime,
+    pub revision: u64,
+    pub result: serde_json::Value,
 }
-
-pub use game_lineage::{
-    GuardianGoalView, GuardianRequest, GuardianSearchView, LessonTopic, LineageView,
-};
-
-pub use game_transport::{Action as TransportAction, View as TransportView};

@@ -1,0 +1,56 @@
+id = "traits/personality"
+version = 1
+[data.traits.discipline]
+name = "Discipline"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { effort = -1 }
+[data.traits.ambition]
+name = "Ambition"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { goal = 2 }
+[data.traits.sociability]
+name = "Sociability"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { value = 1 }
+[data.traits.risk-tolerance]
+name = "Risk tolerance"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { risk = -2 }
+[data.traits.hedonism]
+name = "Hedonism"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { need = 1 }
+[data.traits.empathy]
+name = "Empathy"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { value = 2 }
+[data.traits.aggression]
+name = "Aggression"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { risk = -1 }
+[data.traits.honesty]
+name = "Honesty"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { value = 1 }
+[data.traits.patience]
+name = "Patience"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { effort = -1 }

@@ -1,5 +1,9 @@
 # game-api
 
-`game-api` defines the renderer-independent contract for interacting with the game. A `Command` inside a `Submission` expresses a request; a `CommandReceipt` records its acceptance and sequence. Shared types make these requests serializable and give callers a consistent vocabulary for game actions.
+Typed player commands and immutable observations for CLI or a future renderer. Commands do not contain an arbitrary actor field; the binding supplies the current controlled person.
 
-`PlayerView`, events, and advance results expose committed observations, ongoing activity, and simulation progress. The crate also re-exports public protocol types used by those inputs and observations. It describes the interface; authoritative state changes and game rules are handled elsewhere.
+**Dependencies:** [game-lineage](../game-lineage/README.md), [game-core](../game-core/README.md), [game-physiology](../game-physiology/README.md), [game-transport](../game-transport/README.md), [game-knowledge](../game-knowledge/README.md), [game-invocation](../game-invocation/README.md), [game-conflict](../game-conflict/README.md).
+
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+
+**Verification:** Run `cargo test -p game-api`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.

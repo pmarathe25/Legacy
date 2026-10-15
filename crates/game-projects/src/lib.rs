@@ -1,194 +1,188 @@
-//! Concrete plans and enterprise accounts, held as shared components.
+//! In-kind contributions and construction consume real goods and worker time.
 use game_core::*;
-use game_ecs::{Batch, StableId, Store};
+use game_sim::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
-mod output_reads;
-pub use output_reads::{SiteOutputGuard, SiteOutputRead, prepare_site_output_read};
-mod types;
-pub use types::*;
-mod storage;
-pub use storage::*;
-mod transitions;
-pub use transitions::*;
-mod perception;
-#[cfg(test)]
-mod perception_tests;
-pub use perception::*;
-mod opportunities;
-#[cfg(test)]
-mod opportunities_tests;
-pub use opportunities::*;
-mod choices;
-pub use choices::*;
-mod prospects;
-pub use prospects::*;
-mod financing;
-pub use financing::*;
-mod judgment;
-pub use judgment::*;
-mod boundary_validation;
-pub use boundary_validation::*;
-mod validation;
-pub use validation::{validate_absent, validate_runtime};
-#[cfg(test)]
-mod transition_tests;
+use std::collections::BTreeMap;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Status {
+    Proposed,
+    Building { worker: PersonId, job: ScheduleId },
+    Operating,
+    Failed,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Project {
+    pub sponsor: PersonId,
+    pub area: AreaId,
+    pub store: InventoryId,
+    pub materials: BTreeMap<GoodId, u64>,
+    pub duration: SimDuration,
+    pub contributions: BTreeMap<PersonId, u64>,
+    pub status: Status,
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Runtime {
-    pub rules: Rules,
-    pub last_event: u64,
+pub struct Projects(pub BTreeMap<ProjectId, Project>);
+impl Resource for Projects {
+    fn allocated_ids(&self) -> Vec<u64> {
+        self.0.keys().map(|id| id.0).collect()
+    }
+    const KEY: &'static str = "projects.sites";
+    fn validate(&self) -> Result<()> {
+        require(
+            self.0.values().all(|p| {
+                p.duration.0 > 0 && !p.materials.is_empty() && p.materials.values().all(|q| *q > 0)
+            }),
+            "invalid project",
+        )
+    }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct EnterpriseWork {
-    pub actor: PersonId,
-    pub site: SiteId,
+#[derive(Serialize, Deserialize)]
+pub struct Propose(pub Project);
+impl Request for Propose {
+    const KEY: &'static str = "projects.propose";
+    type Response = ProjectId;
 }
-/// Opening construction membership and touched rows guard labor exclusivity.
-pub struct PreparedAdvance {
-    change: PreparedChange,
-    jobs: Vec<(PersonId, Construction)>,
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Contribute {
+    pub person: PersonId,
+    pub project: ProjectId,
+    pub from: InventoryId,
+    pub good: GoodId,
+    pub quantity: u64,
 }
-impl PreparedAdvance {
-    pub fn validate(&self, runtime: &Runtime, store: &Store) -> Result<(), Error> {
-        if constructions(store)
-            .map(|(actor, row)| (actor, row.clone()))
-            .collect::<Vec<_>>()
-            != self.jobs
-        {
-            return Err(Error::Unavailable);
+impl Request for Contribute {
+    const KEY: &'static str = "projects.contribute";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Build {
+    pub person: PersonId,
+    pub project: ProjectId,
+}
+impl Request for Build {
+    const KEY: &'static str = "projects.build";
+    type Response = SimTime;
+}
+#[derive(Serialize, Deserialize)]
+struct Finish {
+    project: ProjectId,
+}
+impl Request for Finish {
+    const KEY: &'static str = "projects.finish";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+struct Cancel {
+    project: ProjectId,
+}
+impl Request for Cancel {
+    const KEY: &'static str = "projects.cancel";
+    type Response = ();
+}
+pub fn plugin(b: &mut Builder) -> Result<()> {
+    b.plugin("projects", 1)?;
+    b.resource::<Projects>()?;
+    b.request::<Propose>(|tx, r| {
+        require(
+            r.0.status == Status::Proposed && r.0.contributions.is_empty(),
+            "invalid new project",
+        )?;
+        require(
+            game_cargo::locality(tx, r.0.store)? == r.0.area,
+            "project store is elsewhere",
+        )?;
+        let id = ProjectId(tx.allocate()?);
+        tx.edit::<Projects>()?.0.insert(id, r.0);
+        Ok(id)
+    })?;
+    b.request::<Contribute>(|tx, r| {
+        let p = tx
+            .get::<Projects>()?
+            .0
+            .get(&r.project)
+            .ok_or_else(|| Error::Missing("project".into()))?
+            .clone();
+        require(p.status == Status::Proposed, "project not accepting inputs")?;
+        tx.call(game_property::Take {
+            actor: r.person,
+            transfer: game_cargo::Transfer {
+                from: r.from,
+                to: p.store,
+                good: r.good,
+                quantity: r.quantity,
+            },
+            unauthorized: false,
+        })?;
+        let n = tx
+            .edit::<Projects>()?
+            .0
+            .get_mut(&r.project)
+            .unwrap()
+            .contributions
+            .entry(r.person)
+            .or_default();
+        *n = n.checked_add(r.quantity).ok_or(Error::Overflow)?;
+        Ok(())
+    })?;
+    b.request::<Build>(|tx, r| {
+        game_physiology::capable(tx, r.person)?;
+        let p = tx
+            .get::<Projects>()?
+            .0
+            .get(&r.project)
+            .ok_or_else(|| Error::Missing("project".into()))?
+            .clone();
+        require(p.status == Status::Proposed, "cannot start project")?;
+        require(
+            game_transport::area(tx.get()?, r.person)? == p.area,
+            "builder is elsewhere",
+        )?;
+        require(
+            tx.get::<game_property::Property>()?
+                .allowed(r.person, p.store),
+            "no project supply access",
+        )?;
+        for (good, quantity) in p.materials {
+            tx.call(game_cargo::Consume {
+                inventory: p.store,
+                good,
+                quantity,
+            })?;
         }
-        self.change.validate_rows(runtime, store)
-    }
-    pub fn stage_into(
-        self,
-        runtime: &Runtime,
-        store: &Store,
-        batch: &mut Batch,
-    ) -> Result<ProjectFinalization, Error> {
-        self.validate(runtime, store)?;
-        self.change.stage_rows(runtime, store, batch)
-    }
-    pub fn commit(self, runtime: &mut Runtime, store: &mut Store) -> Result<Vec<Effect>, Error> {
-        let mut batch = Batch::new();
-        let finish = self.stage_into(runtime, store, &mut batch)?;
-        finish.validate_advance_batch(runtime, store, &batch)?;
-        store.apply_batch(batch)?;
-        Ok(finish.finish(runtime))
-    }
-}
-impl Runtime {
-    pub fn prepare_advance(
-        &self,
-        store: &Store,
-        from: SimTime,
-        next: SimTime,
-        work: &[EnterpriseWork],
-    ) -> Result<PreparedAdvance, Error> {
-        let elapsed = next.0.checked_sub(from.0).ok_or(Error::Overflow)?;
-        let jobs = constructions(store)
-            .map(|(actor, row)| (actor, row.clone()))
-            .collect::<Vec<_>>();
-        let mut actors = BTreeSet::new();
-        let mut building = BTreeSet::new();
-        if work
-            .iter()
-            .any(|row| !actors.insert(row.actor) || construction(store, row.actor).is_some())
-            || jobs.iter().any(|(_, row)| !building.insert(row.project))
-        {
-            return Err(Error::Unavailable);
+        let until = tx.now().after(p.duration)?;
+        tx.start_action(
+            r.person,
+            "build",
+            Some(until),
+            Cancel { project: r.project },
+        )?;
+        let job = tx.schedule(until, 10, Finish { project: r.project })?;
+        tx.edit::<Projects>()?.0.get_mut(&r.project).unwrap().status = Status::Building {
+            worker: r.person,
+            job,
+        };
+        Ok(until)
+    })?;
+    b.request::<Finish>(|tx, r| {
+        let p = tx.get::<Projects>()?.0[&r.project].clone();
+        let Status::Building { worker, job } = p.status else {
+            return Err(Error::Rejected("project not building".into()));
+        };
+        tx.finish_action(worker, "build")?;
+        tx.edit::<Projects>()?.0.get_mut(&r.project).unwrap().status = Status::Operating;
+        tx.call(game_skills::Practice {
+            person: worker,
+            skill: "construction".into(),
+            effort: p.duration.0 / MINUTE.0 + 1,
+            attribution: job.0,
+        })?;
+        Ok(())
+    })?;
+    b.request::<Cancel>(|tx, r| {
+        if let Status::Building { job, .. } = tx.get::<Projects>()?.0[&r.project].status {
+            tx.unschedule(job);
+            tx.edit::<Projects>()?.0.get_mut(&r.project).unwrap().status = Status::Failed;
         }
-        let mut change = PreparedChange::new(self);
-        change.guard_jobs(store);
-        for (actor, job) in &jobs {
-            let before = project(store, job.project).ok_or(Error::Unavailable)?;
-            let mut after = before.clone();
-            after.progress_ms = after
-                .progress_ms
-                .checked_add(elapsed)
-                .ok_or(Error::Overflow)?;
-            let credit = after.contributions.entry(*actor).or_default();
-            *credit = credit.checked_add(elapsed).ok_or(Error::Overflow)?;
-            change.project(store, job.project, after);
-        }
-        for input in work {
-            change.guard_enterprise_sites(store, input.site);
-            if let Some((id, before)) = enterprises(store).find(|(_, row)| row.site == input.site) {
-                let mut after = change
-                    .enterprises
-                    .get(&id)
-                    .and_then(|(_, after)| after.clone())
-                    .unwrap_or_else(|| before.clone());
-                let credit = after.labor.entry(input.actor).or_default();
-                *credit = credit.checked_add(elapsed).ok_or(Error::Overflow)?;
-                change.enterprise(store, id, after);
-            }
-        }
-        Ok(PreparedAdvance { change, jobs })
-    }
-    pub fn funding_proposal_bound(&self, store: &Store, next: SimTime) -> Result<u64, Error> {
-        projects(store)
-            .filter(|(_, plan)| {
-                !matches!(
-                    plan.status,
-                    ProjectStatus::Failed | ProjectStatus::Cancelled
-                ) && match &plan.kind {
-                    ProjectKind::Workshop { .. } => true,
-                    ProjectKind::Farm { .. } => !plan.materials_consumed && plan.finish_by > next,
-                }
-            })
-            .try_fold(0_u64, |total, _| {
-                total.checked_add(1).ok_or(Error::Overflow)
-            })
-    }
+        Ok(())
+    })
 }
-
-#[cfg(test)]
-mod component_tests;
-
-/// The first stable farm record supplies the authored seed and food endpoints.
-pub fn site_output(
-    store: &game_ecs::Store,
-    site: game_core::SiteId,
-    good: game_core::Good,
-) -> Option<game_core::InventoryId> {
-    output_reads::site_output(store, site, good)
-}
-
-#[derive(Clone, Copy)]
-pub enum LaborActivity {
-    Other,
-    Workshop(SiteId),
-    Farm(SiteId),
-}
-#[derive(Clone, Copy)]
-pub struct LaborFacts {
-    pub actor: PersonId,
-    pub alive: bool,
-    pub health: u64,
-    pub activity: LaborActivity,
-}
-impl Runtime {
-    pub fn prepare_labor_advance(
-        &self,
-        store: &Store,
-        from: SimTime,
-        next: SimTime,
-        actors: &[LaborFacts],
-    ) -> Result<PreparedAdvance, Error> {
-        let work = actors
-            .iter()
-            .filter(|actor| actor.alive && actor.health > 0)
-            .filter_map(|actor| match actor.activity {
-                LaborActivity::Other => None,
-                LaborActivity::Workshop(site) | LaborActivity::Farm(site) => Some(EnterpriseWork {
-                    actor: actor.actor,
-                    site,
-                }),
-            })
-            .collect::<Vec<_>>();
-        self.prepare_advance(store, from, next, &work)
-    }
-}
-
-pub mod receipt_validation;

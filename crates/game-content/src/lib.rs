@@ -1,7 +1,9 @@
 //! Reads authored definitions. The receiving feature validates their meaning.
+mod store;
 use game_core::Error;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::path::Path;
+pub use store::Store;
 
 /// Startup configuration chooses a file or an explicit authored snapshot.
 /// Resolving a source never changes definitions in an already running world.

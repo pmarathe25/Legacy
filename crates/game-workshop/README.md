@@ -1,7 +1,11 @@
 # game-workshop
 
-Runs production from real input stocks, tools, workers, and output space. Sites select a recipe ID; the saved recipe catalog supplies its input, output, and work duration. Normal and accelerated fixture catalogs remain separate.
+Configurable input recipes, time-consuming production, attributed learning, and explicit waste from interruptions. One worker cannot manufacture and travel simultaneously.
 
-Work starts by consuming the selected inputs. Jobs accumulate progress, pause when requirements fail, and publish output through guarded component and stock changes. Recipe definitions can be edited or added in TOML without changing production logic.
+**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-cargo](../game-cargo/README.md), [game-property](../game-property/README.md), [game-transport](../game-transport/README.md), [game-physiology](../game-physiology/README.md), [game-skills](../game-skills/README.md).
 
-Workshop chooses a resumed tool, the site's declared tool, or a nearby alternate in that order. Small factual ports supply physical availability, nearby inventory IDs and access; Cargo admits the choice against other workers and any recipe consumption of tool stock.
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+
+**Verification:** Run `cargo test -p game-workshop`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+
+**Content:** [Store format and extension guide](../../content/README.md). Definitions are read from files at startup and resolved snapshots survive save/load. The schema and validation live in this crate.

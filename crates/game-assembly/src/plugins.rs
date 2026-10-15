@@ -1,0 +1,38 @@
+use game_core::Result;
+use game_sim::Builder;
+pub fn builder() -> Result<Builder> {
+    let mut b = Builder::new();
+    game_land::plugin(&mut b)?;
+    game_transport::plugin(&mut b)?;
+    game_objects::plugin(&mut b)?;
+    game_traits::plugin(&mut b)?;
+    game_cargo::plugin(&mut b)?;
+    game_property::plugin(&mut b)?;
+    game_environment::plugin(&mut b)?;
+    game_physiology::plugin(&mut b)?;
+    game_knowledge::plugin(&mut b)?;
+    game_skills::plugin(&mut b)?;
+    game_ecology::plugin(&mut b)?;
+    game_agriculture::plugin(&mut b)?;
+    game_workshop::plugin(&mut b)?;
+    game_health::plugin(&mut b)?;
+    game_relationships::plugin(&mut b)?;
+    game_agreements::plugin(&mut b)?;
+    game_institutions::plugin(&mut b)?;
+    game_justice::plugin(&mut b)?;
+    game_lifecycle::plugin(&mut b)?;
+    game_lineage::plugin(&mut b)?;
+    game_guardians::plugin(&mut b)?;
+    game_invocation::plugin(&mut b)?;
+    game_characters::plugin(&mut b)?;
+    game_logistics::plugin(&mut b)?;
+    game_projects::plugin(&mut b)?;
+    game_realm::plugin(&mut b)?;
+    game_conflict::plugin(&mut b)?;
+    game_confinement::plugin(&mut b)?;
+    game_missions::plugin(&mut b)?;
+    game_armies::plugin(&mut b)?;
+    game_openings::plugin(&mut b)?;
+    crate::binding::register(&mut b)?;
+    Ok(b)
+}

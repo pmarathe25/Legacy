@@ -5,54 +5,41 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-game-openings.workspace = true
-game-world.workspace = true
 game-content.workspace = true
-game-ecs.workspace = true
-game-spatial.workspace = true
-game-land.workspace = true
-game-workshop.workspace = true
-game-cargo.workspace = true
-game-logistics.workspace = true
-game-property.workspace = true
-game-sim.workspace = true
-game-environment = { workspace = true, features = ["content"] }
-game-ecology.workspace = true
-game-agriculture = { workspace = true, features = ["content"] }
-game-agreements.workspace = true
-game-projects.workspace = true
-game-lifecycle = { workspace = true, features = ["genetics"] }
-game-armies.workspace = true
-game-realm.workspace = true
-game-transport.workspace = true
-game-genetics.workspace = true
-game-missions.workspace = true
-game-society.workspace = true
-game-lineage.workspace = true
-game-skills.workspace = true
-game-conflict.workspace = true
-game-invocation.workspace = true
-game-physiology = { workspace = true, features = ["genetics"] }
-game-health.workspace = true
-game-characters = { workspace = true, features = ["genetics"] }
+game-objects.workspace = true
+game-traits.workspace = true
+
 game-core.workspace = true
+game-sim.workspace = true
 game-api.workspace = true
+game-openings.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-rayon.workspace = true
-
-[[bench]]
-name = "kernel"
-harness = false
-
-
-[[bench]]
-name = "full_world"
-harness = false
-
-[[bench]]
-name = "interval_staging"
-harness = false
-
-[dev-dependencies]
-game-session.workspace = true
+game-land.workspace = true
+game-transport.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-environment.workspace = true
+game-physiology.workspace = true
+game-knowledge.workspace = true
+game-skills.workspace = true
+game-ecology.workspace = true
+game-agriculture.workspace = true
+game-workshop.workspace = true
+game-health.workspace = true
+game-relationships.workspace = true
+game-agreements.workspace = true
+game-institutions.workspace = true
+game-justice.workspace = true
+game-lifecycle.workspace = true
+game-lineage.workspace = true
+game-guardians.workspace = true
+game-invocation.workspace = true
+game-characters.workspace = true
+game-logistics.workspace = true
+game-projects.workspace = true
+game-realm.workspace = true
+game-conflict.workspace = true
+game-confinement.workspace = true
+game-missions.workspace = true
+game-armies.workspace = true

@@ -5,11 +5,19 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-objects.workspace = true
+game-property.workspace = true
+game-transport.workspace = true
 game-core.workspace = true
-game-ecs.workspace = true
-game-conflict.workspace = true
+game-sim.workspace = true
 game-missions.workspace = true
+game-cargo.workspace = true
+game-physiology.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+game-objects.workspace = true
+game-land.workspace = true
+game-transport.workspace = true
+game-property.workspace = true
+game-skills.workspace = true

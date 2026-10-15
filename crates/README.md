@@ -1,77 +1,57 @@
-# Crate boundaries
+# Crates
 
-Domain crates own game records and the rules that change them. `game-assembly` composes the playable simulation, registers component schemas and systems, and binds commands and observations. `game-world` supplies feature-neutral storage and publication; `game-sim` supplies the clock, deadlines, and bounded execution.
+Each mechanic has one owner. Dependencies point toward shared types, the host, and lower features. Features communicate through receiver-owned requests and typed notifications, and their tests do not depend on `game-assembly`.
 
-**Content:** Opening assets, crops, recipes, environment data, and human definitions are authored in TOML. Opening customs are validated definitions resolved by `game-openings` into institution, property, and agreement types. Saves retain the selected definitions for deterministic continuation; see [`content/README.md`](../content/README.md).
+`game-core` contains shared values. `game-sim` is the single generic host. `game-api`, `game-assembly`, `game-openings`, `game-session`, and `game-cli` contain public values, composition, fixture initialization, threading policy, and text presentation respectively. Every other crate owns a named mechanic or pure utility.
 
-## Production workspace dependencies
+Source size and dependency direction are checked by [architecture tests](game-assembly/tests/architecture.rs). A feature can be checked and tested directly:
 
-Each row lists direct production dependencies declared by that crate's current `Cargo.toml`. The table covers the 35 workspace crates. An arrow means consumer → provider; `?` marks an optional dependency. Third-party and development dependencies are omitted.
+```sh
+cargo check -p game-agriculture --lib
+cargo test -p game-agriculture
+```
 
-| Crate | Workspace providers |
-| --- | --- |
-| `game-agreements` | `game-cargo`, `game-core`, `game-ecs`, `game-logistics`, `game-property`, `game-transport` |
-| `game-agriculture` | `game-content?`, `game-core`, `game-ecs`, `game-land` |
-| `game-api` | `game-agreements`, `game-agriculture`, `game-armies`, `game-characters`, `game-conflict`, `game-core`, `game-ecology`, `game-health`, `game-invocation`, `game-lineage`, `game-missions`, `game-physiology`, `game-projects`, `game-property`, `game-realm`, `game-society`, `game-transport` |
-| `game-armies` | `game-conflict`, `game-core`, `game-ecs`, `game-missions` |
-| `game-assembly` | `game-agreements`, `game-agriculture`, `game-api`, `game-armies`, `game-cargo`, `game-characters`, `game-conflict`, `game-content`, `game-core`, `game-ecology`, `game-ecs`, `game-environment`, `game-genetics`, `game-health`, `game-invocation`, `game-land`, `game-lifecycle`, `game-lineage`, `game-logistics`, `game-missions`, `game-openings`, `game-physiology`, `game-projects`, `game-property`, `game-realm`, `game-sim`, `game-skills`, `game-society`, `game-spatial`, `game-transport`, `game-workshop`, `game-world` |
-| `game-cargo` | `game-core`, `game-ecs`, `game-logistics` |
-| `game-characters` | `game-core`, `game-ecs`, `game-genetics?`, `game-logistics`, `game-spatial` |
-| `game-cli` | `game-api`, `game-assembly`, `game-content`, `game-session` |
-| `game-conflict` | `game-cargo`, `game-core`, `game-ecs`, `game-physiology`, `game-skills`, `game-spatial`, `game-transport` |
-| `game-content` | `game-core` |
-| `game-core` | — |
-| `game-ecology` | `game-core`, `game-ecs`, `game-land`, `game-logistics` |
-| `game-ecs` | `game-core` |
-| `game-environment` | `game-content?`, `game-core`, `game-ecs` |
-| `game-genetics` | `game-core`, `game-ecs` |
-| `game-health` | `game-core`, `game-ecs` |
-| `game-invocation` | `game-cargo`, `game-characters`, `game-core`, `game-ecs`, `game-society` |
-| `game-land` | `game-core`, `game-ecs` |
-| `game-lifecycle` | `game-core`, `game-ecs`, `game-genetics?` |
-| `game-lineage` | `game-core`, `game-ecs`, `game-logistics`, `game-transport` |
-| `game-logistics` | `game-core` |
-| `game-missions` | `game-agreements`, `game-cargo`, `game-characters`, `game-conflict`, `game-core`, `game-ecs`, `game-logistics`, `game-spatial`, `game-transport` |
-| `game-openings` | `game-agreements`, `game-content`, `game-core`, `game-ecology`, `game-property`, `game-society` |
-| `game-physiology` | `game-core`, `game-ecs`, `game-genetics?` |
-| `game-projects` | `game-agreements`, `game-cargo`, `game-core`, `game-ecs`, `game-logistics`, `game-workshop` |
-| `game-property` | `game-cargo`, `game-core`, `game-ecs`, `game-logistics` |
-| `game-realm` | `game-agreements`, `game-cargo`, `game-characters`, `game-core`, `game-ecs`, `game-missions`, `game-society` |
-| `game-session` | `game-api` |
-| `game-sim` | `game-core` |
-| `game-skills` | `game-core`, `game-ecs` |
-| `game-society` | `game-agreements`, `game-cargo`, `game-characters`, `game-core`, `game-ecs`, `game-missions`, `game-property` |
-| `game-spatial` | `game-core`, `game-ecs` |
-| `game-transport` | `game-core`, `game-ecs`, `game-spatial` |
-| `game-workshop` | `game-cargo`, `game-content`, `game-core`, `game-ecs`, `game-skills` |
-| `game-world` | `game-core`, `game-ecs`, `game-sim` |
-
-The application depends on a broad set of feature crates to compose one playable simulation. Feature-to-feature dependencies are direct when one owner consumes another owner's typed records or effects. For example, Armies uses Missions and Conflict; Society uses Agreements, Property, Characters, Cargo, and Missions; Missions uses Conflict and Transport. Dependency tests prevent feature crates from importing the assembly and keep the selected ECS engine private to `game-ecs`.
-
-## Shared storage and transaction boundary
-
-**Storage:** `game-ecs` registers plain Rust component types by schema key and stores rows under stable game IDs. Its selected ECS engine stays behind the adapter. Features own their row types and validation; runtime structs generally retain rules or cursors while entity records live in the shared store.
-
-**Opening reads:** [`ReadSet`](game-ecs/src/reads.rs) can retain selected present or absent rows, entity presence, and scoped component membership. It validates those facts before staging. After an owner appends its edits, `ReadSet::bind` returns a `ReadGuard` containing the exact admitted projection and writes. Later validation rejects changed opening facts, altered projected results, unadmitted edits, or a different batch. `Batch::projected` provides indexed row projections; membership witnesses protect the selected set while allowing declared additions or removals.
-
-**Publication:** [`Transaction`](game-world/src/lib.rs) carries a host opening, one shared batch, owner guards, logical time, ID and event budgets, events, and revision changes. `GenericHost::commit_transaction` checks the host opening and budgets, validates all owner guards, then applies the component batch before advancing the clock and counters and publishing events. A failed check leaves canonical state and publication cursors unchanged. Owners validate their own rules and bindings before the host commits.
-
-**Composition:** Assembly supplies factual adapters, binds public commands and views, and orders prepared owner effects in a transaction. Each receiving feature owns its reactions. Global intervals prepare their ordered work in a preview host and publish the resulting rows, clock, counters, and events atomically. Owner tests exercise the same entry points without constructing the playable assembly.
-
-## Feature owners
-
-**Armies:** `game-armies` stores `Army`, personal `Knowledge`, `Talk`, `Queue`, and `Approach` rows in the shared store. Its `World` retains rules and review timing. `Kernel` prepares relationship changes, while `Systems` owns invitation, participation, order, response, autonomy, and coordinated approach policy through factual `Ports`. The remaining adapter and scenario composition live in `game-assembly`. See [`state.rs`](game-armies/src/state.rs) and [`systems.rs`](game-armies/src/systems.rs).
-
-**Social:** `game-characters` owns canonical personal interaction, participation, and development rows, plus admission and completion hooks. `game-society` owns institutional membership, proposals, judgments, enforcement cases, and policy decisions. Their interfaces exchange prepared effects and observations; local discovery, contact facts, and publication still require composition. See [`social.rs`](game-characters/src/social.rs), [`personal.rs`](game-society/src/personal.rs), and [`enforcement_systems.rs`](game-society/src/enforcement_systems.rs).
-
-**Conflict and Force:** `game-conflict::World` retains combat rules; maps, encounters, fighters, and captivity use canonical component rows. `game-conflict::force::Runtime` retains force rules and its event cursor; yielding, restraint, and escape rows are also in the shared store. Combat and Force expose prepared owner operations and guarded effects. Assembly adapts body, location, cargo, and mission facts and sequences the resulting changes. See [`lib.rs`](game-conflict/src/lib.rs), [`force.rs`](game-conflict/src/force.rs), and [`policy.rs`](game-conflict/src/force/policy.rs).
-
-**Enforcement:** `game-society` owns enforcement policy, case evidence, hearings, remedies, and dispatch preparation. Dispatch proposals use Mission and Agreement interfaces; confinement uses Conflict's physical effects. Enforcement records and personal knowledge are component rows, while `game-assembly` supplies factual ports and binds public events and activities. See [`enforcement.rs`](game-society/src/enforcement.rs) and [`enforcement_storage.rs`](game-society/src/enforcement_storage.rs).
-
-**Person progress:** `game-skills` stores per-person `Skills` rows and converts factual activity and interaction intervals into guarded practice effects. `game-lineage` stores invocation lesson learning as a person component and owns its threshold, lesson, and guardian priority decisions. Characters owns canonical temperament and social development rows. Assembly gathers body, activity, and contact facts and sequences owner-prepared changes. See [`learning.rs`](game-skills/src/learning.rs), [`learning.rs`](game-lineage/src/learning.rs), and [`temperament.rs`](game-characters/src/temperament.rs).
-
-## Execution and measured limits
-
-The bounded executor reuses a fixed worker pool and merges keyed results in stable order. The interval transaction currently copies the shared store and evaluates guarded differences before publication; this serial work scales with attached rows and limits the benefit from more workers. Runnable local-system and complete-game benchmarks, their fixture boundaries, and measured limits are documented in [`game-assembly/README.md`](game-assembly/README.md). Local ECS or feature timings do not establish complete-game throughput.
-
-For content files and the definition loading boundary, see [`content/README.md`](../content/README.md).
+| Crate | Responsibility | Direct game dependencies |
+| --- | --- | --- |
+| [game-agreements](game-agreements/README.md) | Negotiated multi-party promises, acceptance/refusal, outstanding duties, physical fulfillment, and default | `game-core`, `game-sim`, `game-property`, `game-cargo` |
+| [game-agriculture](game-agriculture/README.md) | Sowing consumes seed and labor; growing follows configurable time and climate; harvesting consumes labor and produces food | `game-content`, `game-objects`, `game-core`, `game-sim`, `game-transport`, `game-cargo`, `game-property`, `game-physiology`, `game-environment`, `game-skills` |
+| [game-api](game-api/README.md) | Typed player commands and immutable observations for CLI or a future renderer | `game-lineage`, `game-core`, `game-physiology`, `game-transport`, `game-knowledge`, `game-invocation`, `game-conflict` |
+| [game-armies](game-armies/README.md) | Individual recruitment, unit membership, real food consumption, and mission deployment | `game-objects`, `game-property`, `game-transport`, `game-core`, `game-sim`, `game-missions`, `game-cargo`, `game-physiology` |
+| [game-assembly](game-assembly/README.md) | Ordered plugin installation, public command binding, immutable view composition, and Simulation lifecycle | `game-content`, `game-objects`, `game-traits`, `game-core`, `game-sim`, `game-api`, `game-openings`, `game-land`, `game-transport`, `game-cargo`, `game-property`, `game-environment`, `game-physiology`, `game-knowledge`, `game-skills`, `game-ecology`, `game-agriculture`, `game-workshop`, `game-health`, `game-relationships`, `game-agreements`, `game-institutions`, `game-justice`, `game-lifecycle`, `game-lineage`, `game-guardians`, `game-invocation`, `game-characters`, `game-logistics`, `game-projects`, `game-realm`, `game-conflict`, `game-confinement`, `game-missions`, `game-armies` |
+| [game-cargo](game-cargo/README.md) | Physical inventories, checked quantity accounting, atomic local transfers, carried custody, and output-capacity reservations | `game-objects`, `game-core`, `game-sim`, `game-transport` |
+| [game-characters](game-characters/README.md) | Autonomous survival choices, committed food plans, known travel costs, learned values, urgent needs, and failed-option cooldowns | `game-traits`, `game-provisioning`, `game-content`, `game-transport`, `game-core`, `game-sim`, `game-physiology`, `game-knowledge`, `game-relationships`, `game-invocation`, `game-lineage` |
+| [game-cli](game-cli/README.md) | Small text adapter for the same public commands as a future renderer | `game-content`, `game-core`, `game-api`, `game-assembly`, `game-sim` |
+| [game-confinement](game-confinement/README.md) | Custodial confinement, explicit release, and bounded escape checks | `game-core`, `game-sim`, `game-physiology`, `game-transport` |
+| [game-conflict](game-conflict/README.md) | Configurable tactical fixture with generated continuous geometry, simultaneous movement/attacks, fixed world time per shared round, player input stops, and lasting bod… | `game-core`, `game-sim`, `game-physiology`, `game-transport` |
+| [game-content](game-content/README.md) | Parse versioned TOML definitions and fingerprint their normalized data | `game-core` |
+| [game-core](game-core/README.md) | Typed identities, milliseconds, checked time arithmetic, errors, and deterministic counter-based randomness |  |
+| [game-ecology](game-ecology/README.md) | Timed gathering reserves finite stock, consumes one canonical action, produces physical goods, and credits learning | `game-core`, `game-sim`, `game-cargo`, `game-transport`, `game-physiology`, `game-skills` |
+| [game-environment](game-environment/README.md) | Configurable calendar and periodic climate lookup using integer time | `game-content`, `game-core`, `game-sim` |
+| [game-genetics](game-genetics/README.md) | Seeded inheritance, bounded mutation, and trait expression as pure functions | `game-core` |
+| [game-guardians](game-guardians/README.md) | Guardian identity, an innate successor connection, route-by-route search, mentorship assessment, and refusal without abandonment | `game-core`, `game-sim`, `game-lineage`, `game-transport`, `game-land`, `game-spatial`, `game-physiology`, `game-skills` |
+| [game-health](game-health/README.md) | Actual treatment consumes medicine and caregiver time | `game-content`, `game-objects`, `game-core`, `game-sim`, `game-physiology`, `game-cargo`, `game-property`, `game-transport` |
+| [game-institutions](game-institutions/README.md) | Founding and explicit procedures, bounded access-rule proposals, voting with executable permission consequences, offices, and removal | `game-core`, `game-sim`, `game-property` |
+| [game-invocation](game-invocation/README.md) | Selected past-life memories remain temporary | `game-content`, `game-conflict`, `game-core`, `game-sim`, `game-lineage`, `game-physiology` |
+| [game-justice](game-justice/README.md) | Explicit complaints, evidence, bounded reasoning over a judge's known precedents, decisions, and physical enforcement | `game-core`, `game-sim`, `game-property`, `game-cargo` |
+| [game-knowledge](game-knowledge/README.md) | Local observations, stock and route memories, spoken and delayed reports, and route planning from known roads | `game-land`, `game-spatial`, `game-ecology`, `game-property`, `game-core`, `game-sim`, `game-cargo`, `game-transport` |
+| [game-land](game-land/README.md) | Owns named areas and positive-duration bidirectional links | `game-core`, `game-sim` |
+| [game-lifecycle](game-lifecycle/README.md) | Actual scheduled pregnancies and births with stable identities, inherited traits, caregivers, and physical placement | `game-core`, `game-sim`, `game-physiology`, `game-transport`, `game-cargo`, `game-genetics` |
+| [game-lineage](game-lineage/README.md) | Persistent life records, mortal ruler death, indefinite succession gaps, and selection from actual post-death births | `game-core`, `game-sim`, `game-physiology`, `game-lifecycle`, `game-skills`, `game-knowledge` |
+| [game-logistics](game-logistics/README.md) | Physical load–travel–unload delivery with capacity, local access, multi-road routing, and blocked-delivery retries | `game-core`, `game-sim`, `game-land`, `game-spatial`, `game-transport`, `game-cargo`, `game-property`, `game-physiology` |
+| [game-missions](game-missions/README.md) | Consenting parties, preparation, shared strategic travel, arrival, return, and mortality consequences | `game-core`, `game-sim`, `game-physiology`, `game-transport`, `game-land`, `game-spatial`, `game-cargo` |
+| [game-objects](game-objects/README.md) | Runtime object catalogs with stable data keys and IDs, names, mass, tags, and edible properties | `game-core`, `game-sim`, `game-content` |
+| [game-openings](game-openings/README.md) | Selectable, explicitly labeled noncanonical fixtures | `game-content`, `game-objects`, `game-traits`, `game-scenarios`, `game-core`, `game-sim`, `game-land`, `game-transport`, `game-cargo`, `game-property`, `game-environment`, `game-physiology`, `game-knowledge`, `game-skills`, `game-ecology`, `game-agriculture`, `game-workshop`, `game-health`, `game-relationships`, `game-agreements`, `game-institutions`, `game-justice`, `game-lifecycle`, `game-lineage`, `game-guardians`, `game-invocation`, `game-characters`, `game-logistics`, `game-projects`, `game-realm`, `game-conflict`, `game-confinement`, `game-missions`, `game-armies` |
+| [game-physiology](game-physiology/README.md) | Owns hunger, fatigue, rest, injury, mortal death, and in-place immortal recovery | `game-content`, `game-objects`, `game-core`, `game-sim`, `game-transport`, `game-cargo`, `game-property` |
+| [game-projects](game-projects/README.md) | Proposals, physical in-kind contributions, material consumption, construction time, failure, and an operating site | `game-core`, `game-sim`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-skills` |
+| [game-property](game-property/README.md) | Conflicting ownership claims, recognition, revocable per-person permission, and physical taking | `game-core`, `game-sim`, `game-cargo`, `game-transport` |
+| [game-provisioning](game-provisioning/README.md) | Executable meal and foraging plans using learned sources, real travel, containers, gathering, and consumption | `game-core`, `game-sim`, `game-objects`, `game-knowledge`, `game-cargo`, `game-transport`, `game-physiology`, `game-ecology` |
+| [game-realm](game-realm/README.md) | Mandates attach to recognized offices and impose jurisdiction and spending limits | `game-core`, `game-sim`, `game-institutions`, `game-property`, `game-cargo` |
+| [game-relationships](game-relationships/README.md) | Directed trust, affection, fear and grievance; separate social beliefs and slowly learned concept values | `game-core`, `game-sim` |
+| [game-scenarios](game-scenarios/README.md) | Declarative scenario schemas, stable symbolic references, population groups, validation, and runtime discovery | `game-core`, `game-content`, `game-physiology` |
+| [game-session](game-session/README.md) | A dedicated host thread processes input between bounded advances and coalesces ordinary progress into one slot | `game-core`, `game-api`, `game-assembly`, `game-sim` |
+| [game-sim](game-sim/README.md) | One generic transactional host: typed resources, due requests, stable event order, command deduplication, bounded advancement, and validated saves | `game-core` |
+| [game-skills](game-skills/README.md) | Diminishing skill practice and unique work attribution | `game-core`, `game-sim` |
+| [game-spatial](game-spatial/README.md) | Pure deterministic shortest-path search | `game-core`, `game-land` |
+| [game-traits](game-traits/README.md) | Authored trait names, bounds, defaults, and utility weights, plus individual profiles | `game-core`, `game-sim`, `game-content` |
+| [game-transport](game-transport/README.md) | Timed road traversal, partial travel, cancellation, and physically carried movement | `game-core`, `game-sim`, `game-land` |
+| [game-workshop](game-workshop/README.md) | Configurable input recipes, time-consuming production, attributed learning, and explicit waste from interruptions | `game-content`, `game-objects`, `game-core`, `game-sim`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-skills` |

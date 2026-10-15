@@ -1,0 +1,150 @@
+mod support;
+use game_characters::*;
+use game_core::*;
+use support::*;
+
+#[test]
+fn stale_stock_causes_failure_learning_and_backoff() {
+    let mut f = setup();
+    f.host
+        .dispatch(game_lineage::Begin { person: f.ruler })
+        .unwrap();
+    f.host
+        .dispatch(game_property::Permit {
+            issuer: f.ruler,
+            person: f.other,
+            inventory: f.store,
+            allow: true,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_knowledge::ObserveStore {
+            person: f.other,
+            inventory: f.store,
+        })
+        .unwrap();
+    f.host
+        .dispatch(Register {
+            person: f.other,
+            mind: Mind::default(),
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_cargo::Consume {
+            inventory: f.store,
+            good: game_cargo::FOOD,
+            quantity: 1000,
+        })
+        .unwrap();
+    f.host.dispatch(game_physiology::Start).unwrap();
+    f.host.dispatch(Start).unwrap();
+    run(&mut f.host, SimTime(MINUTE.0 * 75));
+    let m = &f.host.get::<Minds>().unwrap().people[&f.other];
+    assert_eq!(m.failures, 1);
+    assert_eq!(m.retry_after[&(f.store.0 * 2 + 10)], SimTime(MINUTE.0 * 76));
+    run(&mut f.host, SimTime(MINUTE.0 * 100));
+    assert_eq!(f.host.get::<Minds>().unwrap().people[&f.other].failures, 1);
+}
+
+#[test]
+fn fixture_state_roundtrips_with_only_required_plugins() {
+    let f = setup();
+    let save = f.host.save().unwrap();
+    let loaded = builder().load(&save, 2).unwrap();
+    assert_eq!(save, loaded.save().unwrap());
+}
+#[test]
+fn learned_values_change_choices_with_physical_options_held_constant() {
+    let mut f = setup();
+    f.host
+        .dispatch(game_lineage::Begin { person: f.ruler })
+        .unwrap();
+    f.host
+        .dispatch(game_property::Permit {
+            issuer: f.ruler,
+            person: f.other,
+            inventory: f.store,
+            allow: true,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_knowledge::ObserveStore {
+            person: f.other,
+            inventory: f.store,
+        })
+        .unwrap();
+    let pack = f
+        .host
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(f.other),
+            capacity: 100,
+        })
+        .unwrap();
+    let patch = f
+        .host
+        .dispatch(game_ecology::Create(game_ecology::Patch {
+            area: f.home,
+            good: game_cargo::FOOD,
+            stock: 100,
+            capacity: 100,
+            renew: 0,
+        }))
+        .unwrap();
+    f.host
+        .dispatch(game_property::ClaimInventory {
+            claimant: f.other,
+            inventory: pack,
+            recognized_by: std::collections::BTreeSet::from([f.other]),
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_knowledge::ObserveStore {
+            person: f.other,
+            inventory: pack,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_knowledge::ObservePatch {
+            person: f.other,
+            patch,
+        })
+        .unwrap();
+    f.host
+        .dispatch(Register {
+            person: f.other,
+            mind: Mind::default(),
+        })
+        .unwrap();
+    f.host.dispatch(game_physiology::Start).unwrap();
+    run(&mut f.host, SimTime(MINUTE.0 * 31));
+    let mut learned = builder().load(&f.host.save().unwrap(), 2).unwrap();
+    for _ in 0..8 {
+        learned
+            .dispatch(game_relationships::LearnValue {
+                person: f.other,
+                concept: "independence".into(),
+                outcome: 5,
+            })
+            .unwrap();
+    }
+    f.host.dispatch(Start).unwrap();
+    learned.dispatch(Start).unwrap();
+    run(&mut f.host, SimTime(MINUTE.0 * 32));
+    run(&mut learned, SimTime(MINUTE.0 * 32));
+    assert_eq!(
+        f.host.get::<Minds>().unwrap().people[&f.other]
+            .last
+            .as_ref()
+            .unwrap()
+            .id,
+        f.store.0 * 2 + 10
+    );
+    assert_eq!(
+        learned.get::<Minds>().unwrap().people[&f.other]
+            .last
+            .as_ref()
+            .unwrap()
+            .id,
+        patch * 2 + 11
+    );
+}

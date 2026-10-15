@@ -1,5 +1,9 @@
 # game-cli
 
-`game-cli` provides a text interface for playing and inspecting a simulation. The executable creates an opening from command-line options, then reads commands interactively, from standard input, or from a script. Players can inspect status, submit gameplay commands, advance simulated time, and save or load a session. `--content PATH` selects editable TOML definitions, and `--environment PATH.toml` selects calendar and climate content; new worlds load files at startup and saved worlds retain their definitions.
+Small text adapter for the same public commands as a future renderer. JSON command input exposes every typed API command without duplicating gameplay logic.
 
-The library parses text into shared `game-api` commands and sends them to `game-assembly`; it also formats observations and results as JSON. Hosted time advances use `game-session`, while the adapter can execute directly against a composed world. The CLI handles input and display; simulation rules remain in the backend.
+**Dependencies:** [game-core](../game-core/README.md), [game-api](../game-api/README.md), [game-assembly](../game-assembly/README.md), [game-sim](../game-sim/README.md).
+
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+
+**Verification:** Run `cargo test -p game-cli`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.

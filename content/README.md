@@ -1,15 +1,63 @@
-# Game content
+# Content store
 
-TOML files hold validated definitions for existing game mechanics. Each document has a stable `id`, a positive `version`, and a `[data]` section that its receiving feature validates. Keep IDs stable when editing a definition and increase its version when publishing changes.
+Game definitions live in this directory and load at runtime. Editing or adding a definition needs no recompilation when it uses existing mechanics. Each document has an `id`, positive revision `version`, and a `[data]` section. Durations use milliseconds; quantities and masses use integer native units.
 
-**Human definitions:** `human/` contains default physiology and temperament parameters, temperament-learning effects, newborn dispositions, genetic mutation and crossover probabilities, and reproductive allele interpretation. Gene loci are opaque names; their feature owners define what they mean.
+## Ownership
 
-**World definitions:** `environment/temperate.toml` sets the calendar and climate. `agriculture/crops.toml` defines crop rules by crop ID. `workshop/temperate.toml` defines production recipes; `workshop/fixtures.toml` is a separate accelerated catalog for fixtures and tests.
+The single store keeps shipping, modding, and references together. Feature crates define their own schemas, validate their own rules, and retain resolved definitions in their saved state. `game-content` provides file discovery, typed TOML loading, overlays, document snapshots, and fingerprints; it contains no game rules.
 
-**Openings:** `openings/temperate.toml` defines playable opening IDs, settlement names and links, starting stock lots and resource deposits, and workshop bindings. Startup resolves its symbolic references to entity IDs. Population scaling is applied by the opening mechanics.
+| Choice | Benefit | Cost |
+| --- | --- | --- |
+| Data shipped inside each crate | Each feature package carries its defaults | A game or mod must coordinate several roots and their references |
+| One namespaced content store | One distributable pack, one override order, and stable cross-feature keys | Feature schemas must remain owned by their crates to avoid a central rules module |
 
-For ordinary playable startup, `game-cli --content DIRECTORY` selects a content directory with this layout. `--environment PATH.toml` selects a calendar and climate document. Files are read while constructing the world; changing a file does not require a rebuild.
+Legacy uses the second option. A feature's tests compose only its required crates; they can also supply a small content pack independently.
 
-Saves retain the resolved definitions and their content stamps. Loading a save does not require the original files. Tests verify that edited opening names and stock quantities, added openings and workshop bindings, and edited recipe values affect normal play and survive save/load. Agriculture tests verify that changing the authored crop yield changes output; resolved crop catalogs also round-trip.
+| Namespace | Definitions | Schema owner |
+| --- | --- | --- |
+| `objects/` | Object keys, stable IDs, names, mass, tags, edible portions and relief | `game-objects` |
+| `traits/` | Trait names, ranges, defaults, weights on existing utility terms | `game-traits` |
+| `agriculture/` | Crop types, seed and output objects, yield, growth, labor, climate thresholds | `game-agriculture` |
+| `workshop/` | Recipe inputs, output, quantities, duration, practiced skill | `game-workshop` |
+| `scenarios/` | Areas, links, people, traits, inventories, permissions, plots, deposits, institutions, optional encounters and reincarnation fixtures | `game-scenarios`, bound by `game-openings` |
+| `physiology/`, `characters/`, `health/`, `environment/`, `invocation/` | Named rule profiles selected by scenarios | Respective feature crates |
+| `manifest.toml` | Default scenario selection | `game-scenarios` |
 
-Adding data that uses existing types is content work. Values such as `Good` and resource kinds are mechanics vocabulary defined in Rust; adding a new vocabulary value or mechanic requires code. Each settlement can define named starting customs in TOML. An opening selects one by key; `game-openings` validates the definition and resolves its symbolic residents, areas, and inventories into the existing institution, property claim, and agreement types during startup. The concrete customs in `openings/temperate.toml` are authored data; the receiving mechanics remain implemented in their feature crates.
+## Extend the game
+
+Add a `.toml` document directly to a catalog namespace. Catalogs discover all documents in stable filename order. Object and trait names are data keys, not Rust enum variants. Crop and recipe definitions reference objects by key. Scenarios reference actors, areas, inventories, and crops by stable keys. Unknown references, duplicate keys or object IDs, invalid quantities, and malformed fields are rejected.
+
+For example, `objects/berries.toml` adds an edible object:
+
+```toml
+id = "objects/berries"
+version = 1
+
+[data.objects.berries]
+id = 6
+name = "Berries"
+mass = 2
+food = { portion = 2, relief = 50 }
+```
+
+Existing eating and carrying mechanics use those properties. A crop can reference `output_object = "berries"`, and a recipe can reference `output = "berries"`. Retain an object's numeric ID when editing its label or properties; IDs must remain unique within the pack.
+
+A new trait can weight `need`, `goal`, `value`, `effort`, or `risk`. Scenario person groups assign scores by trait key. All omitted scores use the authored default. Adding a trait needs no trait-specific code branch; adding a new behavioral effect requires its mechanic to be implemented.
+
+Copy a scenario file, change its document ID, and edit its data to add a start. `fixture = false` makes it eligible for seeded `--scenario random` selection. The shipped starts remain noncanonical fixtures. `foraging-fixture` supplies an autonomous person with an empty carried container and a local edible patch; meals require real gathering and consumption. A group with `count > 1` creates keys such as `citizen-1`; permission selectors accept an exact key, a group key, or `"*"`.
+
+A scenario's `characters` key selects a profile such as `survival`. Its review and retry intervals, hunger and rest thresholds, interruptible action kinds, switching margin, gathering quantity, and travel effort can be changed in `characters/survival.toml` without rebuilding. Existing saves retain the resolved rules.
+
+## Load and override
+
+```sh
+cargo run -p game-cli -- --content ./content --list
+cargo run -p game-cli -- --content ./content --scenario kernel-fixture
+cargo run -p game-cli -- --content ./content --mod ./mods/harbor --list
+```
+
+An overlay follows the same directory layout. A matching relative filename replaces the base document; a new filename adds a document. Repeated `--mod` arguments apply in order, with the last matching path winning. Overlays replace whole documents, not individual fields. Add new catalog files to extend a catalog while retaining its base definitions.
+
+A store caches each document on its first read. New games construct a fresh store. Editing files does not change a running game. Saves contain the resolved definitions and content fingerprints, and loading a save requires no source files. No hot-reload or content scripting engine is provided.
+
+The pre-rewrite documents remain in `/tmp/legacy-before-rewrite-1791992308.tar.gz`; the active files here use the current feature schemas.

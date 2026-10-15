@@ -1,0 +1,10 @@
+[package]
+name = "game-relationships"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+serde.workspace = true

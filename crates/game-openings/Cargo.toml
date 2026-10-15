@@ -5,13 +5,39 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-game-property.workspace = true
-game-society.workspace = true
-game-agreements.workspace = true
-game-core.workspace = true
 game-content.workspace = true
-game-ecology.workspace = true
-serde.workspace = true
+game-objects.workspace = true
+game-traits.workspace = true
+game-scenarios.workspace = true
 
-[dev-dependencies]
-serde_json.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+serde.workspace = true
+game-land.workspace = true
+game-transport.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-environment.workspace = true
+game-physiology.workspace = true
+game-knowledge.workspace = true
+game-skills.workspace = true
+game-ecology.workspace = true
+game-agriculture.workspace = true
+game-workshop.workspace = true
+game-health.workspace = true
+game-relationships.workspace = true
+game-agreements.workspace = true
+game-institutions.workspace = true
+game-justice.workspace = true
+game-lifecycle.workspace = true
+game-lineage.workspace = true
+game-guardians.workspace = true
+game-invocation.workspace = true
+game-characters.workspace = true
+game-logistics.workspace = true
+game-projects.workspace = true
+game-realm.workspace = true
+game-conflict.workspace = true
+game-confinement.workspace = true
+game-missions.workspace = true
+game-armies.workspace = true

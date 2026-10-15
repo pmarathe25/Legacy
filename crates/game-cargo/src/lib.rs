@@ -1,414 +1,323 @@
-//! Admission of conserved stock loading and carried compartments.
-//! Contacts, permissions, reservations and body/transport room are factual ports
-//! supplied by their owners. This crate owns their admission conjunction; it
-//! neither locates distant goods nor stores a second stock or activity ledger.
+//! Physical inventory accounting. Permission is a separate property concern.
 use game_core::*;
-pub mod facts;
+use game_sim::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
-
-mod carried;
-pub use carried::{
-    CarriedDeliveryFacts, binding_stock, carried_destinations, carried_quantities,
-    carried_quantity, carried_quantity_in, carried_quantity_rows, compatible_carried_destination,
-    compatible_carried_destination_in, delivery_cargo,
-};
-
-mod consumption;
-pub use consumption::{
-    ConsumptionFacts, PreparedConsumptions, PreparedPortionConsumption, PreparedSpoilage,
-    consume_inventory_row, portion_available, prepare_consumptions, prepare_food_consumption,
-    prepare_portion_consumption, prepare_spoilage,
-};
-
-mod deposit;
-pub use deposit::{
-    DepositBounds, PreparedDeposit, append_deposit_schema_bounds, deposit_available,
-    deposit_inventory_row, prepare_deposit,
-};
-
-pub mod receiving;
-pub use receiving::{
-    CargoConsume, CargoDeposit, ReceivingSystems, receive_consume, receive_deposit,
-    register_cargo_receiving,
-};
-
-mod storage;
-pub use storage::{
-    InventoryCreationGuard, PreparedForcedSplit, PreparedInventoryCreation,
-    PreparedNewbornInventory, insert_inventory, inventories, inventory, inventory_mut,
-    prepare_forced_split, prepare_inventory_creation, prepare_inventory_split,
-    prepare_newborn_inventory, register_components, remove_inventory, split_inventory_rows,
-    validate_storage,
-};
-#[cfg(test)]
-mod storage_tests;
-
-mod planning_projection;
-pub use planning_projection::{
-    ActualToolFacts, Reservation, ReservationTotals, ToolAllocations, ToolBodyFacts, ToolSlots,
-    ToolUse, equipment_availability, tool_available,
-};
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum InventoryLocation {
+use std::collections::BTreeMap;
+pub const FOOD: GoodId = GoodId(1);
+pub const TIMBER: GoodId = GoodId(2);
+pub const SEED: GoodId = GoodId(3);
+pub const MEDICINE: GoodId = GoodId(4);
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Custody {
     Area(AreaId),
     Carried(PersonId),
+    Road {
+        from: AreaId,
+        to: AreaId,
+        elapsed: SimDuration,
+        duration: SimDuration,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Inventory {
-    pub id: InventoryId,
-    pub location: InventoryLocation,
-    pub quantity: Quantity,
-    pub capacity: Quantity,
-    pub access: BTreeSet<PersonId>,
-    pub last_granted: Option<PersonId>,
-    pub good: Good,
-    pub spoils_at: Option<SimTime>,
+    pub custody: Custody,
+    pub capacity: u64,
+    pub goods: BTreeMap<GoodId, u64>,
+    pub mass: u64,
+    pub reserved: BTreeMap<u64, u64>,
 }
 impl Inventory {
-    pub fn room(&self) -> Result<Quantity, Error> {
-        self.capacity
-            .0
-            .checked_sub(self.quantity.0)
-            .map(Quantity)
-            .ok_or(Error::Unavailable)
+    pub fn amount(&self, good: GoodId) -> u64 {
+        *self.goods.get(&good).unwrap_or(&0)
+    }
+    pub fn used(&self) -> Result<u64> {
+        self.reserved.values().try_fold(self.mass, |sum, q| {
+            sum.checked_add(*q).ok_or(Error::Overflow)
+        })
+    }
+    pub fn total(&self) -> Result<u64> {
+        self.goods
+            .values()
+            .try_fold(0u64, |sum, q| sum.checked_add(*q).ok_or(Error::Overflow))
     }
 }
-
-/// A stock/capacity ceiling only. Rights, accepted duties, record units and
-/// transport constraints still require native admission at the chosen amount.
-pub fn load_upper_bound(
-    source: &Inventory,
-    destination: &Inventory,
-    supply: SourceFacts,
-    receiver: ReceiverFacts,
-) -> Result<Quantity, Error> {
-    source.room()?;
-    let mut bound = source
-        .quantity
-        .0
-        .min(supply.unreserved.0)
-        .min(destination.room()?.0);
-    if source.location != destination.location {
-        bound = bound.min(receiver.body_room.0);
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Cargo(pub BTreeMap<InventoryId, Inventory>);
+impl Resource for Cargo {
+    fn allocated_ids(&self) -> Vec<u64> {
+        self.0
+            .iter()
+            .flat_map(|(id, inv)| std::iter::once(id.0).chain(inv.reserved.keys().copied()))
+            .collect()
     }
-    Ok(Quantity(bound))
-}
-
-/// Pickup can allocate a matching compartment; actual compartment selection
-/// and all admission constraints remain in prepare_carry.
-pub fn pickup_upper_bound(
-    source: &Inventory,
-    supply: SourceFacts,
-    body_room: Quantity,
-    compartment_capacity: Quantity,
-) -> Result<Quantity, Error> {
-    source.room()?;
-    Ok(Quantity(
-        source
-            .quantity
-            .0
-            .min(supply.unreserved.0)
-            .min(body_room.0)
-            .min(compartment_capacity.0),
-    ))
-}
-#[derive(Clone, Copy, Debug)]
-pub struct ActorFacts {
-    pub actor: PersonId,
-    pub alive: bool,
-    pub health: u64,
-    pub independent: bool,
-    pub confined: bool,
-    pub in_combat: bool,
-    pub receiving_care: bool,
-    pub stationary: bool,
-    pub fatigue: u64,
-    pub fatigue_limit: u64,
-}
-impl ActorFacts {
-    fn capable(&self) -> bool {
-        self.actor.0 > 0
-            && self.alive
-            && self.health > 0
-            && self.independent
-            && !self.confined
-            && !self.in_combat
-            && !self.receiving_care
-            && self.stationary
-            && self.fatigue < self.fatigue_limit
-    }
-}
-#[derive(Clone, Copy, Debug)]
-pub struct SourceFacts {
-    pub contact: bool,
-    pub accessible: bool,
-    pub unreserved: Quantity,
-    pub record_permission: bool,
-}
-#[derive(Clone, Copy, Debug)]
-pub struct ReceiverFacts {
-    pub contact: bool,
-    pub accessible: bool,
-    /// An explicit accepted owner obligation can authorize this actual receipt.
-    pub accepted: bool,
-    pub body_room: Quantity,
-    pub transport_allows: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LoadJob {
-    pub actor: PersonId,
-    pub source: InventoryId,
-    pub destination: InventoryId,
-    pub quantity: Quantity,
-    pub completes: SimTime,
-}
-impl LoadJob {
-    /// Structural saved-job validation, without reinterpreting present rights
-    /// as the rights at admission. Closing execution must recheck actual stock.
-    pub fn validate(
-        &self,
-        now: SimTime,
-        source: &Inventory,
-        destination: &Inventory,
-    ) -> Result<(), Error> {
-        if self.actor.0 == 0
-            || self.source != source.id
-            || self.destination != destination.id
-            || self.source == self.destination
-            || self.quantity.0 == 0
-            || self.completes <= now
-            || source.good != destination.good
-            || (source.location != InventoryLocation::Carried(self.actor)
-                && destination.location != InventoryLocation::Carried(self.actor))
-            || source.room().is_err()
-            || destination.room().is_err()
-        {
-            return Err(Error::Unavailable);
+    const KEY: &'static str = "cargo.inventories";
+    fn validate(&self) -> Result<()> {
+        for inventory in self.0.values() {
+            require(
+                inventory.used()? <= inventory.capacity,
+                "inventory over capacity",
+            )?;
         }
         Ok(())
     }
 }
-/// Pure admission. No reservation, allocation, transfer or interruption occurs.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_load(
-    actor: ActorFacts,
-    source: &Inventory,
-    destination: &Inventory,
-    quantity: Quantity,
-    supply: SourceFacts,
-    receiver: ReceiverFacts,
-    now: SimTime,
-    duration: SimDuration,
-) -> Result<LoadJob, Error> {
-    if !actor.capable()
-        || source.id.0 == 0
-        || destination.id.0 == 0
-        || source.id == destination.id
-        || quantity.0 == 0
-        || source.good != destination.good
-        || (source.location != InventoryLocation::Carried(actor.actor)
-            && destination.location != InventoryLocation::Carried(actor.actor))
-        || !supply.contact
-        || !supply.accessible
-        || !supply.record_permission
-        || supply.unreserved < quantity
-        || source.quantity < quantity
-        || !receiver.contact
-        || !(receiver.accessible || receiver.accepted)
-        || destination.room()? < quantity
-        || source.room().is_err()
-        || (source.location != destination.location
-            && (receiver.body_room < quantity || !receiver.transport_allows))
-        || duration.0 == 0
-    {
-        return Err(Error::Unavailable);
+pub fn locality(tx: &Transaction<'_>, id: InventoryId) -> Result<AreaId> {
+    let inv = tx
+        .get::<Cargo>()?
+        .0
+        .get(&id)
+        .ok_or_else(|| Error::Missing("inventory".into()))?;
+    match inv.custody {
+        Custody::Area(a) => Ok(a),
+        Custody::Carried(p) => game_transport::area(tx.get()?, p),
+        Custody::Road { .. } => Err(Error::Rejected("inventory is on a road".into())),
     }
-    let completes = SimTime(now.0.checked_add(duration.0).ok_or(Error::Overflow)?);
-    Ok(LoadJob {
-        actor: actor.actor,
-        source: source.id,
-        destination: destination.id,
-        quantity,
-        completes,
-    })
 }
-#[derive(Clone, Copy)]
-pub struct Compartment<'a> {
-    pub stock: &'a Inventory,
-    pub receiver: ReceiverFacts,
+#[derive(Serialize, Deserialize)]
+pub struct Create {
+    pub custody: Custody,
+    pub capacity: u64,
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Selection {
-    Existing(InventoryId),
-    Proposed(Inventory),
+impl Request for Create {
+    const KEY: &'static str = "cargo.create";
+    type Response = InventoryId;
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct PreparedCarry {
-    pub selection: Selection,
-    pub job: LoadJob,
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Deposit {
+    pub inventory: InventoryId,
+    pub good: GoodId,
+    pub quantity: u64,
 }
-#[derive(Clone, Copy)]
-pub struct NewCompartment {
-    pub id: InventoryId,
-    pub holder: PersonId,
-    pub alive: bool,
-    pub capacity: Quantity,
-    pub receiver: ReceiverFacts,
+impl Request for Deposit {
+    const KEY: &'static str = "cargo.deposit";
+    type Response = ();
 }
-/// Reuses the first eligible compartment in stable ID order. A hypothetical
-/// empty slot is returned only after its complete native-load admission passes.
-#[allow(clippy::too_many_arguments)]
-fn prepare_compartment(
-    actor: ActorFacts,
-    source: &Inventory,
-    quantity: Quantity,
-    supply: SourceFacts,
-    candidates: &[Compartment<'_>],
-    proposed: NewCompartment,
-    now: SimTime,
-    duration: SimDuration,
-) -> Result<PreparedCarry, Error> {
-    if !proposed.alive || proposed.holder.0 == 0 {
-        return Err(Error::Unavailable);
-    }
-    let mut ordered: Vec<_> = candidates.iter().collect();
-    ordered.sort_by_key(|candidate| candidate.stock.id);
-    for candidate in ordered {
-        if candidate.stock.location != InventoryLocation::Carried(proposed.holder) {
-            continue;
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Consume {
+    pub inventory: InventoryId,
+    pub good: GoodId,
+    pub quantity: u64,
+}
+impl Request for Consume {
+    const KEY: &'static str = "cargo.consume";
+    type Response = ();
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Transfer {
+    pub from: InventoryId,
+    pub to: InventoryId,
+    pub good: GoodId,
+    pub quantity: u64,
+}
+impl Request for Transfer {
+    const KEY: &'static str = "cargo.transfer";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+pub struct DropCarried {
+    pub person: PersonId,
+}
+impl Request for DropCarried {
+    const KEY: &'static str = "cargo.drop_carried";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+pub struct ReserveSpace {
+    pub good: GoodId,
+    pub inventory: InventoryId,
+    pub quantity: u64,
+}
+impl Request for ReserveSpace {
+    const KEY: &'static str = "cargo.reserve_space";
+    type Response = u64;
+}
+#[derive(Serialize, Deserialize)]
+pub struct ReleaseSpace {
+    pub inventory: InventoryId,
+    pub reservation: u64,
+}
+impl Request for ReleaseSpace {
+    const KEY: &'static str = "cargo.release_space";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+pub struct DepositReserved {
+    pub inventory: InventoryId,
+    pub reservation: u64,
+    pub good: GoodId,
+    pub quantity: u64,
+}
+impl Request for DepositReserved {
+    const KEY: &'static str = "cargo.deposit_reserved";
+    type Response = ();
+}
+pub fn plugin(b: &mut Builder) -> Result<()> {
+    b.plugin("cargo", 1)?;
+    b.resource::<Cargo>()?;
+    b.validate_save(|h| {
+        for inventory in h.get::<Cargo>()?.0.values() {
+            let mass = inventory.goods.iter().try_fold(0u64, |sum, (good, q)| {
+                sum.checked_add(h.get::<game_objects::Objects>()?.mass(*good, *q)?)
+                    .ok_or(Error::Overflow)
+            })?;
+            require(mass == inventory.mass, "invalid inventory mass")?;
         }
-        match prepare_load(
-            actor,
-            source,
-            candidate.stock,
-            quantity,
-            supply,
-            candidate.receiver,
-            now,
-            duration,
-        ) {
-            Ok(job) => {
-                return Ok(PreparedCarry {
-                    selection: Selection::Existing(candidate.stock.id),
-                    job,
-                });
+        Ok(())
+    });
+    b.request::<Create>(|tx, r| {
+        let id = InventoryId(tx.allocate()?);
+        tx.edit::<Cargo>()?.0.insert(
+            id,
+            Inventory {
+                custody: r.custody,
+                capacity: r.capacity,
+                goods: BTreeMap::new(),
+                mass: 0,
+                reserved: BTreeMap::new(),
+            },
+        );
+        Ok(id)
+    })?;
+    b.request::<ReserveSpace>(|tx, r| {
+        require(r.quantity > 0, "empty reservation")?;
+        let mass = tx
+            .get::<game_objects::Objects>()?
+            .mass(r.good, r.quantity)?;
+        let id = tx.allocate()?;
+        let inventory = tx
+            .edit::<Cargo>()?
+            .0
+            .get_mut(&r.inventory)
+            .ok_or_else(|| Error::Missing("inventory".into()))?;
+        require(
+            inventory.used()?.checked_add(mass).ok_or(Error::Overflow)? <= inventory.capacity,
+            "no output capacity",
+        )?;
+        inventory.reserved.insert(id, mass);
+        Ok(id)
+    })?;
+    b.request::<ReleaseSpace>(|tx, r| {
+        let inventory = tx
+            .edit::<Cargo>()?
+            .0
+            .get_mut(&r.inventory)
+            .ok_or_else(|| Error::Missing("inventory".into()))?;
+        require(
+            inventory.reserved.remove(&r.reservation).is_some(),
+            "unknown capacity reservation",
+        )?;
+        Ok(())
+    })?;
+    b.request::<DepositReserved>(|tx, r| {
+        let mass = tx
+            .get::<game_objects::Objects>()?
+            .mass(r.good, r.quantity)?;
+        let inventory = tx
+            .edit::<Cargo>()?
+            .0
+            .get_mut(&r.inventory)
+            .ok_or_else(|| Error::Missing("inventory".into()))?;
+        let reserved = inventory
+            .reserved
+            .remove(&r.reservation)
+            .ok_or_else(|| Error::Missing("capacity reservation".into()))?;
+        require(mass <= reserved, "output exceeds reservation")?;
+        tx.call(Deposit {
+            inventory: r.inventory,
+            good: r.good,
+            quantity: r.quantity,
+        })
+    })?;
+    b.request::<Deposit>(|tx, r| {
+        require(r.quantity > 0, "quantity must be positive")?;
+        let mass = tx
+            .get::<game_objects::Objects>()?
+            .mass(r.good, r.quantity)?;
+        let inv = tx
+            .edit::<Cargo>()?
+            .0
+            .get_mut(&r.inventory)
+            .ok_or_else(|| Error::Missing("inventory".into()))?;
+        require(
+            inv.used()?.checked_add(mass).ok_or(Error::Overflow)? <= inv.capacity,
+            "capacity exceeded",
+        )?;
+        inv.mass = inv.mass.checked_add(mass).ok_or(Error::Overflow)?;
+        let q = inv.goods.entry(r.good).or_default();
+        *q = q.checked_add(r.quantity).ok_or(Error::Overflow)?;
+        Ok(())
+    })?;
+    b.request::<Consume>(|tx, r| {
+        require(r.quantity > 0, "quantity must be positive")?;
+        let mass = tx
+            .get::<game_objects::Objects>()?
+            .mass(r.good, r.quantity)?;
+        let inv = tx
+            .edit::<Cargo>()?
+            .0
+            .get_mut(&r.inventory)
+            .ok_or_else(|| Error::Missing("inventory".into()))?;
+        let q = inv.goods.entry(r.good).or_default();
+        require(*q >= r.quantity, "insufficient stock")?;
+        *q -= r.quantity;
+        inv.mass = inv.mass.checked_sub(mass).ok_or(Error::Overflow)?;
+        Ok(())
+    })?;
+    b.request::<DropCarried>(|tx, r| {
+        let location = tx
+            .get::<game_transport::Positions>()?
+            .0
+            .get(&r.person)
+            .cloned();
+        let custody = match location {
+            Some(game_transport::Location::At(area)) => Custody::Area(area),
+            Some(game_transport::Location::Road {
+                from,
+                to,
+                elapsed,
+                duration,
+            }) => Custody::Road {
+                from,
+                to,
+                elapsed,
+                duration,
+            },
+            Some(game_transport::Location::Transit {
+                from,
+                to,
+                departed,
+                arrives,
+                ..
+            }) => Custody::Road {
+                from,
+                to,
+                elapsed: SimDuration(tx.now().0 - departed.0),
+                duration: SimDuration(arrives.0 - departed.0),
+            },
+            None => return Ok(()),
+        };
+        for inventory in tx.edit::<Cargo>()?.0.values_mut() {
+            if inventory.custody == Custody::Carried(r.person) {
+                inventory.custody = custody.clone();
             }
-            Err(Error::Unavailable) => {}
-            Err(error) => return Err(error),
         }
-    }
-    if proposed.id.0 == 0 || candidates.iter().any(|c| c.stock.id == proposed.id) {
-        return Err(Error::Unavailable);
-    }
-    let slot = Inventory {
-        id: proposed.id,
-        location: InventoryLocation::Carried(proposed.holder),
-        quantity: Quantity(0),
-        capacity: proposed.capacity,
-        access: BTreeSet::from([proposed.holder]),
-        last_granted: None,
-        good: source.good,
-        spoils_at: None,
-    };
-    let job = prepare_load(
-        actor,
-        source,
-        &slot,
-        quantity,
-        supply,
-        proposed.receiver,
-        now,
-        duration,
-    )?;
-    Ok(PreparedCarry {
-        selection: Selection::Proposed(slot),
-        job,
+        Ok(())
+    })?;
+    b.request::<Transfer>(|tx, r| {
+        require(r.from != r.to, "identical inventories")?;
+        require(
+            locality(tx, r.from)? == locality(tx, r.to)?,
+            "goods must be carried between areas",
+        )?;
+        tx.call(Consume {
+            inventory: r.from,
+            good: r.good,
+            quantity: r.quantity,
+        })?;
+        tx.call(Deposit {
+            inventory: r.to,
+            good: r.good,
+            quantity: r.quantity,
+        })
     })
-}
-#[cfg(test)]
-mod tests;
-
-/// Pickup always brings another stock into the actor's own carried space.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_carry(
-    actor: ActorFacts,
-    source: &Inventory,
-    quantity: Quantity,
-    supply: SourceFacts,
-    candidates: &[Compartment<'_>],
-    proposed: NewCompartment,
-    now: SimTime,
-    duration: SimDuration,
-) -> Result<PreparedCarry, Error> {
-    if proposed.holder != actor.actor || source.location == InventoryLocation::Carried(actor.actor)
-    {
-        return Err(Error::Unavailable);
-    }
-    prepare_compartment(
-        actor, source, quantity, supply, candidates, proposed, now, duration,
-    )
-}
-/// A contact handoff starts with the actor's actually held goods and targets a
-/// different living holder; accepted rights authorize only this physical receipt.
-#[allow(clippy::too_many_arguments)]
-pub fn prepare_handoff(
-    actor: ActorFacts,
-    source: &Inventory,
-    quantity: Quantity,
-    supply: SourceFacts,
-    candidates: &[Compartment<'_>],
-    proposed: NewCompartment,
-    now: SimTime,
-    duration: SimDuration,
-) -> Result<PreparedCarry, Error> {
-    if proposed.holder == actor.actor || source.location != InventoryLocation::Carried(actor.actor)
-    {
-        return Err(Error::Unavailable);
-    }
-    prepare_compartment(
-        actor, source, quantity, supply, candidates, proposed, now, duration,
-    )
-}
-
-mod arbitration;
-mod transfers;
-pub use arbitration::{
-    Balance, Request, arbitrate, arbitrate_with_capacity, arbitrate_with_constraints,
-};
-pub use transfers::{
-    ClosingFacts, PreparedTransfers, TransferIntent, TransferRequest, ValidatedTransfers,
-    prepare_transfers, prepare_transfers_rows,
-};
-
-mod access;
-pub use access::*;
-
-mod quantities;
-pub use quantities::{
-    QuantityFacts, QuantityOffer, QuantityOperation, quantity_choices, quantity_opportunities,
-};
-
-pub mod save_validation;
-
-/// Cargo owns the distinction between actual area stock and stock held by a
-/// co-present body. Bindings supply resolved location and Transport contact.
-pub fn stock_contact(
-    placement: &InventoryLocation,
-    actor_location: impl FnOnce() -> game_core::Location,
-    holder_contact: impl FnOnce(PersonId) -> bool,
-) -> bool {
-    match placement {
-        InventoryLocation::Area(area) => actor_location() == game_core::Location::AtArea(*area),
-        InventoryLocation::Carried(holder) => holder_contact(*holder),
-    }
-}
-
-pub mod receipt_validation;
-
-/// Usable physical stock requires both Property access and actual contact.
-pub fn stock_usable(accessible: bool, contact: impl FnOnce() -> bool) -> bool {
-    accessible && contact()
 }

@@ -1,0 +1,19 @@
+[package]
+name = "game-confinement"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-physiology.workspace = true
+game-transport.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-objects.workspace = true
+game-land.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-skills.workspace = true

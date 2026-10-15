@@ -1,684 +1,309 @@
-//! Conflict-owned maps, encounters, and deterministic initiative rules.
+//! Headless tactical fixture: continuous coordinates and fixed shared rounds.
+mod geometry;
+mod resolution;
+mod view;
 use game_core::*;
+use game_sim::*;
+pub use geometry::{Map, Point};
+pub use resolution::{Effect, OrderKind, resolve};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-pub mod force;
-mod validation;
-pub use validation::*;
-#[cfg(test)]
-mod combat_tests;
-mod drive;
-pub use drive::*;
-mod combat;
-pub use combat::*;
-mod menu;
-pub use menu::*;
-mod scene;
-pub use scene::*;
-mod storage;
-pub use storage::*;
-mod confinement;
-pub use confinement::*;
-mod navigation;
-pub use navigation::*;
-mod autonomy;
-pub use autonomy::*;
-
+use std::collections::{BTreeMap, BTreeSet};
+pub use view::{BattleView, view};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ObstacleView {
-    pub index: u32,
-    pub minimum: Point,
-    pub maximum: Point,
-    pub integrity: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Rules {
-    pub encounter_limit: usize,
-    pub round: SimDuration,
-    pub movement: u64,
-    pub reach: u64,
-    pub damage: u64,
-    pub defence: u64,
-    pub incapacitation: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Profile {
-    pub initiative: u64,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Map {
-    pub id: CombatMapId,
-    pub version: u32,
-    pub area: AreaId,
-    pub location: Location,
-    pub width: i64,
-    pub height: i64,
-    pub obstacles: Vec<ObstacleView>,
-    pub exits: Vec<(AreaId, Point)>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct Fighter {
-    pub actor: PersonId,
-    pub joins_round: u64,
     pub team: u32,
-    pub position: Point,
-    pub surrendered: bool,
-    pub withdrawn: bool,
-    pub defending: bool,
-    pub retreat: Option<AreaId>,
-    pub known: BTreeMap<PersonId, Point>,
-    pub search: SearchState,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Encounter {
-    pub id: EncounterId,
-    pub area: AreaId,
-    pub location: Location,
-    pub map: CombatMapId,
-    pub round: u64,
-    pub started: SimTime,
-    pub ends: SimTime,
-    pub fighters: BTreeMap<PersonId, Fighter>,
-    pub order: Vec<PersonId>,
-    pub cursor: usize,
-    pub active: bool,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Captivity {
-    pub actor: PersonId,
-    pub captor: PersonId,
-    pub area: AreaId,
-    pub position: Point,
-    pub map: CombatMapId,
-    pub binding: InventoryId,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct World {
-    pub rules: Rules,
-}
-
-/// Physical facts supplied by the coordinator; social authority is evaluated
-/// separately and never makes an active opponent physically capturable.
-#[derive(Clone, Copy, Debug)]
-pub struct TargetBody {
-    pub alive: bool,
+    pub point: Point,
     pub health: u64,
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Strike {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Battle {
+    pub area: AreaId,
+    pub map: Map,
+    pub fighters: BTreeMap<PersonId, Fighter>,
+    pub controlled: BTreeSet<PersonId>,
+    pub orders: BTreeMap<PersonId, OrderKind>,
+    pub round: u64,
+    pub interval: SimDuration,
+    pub movement: i64,
+    pub reach: i64,
     pub damage: u64,
-    pub practice: game_skills::PracticeDelta,
+    pub scheduled: Option<ScheduleId>,
+    pub finished: bool,
 }
-
-impl Rules {
-    pub fn validate(&self) -> Result<(), Error> {
-        if !self.capacity_valid()
-            || self.round.0 == 0
-            || self.movement > 1_000_000
-            || self.reach > 1_000_000
-            || self.damage == 0
-        {
-            return Err(Error::InvalidConfiguration("invalid combat rules".into()));
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Battles(pub BTreeMap<u64, Battle>);
+impl Resource for Battles {
+    fn allocated_ids(&self) -> Vec<u64> {
+        self.0.keys().copied().collect()
+    }
+    const KEY: &'static str = "conflict.battles";
+    fn validate(&self) -> Result<()> {
+        for b in self.0.values() {
+            require(
+                b.interval.0 > 0
+                    && b.movement > 0
+                    && b.reach > 0
+                    && b.map.width > 0
+                    && b.map.width <= 1_000_000
+                    && b.map.valid(),
+                "invalid tactical rules",
+            )?;
+            require(
+                b.controlled.iter().all(|p| b.fighters.contains_key(p))
+                    && b.fighters.values().all(|f| b.map.contains(f.point)),
+                "invalid tactical positions",
+            )?;
         }
         Ok(())
     }
-    pub fn can_act(
-        &self,
-        body: TargetBody,
-        captive: bool,
-        independent: bool,
-        force_can_act: bool,
-    ) -> bool {
-        independent && (self.can_fight(body, captive) || force_can_act)
-    }
-    pub fn restricts(&self, active: bool, captive: bool, body: Option<TargetBody>) -> bool {
-        active || captive || body.is_some_and(|body| body.health <= self.incapacitation)
-    }
-    pub fn capacity_valid(&self) -> bool {
-        (2..=4096).contains(&self.encounter_limit)
-    }
-    pub fn can_fight(&self, body: TargetBody, captive: bool) -> bool {
-        body.alive && body.health > self.incapacitation && !captive
-    }
-    pub fn strike_damage(&self, attack: u64, defending: bool) -> u64 {
-        attack.saturating_sub(if defending { self.defence } else { 0 })
-    }
-
-    /// A resolved strike earns experience even when defence absorbs its damage.
-    /// The caller applies both effects once after the actual initiative action.
-    pub fn strike(
-        &self,
-        actor: PersonId,
-        attack: u64,
-        defending: bool,
-        practice_ms: u64,
-    ) -> Strike {
-        Strike {
-            damage: self.strike_damage(attack, defending),
-            practice: game_skills::PracticeDelta {
-                actor,
-                skill: Skill::Combat,
-                milliseconds: practice_ms,
-                mastery_cap: None,
-            },
-        }
-    }
 }
-
-impl Map {
-    /// Stable initial placement inside actual observed geometry. Existing small
-    /// encounter positions remain unchanged; larger groups wrap within bounds.
-    pub fn deployment(&self, index: usize, team: u32) -> Option<Point> {
-        if !(1..=1_000_000).contains(&self.width) || !(1..=1_000_000).contains(&self.height) {
-            return None;
+#[derive(Serialize, Deserialize)]
+pub struct Start(pub Battle);
+impl Request for Start {
+    const KEY: &'static str = "conflict.start";
+    type Response = u64;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Order {
+    pub person: PersonId,
+    pub battle: u64,
+    pub action: OrderKind,
+}
+impl Request for Order {
+    const KEY: &'static str = "conflict.order";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+struct Round {
+    battle: u64,
+}
+impl Request for Round {
+    const KEY: &'static str = "conflict.round";
+    type Response = ();
+}
+#[derive(Serialize, Deserialize)]
+struct Cancel {
+    battle: u64,
+    person: PersonId,
+}
+impl Request for Cancel {
+    const KEY: &'static str = "conflict.cancel";
+    type Response = ();
+}
+/// The optional invocation owner serves this fact, avoiding a reverse dependency.
+#[derive(Serialize, Deserialize)]
+pub struct HasPlayerControl {
+    pub person: PersonId,
+}
+impl Request for HasPlayerControl {
+    const KEY: &'static str = "conflict.player_control";
+    type Response = bool;
+}
+#[derive(Serialize, Deserialize)]
+pub struct RefreshTurns;
+impl Request for RefreshTurns {
+    const KEY: &'static str = "conflict.refresh_turns";
+    type Response = ();
+}
+fn queue(tx: &mut Transaction<'_>, id: u64) -> Result<()> {
+    let battle = tx.get::<Battles>()?.0[&id].clone();
+    if battle.finished || battle.scheduled.is_some() {
+        return Ok(());
+    }
+    for person in &battle.controlled {
+        if battle.fighters[person].health == 0 || battle.orders.contains_key(person) {
+            continue;
         }
-        let x = (4_000 + if team == 0 { 0 } else { 2_000 }).min(self.width);
-        let row = i64::try_from(index / 2).ok()?;
-        let y = 8_000i64.checked_add(row.checked_mul(300)?)?;
-        let preferred = Point { x, y };
-        if self.clear(preferred, preferred) {
-            return Some(preferred);
+        if !tx.registered::<HasPlayerControl>() || tx.call(HasPlayerControl { person: *person })? {
+            return Ok(());
         }
-        let wrapped = Point {
-            x,
-            y: y % (self.height + 1),
-        };
-        if self.clear(wrapped, wrapped) {
-            return Some(wrapped);
+    }
+    let at = tx.now().after(battle.interval)?;
+    let job = tx.schedule(at, 15, Round { battle: id })?;
+    tx.edit::<Battles>()?.0.get_mut(&id).unwrap().scheduled = Some(job);
+    Ok(())
+}
+fn awaiting(host: &Host) -> Result<Option<String>> {
+    for (id, b) in &host.get::<Battles>()?.0 {
+        if b.finished || b.scheduled.is_some() {
+            continue;
         }
-        for offset in 0..64 {
-            let cell = (index % 64 + offset) % 64;
-            let p = Point {
-                x: self.width * (cell % 8 + 1) as i64 / 9,
-                y: self.height * (cell / 8 + 1) as i64 / 9,
-            };
-            if self.clear(p, p) {
-                return Some(p);
+        for person in &b.controlled {
+            if b.fighters[person].health > 0
+                && !b.orders.contains_key(person)
+                && (!host.registered::<HasPlayerControl>()
+                    || host.query(HasPlayerControl { person: *person })?)
+            {
+                return Ok(Some(format!("combat:{id}")));
             }
         }
-        [
-            Point { x: 0, y: 0 },
-            Point {
-                x: self.width,
-                y: 0,
-            },
-            Point {
-                x: 0,
-                y: self.height,
-            },
-            Point {
-                x: self.width,
-                y: self.height,
-            },
-        ]
-        .into_iter()
-        .find(|p| self.clear(*p, *p))
     }
-    pub fn contains(&self, p: Point) -> bool {
-        p.x >= 0 && p.y >= 0 && p.x <= self.width && p.y <= self.height
-    }
-    pub fn clear(&self, a: Point, b: Point) -> bool {
-        self.contains(a)
-            && self.contains(b)
-            && self
-                .obstacles
-                .iter()
-                .filter(|o| o.integrity > 0)
-                .all(|o| !crosses(a, b, o.minimum, o.maximum))
-    }
+    Ok(None)
 }
-pub fn distance(a: Point, b: Point) -> u128 {
-    let x = (i128::from(a.x) - i128::from(b.x)).unsigned_abs();
-    let y = (i128::from(a.y) - i128::from(b.y)).unsigned_abs();
-    x.saturating_mul(x).saturating_add(y.saturating_mul(y))
-}
-fn crosses(a: Point, b: Point, min: Point, max: Point) -> bool {
-    let inside = |p: Point| p.x >= min.x && p.x <= max.x && p.y >= min.y && p.y <= max.y;
-    if inside(a) || inside(b) {
-        return true;
-    }
-    let orient = |a: Point, b: Point, c: Point| {
-        (i128::from(b.x) - i128::from(a.x)) * (i128::from(c.y) - i128::from(a.y))
-            - (i128::from(b.y) - i128::from(a.y)) * (i128::from(c.x) - i128::from(a.x))
-    };
-    let segment = |c: Point, d: Point| {
-        if a.x.max(b.x) < c.x.min(d.x)
-            || c.x.max(d.x) < a.x.min(b.x)
-            || a.y.max(b.y) < c.y.min(d.y)
-            || c.y.max(d.y) < a.y.min(b.y)
-        {
-            return false;
-        }
-        let (x, y, u, v) = (
-            orient(a, b, c),
-            orient(a, b, d),
-            orient(c, d, a),
-            orient(c, d, b),
-        );
-        (x == 0 || y == 0 || x.signum() != y.signum())
-            && (u == 0 || v == 0 || u.signum() != v.signum())
-    };
-    let p = Point { x: min.x, y: max.y };
-    let q = Point { x: max.x, y: min.y };
-    segment(min, p) || segment(p, max) || segment(max, q) || segment(q, min)
-}
-
-impl World {
-    pub fn map<'a>(&self, store: &'a game_ecs::Store, id: CombatMapId) -> Option<&'a Map> {
-        map(store, id)
-    }
-    pub fn map_mut<'a>(
-        &self,
-        store: &'a mut game_ecs::Store,
-        id: CombatMapId,
-    ) -> Option<&'a mut Map> {
-        map_mut(store, id)
-    }
-    pub fn turn_position(
-        &self,
-        store: &game_ecs::Store,
-        encounter: EncounterId,
-        actor: PersonId,
-        movement: Option<Point>,
-    ) -> Result<Point, Error> {
-        let encounter = crate::encounter(store, encounter).ok_or(Error::Unavailable)?;
-        if !encounter.active || encounter.order.get(encounter.cursor) != Some(&actor) {
-            return Err(Error::Unavailable);
-        }
-        let fighter = encounter.fighters.get(&actor).ok_or(Error::Unavailable)?;
-        let map = self.map(store, encounter.map).ok_or(Error::Unavailable)?;
-        let position = movement.unwrap_or(fighter.position);
-        if distance(position, fighter.position) > u128::from(self.rules.movement).pow(2)
-            || !map.clear(fighter.position, position)
-        {
-            return Err(Error::Unavailable);
-        }
-        Ok(position)
-    }
-    pub fn reachable(
-        &self,
-        store: &game_ecs::Store,
-        encounter: EncounterId,
-        position: Point,
-        target: PersonId,
-    ) -> bool {
-        crate::encounter(store, encounter).is_some_and(|encounter| {
-            encounter.fighters.get(&target).is_some_and(|fighter| {
-                !fighter.withdrawn
-                    && distance(position, fighter.position) <= u128::from(self.rules.reach).pow(2)
-                    && self
-                        .map(store, encounter.map)
-                        .is_some_and(|map| map.clear(position, fighter.position))
-            })
-        })
-    }
-    #[allow(clippy::too_many_arguments)]
-    pub fn capture_possible(
-        &self,
-        store: &game_ecs::Store,
-        encounter: EncounterId,
-        actor: PersonId,
-        position: Point,
-        target: PersonId,
-        body: TargetBody,
-        has_binding: bool,
-    ) -> bool {
-        actor != target
-            && has_binding
-            && body.alive
-            && crate::captivity(store, target).is_none()
-            && self.reachable(store, encounter, position, target)
-            && crate::encounter(store, encounter)
-                .expect("validated encounter")
-                .fighters
-                .get(&target)
-                .is_some_and(|fighter| fighter.surrendered || !self.rules.can_fight(body, false))
-    }
-    pub fn initiative_order(
-        &self,
-        store: &game_ecs::Store,
-        encounter: EncounterId,
-        fatigue: &[(PersonId, u64)],
-    ) -> Result<Vec<PersonId>, Error> {
-        let e = crate::encounter(store, encounter).ok_or(Error::Unavailable)?;
-        crate::combat::rank_initiative(store, e, fatigue)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn an_actual_defended_strike_supplies_damage_and_independent_combat_practice() {
-        let rules = Rules {
-            encounter_limit: 128,
-            round: SimDuration(6_000),
-            movement: 5_000,
-            reach: 2_000,
-            damage: 50,
-            defence: 30,
-            incapacitation: 20,
-        };
-        let strike = rules.strike(PersonId(1), rules.defence, true, 6_000);
-        assert_eq!(strike.damage, 0);
-        assert_eq!(strike.practice.skill, Skill::Combat);
-        let skills = game_skills::Runtime::default();
-        let mut schema = game_ecs::Schema::new();
-        game_skills::register_components(&mut schema).unwrap();
-        game_physiology::register_components(&mut schema).unwrap();
-        let mut store = game_ecs::Store::with_schema(schema);
-        skills.apply_practice(&mut store, strike.practice).unwrap();
-        assert_eq!(skills.practice(&store, PersonId(1), Skill::Combat), 6_000);
-        assert_eq!(skills.practice(&store, PersonId(2), Skill::Combat), 0);
-    }
-    #[test]
-    fn large_deployments_remain_inside_clear_geometry_and_blocked_maps_have_no_spawn() {
-        let mut scene = Map {
-            id: CombatMapId(1),
-            version: 1,
-            area: AreaId(1),
-            location: Location::AtArea(AreaId(1)),
-            width: 24_000,
-            height: 16_000,
-            obstacles: vec![],
-            exits: vec![],
-        };
-        for index in 0..4096 {
-            let p = scene.deployment(index, (index % 2) as u32).unwrap();
-            assert!(scene.clear(p, p));
-            assert_eq!(scene.deployment(index, (index % 2) as u32), Some(p));
-            if index < 32 {
-                assert_eq!(
-                    p,
-                    Point {
-                        x: 4_000 + if index % 2 == 0 { 0 } else { 2_000 },
-                        y: 8_000 + (index as i64 / 2) * 300
-                    }
-                );
+pub fn plugin(b: &mut Builder) -> Result<()> {
+    b.plugin("conflict", 1)?;
+    b.resource::<Battles>()?;
+    b.validate_save(|h| {
+        for b in h.get::<Battles>()?.0.values() {
+            for person in b.fighters.keys() {
+                require(
+                    h.get::<game_physiology::Bodies>()?
+                        .people
+                        .contains_key(person),
+                    "unknown fighter",
+                )?;
             }
         }
-        scene.obstacles = vec![ObstacleView {
-            index: 0,
-            minimum: Point { x: 0, y: 0 },
-            maximum: Point {
-                x: 24_000,
-                y: 16_000,
-            },
-            integrity: 1,
-        }];
-        assert_eq!(scene.deployment(0, 0), None);
-        scene.obstacles[0].integrity = 0;
-        assert!(scene.deployment(65, 1).is_some());
-        scene.height = i64::MAX;
-        assert_eq!(scene.deployment(65, 1), None);
-    }
-    fn map() -> Map {
-        Map {
-            id: CombatMapId(1),
-            version: 1,
-            area: AreaId(2),
-            location: Location::AtArea(AreaId(2)),
-            width: 20_000,
-            height: 20_000,
-            obstacles: vec![ObstacleView {
-                index: 0,
-                minimum: Point { x: 5_000, y: 4_000 },
-                maximum: Point { x: 6_000, y: 8_000 },
-                integrity: 10,
-            }],
-            exits: vec![],
+        Ok(())
+    });
+    b.stop(awaiting);
+    b.request::<RefreshTurns>(|tx, _| {
+        let ids: Vec<_> = tx.get::<Battles>()?.0.keys().copied().collect();
+        for id in ids {
+            queue(tx, id)?;
         }
-    }
-    #[test]
-    fn obstacles_stop_reach_until_the_owned_map_records_actual_damage() {
-        let mut map = map();
-        let (from, to) = (Point { x: 3_000, y: 5_000 }, Point { x: 8_000, y: 5_000 });
-        assert!(!map.clear(from, to));
-        map.obstacles[0].integrity = 0;
-        assert!(map.clear(from, to));
-    }
-    #[test]
-    fn continuous_geometry_handles_boundary_touch_and_rejects_outside_points() {
-        let map = map();
-        assert!(!map.clear(
-            Point { x: 0, y: 4_000 },
-            Point {
-                x: 10_000,
-                y: 4_000
-            }
-        ));
-        assert!(map.clear(
-            Point { x: 0, y: 3_999 },
-            Point {
-                x: 10_000,
-                y: 3_999
-            }
-        ));
-        assert!(!map.clear(Point { x: -1, y: 0 }, Point { x: 1, y: 0 }));
-        assert_eq!(distance(Point { x: 0, y: 0 }, Point { x: 3, y: 4 }), 25);
-    }
-    #[test]
-    fn initiative_is_stable_and_a_late_arrival_waits_for_its_eligible_round() {
-        let mut fighters = BTreeMap::new();
-        for (actor, joins_round) in [(PersonId(5), 0), (PersonId(3), 0), (PersonId(4), 2)] {
-            fighters.insert(
-                actor,
-                Fighter {
-                    actor,
-                    joins_round,
-                    team: 0,
-                    position: Point { x: 0, y: 0 },
-                    surrendered: false,
-                    withdrawn: false,
-                    defending: false,
-                    retreat: None,
-                    known: BTreeMap::new(),
-                    search: SearchState::default(),
+        Ok(())
+    })?;
+    b.request::<Start>(|tx, r| {
+        let mut battle = r.0;
+        require(
+            battle.round == 0
+                && battle.scheduled.is_none()
+                && !battle.finished
+                && battle.orders.is_empty()
+                && battle.fighters.len() >= 2,
+            "invalid new encounter",
+        )?;
+        let id = tx.allocate()?;
+        for (person, f) in &mut battle.fighters {
+            game_physiology::capable(tx, *person)?;
+            require(
+                game_transport::area(tx.get()?, *person)? == battle.area,
+                "fighter is elsewhere",
+            )?;
+            f.health = tx.get::<game_physiology::Bodies>()?.people[person].health;
+            tx.start_action(
+                *person,
+                "combat",
+                None,
+                Cancel {
+                    battle: id,
+                    person: *person,
                 },
-            );
+            )?;
         }
-        let id = EncounterId(10);
-        let world = World {
-            rules: Rules {
-                encounter_limit: 128,
-                round: SimDuration(6_000),
-                movement: 5_000,
-                reach: 2_000,
-                damage: 1,
-                defence: 1,
-                incapacitation: 1,
-            },
-        };
-        let mut store = crate::test_store();
-        let rows: BTreeMap<PersonId, Profile> = fighters
+        tx.edit::<Battles>()?.0.insert(id, battle);
+        queue(tx, id)?;
+        Ok(id)
+    })?;
+    b.request::<Order>(|tx, r| {
+        let battle = tx
+            .get::<Battles>()?
+            .0
+            .get(&r.battle)
+            .ok_or_else(|| Error::Missing("battle".into()))?;
+        require(
+            !battle.finished
+                && battle.scheduled.is_none()
+                && battle.controlled.contains(&r.person)
+                && battle.fighters[&r.person].health > 0,
+            "turn unavailable",
+        )?;
+        match r.action {
+            OrderKind::Move(point) => require(
+                battle.map.contains(point)
+                    && battle.map.clear(battle.fighters[&r.person].point, point)
+                    && geometry::distance2(battle.fighters[&r.person].point, point)
+                        <= i128::from(battle.movement).pow(2),
+                "invalid tactical move",
+            )?,
+            OrderKind::Attack(target) => require(
+                battle
+                    .fighters
+                    .get(&target)
+                    .is_some_and(|f| f.health > 0 && f.team != battle.fighters[&r.person].team),
+                "invalid target",
+            )?,
+            _ => {}
+        }
+        tx.edit::<Battles>()?
+            .0
+            .get_mut(&r.battle)
+            .unwrap()
+            .orders
+            .insert(r.person, r.action);
+        queue(tx, r.battle)
+    })?;
+    b.request::<Round>(|tx, r| {
+        let snapshot = tx.get::<Battles>()?.0[&r.battle].clone();
+        let effects = resolve(&snapshot);
+        for effect in effects {
+            match effect {
+                Effect::Moved(person, point) => {
+                    tx.edit::<Battles>()?
+                        .0
+                        .get_mut(&r.battle)
+                        .unwrap()
+                        .fighters
+                        .get_mut(&person)
+                        .unwrap()
+                        .point = point;
+                }
+                Effect::Damage(person, amount) => {
+                    tx.call(game_physiology::Damage { person, amount })?;
+                }
+                Effect::Retreated(person) => {
+                    tx.cancel_action(person)?;
+                }
+            }
+        }
+        let health: BTreeMap<_, _> = snapshot
+            .fighters
             .keys()
-            .map(|p| (*p, Profile { initiative: 100 }))
-            .collect();
-        for (id, row) in rows {
-            crate::insert_profile(&mut store, id, row).unwrap();
-        }
-        let rows: BTreeMap<EncounterId, Encounter> = BTreeMap::from([(
-            id,
-            Encounter {
-                id,
-                area: AreaId(2),
-                location: Location::AtArea(AreaId(2)),
-                map: CombatMapId(1),
-                round: 1,
-                started: SimTime(0),
-                ends: SimTime(6_000),
-                fighters,
-                order: vec![],
-                cursor: 0,
-                active: true,
-            },
-        )]);
-        for (_, row) in rows {
-            crate::insert_encounter(&mut store, row).unwrap();
-        }
-
-        let fatigue = [(PersonId(5), 0), (PersonId(3), 0), (PersonId(4), 0)];
-        assert_eq!(
-            world.initiative_order(&store, id, &fatigue).unwrap(),
-            vec![PersonId(3), PersonId(5)]
-        );
-        crate::encounter_mut(&mut store, id).unwrap().round = 2;
-        assert_eq!(
-            world.initiative_order(&store, id, &fatigue).unwrap(),
-            vec![PersonId(3), PersonId(4), PersonId(5)]
-        );
-        assert_eq!(
-            world.initiative_order(&store, id, &[(PersonId(5), 0)]),
-            Err(Error::Unavailable)
-        );
-    }
-    #[test]
-    fn capture_requires_physical_surrender_or_incapacitation_and_a_real_binding() {
-        let actor = PersonId(3);
-        let target = PersonId(5);
-        let id = EncounterId(10);
-        let fighters = [actor, target]
-            .into_iter()
-            .map(|actor| {
+            .map(|p| {
                 (
-                    actor,
-                    Fighter {
-                        actor,
-                        joins_round: 0,
-                        team: 0,
-                        position: Point { x: 100, y: 100 },
-                        surrendered: false,
-                        withdrawn: false,
-                        defending: false,
-                        retreat: None,
-                        known: BTreeMap::new(),
-                        search: SearchState::default(),
-                    },
+                    *p,
+                    tx.get::<game_physiology::Bodies>().unwrap().people[p].health,
                 )
             })
             .collect();
-        let world = World {
-            rules: Rules {
-                encounter_limit: 128,
-                round: SimDuration(6_000),
-                movement: 5_000,
-                reach: 2_000,
-                damage: 50,
-                defence: 30,
-                incapacitation: 20,
-            },
-        };
-        let mut store = crate::test_store();
-        let rows: BTreeMap<AreaId, Map> = BTreeMap::from([(AreaId(2), map())]);
-        for (_, row) in rows {
-            crate::insert_map(&mut store, row).unwrap();
+        let battle = tx.edit::<Battles>()?.0.get_mut(&r.battle).unwrap();
+        for (person, f) in &mut battle.fighters {
+            if f.health > 0 {
+                f.health = health[person];
+            }
         }
-        let rows: BTreeMap<EncounterId, Encounter> = BTreeMap::from([(
-            id,
-            Encounter {
-                id,
-                area: AreaId(2),
-                location: Location::AtArea(AreaId(2)),
-                map: CombatMapId(1),
-                round: 1,
-                started: SimTime(0),
-                ends: SimTime(6_000),
-                fighters,
-                order: vec![actor],
-                cursor: 0,
-                active: true,
-            },
-        )]);
-        for (_, row) in rows {
-            crate::insert_encounter(&mut store, row).unwrap();
+        battle.round += 1;
+        battle.orders.clear();
+        battle.scheduled = None;
+        let teams: BTreeSet<_> = battle
+            .fighters
+            .values()
+            .filter(|f| f.health > 0)
+            .map(|f| f.team)
+            .collect();
+        let finished = teams.len() <= 1;
+        battle.finished = finished;
+        if finished {
+            for person in snapshot.fighters.keys() {
+                if tx
+                    .get::<Actions>()?
+                    .0
+                    .get(person)
+                    .is_some_and(|a| a.kind == "combat")
+                {
+                    tx.finish_action(*person, "combat")?;
+                }
+            }
+        } else {
+            queue(tx, r.battle)?;
         }
-
-        let position = world
-            .turn_position(&store, id, actor, Some(Point { x: 200, y: 100 }))
-            .unwrap();
-        let body = TargetBody {
-            alive: true,
-            health: 100,
-        };
-        assert!(!world.capture_possible(&store, id, actor, position, target, body, true));
-        crate::encounter_mut(&mut store, id)
-            .unwrap()
-            .fighters
-            .get_mut(&target)
-            .unwrap()
-            .surrendered = true;
-        assert!(world.capture_possible(&store, id, actor, position, target, body, true));
-        assert!(!world.capture_possible(&store, id, actor, position, target, body, false));
-        assert!(!world.capture_possible(
-            &store,
-            id,
-            actor,
-            position,
-            target,
-            TargetBody {
-                alive: false,
-                health: 0
-            },
-            true
-        ));
-        crate::encounter_mut(&mut store, id)
-            .unwrap()
-            .fighters
-            .get_mut(&target)
-            .unwrap()
-            .surrendered = false;
-        assert!(world.capture_possible(
-            &store,
-            id,
-            actor,
-            position,
-            target,
-            TargetBody {
-                alive: true,
-                health: 20
-            },
-            true
-        ));
-        assert_eq!(world.rules.strike_damage(50, true), 20);
-        assert_eq!(world.rules.strike_damage(10, true), 0);
-        assert_eq!(
-            world.turn_position(&store, id, actor, Some(Point { x: 8_000, y: 100 })),
-            Err(Error::Unavailable)
-        );
-        assert_eq!(
-            world.turn_position(&store, id, target, None),
-            Err(Error::Unavailable)
-        );
-    }
+        Ok(())
+    })?;
+    b.request::<Cancel>(|tx, r| {
+        if let Some(b) = tx.edit::<Battles>()?.0.get_mut(&r.battle) {
+            b.fighters.get_mut(&r.person).unwrap().health = 0;
+        }
+        queue(tx, r.battle)
+    })
 }
-
-mod release;
-pub use release::*;
-mod allegiance;
-pub use allegiance::*;
-
-mod contact;
-pub use contact::TacticalPlacement;
-
-#[cfg(test)]
-pub(crate) fn test_store() -> game_ecs::Store {
-    let mut schema = game_ecs::Schema::new();
-    register_components(&mut schema).unwrap();
-    game_cargo::register_components(&mut schema).unwrap();
-    game_spatial::register_components(&mut schema).unwrap();
-    game_skills::register_components(&mut schema).unwrap();
-    game_physiology::register_components(&mut schema).unwrap();
-    game_ecs::Store::with_schema(schema)
-}
-
-mod physical_admission;
-pub use physical_admission::*;
-
-pub mod receipt_validation;

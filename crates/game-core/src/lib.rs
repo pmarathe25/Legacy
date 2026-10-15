@@ -1,227 +1,65 @@
-//! Stable identifiers and shared value types. No simulation or client dependency.
+//! Shared units and identities. Feature state belongs to feature crates.
 use serde::{Deserialize, Serialize};
-
-macro_rules! id {
-    ($($name:ident),*) => {$(
-        #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        pub struct $name(pub u64);
-    )*};
-}
-id!(
-    ArmyId,
-    ArmyOrderId,
-    ArmyReportId,
-    RealmCommitmentId,
-    EnforcementCaseId,
-    JudgmentId,
-    ShelterId,
-    ResourceId,
-    MissionId,
-    RecruitmentId,
+macro_rules! ids { ($($name:ident),* $(,)?) => {$ (
+ #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+ pub struct $name(pub u64);
+)*}; }
+ids!(
     PersonId,
     AreaId,
     InventoryId,
-    SiteId,
-    ConceptId,
-    AgreementId,
-    WarningId,
-    RecordId,
+    GoodId,
+    PlotId,
     ProjectId,
-    EnterpriseId,
+    AgreementId,
     InstitutionId,
-    RuleProposalId,
     CaseId,
-    ClaimId,
-    IncidentId,
-    AmendmentId,
-    ObligationId,
-    PregnancyId,
-    EncounterId,
-    CombatMapId,
-    EventId,
+    MissionId,
+    ArmyId,
+    LifeId,
     SimTime,
     SimDuration,
-    Quantity
+    ScheduleId
 );
-
 pub const MINUTE: SimDuration = SimDuration(60_000);
-
+pub const HOUR: SimDuration = SimDuration(3_600_000);
+pub const DAY: SimDuration = SimDuration(86_400_000);
+impl SimTime {
+    pub fn after(self, d: SimDuration) -> Result<Self> {
+        self.0.checked_add(d.0).map(Self).ok_or(Error::Overflow)
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Error {
-    UnknownArea,
-    NoRoute,
-    AlreadyThere,
-    SequenceConflict,
+    Rejected(String),
+    Missing(String),
+    Duplicate(String),
     InvalidConfiguration(String),
-    InvalidFixture(String),
     InvalidSave(String),
+    SequenceConflict,
     Overflow,
+    Limit,
     WorkerFailure,
-    HostDisconnected,
-    Unavailable,
 }
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Role {
-    Ruler,
-    Guardian,
-    Citizen,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct RoadPosition {
-    pub from: AreaId,
-    pub to: AreaId,
-    pub progress: SimDuration,
-    pub duration: SimDuration,
-}
-impl RoadPosition {
-    pub fn valid(&self) -> bool {
-        self.from != self.to && self.duration.0 > 0 && self.progress <= self.duration
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Location {
-    AtArea(AreaId),
-    InTransit {
-        from: AreaId,
-        to: AreaId,
-        departed: SimTime,
-        arrives: SimTime,
-        road_start: Option<RoadPosition>,
-    },
-    StoppedOnRoad {
-        from: AreaId,
-        to: AreaId,
-        progress: SimDuration,
-        duration: SimDuration,
-    },
-    Carried {
-        carrier: PersonId,
-    },
-}
-
-impl Location {
-    /// Shared coarse spatial membership. A road segment stays in its departure
-    /// cell until arrival. Resolve carrier relationships before asking for a cell.
-    pub fn cell(&self) -> Option<AreaId> {
-        match *self {
-            Self::AtArea(area) => Some(area),
-            Self::InTransit { from, .. } | Self::StoppedOnRoad { from, .. } => Some(from),
-            Self::Carried { .. } => None,
-        }
-    }
-}
-
-#[cfg(test)]
-mod spatial_tests {
-    use super::*;
-    #[test]
-    fn coarse_cell_is_shared_and_changes_at_arrival_without_unscheduled_midpoints() {
-        let location = Location::InTransit {
-            from: AreaId(1),
-            to: AreaId(2),
-            departed: SimTime(0),
-            arrives: SimTime(100),
-            road_start: None,
-        };
-        assert_eq!(location.cell(), Some(AreaId(1)));
-        assert_eq!(
-            Location::StoppedOnRoad {
-                from: AreaId(1),
-                to: AreaId(2),
-                progress: SimDuration(99),
-                duration: SimDuration(100)
-            }
-            .cell(),
-            Some(AreaId(1))
-        );
-        assert_eq!(Location::AtArea(AreaId(2)).cell(), Some(AreaId(2)));
-        assert_eq!(
-            Location::Carried {
-                carrier: PersonId(3)
-            }
-            .cell(),
-            None
-        );
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum Good {
-    Herb,
-    Food,
-    Timber,
-    Tool,
-    Binding,
-    Seed,
-    Water,
-    Record,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Vitals {
-    /// Milliseconds of fixture hunger/fatigue exposure, not setting biology.
-    pub hunger: u64,
-    pub fatigue: u64,
-    pub health: u64,
-    pub alive: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum StockPosition {
-    Area(AreaId),
-    Carried(PersonId),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum KnowledgeSource {
-    Recorded(RecordId),
-    Observed(PersonId),
-    Reported(PersonId),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StockKnowledge {
-    pub inventory: InventoryId,
-    pub area: AreaId,
-    pub good: Good,
-    pub quantity: Quantity,
-    pub accessible: bool,
-    pub observed_at: SimTime,
-    pub learned_at: SimTime,
-    pub source: KnowledgeSource,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LifeStage {
-    Infant,
-    Child,
-    Adult,
-    Elder,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub enum ChildhoodInterest {
-    Food,
-    Company,
-    Movement,
-    Craft,
-}
-
-/// Continuous placement in millimetres, independent of any rendering grid.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Point {
-    pub x: i64,
-    pub y: i64,
-}
-
+pub type Result<T> = std::result::Result<T, Error>;
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{self:?}")
     }
 }
 impl std::error::Error for Error {}
-pub mod skills;
-pub use skills::*;
+pub fn require(condition: bool, reason: &str) -> Result<()> {
+    if condition {
+        Ok(())
+    } else {
+        Err(Error::Rejected(reason.into()))
+    }
+}
+/// Counter-based randomness: results depend on identities, never evaluation order.
+pub fn random(seed: u64, identity: u64, counter: u64) -> u64 {
+    let mut x =
+        seed ^ identity.wrapping_mul(0x9e3779b97f4a7c15) ^ counter.wrapping_mul(0xd1b54a32d192ed03);
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
+    x ^ (x >> 31)
+}

@@ -1,7 +1,9 @@
 # game-logistics
 
-`game-logistics` plans one next step for a resource requirement and destination. The same planner handles food, water, timber, tools, and other goods: it can acquire or carry supplies, travel, transfer between inventories, and reach a handoff. Acquisition offers may declare prerequisites, which the planner composes recursively, including requirements that must be carried, consolidated into one usable lot, or available at the provider.
+Physical load–travel–unload delivery with capacity, local access, multi-road routing, and blocked-delivery retries. Interrupted deliveries leave cargo with the carrier.
 
-The caller defines the goal and supplies the actor’s known observations, actual usable cargo, carrying room, and travel constraints. Remembered stock and provider offers guide attempts; they do not guarantee current access or yield, and an actor may fail or refuse an action. Arrival only proposes a handoff: delivery progress changes only when an actual receipt is recorded.
+**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-land](../game-land/README.md), [game-spatial](../game-spatial/README.md), [game-transport](../game-transport/README.md), [game-cargo](../game-cargo/README.md), [game-property](../game-property/README.md), [game-physiology](../game-physiology/README.md).
 
-Delivery readiness and acquisition demand expansion stay in this crate. Providers supply prospects for each requested good; Characters supplies willingness judgments. The planner expands prerequisites once per good and chooses the next step from those facts.
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+
+**Verification:** Run `cargo test -p game-logistics`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.

@@ -4,18 +4,27 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-[features]
-default = []
-genetics = ["dep:game-genetics"]
-
 [dependencies]
-game-genetics = { workspace = true, optional = true }
-game-logistics.workspace = true
+game-traits.workspace = true
+
+game-provisioning.workspace = true
+game-content.workspace = true
+game-transport.workspace = true
 game-core.workspace = true
-game-spatial.workspace = true
-game-ecs.workspace = true
-game-world.workspace = true
+game-sim.workspace = true
+game-physiology.workspace = true
+game-knowledge.workspace = true
+game-relationships.workspace = true
+game-invocation.workspace = true
+game-lineage.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
+game-workshop.workspace = true
+game-property.workspace = true
+game-ecology.workspace = true
+game-cargo.workspace = true
+game-objects.workspace = true
+game-land.workspace = true
+game-skills.workspace = true
+game-lifecycle.workspace = true

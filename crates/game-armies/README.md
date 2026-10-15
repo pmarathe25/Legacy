@@ -1,7 +1,9 @@
 # game-armies
 
-`game-armies` owns coordinated command relationships among existing missions, local communication queues, personal army knowledge, autonomy, reinforcement approaches, and their validation. Each mission retains its named leader and members. Leaders choose whether to join, accept orders, retreat, or defect; distant knowledge changes only through dated communication.
+Individual recruitment, unit membership, real food consumption, and mission deployment. Unit coordination uses the same party/travel mechanics as expeditions.
 
-`register_components` installs `Army`, personal `Knowledge`, `Talk`, `Queue`, and `Approach` in the shared component store. `World` retains only rules and review timing. `Kernel` borrows canonical rows for prepared relationship changes. `PreparedChange::stage` and cancellation staging return generic ECS read guards for composed transactions.
+**Dependencies:** [game-property](../game-property/README.md), [game-transport](../game-transport/README.md), [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-missions](../game-missions/README.md), [game-cargo](../game-cargo/README.md), [game-physiology](../game-physiology/README.md).
 
-`Systems` exposes owner behavior independently of the assembly. Its `Ports` supply borrowed native mission, body, location, route and encounter facts, and sequence prepared Army and mission effects in one transaction. Army selection and progression stay in this crate; mission directives and departures use mission-owned preparation. The assembly registers schemas, builds fixtures, supplies factual ports, and binds public commands and views.
+**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+
+**Verification:** Run `cargo test -p game-armies`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
