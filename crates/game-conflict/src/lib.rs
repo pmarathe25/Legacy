@@ -89,6 +89,17 @@ impl Request for HasPlayerControl {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct RefreshTurns;
+/// Direct evidence of a resolved hit, emitted after the round's simultaneous damage.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Struck {
+    pub battle: u64,
+    pub actor: PersonId,
+    pub target: PersonId,
+    pub amount: u64,
+}
+impl Event for Struck {
+    const KEY: &'static str = "conflict.struck";
+}
 impl Request for RefreshTurns {
     const KEY: &'static str = "conflict.refresh_turns";
     type Response = ();
@@ -242,6 +253,21 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 }
                 Effect::Retreated(person) => {
                     tx.cancel_action(person)?;
+                }
+                Effect::Hit {
+                    actor,
+                    target,
+                    amount,
+                } => {
+                    tx.emit(
+                        Struck {
+                            battle: r.battle,
+                            actor,
+                            target,
+                            amount,
+                        },
+                        vec![actor, target],
+                    )?;
                 }
             }
         }

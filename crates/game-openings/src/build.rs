@@ -2,7 +2,14 @@ use super::assets::Assets;
 use super::*;
 use game_scenarios::Definition;
 use std::collections::BTreeSet;
-pub(super) fn initialize(host: &mut Host, d: &Definition, assets: Assets, seed: u64) -> Result<()> {
+pub(super) fn initialize(
+    host: &mut Host,
+    d: &Definition,
+    assets: Assets,
+    seed: u64,
+    player: bool,
+) -> Result<()> {
+    let regions = assets.regions.clone();
     assets.install(host)?;
     let mut names = BTreeMap::new();
     let mut areas = BTreeMap::new();
@@ -14,6 +21,12 @@ pub(super) fn initialize(host: &mut Host, d: &Definition, assets: Assets, seed: 
         })?;
         areas.insert(area.key.clone(), id);
         names.insert(area.key.clone(), id.0);
+        if let Some(climate) = regions.get(&area.key) {
+            host.dispatch(game_environment::ConfigureArea {
+                area: id,
+                climate: climate.clone(),
+            })?;
+        }
     }
     for link in &d.links {
         host.dispatch(game_land::Link {
@@ -35,11 +48,36 @@ pub(super) fn initialize(host: &mut Host, d: &Definition, assets: Assets, seed: 
             person,
             profile: p.traits.clone(),
         })?;
+        host.dispatch(game_relationships::Initialize {
+            person,
+            beliefs: p.beliefs.clone(),
+            values: p.values.clone(),
+        })?;
+        if d.social_life.is_some() {
+            let name = p.name.as_ref().unwrap_or(&p.key);
+            host.dispatch(game_social_life::Register {
+                person,
+                name: if p.count == 1 {
+                    name.clone()
+                } else {
+                    format!("{name} {}", key.rsplit('-').next().unwrap())
+                },
+            })?;
+        }
         people.insert(key.clone(), person);
         names.insert(key, person.0);
     }
+    for bond in &d.bonds {
+        host.dispatch(game_relationships::SetRelationship {
+            observer: people[&bond.observer],
+            other: people[&bond.other],
+            relationship: bond.relationship.clone(),
+        })?;
+    }
     let ruler = people[&d.ruler];
-    host.dispatch(game_lineage::Begin { person: ruler })?;
+    if player {
+        host.dispatch(game_lineage::Begin { person: ruler })?;
+    }
     for (key, p) in d.actors() {
         if p.kind == game_physiology::Kind::Guardian {
             let person = people[&key];
@@ -131,6 +169,13 @@ pub(super) fn initialize(host: &mut Host, d: &Definition, assets: Assets, seed: 
             renew: patch.renew,
         }))?;
         names.insert(patch.key.clone(), id);
+        if let Some(minimum_warmth) = patch.renewal_warmth {
+            host.dispatch(game_ecology::SetRenewal {
+                patch: id,
+                minimum_warmth,
+                minimum_rain: patch.renewal_rain,
+            })?;
+        }
     }
     for person in people.values() {
         host.dispatch(game_characters::Register {

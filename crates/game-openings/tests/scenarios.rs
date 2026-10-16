@@ -25,6 +25,7 @@ fn builder() -> Builder {
     game_lineage::plugin(&mut b).unwrap();
     game_guardians::plugin(&mut b).unwrap();
     game_invocation::plugin(&mut b).unwrap();
+    game_social_life::plugin(&mut b).unwrap();
     game_characters::plugin(&mut b).unwrap();
     game_logistics::plugin(&mut b).unwrap();
     game_projects::plugin(&mut b).unwrap();
@@ -33,6 +34,8 @@ fn builder() -> Builder {
     game_confinement::plugin(&mut b).unwrap();
     game_missions::plugin(&mut b).unwrap();
     game_armies::plugin(&mut b).unwrap();
+    game_pressure::plugin(&mut b).unwrap();
+    game_communities::plugin(&mut b).unwrap();
     game_openings::plugin(&mut b).unwrap();
     b
 }
@@ -48,7 +51,7 @@ fn fixtures_initialize_through_owner_requests_without_the_application() {
             expected
         );
         assert_eq!(h.get::<Opening>().unwrap().scenario, scenario.id);
-        assert!(scenario.fixture);
+        assert_eq!(scenario.fixture, scenario.id != "generated");
         let save = h.save().unwrap();
         assert_eq!(builder().load(&save, 2).unwrap().save().unwrap(), save);
     }

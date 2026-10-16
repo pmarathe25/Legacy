@@ -59,6 +59,7 @@ fn route(
                 key,
             },
         ),
+        Command::Talk { other } => value(tx, game_social_life::Talk { person, other }),
         Command::Take {
             from,
             to,
@@ -155,6 +156,14 @@ fn route(
                 support,
             },
         ),
+        Command::Decide { proposal, support } => value(
+            tx,
+            game_institutions::Decide {
+                person,
+                proposal,
+                support,
+            },
+        ),
         Command::Build { project } => value(tx, game_projects::Build { person, project }),
         Command::GuardianOrder {
             guardian,
@@ -220,6 +229,14 @@ pub fn observe(host: &Host) -> Result<PlayerView> {
         borrowed_memories: game_invocation::memories(host)?,
         battles: person
             .map(|p| game_conflict::view(host, p))
+            .transpose()?
+            .unwrap_or_default(),
+        communities: person
+            .map(|p| game_communities::view(host, p))
+            .transpose()?
+            .unwrap_or_default(),
+        neighbors: person
+            .map(|p| game_social_life::neighbors(host, p))
             .transpose()?
             .unwrap_or_default(),
         events: host

@@ -36,7 +36,7 @@ fn adopted_proposal_changes_access_and_an_office_can_be_removed() {
         .unwrap();
     assert!(
         f.host
-            .dispatch(Vote {
+            .dispatch(Decide {
                 person: f.ruler,
                 proposal,
                 support: true

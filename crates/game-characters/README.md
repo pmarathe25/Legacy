@@ -4,6 +4,8 @@ Owns individual decisions, survival-plan commitment, failed-option cooldowns, an
 
 Food plans come from [game-provisioning](../game-provisioning/README.md). Their progress and the last decision are saved in each mind; actual travel and gathering use the common action record. Death removes the mind. Failed food attempts refresh locally observable facts and allow another plan on the next review.
 
+When food and rest needs are satisfied, enrolled people can ask [game-social-life](../game-social-life/README.md) for local company. That owner handles willingness, companion selection, contact history, and conversation actions. The mind records the social intention for inspection. NPC searches exclude the current player from implicit consent. Social actions can be interrupted by urgent hunger through the same authored policy as work.
+
 Scenarios select a `characters` profile from [content/characters](../../content/characters). The owning [schema](src/rules.rs) controls review intervals, retry intervals, need thresholds, utility weights for time and gathering, switching margins, and action kinds that urgent hunger can interrupt. Existing food acquisition stays committed; interrupted work keeps the cancellation consequences defined by its owner. Configuration freezes before minds are created.
 
 Run `cargo test -p game-characters`. Tests cover plan continuation, stale-stock alternatives, blocked routes, partial travel, gathering, urgent hunger, learned values, and save/load with different workers, using only required feature plugins.
@@ -13,3 +15,5 @@ Reviews process at most 128 due people per committed request, in stable person o
 Candidate inputs are 56-byte numeric records. Trait weights use five numeric channels and visit only recorded deviations from authored defaults. Decision explanations are built after selection. New mechanics that invalidate a physiological forecast must also invalidate the corresponding mind's deadline; ordinary progress does not require waking every actor.
 
 Minds use indexed dense rows. Checkpoints journal changed people and snapshot the small rules/schedule metadata. Physical row slots never determine review order.
+
+An internal `IdleReview` notification lets upper organizing owners consider influence or coercion before ordinary company. Any action they start uses the existing action clock and is recorded in the mind’s last intention. This adds no second autonomy scheduler or dependency from characters back to communities.

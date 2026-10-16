@@ -10,7 +10,7 @@ use game_sim::*;
 pub use rules::{Configure, Rules, load};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-pub use utility::{Candidate, Decision, choose};
+pub use utility::{Candidate, Decision, IdleReview, choose};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mind {
     pub plan: Option<Plan>,
@@ -156,6 +156,22 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     }
     let rules = &tx.get::<Minds>()?.rules;
     if hunger < rules.meal_hunger && fatigue <= rules.rest_fatigue {
+        tx.notify(IdleReview { person })?;
+        let acting = tx.get::<Actions>()?.0.contains_key(&person);
+        if acting
+            || (tx.registered::<game_social_life::SeekCompany>()
+                && tx.call(game_social_life::SeekCompany {
+                    person,
+                    protected: ruler,
+                })?)
+        {
+            let reason = tx.get::<Actions>()?.0[&person].kind.clone();
+            tx.edit::<Minds>()?.people.get_mut(&person).unwrap().last = Some(Decision {
+                id: 2,
+                score: 0,
+                reasons: vec![reason],
+            });
+        }
         return Ok(());
     }
     let mut candidates = vec![];

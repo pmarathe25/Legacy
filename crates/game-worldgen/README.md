@@ -1,0 +1,9 @@
+# game-worldgen
+
+Generates deterministic physical initial conditions from a seed and [runtime settings](../../content/worldgen/default.toml). Its output is a validated `game-scenarios::Definition`, without authored institutions, offices, bonds, buildings, farms, or settlements. A seeded spanning tree links natural areas; biomes supply local climate, wild food, and renewable materials or finite deposits. Each person receives independently generated traits sampled from every authored catalog range, beliefs, a name, a carried supply, and an individual possession claim.
+
+This crate is a pure content generator. It does not invent historical records, run a second simulation, mutate another feature, or define character behavior. `game-openings` installs its result through ordinary owners, runs the authoritative host for the requested history duration, then begins player control. The default settings create 96 mortals and two guardians across 12 areas and run two simulated days. Population, area count, duration, biome choices, and name fragments are data. The supported population limit includes guardians.
+
+History is currently limited by the implemented behavior: survival, foraging, rest, companionship, individual organizing decisions, and coercive conflict. There is no geological generator, animal ecology, autonomous farming, migration, family formation, or centuries of political succession. Increasing history duration does not synthesize those missing events. Existing physical scarcity and mortality continue normally.
+
+Run `cargo test -p game-worldgen`. Tests check deterministic seeds, varied physical starts, references and bounds, and the absence of preconstructed societies. Dependencies are `game-core`, `game-content`, `game-scenarios`, `game-physiology`, `game-relationships`, `game-traits`, and `serde`.

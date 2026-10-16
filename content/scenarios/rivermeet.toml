@@ -1,0 +1,459 @@
+id = "rivermeet"
+version = 1
+[data]
+label = "Rivermeet community fixture"
+fixture = true
+ruler = "ruler"
+physiology = "human"
+characters = "survival"
+environment = "river-valley"
+health = "basic"
+social_life = "community"
+autonomy = true
+renewal = true
+
+[[data.areas]]
+key = "green"
+name = "Rivermeet Green"
+
+[[data.areas]]
+key = "fields"
+name = "Southbank Fields"
+
+[[data.areas]]
+key = "wood"
+name = "Alderwood"
+
+[[data.areas]]
+key = "marsh"
+name = "Reedfen"
+climate = "wetland"
+
+[[data.areas]]
+key = "ridge"
+name = "Old Quarry"
+climate = "highland"
+
+[[data.areas]]
+key = "landing"
+name = "Willow Landing"
+
+[[data.links]]
+from = "green"
+to = "fields"
+duration = 120000
+
+[[data.links]]
+from = "green"
+to = "wood"
+duration = 180000
+
+[[data.links]]
+from = "green"
+to = "marsh"
+duration = 240000
+
+[[data.links]]
+from = "green"
+to = "ridge"
+duration = 300000
+
+[[data.links]]
+from = "green"
+to = "landing"
+duration = 360000
+
+[[data.links]]
+from = "wood"
+to = "ridge"
+duration = 120000
+
+[[data.people]]
+key = "ruler"
+name = "The Wanderer"
+count = 1
+kind = "Mortal"
+area = "green"
+
+[[data.people]]
+key = "guardian-1"
+name = "Aster"
+count = 1
+kind = "Guardian"
+area = "green"
+
+[[data.people]]
+key = "guardian-2"
+name = "Cairn"
+count = 1
+kind = "Guardian"
+area = "green"
+
+[[data.people]]
+key = "mira"
+name = "Mira Reed"
+count = 1
+kind = "Mortal"
+area = "green"
+traits = { sociability = 900, empathy = 850, discipline = 100, patience = 850, risk-tolerance = 150 }
+beliefs = { sharing = 10, authority = -5, honesty = 8 }
+values = { fellowship = 35, independence = 15 }
+
+[[data.people]]
+key = "oren"
+name = "Oren Ash"
+count = 1
+kind = "Mortal"
+area = "green"
+traits = { sociability = 200, empathy = 350, discipline = 800, patience = 350, risk-tolerance = 650 }
+beliefs = { sharing = -8, authority = 10, honesty = 5 }
+values = { independence = 70 }
+
+[[data.people]]
+key = "tala"
+name = "Tala Moss"
+count = 1
+kind = "Mortal"
+area = "green"
+traits = { sociability = 700, empathy = 950, discipline = 300, patience = 950, risk-tolerance = 50 }
+beliefs = { sharing = 10, authority = -8, honesty = 10 }
+values = { fellowship = 60 }
+
+[[data.people]]
+key = "bren"
+name = "Bren Clay"
+count = 1
+kind = "Mortal"
+area = "fields"
+traits = { sociability = 450, empathy = 550, discipline = 550, patience = 550, risk-tolerance = 450 }
+beliefs = { sharing = 2, authority = 5, honesty = 5 }
+values = { independence = 30 }
+
+[[data.people]]
+key = "sela"
+name = "Sela Fen"
+count = 1
+kind = "Mortal"
+area = "fields"
+traits = { sociability = 800, empathy = 700, discipline = 200, patience = 700, risk-tolerance = 300 }
+beliefs = { sharing = 8, authority = -5, honesty = 7 }
+values = { fellowship = 25 }
+
+[[data.people]]
+key = "ivo"
+name = "Ivo Flint"
+count = 1
+kind = "Mortal"
+area = "wood"
+traits = { sociability = 100, empathy = 300, discipline = 900, patience = 300, risk-tolerance = 700 }
+beliefs = { sharing = -5, authority = -8, honesty = 0 }
+values = { independence = 90 }
+
+[[data.people]]
+key = "nera"
+name = "Nera Vale"
+count = 1
+kind = "Mortal"
+area = "wood"
+traits = { sociability = 750, empathy = 800, discipline = 250, patience = 800, risk-tolerance = 200 }
+beliefs = { sharing = 8, authority = 0, honesty = 9 }
+values = { fellowship = 30 }
+
+[[data.people]]
+key = "ada"
+name = "Ada Rush"
+count = 1
+kind = "Mortal"
+area = "landing"
+traits = { sociability = 650, empathy = 650, discipline = 350, patience = 650, risk-tolerance = 350 }
+beliefs = { sharing = 5, authority = 3, honesty = 6 }
+values = { independence = 40 }
+
+[[data.people]]
+key = "pavel"
+name = "Pavel Brook"
+count = 1
+kind = "Mortal"
+area = "landing"
+traits = { sociability = 350, empathy = 600, discipline = 650, patience = 600, risk-tolerance = 400 }
+beliefs = { sharing = 0, authority = 8, honesty = 6 }
+values = { independence = 20 }
+
+[[data.bonds]]
+observer = "mira"
+other = "tala"
+relationship = { trust = 35, affection = 40, fear = 0, grievance = 0 }
+
+[[data.bonds]]
+observer = "tala"
+other = "mira"
+relationship = { trust = 15, affection = 25, fear = 0, grievance = 0 }
+
+[[data.bonds]]
+observer = "mira"
+other = "oren"
+relationship = { trust = -25, affection = -20, fear = 10, grievance = 35 }
+
+[[data.bonds]]
+observer = "oren"
+other = "mira"
+relationship = { trust = -10, affection = -5, fear = 0, grievance = 20 }
+
+[[data.inventories]]
+key = "green-store"
+area = "green"
+capacity = 100000
+owner = "ruler"
+access = ["ruler", "guardian-1", "guardian-2", "mira", "oren", "tala"]
+known_to = ["ruler", "guardian-1", "guardian-2", "mira", "oren", "tala"]
+goods = { grain = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20, iron-ore = 30, clay = 30, reeds = 40, flax = 40, healing-herbs = 20, fish = 30, roots = 40, beans = 40, wild-berries = 30 }
+
+[[data.inventories]]
+key = "fields-store"
+area = "fields"
+capacity = 100000
+owner = "bren"
+access = ["bren", "sela"]
+known_to = ["bren", "sela"]
+goods = { grain = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20 }
+
+[[data.inventories]]
+key = "wood-store"
+area = "wood"
+capacity = 100000
+owner = "ivo"
+access = ["ivo", "nera"]
+known_to = ["ivo", "nera"]
+goods = { grain = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20 }
+
+[[data.inventories]]
+key = "landing-store"
+area = "landing"
+capacity = 100000
+owner = "ada"
+access = ["ada", "pavel"]
+known_to = ["ada", "pavel"]
+goods = { grain = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20 }
+
+[[data.inventories]]
+key = "ruler-pack"
+carried_by = "ruler"
+capacity = 250
+owner = "ruler"
+access = ["ruler"]
+known_to = ["ruler"]
+
+[[data.inventories]]
+key = "mira-pack"
+carried_by = "mira"
+capacity = 250
+owner = "mira"
+access = ["mira"]
+known_to = ["mira"]
+
+[[data.inventories]]
+key = "oren-pack"
+carried_by = "oren"
+capacity = 250
+owner = "oren"
+access = ["oren"]
+known_to = ["oren"]
+
+[[data.inventories]]
+key = "tala-pack"
+carried_by = "tala"
+capacity = 250
+owner = "tala"
+access = ["tala"]
+known_to = ["tala"]
+
+[[data.inventories]]
+key = "bren-pack"
+carried_by = "bren"
+capacity = 250
+owner = "bren"
+access = ["bren"]
+known_to = ["bren"]
+
+[[data.inventories]]
+key = "sela-pack"
+carried_by = "sela"
+capacity = 250
+owner = "sela"
+access = ["sela"]
+known_to = ["sela"]
+
+[[data.inventories]]
+key = "ivo-pack"
+carried_by = "ivo"
+capacity = 250
+owner = "ivo"
+access = ["ivo"]
+known_to = ["ivo"]
+
+[[data.inventories]]
+key = "nera-pack"
+carried_by = "nera"
+capacity = 250
+owner = "nera"
+access = ["nera"]
+known_to = ["nera"]
+
+[[data.inventories]]
+key = "ada-pack"
+carried_by = "ada"
+capacity = 250
+owner = "ada"
+access = ["ada"]
+known_to = ["ada"]
+
+[[data.inventories]]
+key = "pavel-pack"
+carried_by = "pavel"
+capacity = 250
+owner = "pavel"
+access = ["pavel"]
+known_to = ["pavel"]
+
+[[data.patches]]
+key = "resource-1"
+area = "green"
+object = "wild-berries"
+stock = 140
+capacity = 140
+renew = 18
+renewal_warmth = 5
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-2"
+area = "wood"
+object = "nuts"
+stock = 180
+capacity = 180
+renew = 15
+renewal_warmth = 3
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-3"
+area = "wood"
+object = "mushrooms"
+stock = 120
+capacity = 120
+renew = 20
+renewal_warmth = 5
+renewal_rain = 3
+
+[[data.patches]]
+key = "resource-4"
+area = "wood"
+object = "timber"
+stock = 400
+capacity = 400
+renew = 20
+renewal_warmth = 1
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-5"
+area = "marsh"
+object = "reeds"
+stock = 300
+capacity = 300
+renew = 35
+renewal_warmth = 5
+renewal_rain = 3
+
+[[data.patches]]
+key = "resource-6"
+area = "marsh"
+object = "healing-herbs"
+stock = 100
+capacity = 100
+renew = 10
+renewal_warmth = 10
+renewal_rain = 3
+
+[[data.patches]]
+key = "resource-7"
+area = "ridge"
+object = "stone"
+stock = 600
+capacity = 600
+renew = 0
+
+[[data.patches]]
+key = "resource-8"
+area = "ridge"
+object = "iron-ore"
+stock = 300
+capacity = 300
+renew = 0
+
+[[data.patches]]
+key = "resource-9"
+area = "landing"
+object = "fish"
+stock = 180
+capacity = 180
+renew = 25
+renewal_warmth = 0
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-10"
+area = "landing"
+object = "clay"
+stock = 400
+capacity = 400
+renew = 0
+
+[[data.plots]]
+key = "roots-plot"
+area = "fields"
+steward = "ruler"
+crop = "roots"
+
+[[data.plots]]
+key = "barley-plot"
+area = "fields"
+steward = "ruler"
+crop = "barley"
+
+[[data.plots]]
+key = "beans-plot"
+area = "fields"
+steward = "ruler"
+crop = "beans"
+
+[[data.plots]]
+key = "flax-plot"
+area = "fields"
+steward = "ruler"
+crop = "flax"
+
+[[data.plots]]
+key = "herbs-plot"
+area = "fields"
+steward = "ruler"
+crop = "herbs"
+
+[[data.plots]]
+key = "rice-plot"
+area = "marsh"
+steward = "ruler"
+crop = "rice"
+
+[[data.plots]]
+key = "orchard-plot"
+area = "fields"
+steward = "ruler"
+crop = "orchard"
+
+[[data.institutions]]
+key = "commons"
+name = "Rivermeet Green Council"
+area = "green"
+members = ["ruler", "mira", "oren", "tala"]
+offices = {}

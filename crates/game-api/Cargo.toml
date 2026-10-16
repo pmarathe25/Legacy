@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-communities.workspace = true
+game-social-life.workspace = true
 game-lineage.workspace = true
 game-core.workspace = true
 serde.workspace = true

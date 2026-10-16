@@ -1,4 +1,11 @@
 use super::*;
+#[derive(Clone, Serialize, Deserialize)]
+pub struct IdleReview {
+    pub person: PersonId,
+}
+impl Event for IdleReview {
+    const KEY: &'static str = "characters.idle-review";
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub id: u64,

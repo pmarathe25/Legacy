@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Procedure {
+    /// No joint decision procedure: each custodian controls their own commitments.
+    Personal,
     Leader(PersonId),
     Majority,
     Unanimity,
@@ -60,7 +62,7 @@ pub fn passed(
     votes: &BTreeMap<PersonId, bool>,
 ) -> bool {
     match procedure {
-        Procedure::Leader(p) => votes.get(p) == Some(&true),
+        Procedure::Personal | Procedure::Leader(_) => false,
         Procedure::Majority => {
             votes
                 .iter()
@@ -110,6 +112,49 @@ pub struct Vote {
     pub proposal: u64,
     pub support: bool,
 }
+/// A decision by a recognized individual is not a ballot.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Decide {
+    pub person: PersonId,
+    pub proposal: u64,
+    pub support: bool,
+}
+impl Request for Decide {
+    const KEY: &'static str = "institutions.decide";
+    type Response = bool;
+}
+/// Record an independently enacted practice without manufacturing a vote.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RecordPractice {
+    pub institution: InstitutionId,
+    pub terms: AccessRule,
+}
+impl Request for RecordPractice {
+    const KEY: &'static str = "institutions.record-practice";
+    type Response = ();
+}
+/// Affected people's actual responses; compliance does not imply approval or a ballot.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Arrange {
+    pub institution: InstitutionId,
+    pub procedure: Procedure,
+    pub responses: BTreeSet<PersonId>,
+}
+impl Request for Arrange {
+    const KEY: &'static str = "institutions.arrange";
+    type Response = ();
+}
+/// An upper social owner can check whether a real custodian will carry out this decision.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CanCommit {
+    pub institution: InstitutionId,
+    pub person: PersonId,
+    pub custodian: PersonId,
+}
+impl Request for CanCommit {
+    const KEY: &'static str = "institutions.can-commit";
+    type Response = bool;
+}
 impl Request for Vote {
     const KEY: &'static str = "institutions.vote";
     type Response = bool;
@@ -140,6 +185,52 @@ pub fn holds(
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("institutions", 1)?;
     b.resource::<Institutions>()?;
+    b.request::<RecordPractice>(|tx, r| {
+        let group = tx
+            .get::<Institutions>()?
+            .groups
+            .get(&r.institution)
+            .ok_or_else(|| Error::Missing("institution".into()))?;
+        require(
+            group.members.contains(&r.terms.custodian)
+                && r.terms.users.is_subset(&group.members)
+                && r.terms.users.iter().all(|p| {
+                    tx.get::<game_property::Property>()
+                        .is_ok_and(|s| s.allowed(*p, r.terms.inventory))
+                }),
+            "practice has not been enacted",
+        )?;
+        let rules = &mut tx
+            .edit::<Institutions>()?
+            .groups
+            .get_mut(&r.institution)
+            .unwrap()
+            .rules;
+        if !rules.contains(&r.terms) {
+            rules.push(r.terms);
+        }
+        Ok(())
+    })?;
+    b.request::<Arrange>(|tx, r| {
+        let group = tx
+            .get::<Institutions>()?
+            .groups
+            .get(&r.institution)
+            .ok_or_else(|| Error::Missing("institution".into()))?;
+        require(
+            r.responses == group.members,
+            "affected people have not responded to the arrangement",
+        )?;
+        if let Procedure::Leader(p) = r.procedure {
+            require(group.members.contains(&p), "unknown leader")?;
+        }
+        tx.edit::<Institutions>()?
+            .groups
+            .get_mut(&r.institution)
+            .unwrap()
+            .procedure = r.procedure;
+        Ok(())
+    })?;
     b.request::<Found>(|tx, r| {
         require(
             r.0.rules.is_empty(),
@@ -156,6 +247,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get(&r.institution)
             .ok_or_else(|| Error::Missing("institution".into()))?;
         require(i.members.contains(&r.person), "not a member")?;
+        require(
+            i.members.contains(&r.terms.custodian) && r.terms.users.is_subset(&i.members),
+            "terms exceed the participating members",
+        )?;
         let id = tx.allocate()?;
         tx.edit::<Institutions>()?.proposals.insert(
             id,
@@ -178,7 +273,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .clone();
         let i = tx.get::<Institutions>()?.groups[&proposal.institution].clone();
         require(
-            i.members.contains(&r.person) && !proposal.closed,
+            i.members.contains(&r.person)
+                && !proposal.closed
+                && matches!(i.procedure, Procedure::Majority | Procedure::Unanimity),
             "vote unavailable",
         )?;
         let p = tx
@@ -189,6 +286,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         p.votes.insert(r.person, r.support);
         let adopted = passed(&i.procedure, &i.members, &p.votes);
         if adopted {
+            require(
+                !tx.registered::<CanCommit>()
+                    || tx.call(CanCommit {
+                        institution: proposal.institution,
+                        person: r.person,
+                        custodian: proposal.terms.custodian,
+                    })?,
+                "custodian refuses to enact the decision",
+            )?;
             for person in &proposal.terms.users {
                 tx.call(game_property::Permit {
                     issuer: proposal.terms.custodian,
@@ -214,6 +320,58 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 .closed = true;
         }
         Ok(adopted)
+    })?;
+    b.request::<Decide>(|tx, r| {
+        let proposal = tx
+            .get::<Institutions>()?
+            .proposals
+            .get(&r.proposal)
+            .ok_or_else(|| Error::Missing("proposal".into()))?
+            .clone();
+        let group = &tx.get::<Institutions>()?.groups[&proposal.institution];
+        require(
+            !proposal.closed
+                && group.members.contains(&r.person)
+                && match group.procedure {
+                    Procedure::Leader(p) => p == r.person,
+                    Procedure::Personal => proposal.terms.custodian == r.person,
+                    _ => false,
+                },
+            "individual decision unavailable",
+        )?;
+        if r.support {
+            require(
+                !tx.registered::<CanCommit>()
+                    || tx.call(CanCommit {
+                        institution: proposal.institution,
+                        person: r.person,
+                        custodian: proposal.terms.custodian,
+                    })?,
+                "custodian refuses to enact the decision",
+            )?;
+            for person in &proposal.terms.users {
+                tx.call(game_property::Permit {
+                    issuer: proposal.terms.custodian,
+                    person: *person,
+                    inventory: proposal.terms.inventory,
+                    allow: true,
+                })?;
+            }
+            tx.edit::<Institutions>()?
+                .groups
+                .get_mut(&proposal.institution)
+                .unwrap()
+                .rules
+                .push(proposal.terms);
+        }
+        let p = tx
+            .edit::<Institutions>()?
+            .proposals
+            .get_mut(&r.proposal)
+            .unwrap();
+        p.adopted = r.support;
+        p.closed = true;
+        Ok(r.support)
     })?;
     b.request::<Appoint>(|tx, r| {
         let i = tx

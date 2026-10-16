@@ -1,0 +1,23 @@
+id = "environment/maritime"
+version = 1
+# Four 90-day seasons; warmth and rain use simulation units.
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 12
+rain = 6
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 18
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 13
+rain = 7
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 6
+rain = 5

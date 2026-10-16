@@ -99,6 +99,20 @@ fn main() {
         "committed readers changed"
     );
     let remaining = game_performance::stock(&sim, &stores);
+    if game_performance::setting("LEGACY_SOCIAL", false) {
+        let social = sim
+            .debug_host()
+            .get::<game_social_life::SocialLife>()
+            .unwrap();
+        let encounters: u64 = social.people.values().map(|p| p.encounters).sum();
+        if ticks >= 120 {
+            assert!(encounters > 0);
+        }
+        println!(
+            "social_people={} completed_participations={encounters}",
+            social.people.len()
+        );
+    }
     assert!(remaining < initial);
     if ticks == 120 {
         assert_eq!(initial - remaining, (count as u64 - 3) * 10);

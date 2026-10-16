@@ -7,3 +7,5 @@ Founding and explicit procedures, bounded access-rule proposals, voting with exe
 **Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
 **Verification:** Run `cargo test -p game-institutions`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+
+`Personal` leaves commitments with their individual custodians. `Decide` handles a recognized individual’s decision; `Vote` is reserved for actual voting procedures. `Arrange` records a change after the affected people respond, without treating compliance as approval. `RecordPractice` records permissions already enacted by the relevant holders. The optional upper-owned `CanCommit` request lets generated communities refuse practical implementation when a custodian no longer follows the decision maker. Proposals cannot commit people outside the membership.

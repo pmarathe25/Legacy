@@ -1,0 +1,14 @@
+[package]
+name = "game-worldgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-core.workspace = true
+game-content.workspace = true
+game-scenarios.workspace = true
+game-physiology.workspace = true
+game-relationships.workspace = true
+game-traits.workspace = true
+serde.workspace = true

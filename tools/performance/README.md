@@ -11,6 +11,7 @@ cargo bench -p game-performance --bench traits --locked --offline
 cargo bench -p game-performance --bench architecture --locked --offline
 LEGACY_POPULATION=10000 LEGACY_WORKERS=1 cargo bench -p game-performance --bench economy --locked --offline
 LEGACY_POPULATION=10000 LEGACY_WORKERS=4 LEGACY_DISTRIBUTED=true cargo bench -p game-performance --bench economy --locked --offline
+LEGACY_POPULATION=10000 LEGACY_SOCIAL=true cargo bench -p game-performance --bench economy --locked --offline
 LEGACY_POPULATION=10000 cargo bench -p game-performance --bench latency --locked --offline
 cargo bench -p game-performance --features allocation-profile --bench economy --locked --offline
 ```
@@ -22,6 +23,8 @@ The CLI and performance fixtures default to bundled [mimalloc](https://github.co
 **Storage:** The shared protocol fixture includes needs, progress, scoring from four known choices, two sparse relationship edges per person, stable transfer arbitration, arrivals, membership changes, structural replacement, observation extraction, and a checkpoint followed by continued execution. It compares canonical records, conserved quantities, and event hashes across workers and reversed evaluation output. This is a storage workload; its progress and transfers are fixture rules. It does not run the complete economy.
 
 **Economy:** The composed fixture runs actual character, knowledge, physiology, cargo, and transport features with a shared warehouse or 32 settlements. It checks live bodies and actual food consumption, saves and reloads, then compares continued canonical state with different advancement budgets. A separate measured phase creates actual births and deaths, reserves capacity, and starts deliveries. The checkpoint retains those in-flight shipments and checks their eventual arrival and quantity conservation. Output includes fixture counts, throughput, committed-boundary latency, save/load time and size, and a state hash. Pending choices and invocation semantics remain covered by feature and assembly tests.
+
+`LEGACY_SOCIAL=true` enrolls the same population in ordinary social life with varied sociability and empathy. The economy benchmark additionally checks completed encounters and prints participation counts. Searches use bounded, rotating local neighborhoods; timed conversations share the ordinary action clock with survival and travel. The replay test includes a crowded 257-person social world with different worker counts and advance budgets. Existing production measurements below predate this option.
 
 **Ledger:** Actual cargo requests fill disjoint inventories or one shared reservation book. The benchmark rejects an over-capacity request without consuming its identity, reloads pending reservations, then releases half and fulfills half. It checks final quantities, capacity accounting, and canonical state at 15, 1,000, 10,000, and 20,000 reservations.
 

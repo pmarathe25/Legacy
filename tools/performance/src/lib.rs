@@ -130,8 +130,38 @@ pub fn fixture(count: usize, workers: usize, distributed: bool) -> (Simulation, 
             .unwrap();
         }
     }
-    h.dispatch(game_characters::Start).unwrap();
+    if setting("LEGACY_SOCIAL", false) {
+        enable_social(&mut sim);
+    }
+    sim.debug_host_mut()
+        .dispatch(game_characters::Start)
+        .unwrap();
     (sim, stores)
+}
+pub fn enable_social(sim: &mut Simulation) {
+    let h = sim.debug_host_mut();
+    let people: Vec<_> = h
+        .get::<game_physiology::Bodies>()
+        .unwrap()
+        .people
+        .keys()
+        .copied()
+        .collect();
+    for person in people {
+        h.dispatch(game_social_life::Register {
+            person,
+            name: format!("Resident {}", person.0),
+        })
+        .unwrap();
+        h.dispatch(game_traits::Set {
+            person,
+            profile: std::collections::BTreeMap::from([
+                ("sociability".into(), (person.0 % 1001) as i32),
+                ("empathy".into(), ((person.0 * 37) % 1001) as i32),
+            ]),
+        })
+        .unwrap();
+    }
 }
 pub fn stock(sim: &Simulation, stores: &[InventoryId]) -> u64 {
     stores

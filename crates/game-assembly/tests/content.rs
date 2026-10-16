@@ -308,3 +308,211 @@ fn authored_mass_changes_carrying_limits() {
         1000
     );
 }
+
+#[test]
+fn communities_develop_social_histories_and_preserve_them_across_workers_and_saving() {
+    for id in ["rivermeet", "bracken-coast", "ashridge"] {
+        let mut a = Simulation::new(id, 21, 1).unwrap();
+        let mut b = Simulation::load(&a.save().unwrap(), 4).unwrap();
+        let initial = a.observe().unwrap();
+        assert!(initial.neighbors.len() >= 4);
+        let ruler = initial.person.unwrap();
+        let before = a.save().unwrap();
+        a.observe().unwrap();
+        assert_eq!(before, a.save().unwrap());
+        run(&mut a, SimTime(6 * HOUR.0));
+        for at in [1, 480_001, 3_000_000, 6_000_019, 6 * HOUR.0] {
+            run(&mut b, SimTime(at));
+            b = Simulation::load(&b.save().unwrap(), 2).unwrap();
+        }
+        assert_eq!(a.save().unwrap(), b.save().unwrap(), "{id}");
+        let state = a
+            .debug_host()
+            .get::<game_social_life::SocialLife>()
+            .unwrap();
+        assert!(
+            state.people.values().any(|p| p.encounters > 0),
+            "{id}: no social life"
+        );
+        assert_eq!(
+            state.people[&ruler].encounters, 0,
+            "NPCs cannot reserve the player"
+        );
+        assert!(
+            a.debug_host()
+                .get::<game_physiology::Bodies>()
+                .unwrap()
+                .people
+                .iter()
+                .all(|(p, b)| *p == ruler || b.alive),
+            "{id}: autonomous residents must eat"
+        );
+    }
+}
+#[test]
+fn public_company_is_timed_cancellable_and_visible_only_locally() {
+    let mut sim = Simulation::new("rivermeet", 7, 1).unwrap();
+    let view = sim.observe().unwrap();
+    let other = view
+        .neighbors
+        .iter()
+        .find(|p| p.name == "Mira Reed")
+        .unwrap()
+        .person;
+    let result = sim.submit(1, Command::Talk { other }).unwrap();
+    assert_eq!(sim.submit(1, Command::Talk { other }).unwrap(), result);
+    assert_eq!(sim.observe().unwrap().action.as_deref(), Some("socialize"));
+    let before = sim.save().unwrap();
+    assert!(sim.submit(2, Command::Rest).is_err());
+    assert_eq!(before, sim.save().unwrap());
+    run(&mut sim, SimTime(120_000));
+    sim.submit(2, Command::Cancel).unwrap();
+    assert!(
+        sim.debug_host()
+            .get::<game_social_life::SocialLife>()
+            .unwrap()
+            .meetings
+            .is_empty()
+    );
+    let names = &sim
+        .debug_host()
+        .get::<game_openings::Opening>()
+        .unwrap()
+        .names;
+    let destination = AreaId(names["ridge"]);
+    sim.submit(3, Command::Move { destination }).unwrap();
+    assert!(sim.observe().unwrap().neighbors.is_empty());
+    run(&mut sim, SimTime(420_000));
+    assert!(sim.observe().unwrap().neighbors.is_empty());
+    assert!(sim.submit(4, Command::Talk { other }).is_err());
+}
+#[test]
+fn new_craft_chains_transform_real_supplies_into_food() {
+    let mut sim = Simulation::new("rivermeet", 9, 1).unwrap();
+    let inventory = InventoryId(
+        sim.debug_host()
+            .get::<game_openings::Opening>()
+            .unwrap()
+            .names["green-store"],
+    );
+    let objects = sim.debug_host().get::<game_objects::Objects>().unwrap();
+    let flour = objects.resolve("flour").unwrap();
+    let bread = objects.resolve("bread").unwrap();
+    sim.submit(
+        1,
+        Command::Craft {
+            recipe: "mill-grain".into(),
+            inventory,
+        },
+    )
+    .unwrap();
+    run(&mut sim, SimTime(10 * MINUTE.0));
+    assert_eq!(
+        sim.debug_host().get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(flour),
+        16
+    );
+    sim.submit(
+        2,
+        Command::Craft {
+            recipe: "bake-bread".into(),
+            inventory,
+        },
+    )
+    .unwrap();
+    let save = sim.save().unwrap();
+    let mut loaded = Simulation::load(&save, 3).unwrap();
+    for s in [&mut sim, &mut loaded] {
+        run(s, SimTime(30 * MINUTE.0));
+        let stock = &s.debug_host().get::<game_cargo::Cargo>().unwrap().0[&inventory];
+        assert_eq!(stock.amount(flour), 4);
+        assert_eq!(stock.amount(bread), 12);
+    }
+    assert_eq!(sim.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn default_history_forms_named_compacts_with_executable_permissions() {
+    assert_eq!(
+        game_assembly::default_scenario(&mut Store::standard()).unwrap(),
+        "generated"
+    );
+    let mut sim = Simulation::new("generated", 1, 1).unwrap();
+    let host = sim.debug_host();
+    let opening = host.get::<game_openings::Opening>().unwrap();
+    let history = opening.generated.as_ref().unwrap();
+    assert_eq!(host.now(), history.until);
+    assert_eq!(history.until.0, history.settings.history.0);
+    let initial = opening.definition.as_ref().unwrap();
+    assert!(initial.institutions.is_empty());
+    assert!(initial.bonds.is_empty());
+    let institutions = host.get::<game_institutions::Institutions>().unwrap();
+    assert!(
+        !institutions.groups.is_empty(),
+        "friendships should have time to form compacts"
+    );
+    for (id, institution) in &institutions.groups {
+        assert!(institution.name.ends_with("Hearth") || institution.name.ends_with("Company"));
+        assert!(institution.offices.is_empty());
+        assert!(institution.rules.len() >= 2);
+        for rule in &institution.rules {
+            for person in &rule.users {
+                assert!(
+                    host.get::<game_property::Property>()
+                        .unwrap()
+                        .allowed(*person, rule.inventory)
+                );
+                assert_eq!(
+                    host.get::<game_communities::Communities>().unwrap().members[person],
+                    *id
+                );
+            }
+        }
+    }
+    let next = SimTime(history.until.0 + HOUR.0);
+    let before = sim.save().unwrap();
+    let mut loaded = Simulation::load(&before, 4).unwrap();
+    run(&mut sim, next);
+    run(&mut loaded, next);
+    assert_eq!(sim.save().unwrap(), loaded.save().unwrap());
+}
+#[test]
+fn history_uses_the_same_live_rules_with_zero_duration_and_worker_variations() {
+    let pack = Pack::new();
+    pack.edit(
+        "worldgen/default.toml",
+        "history = 172800000",
+        "history = 0",
+    );
+    let empty = Simulation::with_content("generated", 1, 1, &mut Store::new(&pack.root)).unwrap();
+    assert_eq!(empty.now(), SimTime(0));
+    assert!(
+        empty
+            .debug_host()
+            .get::<game_institutions::Institutions>()
+            .unwrap()
+            .groups
+            .is_empty()
+    );
+    assert!(
+        empty
+            .debug_host()
+            .get::<game_relationships::Social>()
+            .unwrap()
+            .relationships
+            .is_empty()
+    );
+    let a = Simulation::new("generated", 13, 1).unwrap();
+    let b = Simulation::new("generated", 13, 4).unwrap();
+    assert_eq!(a.save().unwrap(), b.save().unwrap());
+    let c = Simulation::new("generated", 14, 1).unwrap();
+    assert_ne!(
+        a.debug_host()
+            .get::<game_openings::Opening>()
+            .unwrap()
+            .definition,
+        c.debug_host()
+            .get::<game_openings::Opening>()
+            .unwrap()
+            .definition
+    );
+}

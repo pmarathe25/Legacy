@@ -1,0 +1,48 @@
+id = "worldgen/default"
+version = 1
+[data]
+population = 96
+areas = 12
+# This initial history uses the live simulation and its current accelerated needs.
+history = 172800000
+physiology = "human"
+characters = "survival"
+social_life = "community"
+health = "basic"
+name_starts = ["Al", "Bran", "Cor", "Dar", "El", "Fen", "Gal", "Har", "Is", "Kel", "Lor", "Mer", "Nor", "Or", "Pen", "Rav", "Sel", "Tal", "Val", "Wen"]
+name_ends = ["a", "en", "in", "or", "eth", "an", "el", "is", "ar", "wen", "wyn", "ren", "as", "il", "on", "ith"]
+[[data.biomes]]
+name = "Woodland"
+climate = "river-valley"
+food = "nuts"
+material = "timber"
+renewal_warmth = 3
+renewal_rain = 1
+[[data.biomes]]
+name = "Coast"
+climate = "maritime"
+food = "fish"
+material = "clay"
+renewal_warmth = 0
+renewal_rain = 1
+[[data.biomes]]
+name = "Wetland"
+climate = "wetland"
+food = "roots"
+material = "reeds"
+renewal_warmth = 10
+renewal_rain = 3
+[[data.biomes]]
+name = "Highland"
+climate = "highland"
+food = "nuts"
+material = "iron-ore"
+renewal_warmth = 3
+renewal_rain = 1
+[[data.biomes]]
+name = "Plain"
+climate = "dry-steppe"
+food = "wild-berries"
+material = "stone"
+renewal_warmth = 5
+renewal_rain = 2

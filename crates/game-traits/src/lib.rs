@@ -121,6 +121,20 @@ impl std::ops::Index<&str> for Weights {
     }
 }
 impl Traits {
+    /// Express a disposition on a common 0..=1000 scale, using authored defaults.
+    pub fn disposition(&self, person: PersonId, key: &str) -> i64 {
+        let Some(t) = self.definitions.get(key) else {
+            return 500;
+        };
+        let value = self
+            .people
+            .get(&person)
+            .and_then(|p| p.get(key))
+            .copied()
+            .unwrap_or(t.default);
+        (i64::from(value) - i64::from(t.minimum)) * 1000
+            / (i64::from(t.maximum) - i64::from(t.minimum)).max(1)
+    }
     pub fn validate_profile(&self, profile: &BTreeMap<String, i32>) -> Result<()> {
         for (key, value) in profile {
             let t = self

@@ -1,0 +1,13 @@
+# game-social-life
+
+Owns local company, contact history, and timed conversations. Character autonomy asks `SeekCompany` when immediate food and rest needs are satisfied. Sociability and learned fellowship values affect how often someone seeks company. Directed affection, trust, fear, grievance, and the last companion influence selection. A rotating local window bounds each search; refused searches back off. The autonomy caller excludes the current player from implicit consent.
+
+`Talk` checks that both people are alive, capable, available, and together. The recipient can refuse based on their own relationship. Both participants occupy the common action clock for the configured duration. Completion changes each person's relationship and fellowship value separately, according to expressed beliefs and empathy. Each speaker shares one of their own remembered facts through `game-knowledge`; reports retain evidence time and reduced confidence. A conversation can strengthen one person's affection while worsening the other's.
+
+Cancellation, urgent hunger interruption, or death releases both participants and cancels completion. Interrupted conversations grant no encounter credit. Movement and mortality update an area index through receiver-owned requests and event subscriptions. No independent polling loop is added. `neighbors` exposes only people currently present with the observer and their visible activity; it reveals no private beliefs or scores.
+
+Scenarios opt in with `social_life = "community"`, selecting [rules](../../content/social-life/community.toml). Registration supplies a public name. Initial beliefs, values, and directed bonds belong to `game-relationships`. All resolved rules, search cursors, recent contacts, and in-flight pairs persist in saves. Validation checks pair symmetry, actions, bodies, and the locality index.
+
+This is ordinary companionship and conversation. It does not implement household care, romance, political persuasion, occupational planning, or autonomous enterprise formation.
+
+Run `cargo test -p game-social-life`. Feature tests compose the required lower owners and cover consent, different dispositions, asymmetric impressions, personal evidence, bounded search, interruption, death, locality, and continued save/load across workers. Dependencies are `game-core`, `game-sim`, `game-storage`, `game-content`, `game-physiology`, `game-transport`, `game-knowledge`, `game-relationships`, and `game-traits`.

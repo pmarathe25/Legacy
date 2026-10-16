@@ -1,0 +1,231 @@
+id = "objects/livelihoods"
+version = 1
+
+[data.objects.wild-berries]
+id = 20
+name = "Wild berries"
+mass = 1
+tags = ["food", "wild"]
+food = { portion = 6, relief = 35 }
+
+[data.objects.orchard-fruit]
+id = 21
+name = "Orchard fruit"
+mass = 2
+tags = ["food", "crop"]
+food = { portion = 5, relief = 45 }
+
+[data.objects.roots]
+id = 22
+name = "Edible roots"
+mass = 2
+tags = ["food", "crop"]
+food = { portion = 8, relief = 50 }
+
+[data.objects.beans]
+id = 23
+name = "Beans"
+mass = 1
+tags = ["food", "crop"]
+food = { portion = 8, relief = 55 }
+
+[data.objects.barley]
+id = 24
+name = "Barley"
+mass = 1
+tags = ["food", "crop"]
+food = { portion = 10, relief = 60 }
+
+[data.objects.rice]
+id = 25
+name = "Rice"
+mass = 1
+tags = ["food", "crop"]
+food = { portion = 10, relief = 60 }
+
+[data.objects.fish]
+id = 26
+name = "Fresh fish"
+mass = 2
+tags = ["food", "wild"]
+food = { portion = 5, relief = 45 }
+
+[data.objects.mushrooms]
+id = 27
+name = "Edible mushrooms"
+mass = 1
+tags = ["food", "wild"]
+food = { portion = 6, relief = 30 }
+
+[data.objects.nuts]
+id = 28
+name = "Forest nuts"
+mass = 1
+tags = ["food", "wild"]
+food = { portion = 5, relief = 50 }
+
+[data.objects.flour]
+id = 29
+name = "Flour"
+mass = 1
+tags = ["ingredient"]
+
+[data.objects.bread]
+id = 30
+name = "Bread"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 75 }
+
+[data.objects.vegetable-stew]
+id = 31
+name = "Vegetable stew"
+mass = 2
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 85 }
+
+[data.objects.dried-fish]
+id = 32
+name = "Dried fish"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 65 }
+
+[data.objects.berry-cakes]
+id = 33
+name = "Berry cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 65 }
+
+[data.objects.healing-herbs]
+id = 34
+name = "Healing herbs"
+mass = 1
+tags = ["herb", "ingredient"]
+
+[data.objects.reeds]
+id = 35
+name = "Reeds"
+mass = 1
+tags = ["fiber", "wild"]
+
+[data.objects.flax]
+id = 36
+name = "Flax fiber"
+mass = 1
+tags = ["fiber", "crop"]
+
+[data.objects.clay]
+id = 37
+name = "Clay"
+mass = 3
+tags = ["mineral", "material"]
+
+[data.objects.stone]
+id = 38
+name = "Stone"
+mass = 5
+tags = ["mineral", "material"]
+
+[data.objects.iron-ore]
+id = 39
+name = "Iron ore"
+mass = 4
+tags = ["mineral", "material"]
+
+[data.objects.charcoal]
+id = 40
+name = "Charcoal"
+mass = 1
+tags = ["fuel", "material"]
+
+[data.objects.iron]
+id = 41
+name = "Iron bloom"
+mass = 3
+tags = ["metal", "material"]
+
+[data.objects.cloth]
+id = 42
+name = "Linen cloth"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.rope]
+id = 43
+name = "Fiber rope"
+mass = 1
+tags = ["material", "crafted"]
+
+[data.objects.pottery]
+id = 44
+name = "Pottery"
+mass = 2
+tags = ["material", "crafted"]
+
+[data.objects.brick]
+id = 45
+name = "Fired brick"
+mass = 3
+tags = ["material", "crafted"]
+
+[data.objects.fishing-net]
+id = 46
+name = "Fishing net"
+mass = 2
+tags = ["tool", "crafted"]
+
+[data.objects.iron-tools]
+id = 47
+name = "Iron tools"
+mass = 3
+tags = ["tool", "crafted"]
+
+[data.objects.root-seed]
+id = 48
+name = "Root seed"
+mass = 1
+tags = ["seed"]
+
+[data.objects.bean-seed]
+id = 49
+name = "Bean seed"
+mass = 1
+tags = ["seed"]
+
+[data.objects.barley-seed]
+id = 50
+name = "Barley seed"
+mass = 1
+tags = ["seed"]
+
+[data.objects.rice-seed]
+id = 51
+name = "Rice seed"
+mass = 1
+tags = ["seed"]
+
+[data.objects.flax-seed]
+id = 52
+name = "Flax seed"
+mass = 1
+tags = ["seed"]
+
+[data.objects.herb-seed]
+id = 53
+name = "Herb seed"
+mass = 1
+tags = ["seed"]
+
+[data.objects.fruit-cuttings]
+id = 54
+name = "Fruit cuttings"
+mass = 1
+tags = ["seed"]
+
+[data.objects.reed-mat]
+id = 55
+name = "Reed mat"
+mass = 2
+tags = ["crafted", "furnishing"]

@@ -22,6 +22,9 @@ pub enum Command {
         recipient: PersonId,
         key: String,
     },
+    Talk {
+        other: PersonId,
+    },
     Take {
         from: InventoryId,
         to: InventoryId,
@@ -72,6 +75,10 @@ pub enum Command {
         proposal: u64,
         support: bool,
     },
+    Decide {
+        proposal: u64,
+        support: bool,
+    },
     Build {
         project: ProjectId,
     },
@@ -112,6 +119,8 @@ pub struct PlayerView {
     pub past_lives: Vec<LifeId>,
     pub borrowed_memories: BTreeMap<String, game_lineage::Life>,
     pub battles: Vec<game_conflict::BattleView>,
+    pub neighbors: Vec<game_social_life::Neighbor>,
+    pub communities: Vec<game_communities::CommunityView>,
     pub events: Vec<PlayerEvent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

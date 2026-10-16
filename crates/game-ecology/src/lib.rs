@@ -26,6 +26,8 @@ pub struct Ecology {
     pub patches: Table<u64, Patch>,
     pub gathering: Table<PersonId, Gathering>,
     pub renewing: bool,
+    #[serde(default)]
+    pub renewal: Table<u64, Renewal>,
     #[serde(skip)]
     by_area: Records<AreaId, Table<u64, ()>>,
     #[serde(skip)]
@@ -56,6 +58,21 @@ impl Ecology {
             .checked_sub(reserved)
             .ok_or_else(|| Error::Rejected("patch reservations exceed stock".into()))
     }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Renewal {
+    pub minimum_warmth: i32,
+    pub minimum_rain: u32,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetRenewal {
+    pub patch: u64,
+    pub minimum_warmth: i32,
+    pub minimum_rain: u32,
+}
+impl Request for SetRenewal {
+    const KEY: &'static str = "ecology.set-renewal";
+    type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Create(pub Patch);
@@ -105,6 +122,20 @@ impl Request for Renew {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("ecology", 1)?;
     b.resource::<Ecology>()?;
+    b.request::<SetRenewal>(|tx, r| {
+        require(
+            tx.get::<Ecology>()?.patches.contains_key(&r.patch),
+            "unknown renewal patch",
+        )?;
+        tx.edit::<Ecology>()?.renewal.insert(
+            r.patch,
+            Renewal {
+                minimum_warmth: r.minimum_warmth,
+                minimum_rain: r.minimum_rain,
+            },
+        );
+        Ok(())
+    })?;
     b.validate_save(|h| {
         let s = h.get::<Ecology>()?;
         for id in s.patches.keys() {
@@ -218,9 +249,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Renew>(|tx, _| {
+        let mut dormant = std::collections::BTreeSet::new();
+        for (id, rule) in &tx.get::<Ecology>()?.renewal {
+            let season = game_environment::at(tx, tx.get::<Ecology>()?.patches[id].area)?;
+            if season.warmth < rule.minimum_warmth || season.rain < rule.minimum_rain {
+                dormant.insert(*id);
+            }
+        }
         tx.edit_with_compute::<Ecology, _>(|state, pool| {
-            state.patches.update(pool, |_, patch| {
-                patch.stock = patch.stock.saturating_add(patch.renew).min(patch.capacity);
+            state.patches.update(pool, |id, patch| {
+                if !dormant.contains(id) {
+                    patch.stock = patch.stock.saturating_add(patch.renew).min(patch.capacity);
+                }
             })
         })?;
         tx.schedule(tx.now().after(DAY)?, 30, Renew)?;

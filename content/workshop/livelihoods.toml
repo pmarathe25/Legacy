@@ -1,0 +1,114 @@
+id = "workshop/livelihoods"
+version = 1
+
+[data.recipes.mill-grain]
+inputs = { grain = 20 }
+output = "flour"
+quantity = 16
+duration = 600000
+skill = "milling"
+
+[data.recipes.mill-barley]
+inputs = { barley = 20 }
+output = "flour"
+quantity = 16
+duration = 600000
+skill = "milling"
+
+[data.recipes.bake-bread]
+inputs = { flour = 12, timber = 2 }
+output = "bread"
+quantity = 12
+duration = 1200000
+skill = "cooking"
+
+[data.recipes.cook-stew]
+inputs = { roots = 8, beans = 8, timber = 2 }
+output = "vegetable-stew"
+quantity = 15
+duration = 900000
+skill = "cooking"
+
+[data.recipes.dry-fish]
+inputs = { fish = 15, timber = 3 }
+output = "dried-fish"
+quantity = 9
+duration = 1800000
+skill = "cooking"
+
+[data.recipes.bake-berry-cakes]
+inputs = { flour = 8, wild-berries = 12, timber = 2 }
+output = "berry-cakes"
+quantity = 12
+duration = 1200000
+skill = "cooking"
+
+[data.recipes.prepare-medicine]
+inputs = { healing-herbs = 6, cloth = 1 }
+output = "medicine"
+quantity = 2
+duration = 1200000
+skill = "healing"
+
+[data.recipes.burn-charcoal]
+inputs = { timber = 12 }
+output = "charcoal"
+quantity = 6
+duration = 2700000
+skill = "charcoal"
+
+[data.recipes.smelt-iron]
+inputs = { iron-ore = 10, charcoal = 6 }
+output = "iron"
+quantity = 5
+duration = 3600000
+skill = "smithing"
+
+[data.recipes.forge-tools]
+inputs = { iron = 3, timber = 2, charcoal = 2 }
+output = "iron-tools"
+quantity = 1
+duration = 2700000
+skill = "smithing"
+
+[data.recipes.weave-cloth]
+inputs = { flax = 8 }
+output = "cloth"
+quantity = 4
+duration = 1800000
+skill = "weaving"
+
+[data.recipes.twist-rope]
+inputs = { reeds = 8 }
+output = "rope"
+quantity = 4
+duration = 900000
+skill = "weaving"
+
+[data.recipes.knot-fishing-net]
+inputs = { rope = 6 }
+output = "fishing-net"
+quantity = 1
+duration = 1800000
+skill = "weaving"
+
+[data.recipes.fire-pottery]
+inputs = { clay = 6, timber = 3 }
+output = "pottery"
+quantity = 3
+duration = 1800000
+skill = "pottery"
+
+[data.recipes.fire-bricks]
+inputs = { clay = 12, charcoal = 3 }
+output = "brick"
+quantity = 9
+duration = 1800000
+skill = "pottery"
+
+[data.recipes.weave-reed-mat]
+inputs = { reeds = 10 }
+output = "reed-mat"
+quantity = 2
+duration = 1200000
+skill = "weaving"

@@ -206,7 +206,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Ripe>(|tx, r| {
         let crop = catalog::crop(tx, r.plot)?;
-        let season = tx.get::<game_environment::Climate>()?.at(tx.now())?;
+        let season = game_environment::at(tx, tx.get::<Farms>()?.plots[&r.plot].area)?;
         let productive = season.warmth >= crop.minimum_warmth && season.rain >= crop.minimum_rain;
         let plot = tx.edit::<Farms>()?.plots.get_mut(&r.plot).unwrap();
         plot.phase = Phase::Ripe {

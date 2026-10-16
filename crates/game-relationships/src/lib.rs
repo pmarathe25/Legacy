@@ -17,6 +17,58 @@ pub struct Beliefs {
     pub authority: i32,
     pub honesty: i32,
 }
+impl Relationship {
+    pub fn validate(&self) -> Result<()> {
+        require(
+            (-100..=100).contains(&self.trust)
+                && (-100..=100).contains(&self.affection)
+                && (0..=100).contains(&self.fear)
+                && (0..=100).contains(&self.grievance),
+            "invalid relationship",
+        )
+    }
+}
+/// Authored starting attachments; subsequent changes use experience requests.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Initialize {
+    pub person: PersonId,
+    pub beliefs: Beliefs,
+    pub values: std::collections::BTreeMap<String, i32>,
+}
+impl Request for Initialize {
+    const KEY: &'static str = "relationships.initialize";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetRelationship {
+    pub observer: PersonId,
+    pub other: PersonId,
+    pub relationship: Relationship,
+}
+impl Request for SetRelationship {
+    const KEY: &'static str = "relationships.set";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Converse {
+    pub observer: PersonId,
+    pub other: PersonId,
+    pub warmth: i32,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SufferForce {
+    pub observer: PersonId,
+    pub actor: PersonId,
+    pub harm: u64,
+}
+impl Request for SufferForce {
+    const KEY: &'static str = "relationships.suffer-force";
+    type Response = ();
+}
+impl Request for Converse {
+    const KEY: &'static str = "relationships.converse";
+    type Response = ();
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Social {
     pub relationships: Table<PersonId, Table<PersonId, Relationship>>,
@@ -25,6 +77,38 @@ pub struct Social {
 }
 impl Resource for Social {
     const KEY: &'static str = "relationships.social";
+    fn validate(&self) -> Result<()> {
+        for (person, links) in &self.relationships {
+            for (other, relation) in links {
+                require(person != other, "self relationship")?;
+                relation.validate()?;
+            }
+        }
+        for values in self.values.values() {
+            validate_values(values)?;
+        }
+        Ok(())
+    }
+    fn validate_changes(&self, old: &Self) -> Result<()> {
+        for (person, links) in self.relationships.changed(&old.relationships) {
+            for (other, relation) in links {
+                require(person != other, "self relationship")?;
+                relation.validate()?;
+            }
+        }
+        for (_, values) in self.values.changed(&old.values) {
+            validate_values(values)?;
+        }
+        Ok(())
+    }
+}
+fn validate_values(values: &Table<Arc<str>, i32>) -> Result<()> {
+    require(
+        values
+            .iter()
+            .all(|(key, v)| !key.trim().is_empty() && (-100..=100).contains(v)),
+        "invalid personal values",
+    )
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Interpret {
@@ -71,6 +155,70 @@ impl Request for DefineBeliefs {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("relationships", 1)?;
     b.resource::<Social>()?;
+    b.request::<SufferForce>(|tx, r| {
+        require(
+            r.observer != r.actor && r.harm > 0,
+            "invalid force experience",
+        )?;
+        let rel = tx
+            .edit::<Social>()?
+            .relationships
+            .entry(r.observer)
+            .or_default()
+            .entry(r.actor)
+            .or_default();
+        let harm = r.harm.min(100) as i32;
+        rel.fear = (rel.fear + harm).min(100);
+        rel.trust = (rel.trust - harm).max(-100);
+        rel.grievance = (rel.grievance + harm / 2).min(100);
+        Ok(())
+    })?;
+    b.request::<Initialize>(|tx, r| {
+        require(
+            !tx.get::<Social>()?.beliefs.contains_key(&r.person),
+            "social profile already initialized",
+        )?;
+        require(
+            r.values
+                .iter()
+                .all(|(k, v)| !k.trim().is_empty() && (-100..=100).contains(v)),
+            "invalid starting values",
+        )?;
+        let state = tx.edit::<Social>()?;
+        state.beliefs.insert(r.person, r.beliefs);
+        state.values.insert(
+            r.person,
+            r.values.into_iter().map(|(k, v)| (k.into(), v)).collect(),
+        );
+        Ok(())
+    })?;
+    b.request::<SetRelationship>(|tx, r| {
+        require(r.observer != r.other, "self relationship")?;
+        r.relationship.validate()?;
+        tx.edit::<Social>()?
+            .relationships
+            .entry(r.observer)
+            .or_default()
+            .insert(r.other, r.relationship);
+        Ok(())
+    })?;
+    b.request::<Converse>(|tx, r| {
+        require(r.observer != r.other, "self conversation")?;
+        let rel = tx
+            .edit::<Social>()?
+            .relationships
+            .entry(r.observer)
+            .or_default()
+            .entry(r.other)
+            .or_default();
+        let warmth = r.warmth.clamp(-5, 5);
+        rel.affection = rel.affection.saturating_add(warmth).clamp(-100, 100);
+        rel.trust = rel.trust.saturating_add(warmth.signum()).clamp(-100, 100);
+        if warmth < 0 {
+            rel.grievance = (rel.grievance + 1).min(100);
+        }
+        Ok(())
+    })?;
     b.request::<DefineBeliefs>(|tx, r| {
         tx.edit::<Social>()?.beliefs.insert(r.person, r.beliefs);
         Ok(())

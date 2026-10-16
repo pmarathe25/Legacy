@@ -2,18 +2,21 @@
 
 Legacy is a headless simulation game. The workspace has one simulation host and small crates that own individual mechanics. The game design remains in [docs/plan.md](docs/plan.md).
 
-This is a deliberate rewrite of the earlier implementation. The working mechanics run in explicitly labeled fixtures. The previous gameplay was not ported wholesale, and the complete campaign described in `docs/design/` remains unfinished. Old APIs, saves, scenarios, and tests are incompatible.
+This is a deliberate rewrite of the earlier implementation. The default start generates a seeded physical world and runs live history before player control; explicitly labeled fixtures remain available for testing. The previous gameplay was not ported wholesale, and the complete campaign described in `docs/design/` remains unfinished. Old APIs, saves, scenarios, and tests are incompatible.
 
 ## Run and test
 
 ```sh
 cargo run -p game-cli -- --list
+cargo run -p game-cli -- --seed 1
 cargo run -p game-cli -- --scenario kernel-fixture --seed 1
 cargo test -p game-agriculture
 cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 cargo bench -p game-sim --bench kernel
 ```
+
+The default `generated` start creates 96 mortal individuals and two guardians across 12 natural areas, then simulates two days. Initial definitions contain no institutions or social bonds. People can share informally, develop collective decision practices, follow admired leaders, or comply with force. Their own responses determine the resulting arrangements and names. Generation settings and history duration live in [content/worldgen/default.toml](content/worldgen/default.toml). The current history model covers survival and small social groups, not full societies or multigenerational campaigns.
 
 The CLI reads commands from stdin or `--script <path>`. `run` takes seconds; authoritative times use milliseconds. For the kernel fixture, this script moves the ruler to the farm:
 
@@ -28,6 +31,8 @@ quit
 `--content <directory>` selects a content pack; repeated `--mod <directory>` arguments add overlays. [The content guide](content/README.md) explains runtime definitions, schemas, and extension without rebuilding.
 
 `look` observes nearby roads and resources; `observe-patch <id>` inspects a local patch; `tell <person-id> <fact-key>` shares one remembered fact with someone at the same place.
+
+`rivermeet`, `bracken-coast`, and `ashridge` are populated community fixtures with named residents, distinct personalities, directed social bonds, local stores, gardens, and renewable or finite resources. Run `cargo run -p game-cli -- --scenario rivermeet --seed 1`. `status` includes nearby people and their visible activities; `talk <person-id>` starts a conversation if the other person consents. See [the community content guide](content/README.md#communities-and-livelihoods) for places and production chains.
 
 `command <JSON>` submits any [public command](crates/game-api/src/lib.rs). `save <path>` and `load <path>` persist the session. `debug` explicitly exposes privileged state; normal observations use the current ruler's facts and witnessed events.
 
@@ -50,6 +55,8 @@ See the [crate index](crates/README.md) for responsibilities and dependencies an
 ## Evidence and limits
 
 Feature tests exercise timed movement and work, physical transfers, reservations, access and theft, needs and mortality, local facts and reports, learning and choice, committed food plans across travel and gathering, promises and default, institution rules, enforcement, construction, deliveries, parties, succession, guardian confinement, and invocation consent. Composed tests check passive observations, public command retries, CLI equivalence, worker counts, irregular advances, and continued execution after saving.
+
+Social life adds timed mutual conversations, companion preferences and refusal, asymmetric relationship changes, learned fellowship, and exchanges of personal evidence. Organizing distinguishes personal sharing, chosen voting, loyalty, and fear; coercive demands use actual combat and can be resisted. Area climates affect crop outcomes and optional seasonal regrowth. This adds saved resources and a plugin; earlier save manifests are incompatible.
 
 These tests establish their asserted fixture behavior. They do not establish complete autonomous enterprises, household care and childhood agency, full institutional invention and political procedures, regional trade, final tactical rules, or the final past-life benefit and recovery model. Those requirements still belong to the design documents and must be implemented in their owners.
 

@@ -8,8 +8,10 @@ pub(super) struct Assets {
     pub body: game_physiology::Rules,
     pub characters: game_characters::Rules,
     pub climate: game_environment::Climate,
+    pub regions: BTreeMap<String, game_environment::Climate>,
     pub health: game_health::TreatmentRules,
     pub invocation: Option<game_invocation::Configure>,
+    pub social_life: Option<game_social_life::Rules>,
 }
 impl Assets {
     pub fn load(store: &mut Store, scenario: &Definition) -> Result<Self> {
@@ -20,7 +22,18 @@ impl Assets {
         let characters = game_characters::load(store, &scenario.characters)?;
         let body = game_physiology::load(store, &scenario.physiology)?;
         let climate = game_environment::load(store, &scenario.environment)?;
+        let mut regions = BTreeMap::new();
+        for area in &scenario.areas {
+            if let Some(key) = &area.climate {
+                regions.insert(area.key.clone(), game_environment::load(store, key)?);
+            }
+        }
         let health = game_health::load(store, &scenario.health, &objects)?;
+        let social_life = scenario
+            .social_life
+            .as_ref()
+            .map(|key| game_social_life::load(store, key))
+            .transpose()?;
         let invocation = scenario
             .invocation
             .as_ref()
@@ -68,8 +81,10 @@ impl Assets {
             body,
             characters,
             climate,
+            regions,
             health,
             invocation,
+            social_life,
         })
     }
     pub fn install(self, host: &mut Host) -> Result<()> {
@@ -81,6 +96,9 @@ impl Assets {
         host.dispatch(game_characters::Configure(self.characters))?;
         host.dispatch(game_environment::Configure(self.climate))?;
         host.dispatch(game_health::Configure(self.health))?;
+        if let Some(rules) = self.social_life {
+            host.dispatch(game_social_life::Configure(rules))?;
+        }
         if let Some(invocation) = self.invocation {
             host.dispatch(invocation)?;
         }

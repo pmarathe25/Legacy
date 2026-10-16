@@ -24,6 +24,7 @@ pub fn builder() -> Result<Builder> {
     game_lineage::plugin(&mut b)?;
     game_guardians::plugin(&mut b)?;
     game_invocation::plugin(&mut b)?;
+    game_social_life::plugin(&mut b)?;
     game_characters::plugin(&mut b)?;
     game_logistics::plugin(&mut b)?;
     game_projects::plugin(&mut b)?;
@@ -32,6 +33,8 @@ pub fn builder() -> Result<Builder> {
     game_confinement::plugin(&mut b)?;
     game_missions::plugin(&mut b)?;
     game_armies::plugin(&mut b)?;
+    game_pressure::plugin(&mut b)?;
+    game_communities::plugin(&mut b)?;
     game_openings::plugin(&mut b)?;
     crate::binding::register(&mut b)?;
     Ok(b)

@@ -4,6 +4,8 @@ pub(super) struct SavedEcology {
     patches: Table<u64, Patch>,
     gathering: Table<PersonId, Gathering>,
     renewing: bool,
+    #[serde(default)]
+    renewal: Table<u64, Renewal>,
 }
 impl TryFrom<SavedEcology> for Ecology {
     type Error = Error;
@@ -13,6 +15,7 @@ impl TryFrom<SavedEcology> for Ecology {
             patches: saved.patches,
             gathering: saved.gathering,
             renewing: saved.renewing,
+            renewal: saved.renewal,
             by_area,
             reserved,
         })
@@ -57,6 +60,10 @@ impl Ecology {
         }
     }
     pub(super) fn validate_indexes(&self) -> Result<()> {
+        require(
+            self.renewal.keys().all(|id| self.patches.contains_key(id)),
+            "renewal without patch",
+        )?;
         let (areas, reservations) = indexes(&self.patches, &self.gathering)?;
         require(
             areas == self.by_area && reservations == self.reserved,

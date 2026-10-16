@@ -11,6 +11,11 @@ pub enum Effect {
     Moved(PersonId, Point),
     Damage(PersonId, u64),
     Retreated(PersonId),
+    Hit {
+        actor: PersonId,
+        target: PersonId,
+        amount: u64,
+    },
 }
 pub fn resolve(b: &Battle) -> Vec<Effect> {
     let mut positions: BTreeMap<_, _> = b.fighters.iter().map(|(p, f)| (*p, f.point)).collect();
@@ -44,6 +49,7 @@ pub fn resolve(b: &Battle) -> Vec<Effect> {
         }
     }
     let mut damage = BTreeMap::<PersonId, u64>::new();
+    let mut hits = vec![];
     for (person, order) in orders {
         if b.fighters[&person].health == 0 {
             continue;
@@ -55,8 +61,16 @@ pub fn resolve(b: &Battle) -> Vec<Effect> {
         {
             let amount = damage.entry(target).or_default();
             *amount = amount.saturating_add(b.damage);
+            if b.damage > 0 {
+                hits.push(Effect::Hit {
+                    actor: person,
+                    target,
+                    amount: b.damage,
+                });
+            }
         }
     }
     effects.extend(damage.into_iter().map(|(p, q)| Effect::Damage(p, q)));
+    effects.extend(hits);
     effects
 }

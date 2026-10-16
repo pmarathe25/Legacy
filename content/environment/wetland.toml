@@ -1,0 +1,23 @@
+id = "environment/wetland"
+version = 1
+# Four 90-day seasons; warmth and rain use simulation units.
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 20
+rain = 8
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 30
+rain = 6
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 24
+rain = 9
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 15
+rain = 5

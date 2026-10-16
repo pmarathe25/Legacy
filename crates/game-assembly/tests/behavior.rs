@@ -127,8 +127,7 @@ fn ordinary_views_do_not_reveal_distant_unreported_stock() {
 }
 #[test]
 fn every_supported_fixture_constructs_and_resumes() {
-    for scenario in scenarios().unwrap() {
-        assert!(scenario.fixture);
+    for scenario in scenarios().unwrap().into_iter().filter(|s| s.fixture) {
         let mut s = Simulation::new(&scenario.id, 4, 1).unwrap();
         let first = s.advance(SimTime(60_000), 128).unwrap();
         let mut resumed = Simulation::load(&s.save().unwrap(), 2).unwrap();

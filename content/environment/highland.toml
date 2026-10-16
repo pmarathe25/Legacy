@@ -1,0 +1,23 @@
+id = "environment/highland"
+version = 1
+# Four 90-day seasons; warmth and rain use simulation units.
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 5
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 14
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 4
+rain = 2
+
+[[data.seasons]]
+duration = 7776000000
+warmth = -8
+rain = 1

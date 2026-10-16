@@ -1,0 +1,23 @@
+id = "environment/river-valley"
+version = 1
+# Four 90-day seasons; warmth and rain use simulation units.
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 14
+rain = 5
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 25
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 12
+rain = 5
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 2
+rain = 2

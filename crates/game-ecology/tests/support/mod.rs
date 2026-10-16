@@ -120,6 +120,7 @@ pub fn builder() -> Builder {
     game_property::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
     game_skills::plugin(&mut b).unwrap();
+    game_environment::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     b
 }

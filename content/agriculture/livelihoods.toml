@@ -1,0 +1,86 @@
+id = "agriculture/livelihoods"
+version = 1
+
+[data.crops.roots]
+name = "Root garden"
+seed_object = "root-seed"
+seed_input = 10
+output_object = "roots"
+yield_units = 160
+growth = 172800000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 0
+minimum_rain = 1
+
+[data.crops.beans]
+name = "Bean field"
+seed_object = "bean-seed"
+seed_input = 10
+output_object = "beans"
+yield_units = 130
+growth = 259200000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 8
+minimum_rain = 2
+
+[data.crops.barley]
+name = "Barley field"
+seed_object = "barley-seed"
+seed_input = 10
+output_object = "barley"
+yield_units = 180
+growth = 259200000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 3
+minimum_rain = 1
+
+[data.crops.rice]
+name = "Rice paddy"
+seed_object = "rice-seed"
+seed_input = 10
+output_object = "rice"
+yield_units = 220
+growth = 345600000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 15
+minimum_rain = 5
+
+[data.crops.flax]
+name = "Flax field"
+seed_object = "flax-seed"
+seed_input = 10
+output_object = "flax"
+yield_units = 100
+growth = 259200000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 5
+minimum_rain = 2
+
+[data.crops.herbs]
+name = "Medicinal herb bed"
+seed_object = "herb-seed"
+seed_input = 10
+output_object = "healing-herbs"
+yield_units = 45
+growth = 172800000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 8
+minimum_rain = 2
+
+[data.crops.orchard]
+name = "Young orchard"
+seed_object = "fruit-cuttings"
+seed_input = 10
+output_object = "orchard-fruit"
+yield_units = 180
+growth = 604800000
+sow_labor = 1800000
+harvest_labor = 1800000
+minimum_warmth = 10
+minimum_rain = 2

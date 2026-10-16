@@ -20,6 +20,7 @@ game-armies = { path = "crates/game-armies" }
 game-assembly = { path = "crates/game-assembly" }
 game-cargo = { path = "crates/game-cargo" }
 game-characters = { path = "crates/game-characters" }
+game-communities = { path = "crates/game-communities" }
 game-cli = { path = "crates/game-cli" }
 game-confinement = { path = "crates/game-confinement" }
 game-conflict = { path = "crates/game-conflict" }
@@ -47,17 +48,20 @@ game-physiology = { path = "crates/game-physiology" }
 game-provisioning = { path = "crates/game-provisioning" }
 game-projects = { path = "crates/game-projects" }
 game-property = { path = "crates/game-property" }
+game-pressure = { path = "crates/game-pressure" }
 game-realm = { path = "crates/game-realm" }
 game-relationships = { path = "crates/game-relationships" }
 game-scenarios = { path = "crates/game-scenarios" }
 game-session = { path = "crates/game-session" }
 game-sim = { path = "crates/game-sim" }
+game-social-life = { path = "crates/game-social-life" }
 game-storage = { path = "crates/game-storage" }
 game-skills = { path = "crates/game-skills" }
 game-spatial = { path = "crates/game-spatial" }
 game-traits = { path = "crates/game-traits" }
 game-transport = { path = "crates/game-transport" }
 game-workshop = { path = "crates/game-workshop" }
+game-worldgen = { path = "crates/game-worldgen" }
 
 [profile.dev]
 debug = 1

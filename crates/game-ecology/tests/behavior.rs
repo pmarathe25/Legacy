@@ -187,3 +187,78 @@ fn local_indexes_and_contested_reservations_rebuild_after_load_and_release_on_de
     corrupt["resources"]["ecology.patches"]["gathering"][key]["quantity"] = u64::MAX.into();
     assert!(builder().load(&corrupt.to_string(), 1).is_err());
 }
+
+#[test]
+fn local_seasons_suspend_regrowth_and_resume_after_saving() {
+    let mut f = setup();
+    let climate = |warmth, rain, duration| game_environment::Season {
+        duration,
+        warmth,
+        rain,
+    };
+    f.host
+        .dispatch(game_environment::Configure(game_environment::Climate {
+            seasons: vec![climate(20, 4, SimDuration(4 * DAY.0))],
+        }))
+        .unwrap();
+    f.host
+        .dispatch(game_environment::ConfigureArea {
+            area: f.away,
+            climate: game_environment::Climate {
+                seasons: vec![
+                    climate(-5, 0, SimDuration(2 * DAY.0)),
+                    climate(15, 3, SimDuration(2 * DAY.0)),
+                ],
+            },
+        })
+        .unwrap();
+    let mut patches = vec![];
+    for area in [f.home, f.away] {
+        let patch = f
+            .host
+            .dispatch(Create(Patch {
+                area,
+                good: game_cargo::FOOD,
+                stock: 0,
+                capacity: 20,
+                renew: 5,
+            }))
+            .unwrap();
+        f.host
+            .dispatch(SetRenewal {
+                patch,
+                minimum_warmth: 10,
+                minimum_rain: 2,
+            })
+            .unwrap();
+        patches.push(patch);
+    }
+    let mineral = f
+        .host
+        .dispatch(Create(Patch {
+            area: f.home,
+            good: game_cargo::TIMBER,
+            stock: 7,
+            capacity: 7,
+            renew: 0,
+        }))
+        .unwrap();
+    f.host.dispatch(StartRenewal).unwrap();
+    run(&mut f.host, SimTime(DAY.0));
+    assert_eq!(
+        f.host.get::<Ecology>().unwrap().patches[&patches[0]].stock,
+        5
+    );
+    assert_eq!(
+        f.host.get::<Ecology>().unwrap().patches[&patches[1]].stock,
+        0
+    );
+    let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    for h in [&mut f.host, &mut loaded] {
+        run(h, SimTime(2 * DAY.0));
+        assert_eq!(h.get::<Ecology>().unwrap().patches[&patches[0]].stock, 10);
+        assert_eq!(h.get::<Ecology>().unwrap().patches[&patches[1]].stock, 5);
+        assert_eq!(h.get::<Ecology>().unwrap().patches[&mineral].stock, 7);
+    }
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
+}

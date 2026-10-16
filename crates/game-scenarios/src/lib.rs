@@ -8,6 +8,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Area {
     pub key: String,
     pub name: String,
+    #[serde(default)]
+    pub climate: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -25,6 +27,19 @@ pub struct People {
     pub area: String,
     #[serde(default)]
     pub traits: BTreeMap<String, i32>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub beliefs: game_relationships::Beliefs,
+    #[serde(default)]
+    pub values: BTreeMap<String, i32>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bond {
+    pub observer: String,
+    pub other: String,
+    pub relationship: game_relationships::Relationship,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -62,6 +77,10 @@ pub struct Patch {
     pub stock: u64,
     pub capacity: u64,
     pub renew: u64,
+    #[serde(default)]
+    pub renewal_warmth: Option<i32>,
+    #[serde(default)]
+    pub renewal_rain: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -119,6 +138,10 @@ pub struct Definition {
     pub health: String,
     #[serde(default)]
     pub invocation: Option<String>,
+    #[serde(default)]
+    pub social_life: Option<String>,
+    #[serde(default)]
+    pub bonds: Vec<Bond>,
     pub autonomy: bool,
     pub renewal: bool,
     pub areas: Vec<Area>,
@@ -219,6 +242,24 @@ impl Definition {
         )?;
         for p in &self.people {
             require(areas.contains(&p.area), "unknown person's area")?;
+            require(
+                p.name.as_ref().is_none_or(|n| !n.trim().is_empty())
+                    && p.values
+                        .iter()
+                        .all(|(k, v)| !k.trim().is_empty() && (-100..=100).contains(v)),
+                "invalid personal identity or values",
+            )?;
+        }
+        let mut bonds = BTreeSet::new();
+        for bond in &self.bonds {
+            require(
+                people.contains(&bond.observer)
+                    && people.contains(&bond.other)
+                    && bond.observer != bond.other
+                    && bonds.insert((&bond.observer, &bond.other)),
+                "invalid social bond references",
+            )?;
+            bond.relationship.validate()?;
         }
         for link in &self.links {
             require(
@@ -251,7 +292,9 @@ impl Definition {
         }
         for p in &self.patches {
             require(
-                areas.contains(&p.area) && p.stock <= p.capacity,
+                areas.contains(&p.area)
+                    && p.stock <= p.capacity
+                    && (p.renewal_warmth.is_some() || p.renewal_rain == 0),
                 "invalid resource patch",
             )?;
         }

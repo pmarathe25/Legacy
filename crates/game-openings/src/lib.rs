@@ -1,6 +1,7 @@
 //! Bind validated, declarative content to feature-owned construction requests.
 mod assets;
 mod build;
+mod history;
 pub use game_content::Store;
 use game_core::*;
 pub use game_scenarios::Info as Scenario;
@@ -14,6 +15,7 @@ pub struct Opening {
     pub names: BTreeMap<String, u64>,
     pub sources: Vec<game_content::Stamp>,
     pub definition: Option<game_scenarios::Definition>,
+    pub generated: Option<history::History>,
 }
 impl Resource for Opening {
     const KEY: &'static str = "openings.identity";
@@ -28,6 +30,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("openings", 1)?;
     b.resource::<Opening>()?;
     build::register(b)?;
+    history::register(b)?;
     b.request::<Remember>(|tx, r| {
         require(
             tx.get::<Opening>()?.scenario.is_empty(),
@@ -38,7 +41,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })
 }
 pub fn scenarios(store: &mut Store) -> Result<Vec<Scenario>> {
-    game_scenarios::list(store)
+    let mut list = game_scenarios::list(store)?;
+    list.push(Scenario {
+        id: "generated".into(),
+        label: "Generated world with simulated history".into(),
+        version: 1,
+        fixture: false,
+    });
+    Ok(list)
 }
 pub fn default_scenario(store: &mut Store) -> Result<String> {
     game_scenarios::default_scenario(store)
@@ -48,6 +58,9 @@ pub fn initialize(host: &mut Host, store: &mut Store, id: &str, seed: u64) -> Re
         host.get::<Opening>()?.scenario.is_empty(),
         "opening already initialized",
     )?;
+    if id == "generated" {
+        return history::initialize(host, store, seed);
+    }
     let definitions = game_scenarios::load(store)?;
     let selected = if id == "random" {
         let eligible: Vec<_> = definitions.values().filter(|d| !d.data.fixture).collect();
@@ -66,7 +79,7 @@ pub fn initialize(host: &mut Host, store: &mut Store, id: &str, seed: u64) -> Re
         .cloned()
         .ok_or_else(|| Error::InvalidConfiguration(format!("unknown scenario {selected}")))?;
     let assets = assets::Assets::load(store, &definition.data)?;
-    build::initialize(host, &definition.data, assets, seed)?;
+    build::initialize(host, &definition.data, assets, seed, true)?;
     let mut opening = host.get::<Opening>()?.clone();
     opening.scenario = definition.id;
     opening.version = definition.version;
