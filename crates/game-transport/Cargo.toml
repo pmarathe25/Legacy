@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 game-storage.workspace = true
+game-packed.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
 game-land.workspace = true

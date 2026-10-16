@@ -48,6 +48,37 @@ pub fn fixture(count: usize, workers: usize, distributed: bool) -> (Simulation, 
             stores.push(inv);
         }
     }
+    let extra_patches = setting("LEGACY_EXTRA_PATCHES", 0usize);
+    for area in &areas {
+        for _ in 0..extra_patches {
+            h.dispatch(game_ecology::Create(game_ecology::Patch {
+                area: *area,
+                capacity: 1_000_000,
+                good: game_cargo::FOOD,
+                renew: 0,
+                stock: 1_000_000,
+            }))
+            .unwrap();
+        }
+    }
+    let history = setting("LEGACY_HISTORY", 0usize);
+    let value = std::sync::Arc::new(game_knowledge::FactValue::from(
+        serde_json::json!({"story":"shared historical account"}),
+    ));
+    let memories: game_knowledge::Facts = (0..history)
+        .map(|i| {
+            (
+                format!("memory:{i:08}").into(),
+                game_knowledge::Fact {
+                    value: value.clone(),
+                    source: ruler,
+                    observed: SimTime(0),
+                    revision: 0,
+                    confidence: 90,
+                },
+            )
+        })
+        .collect();
     for store in &stores {
         h.dispatch(game_cargo::Deposit {
             inventory: *store,
@@ -76,6 +107,13 @@ pub fn fixture(count: usize, workers: usize, distributed: bool) -> (Simulation, 
             allow: true,
         })
         .unwrap();
+        if history > 0 {
+            h.dispatch(game_knowledge::Initialize {
+                person,
+                facts: memories.clone(),
+            })
+            .unwrap();
+        }
         h.dispatch(game_characters::Register {
             person,
             mind: Default::default(),

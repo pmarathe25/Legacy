@@ -67,7 +67,7 @@ impl Sample {
 }
 pub fn metadata() {
     println!(
-        "arch={} os={} package={} available_workers={} release={} allocation_profile={} allocator={}",
+        "arch={} os={} package={} available_workers={} release={} allocation_profile={} allocator={} packed_index={} packed_buffers={}",
         std::env::consts::ARCH,
         std::env::consts::OS,
         env!("CARGO_PKG_VERSION"),
@@ -78,7 +78,9 @@ pub fn metadata() {
             "mimalloc"
         } else {
             "system"
-        }
+        },
+        game_packed::INDEX_NAME,
+        game_packed::BUFFER_POLICY
     );
     for (path, prefixes) in [
         ("/proc/cpuinfo", vec!["model name"]),

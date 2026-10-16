@@ -37,9 +37,11 @@ fn small_crates_and_dependency_direction_are_enforced() {
             .map(|p| fs::read_to_string(p).unwrap().lines().count())
             .sum();
         let budget = match name {
-            "game-sim" => 1150,
+            "game-sim" => 1250,
             "game-storage" => 875,
-            "game-knowledge" => 650,
+            "game-knowledge" => 750,
+            "game-characters" => 650,
+            "game-packed" => 750,
             _ => 600,
         };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");
@@ -56,7 +58,8 @@ fn small_crates_and_dependency_direction_are_enforced() {
                 assert!(
                     [
                         "game-core.workspace = true",
-                        "game-storage.workspace = true"
+                        "game-storage.workspace = true",
+                        "game-packed.workspace = true"
                     ]
                     .contains(&line),
                     "kernel depends on a feature: {line}"

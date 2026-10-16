@@ -2,6 +2,7 @@
 use game_storage::{Records, Table};
 use std::sync::Arc;
 mod persistence;
+mod scenes;
 mod snapshots;
 pub use snapshots::FactValue;
 use snapshots::{Cached, Subject};
@@ -14,7 +15,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(transparent)]
 pub struct Facts(
-    Table<Arc<str>, Fact>,
+    game_facts::Facts<FactValue>,
     #[serde(skip)] Option<game_storage::Version<InventoryId, ()>>,
 );
 impl PartialEq for Facts {
@@ -30,7 +31,7 @@ impl Facts {
     }
 }
 impl std::ops::Deref for Facts {
-    type Target = Table<Arc<str>, Fact>;
+    type Target = game_facts::Facts<FactValue>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -44,19 +45,14 @@ impl FromIterator<(Arc<str>, Fact)> for Facts {
         facts
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Fact {
-    pub value: Arc<FactValue>,
-    pub source: PersonId,
-    pub observed: SimTime,
-    pub revision: u64,
-    pub confidence: u8,
-}
+pub type Fact = game_facts::Fact<FactValue>;
+pub type FactRef<'a> = game_facts::FactRef<'a, FactValue>;
 #[derive(Clone, Debug, Default, Serialize)]
 #[serde(transparent)]
 pub struct Knowledge(
-    pub Table<PersonId, Facts>,
+    pub game_packed::Packed<PersonId, Facts>,
     #[serde(skip)] Records<Subject, Cached>,
+    #[serde(skip)] Records<AreaId, scenes::CachedScene>,
 );
 impl PartialEq for Knowledge {
     fn eq(&self, other: &Self) -> bool {
@@ -64,28 +60,60 @@ impl PartialEq for Knowledge {
     }
 }
 impl Eq for Knowledge {}
+type KnowledgeMark = (
+    game_packed::Mark,
+    Records<Subject, Cached>,
+    Records<AreaId, scenes::CachedScene>,
+);
 impl Resource for Knowledge {
     const KEY: &'static str = "knowledge.facts";
     fn validate(&self) -> Result<()> {
         require(
-            self.0
-                .values()
-                .all(|m| m.values().all(|f| f.confidence <= 100)),
+            self.0.values().all(|m| m.0.valid_confidence(None)),
             "invalid confidence",
         )
     }
-    fn validate_changes(&self, previous: &Self) -> Result<()> {
-        let empty = Facts::default();
-        for (_, facts, old) in self.0.changed_pairs(&previous.0) {
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new((self.0.begin(), self.1.clone(), self.2.clone()))
+    }
+    fn restore(&mut self, checkpoint: Checkpoint) {
+        let (mark, sources, scenes) = *checkpoint
+            .downcast::<KnowledgeMark>()
+            .expect("knowledge checkpoint");
+        self.0.rollback(mark);
+        self.1 = sources;
+        self.2 = scenes;
+    }
+    fn commit(&mut self, checkpoint: Checkpoint) {
+        self.0.commit(
+            checkpoint
+                .downcast::<KnowledgeMark>()
+                .expect("knowledge checkpoint")
+                .0,
+        );
+    }
+    fn validate_checkpoint(&self, checkpoint: &dyn std::any::Any) -> Result<()> {
+        let previous = checkpoint
+            .downcast_ref::<KnowledgeMark>()
+            .expect("knowledge checkpoint");
+        for (_, facts, old) in self.0.changed_pairs_since(&previous.0) {
             require(
-                facts
-                    .changed(old.unwrap_or(&empty))
-                    .all(|(_, f)| f.confidence <= 100),
+                facts.0.valid_confidence(old.map(|v| &v.0)),
                 "invalid confidence",
             )?;
         }
         Ok(())
     }
+}
+/// Privileged scenario input. Existing personal knowledge cannot be overwritten.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Initialize {
+    pub person: PersonId,
+    pub facts: Facts,
+}
+impl Request for Initialize {
+    const KEY: &'static str = "knowledge.initialize";
+    type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ObserveStore {
@@ -142,6 +170,14 @@ pub fn view(host: &Host, person: PersonId) -> Result<Facts> {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("knowledge", 1)?;
     b.resource::<Knowledge>()?;
+    b.request::<Initialize>(|tx, r| {
+        require(
+            !tx.get::<Knowledge>()?.0.contains_key(&r.person),
+            "knowledge already initialized",
+        )?;
+        tx.edit::<Knowledge>()?.0.insert(r.person, r.facts);
+        Ok(())
+    })?;
     b.validate_save(|host| {
         require(
             host.get::<Knowledge>()?.0.values().all(|facts| {
@@ -206,7 +242,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .0
             .get(&r.sender)
             .and_then(|m| m.get(r.key.as_str()))
-            .cloned()
+            .map(|f| f.to_owned())
             .ok_or_else(|| Error::Rejected("sender does not know this fact".into()))?;
         fact.source = r.sender;
         fact.confidence = fact.confidence.min(90);

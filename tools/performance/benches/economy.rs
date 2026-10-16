@@ -23,7 +23,7 @@ fn main() {
     let (mut sim, stores) = game_performance::fixture(count, workers, distributed);
     let h = sim.debug_host();
     println!(
-        "areas={} inventories={} active_tasks={} shipments=0 relationships={} facts={} institutions=1 agreements=0 conflicts=0 historical_records=0 plots=1 patches=1",
+        "areas={} inventories={} active_tasks={} shipments=0 relationships={} facts={} institutions=1 agreements=0 conflicts=0 historical_records={} plots=1 patches={}",
         h.get::<game_land::Land>().unwrap().0.len(),
         h.get::<game_cargo::Cargo>().unwrap().0.len(),
         h.get::<game_sim::Actions>().unwrap().0.len(),
@@ -38,7 +38,26 @@ fn main() {
             .0
             .values()
             .map(|r| r.len())
-            .sum::<usize>()
+            .sum::<usize>(),
+        (count - 15) * game_performance::setting("LEGACY_HISTORY", 0usize),
+        h.get::<game_ecology::Ecology>().unwrap().patches.len()
+    );
+    let freeze = Instant::now();
+    let readers = game_performance::setting("LEGACY_HOLD_READERS", false).then(|| {
+        (
+            h.get::<game_physiology::Bodies>().unwrap().clone(),
+            h.get::<game_characters::Minds>().unwrap().clone(),
+            h.get::<game_knowledge::Knowledge>().unwrap().clone(),
+            h.get::<game_transport::Positions>().unwrap().clone(),
+            h.get::<game_sim::Actions>().unwrap().clone(),
+            h.get::<game_property::Property>().unwrap().clone(),
+        )
+    });
+    let freeze_ms = freeze.elapsed().as_secs_f64() * 1000.;
+    let reader_hash = readers.as_ref().map(fingerprint);
+    println!(
+        "held_readers={} freeze_ms={freeze_ms:.6}",
+        readers.is_some()
     );
     let initial = game_performance::stock(&sim, &stores);
     let init = start.elapsed();
@@ -74,6 +93,11 @@ fn main() {
             .values()
             .all(|p| p.alive && p.health > 0)
     );
+    assert_eq!(
+        readers.as_ref().map(fingerprint),
+        reader_hash,
+        "committed readers changed"
+    );
     let remaining = game_performance::stock(&sim, &stores);
     assert!(remaining < initial);
     if ticks == 120 {
@@ -100,6 +124,11 @@ fn main() {
     assert_eq!(loaded.save().unwrap(), sim.save().unwrap());
     follow.check(&sim);
     follow.check(&loaded);
+    assert_eq!(
+        readers.as_ref().map(fingerprint),
+        reader_hash,
+        "readers changed through structural churn"
+    );
     sample.report("save_load_continue");
     game_performance::metrics::rss();
     let hash = save.bytes().fold(0xcbf29ce484222325u64, |h, b| {
@@ -118,4 +147,22 @@ fn main() {
         save.len(),
         initial - remaining
     );
+}
+
+fn fingerprint<T: serde::Serialize>(value: &T) -> u64 {
+    struct Sink(u64);
+    impl std::io::Write for Sink {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            for b in bytes {
+                self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x100000001b3);
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut sink = Sink(0xcbf29ce484222325);
+    serde_json::to_writer(&mut sink, value).unwrap();
+    sink.0
 }

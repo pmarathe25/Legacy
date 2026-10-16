@@ -103,13 +103,19 @@ impl Builder {
         let mut seen = std::collections::BTreeSet::new();
         // Resource decoding has no registry access. Bind action payloads once
         // after all owners and resources exist, before exposing the loaded host.
-        let mut actions = host.get::<Actions>()?.clone();
+        let stored = host
+            .data
+            .get_mut(&TypeId::of::<Actions>())
+            .expect("loaded actions");
+        let actions = Arc::get_mut(stored)
+            .expect("fresh resource")
+            .downcast_mut::<Actions>()
+            .expect("action type");
         let ids: Vec<_> = actions.0.keys().copied().collect();
         for id in ids {
             let action = actions.0.get_mut(&id).expect("loaded action");
             action.cancel.bind(&host.registry)?;
         }
-        host.data.insert(TypeId::of::<Actions>(), Arc::new(actions));
         for mut job in save.jobs {
             require(
                 job.at >= save.time && job.id.0 < save.next_id && seen.insert(job.id),

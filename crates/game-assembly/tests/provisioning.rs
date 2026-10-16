@@ -166,8 +166,11 @@ fn public_observation_and_speech_require_local_physical_access() {
     .unwrap();
     let now = sim.observe().unwrap().time;
     run(&mut sim, now);
-    let fact = &game_knowledge::view(sim.debug_host(), citizen).unwrap()
-        [game_knowledge::patch_key(patch).as_str()];
+    let fact = &game_knowledge::view(sim.debug_host(), citizen)
+        .unwrap()
+        .get(game_knowledge::patch_key(patch).as_str())
+        .unwrap()
+        .to_owned();
     assert_eq!(fact.source, ruler);
     assert_eq!(fact.observed, SimTime(3 * MINUTE.0));
     assert_eq!(fact.confidence, 90);

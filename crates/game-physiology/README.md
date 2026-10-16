@@ -7,3 +7,5 @@ Owns hunger, fatigue, rest, injury, mortal death, and in-place immortal recovery
 **Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
 **Verification:** Run `cargo test -p game-physiology`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+
+Bodies use indexed dense rows and nested undo journals. Bulk ticks reuse a numeric backup buffer and run over physical rows; death effects are sorted by stable person ID. Rules and ticking state share the same rollback boundary.

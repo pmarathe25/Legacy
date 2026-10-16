@@ -1,12 +1,12 @@
 //! One transactional host. Plugins own all gameplay state and requests.
-use game_storage::Records;
+use game_packed::Packed;
 mod pending;
 mod persistence;
 pub use pending::Pending;
 mod registry;
 mod transaction;
 use game_core::*;
-pub use registry::{Builder, Event, Request, Resource};
+pub use registry::{Builder, Checkpoint, Event, Request, Resource};
 use registry::{Registry, Stored};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -55,9 +55,27 @@ impl Event for ActionFinished {
     const KEY: &'static str = "sim.action_finished";
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Actions(pub Records<PersonId, Action>);
+pub struct Actions(pub Packed<PersonId, Action>);
 impl Resource for Actions {
     const KEY: &'static str = "world.actions";
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new(self.0.begin())
+    }
+    fn restore(&mut self, c: Checkpoint) {
+        self.0.rollback(
+            *c.downcast::<game_packed::Mark>()
+                .expect("action checkpoint"),
+        );
+    }
+    fn commit(&mut self, c: Checkpoint) {
+        self.0.commit(
+            *c.downcast::<game_packed::Mark>()
+                .expect("action checkpoint"),
+        );
+    }
+    fn validate_checkpoint(&self, _: &dyn std::any::Any) -> Result<()> {
+        Ok(())
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Stop {
@@ -162,6 +180,7 @@ impl Host {
         request: Pending,
         remove: Option<(SimTime, u8, ScheduleId)>,
     ) -> Result<Value> {
+        let data = std::mem::take(&mut self.data);
         let at = remove.map_or(self.time, |key| key.0);
         let limit = self
             .registry
@@ -186,7 +205,7 @@ impl Host {
         });
         let requests = std::iter::once((remove, request)).chain(extra);
         let mut removed = 0;
-        let mut tx = Transaction::new(self, at);
+        let mut tx = Transaction::owned(self, at, data);
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut response = Value::Null;
             for (key, request) in requests {
@@ -206,14 +225,11 @@ impl Host {
             tx.validate()?;
             Ok(response)
         }))
-        .map_err(|_| Error::WorkerFailure)??;
-        let changes = tx.finish();
-        self.data.extend(
-            changes
-                .writes
-                .iter()
-                .map(|(id, value)| (*id, value.clone())),
-        );
+        .map_err(|_| Error::WorkerFailure)
+        .and_then(|r| r);
+        let changes = tx.finish(response.is_ok());
+        self.data = changes.data;
+        let response = response?;
         for _ in 0..removed {
             let (key, _) = self.jobs.pop_first().expect("committed due prefix");
             self.job_keys.remove(&key.2);

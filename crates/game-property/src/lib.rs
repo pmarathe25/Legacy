@@ -15,10 +15,38 @@ pub struct Property {
     pub claims: Records<InventoryId, Vec<Claim>>,
     pub access: Records<InventoryId, game_storage::Table<PersonId, ()>>,
     #[serde(skip)]
-    permitted: Records<PersonId, game_storage::Table<InventoryId, ()>>,
+    permitted: game_packed::Packed<PersonId, game_storage::Table<InventoryId, ()>>,
 }
+type PropertyMark = (
+    Records<InventoryId, Vec<Claim>>,
+    Records<InventoryId, game_storage::Table<PersonId, ()>>,
+    game_packed::Mark,
+);
 impl Resource for Property {
     const KEY: &'static str = "property.claims";
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new((
+            self.claims.clone(),
+            self.access.clone(),
+            self.permitted.begin(),
+        ))
+    }
+    fn restore(&mut self, c: Checkpoint) {
+        let (claims, access, mark) = *c.downcast::<PropertyMark>().expect("permission checkpoint");
+        self.claims = claims;
+        self.access = access;
+        self.permitted.rollback(mark);
+    }
+    fn commit(&mut self, c: Checkpoint) {
+        self.permitted.commit(
+            c.downcast::<PropertyMark>()
+                .expect("permission checkpoint")
+                .2,
+        );
+    }
+    fn validate_checkpoint(&self, _: &dyn std::any::Any) -> Result<()> {
+        Ok(())
+    }
 }
 impl Property {
     pub fn permitted_set(&self, person: PersonId) -> Option<&game_storage::Table<InventoryId, ()>> {
@@ -47,9 +75,9 @@ impl Property {
         }
     }
     pub fn allowed(&self, person: PersonId, inventory: InventoryId) -> bool {
-        self.access
-            .get(&inventory)
-            .is_some_and(|p| p.contains_key(&person))
+        self.permitted
+            .get(&person)
+            .is_some_and(|ids| ids.contains_key(&inventory))
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -159,7 +187,8 @@ struct SavedProperty {
 }
 impl From<SavedProperty> for Property {
     fn from(saved: SavedProperty) -> Self {
-        let mut permitted: Records<PersonId, game_storage::Table<InventoryId, ()>> = Records::new();
+        let mut permitted: game_packed::Packed<PersonId, game_storage::Table<InventoryId, ()>> =
+            game_packed::Packed::new();
         for (inventory, people) in &saved.access {
             for person in people.keys() {
                 permitted.entry(*person).or_default().insert(*inventory, ());

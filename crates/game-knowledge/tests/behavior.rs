@@ -25,7 +25,10 @@ fn reports_deliver_known_facts_only_after_travel_delay() {
     assert!(view(&f.host, f.other).unwrap().is_empty());
     run(&mut f.host, SimTime(1000));
     let facts = view(&f.host, f.other).unwrap();
-    assert_eq!(facts[store_key(f.store).as_str()].source, f.ruler);
+    assert_eq!(
+        facts.get(store_key(f.store).as_str()).unwrap().source,
+        f.ruler
+    );
     f.host
         .dispatch(game_cargo::Consume {
             inventory: f.store,
@@ -205,7 +208,11 @@ fn arriving_discovers_accessible_local_containers_but_does_not_refresh_every_rem
     f.host
         .dispatch(ObserveSurroundings { person: f.other })
         .unwrap();
-    let remembered = view(&f.host, f.other).unwrap()[store_key(inventory).as_str()].clone();
+    let remembered = view(&f.host, f.other)
+        .unwrap()
+        .get(store_key(inventory).as_str())
+        .unwrap()
+        .to_owned();
     f.host
         .dispatch(game_cargo::Consume {
             inventory,
@@ -217,7 +224,10 @@ fn arriving_discovers_accessible_local_containers_but_does_not_refresh_every_rem
         .dispatch(ObserveSurroundings { person: f.other })
         .unwrap();
     assert_eq!(
-        view(&f.host, f.other).unwrap()[store_key(inventory).as_str()],
+        view(&f.host, f.other)
+            .unwrap()
+            .get(store_key(inventory).as_str())
+            .unwrap(),
         remembered
     );
     f.host
@@ -261,11 +271,18 @@ fn a_delayed_report_cannot_overwrite_newer_observation_from_the_same_clock_time(
             inventory: f.store,
         })
         .unwrap();
-    let newer = view(&f.host, f.other).unwrap()[store_key(f.store).as_str()].clone();
+    let newer = view(&f.host, f.other)
+        .unwrap()
+        .get(store_key(f.store).as_str())
+        .unwrap()
+        .to_owned();
     assert_eq!(newer.observed, SimTime(0));
     run(&mut f.host, SimTime(MINUTE.0));
     assert_eq!(
-        view(&f.host, f.other).unwrap()[store_key(f.store).as_str()],
+        view(&f.host, f.other)
+            .unwrap()
+            .get(store_key(f.store).as_str())
+            .unwrap(),
         newer
     );
 }
@@ -288,22 +305,24 @@ fn observers_share_unchanged_payloads_but_keep_individual_evidence_and_stale_sna
     let roads = roads_key(f.home);
     let stock = store_key(f.store);
     assert!(Arc::ptr_eq(
-        &first[roads.as_str()].value,
-        &other[roads.as_str()].value
+        first.get(roads.as_str()).unwrap().value,
+        other.get(roads.as_str()).unwrap().value
     ));
     assert!(Arc::ptr_eq(
-        &first[stock.as_str()].value,
-        &other[stock.as_str()].value
+        first.get(stock.as_str()).unwrap().value,
+        other.get(stock.as_str()).unwrap().value
     ));
-    assert_eq!(first[roads.as_str()].source, f.ruler);
-    assert_eq!(other[roads.as_str()].source, f.other);
-    assert!(other[roads.as_str()].revision > first[roads.as_str()].revision);
+    assert_eq!(first.get(roads.as_str()).unwrap().source, f.ruler);
+    assert_eq!(other.get(roads.as_str()).unwrap().source, f.other);
+    assert!(
+        other.get(roads.as_str()).unwrap().revision > first.get(roads.as_str()).unwrap().revision
+    );
     let reloaded = builder().load(&f.host.save().unwrap(), 2).unwrap();
     let a = view(&reloaded, f.ruler).unwrap();
     let b = view(&reloaded, f.other).unwrap();
     assert!(Arc::ptr_eq(
-        &a[roads.as_str()].value,
-        &b[roads.as_str()].value
+        a.get(roads.as_str()).unwrap().value,
+        b.get(roads.as_str()).unwrap().value
     ));
     assert!(Arc::ptr_eq(
         a.keys().next().unwrap(),
@@ -334,12 +353,12 @@ fn observers_share_unchanged_payloads_but_keep_individual_evidence_and_stale_sna
         .unwrap();
     let refreshed = view(&f.host, f.ruler).unwrap();
     assert!(!Arc::ptr_eq(
-        &first[roads.as_str()].value,
-        &refreshed[roads.as_str()].value
+        first.get(roads.as_str()).unwrap().value,
+        refreshed.get(roads.as_str()).unwrap().value
     ));
     assert!(!Arc::ptr_eq(
-        &first[stock.as_str()].value,
-        &refreshed[stock.as_str()].value
+        first.get(stock.as_str()).unwrap().value,
+        refreshed.get(stock.as_str()).unwrap().value
     ));
     assert_eq!(view(&f.host, f.other).unwrap(), other);
     assert_eq!(
@@ -367,7 +386,7 @@ fn typed_loading_preserves_opaque_extensions_and_numeric_evidence() {
     let facts: Facts = serde_json::from_value(data.clone()).unwrap();
     assert_eq!(serde_json::to_value(&facts).unwrap(), data);
     assert!(matches!(
-        facts["roads:1"].value.as_ref(),
+        facts.get("roads:1").unwrap().value.as_ref(),
         FactValue::Other(_)
     ));
     let f = setup();
@@ -378,7 +397,10 @@ fn typed_loading_preserves_opaque_extensions_and_numeric_evidence() {
     })
     .unwrap();
     assert!(matches!(
-        view(&host, f.ruler).unwrap()[store_key(f.store).as_str()]
+        view(&host, f.ruler)
+            .unwrap()
+            .get(store_key(f.store).as_str())
+            .unwrap()
             .value
             .as_ref(),
         FactValue::Stock(_)

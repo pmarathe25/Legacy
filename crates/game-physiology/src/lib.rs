@@ -1,5 +1,5 @@
 //! Needs, bodily harm, rest, and guardian recovery.
-use game_storage::Table;
+use game_packed::Packed;
 mod compute;
 pub use compute::{advance_body, hunger_threshold};
 use game_core::*;
@@ -54,23 +54,44 @@ impl Default for Rules {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bodies {
-    pub people: Table<PersonId, Body>,
+    pub people: Packed<PersonId, Body>,
     pub rules: Rules,
     pub ticking: bool,
 }
+type BodyMark = (game_packed::Mark, Rules, bool);
 impl Resource for Bodies {
     fn allocated_ids(&self) -> Vec<u64> {
         self.people.keys().map(|id| id.0).collect()
     }
     const KEY: &'static str = "physiology.bodies";
     fn validate(&self) -> Result<()> {
-        self.validate_rows(self.people.values())
+        self.validate_rows(self.people.rows().map(|(_, b)| b))
     }
-    fn validate_changes(&self, previous: &Self) -> Result<()> {
-        if self.rules != previous.rules {
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new((self.people.begin(), self.rules.clone(), self.ticking))
+    }
+    fn restore(&mut self, checkpoint: Checkpoint) {
+        let (mark, rules, ticking) = *checkpoint.downcast::<BodyMark>().expect("body checkpoint");
+        self.people.rollback(mark);
+        self.rules = rules;
+        self.ticking = ticking;
+    }
+    fn commit(&mut self, checkpoint: Checkpoint) {
+        self.people.commit(
+            checkpoint
+                .downcast::<BodyMark>()
+                .expect("body checkpoint")
+                .0,
+        );
+    }
+    fn validate_checkpoint(&self, checkpoint: &dyn std::any::Any) -> Result<()> {
+        let previous = checkpoint
+            .downcast_ref::<BodyMark>()
+            .expect("body checkpoint");
+        if self.rules != previous.1 {
             return self.validate();
         }
-        self.validate_rows(self.people.changed(&previous.people).map(|(_, row)| row))
+        self.validate_rows(self.people.changed_since(&previous.0).map(|(_, row)| row))
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -292,13 +313,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 .update(pool, |_, body| *body = advance_body(body, &rules, at))
         })?;
         // Only deaths and incapacitated guardians require cross-feature effects.
-        let affected: Vec<_> = tx
+        let mut affected: Vec<_> = tx
             .get::<Bodies>()?
             .people
-            .iter()
+            .rows()
             .filter(|(_, p)| p.alive && p.health == 0)
             .map(|(id, _)| *id)
             .collect();
+        affected.sort_unstable();
         for id in affected {
             death(tx, id)?;
         }

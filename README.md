@@ -43,7 +43,7 @@ quit
 
 **Host:** `game-sim` stores typed resources, orders due requests, commits transactions, and saves complete state. There is one clock and one canonical action record per actor. CPU workers evaluate numeric batches against immutable inputs; arbitration and commit remain ordered.
 
-**Growth:** [Architecture tests](crates/game-assembly/tests/architecture.rs) enforce dependency direction, prohibit cross-owner mutation and duplicate kernels, and cap source size at 600 lines per feature crate, 650 for knowledge, 850 for shared storage, and 1,100 for the generic host. Split a growing mechanic into another named owner rather than moving it into the assembly.
+**Growth:** [Architecture tests](crates/game-assembly/tests/architecture.rs) enforce dependency direction, prohibit cross-owner mutation and duplicate kernels, and enforce small source budgets, generally 600 lines per feature with explicit exceptions for knowledge and generic infrastructure. Split a growing mechanic into another named owner rather than moving it into the assembly.
 
 See the [crate index](crates/README.md) for responsibilities and dependencies and [migration note](MIGRATION.md) for the replacement boundary.
 
@@ -53,4 +53,4 @@ Feature tests exercise timed movement and work, physical transfers, reservations
 
 These tests establish their asserted fixture behavior. They do not establish complete autonomous enterprises, household care and childhood agency, full institutional invention and political procedures, regional trade, final tactical rules, or the final past-life benefit and recovery model. Those requirements still belong to the design documents and must be implemented in their owners.
 
-[Performance benchmarks](tools/performance/README.md) exercise storage, autonomous survival, queued input, and save/load. Numeric state uses bounded dense leaves; sparse records share unchanged values between transactions. Point updates and nested rollback no longer clone population tables. These fixtures measure the implemented mechanics; the complete late-game economy and long-history workload remain to be built.
+[Performance benchmarks](tools/performance/README.md) exercise storage, autonomous survival, queued input, and save/load. Hot components use indexed dense rows and nested undo journals; cold records keep persistent snapshots. Shared scenes separate visible values from personal evidence. Point updates and nested rollback avoid copying population tables. Storage policies trade reusable buffers and index memory against speed; complete retained snapshots impose a copy on the next write. These fixtures measure the implemented mechanics; the complete late-game economy and long-history workload remain to be built.

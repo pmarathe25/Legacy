@@ -9,6 +9,8 @@ publish = false
 default = ["mimalloc"]
 mimalloc = ["dep:mimalloc"]
 allocation-profile = []
+hash-index = ["game-packed/hash-index"]
+compact-storage = ["game-packed/compact"]
 
 [dependencies]
 mimalloc = { workspace = true, optional = true }
@@ -22,6 +24,7 @@ game-session.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
 game-storage.workspace = true
+game-packed.workspace = true
 game-openings.workspace = true
 game-physiology.workspace = true
 game-transport.workspace = true
@@ -62,4 +65,8 @@ harness = false
 
 [[bench]]
 name = "architecture"
+harness = false
+
+[[bench]]
+name = "packed"
 harness = false

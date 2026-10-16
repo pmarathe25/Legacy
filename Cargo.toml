@@ -27,6 +27,7 @@ game-content = { path = "crates/game-content" }
 game-core = { path = "crates/game-core" }
 game-ecology = { path = "crates/game-ecology" }
 game-environment = { path = "crates/game-environment" }
+game-facts = { path = "crates/game-facts" }
 game-genetics = { path = "crates/game-genetics" }
 game-guardians = { path = "crates/game-guardians" }
 game-health = { path = "crates/game-health" }
@@ -41,6 +42,7 @@ game-logistics = { path = "crates/game-logistics" }
 game-missions = { path = "crates/game-missions" }
 game-objects = { path = "crates/game-objects" }
 game-openings = { path = "crates/game-openings" }
+game-packed = { path = "crates/game-packed" }
 game-physiology = { path = "crates/game-physiology" }
 game-provisioning = { path = "crates/game-provisioning" }
 game-projects = { path = "crates/game-projects" }

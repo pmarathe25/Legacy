@@ -1,9 +1,8 @@
 use crate::*;
 // Independent events in a 20,000-person phase must fit; recursion remains depth-limited.
 const MAX_CALLS: usize = 1_000_000;
-use game_storage::Table;
 pub(crate) struct Changes {
-    pub writes: Table<TypeId, Stored>,
+    pub data: HashMap<TypeId, Stored>,
     pub jobs: Vec<Job>,
     pub cancelled: Vec<ScheduleId>,
     pub notices: Vec<Notice>,
@@ -14,7 +13,8 @@ pub struct Transaction<'a> {
     host: &'a Host,
     owner: usize,
     at: SimTime,
-    writes: Table<TypeId, Stored>,
+    data: Option<HashMap<TypeId, Stored>>,
+    frames: Vec<HashMap<TypeId, Checkpoint>>,
     jobs: Vec<Job>,
     cancelled: Vec<ScheduleId>,
     cancelled_jobs: Vec<usize>,
@@ -30,7 +30,8 @@ impl<'a> Transaction<'a> {
             host,
             owner: 0,
             at,
-            writes: Table::new(),
+            data: None,
+            frames: vec![],
             jobs: vec![],
             cancelled: vec![],
             cancelled_jobs: vec![],
@@ -40,6 +41,12 @@ impl<'a> Transaction<'a> {
             calls: 0,
             depth: 0,
         }
+    }
+    pub(crate) fn owned(host: &'a Host, at: SimTime, data: HashMap<TypeId, Stored>) -> Self {
+        let mut tx = Self::new(host, at);
+        tx.data = Some(data);
+        tx.frames.push(HashMap::default());
+        tx
     }
     pub(crate) fn with_owner<T>(
         &mut self,
@@ -55,12 +62,20 @@ impl<'a> Transaction<'a> {
         self.host.revision + 1
     }
     pub(crate) fn read_only(&self) -> bool {
-        self.writes.is_empty()
+        self.frames.iter().all(|f| f.is_empty())
             && self.jobs.is_empty()
             && self.cancelled.is_empty()
             && self.notices.is_empty()
             && self.next_id == self.host.next_id
             && self.next_notice == self.host.next_notice
+    }
+    /// Bulk owner operations retain the ordinary request path when hooks exist.
+    pub fn has_before<R: Request>(&self) -> bool {
+        self.host
+            .registry
+            .before
+            .get(R::KEY)
+            .is_some_and(|checks| !checks.is_empty())
     }
     pub fn registered<R: Request>(&self) -> bool {
         self.host.registered::<R>()
@@ -75,12 +90,12 @@ impl<'a> Transaction<'a> {
         &self.host.pool
     }
     pub fn get<T: Resource>(&self) -> Result<&T> {
-        if let Some(s) = self.writes.get(&TypeId::of::<T>()) {
-            return s
-                .downcast_ref()
-                .ok_or_else(|| Error::Missing(T::KEY.into()));
-        }
-        self.host.get::<T>()
+        self.data
+            .as_ref()
+            .unwrap_or(&self.host.data)
+            .get(&TypeId::of::<T>())
+            .and_then(|value| value.downcast_ref())
+            .ok_or_else(|| Error::Missing(T::KEY.into()))
     }
     /// Stage a resource snapshot. Persistent tables copy only changed paths and records.
     pub fn edit<T: Resource>(&mut self) -> Result<&mut T> {
@@ -107,20 +122,44 @@ impl<'a> Transaction<'a> {
     }
     fn edit_owned<T: Resource>(&mut self) -> Result<&mut T> {
         let id = TypeId::of::<T>();
-        let state = self
-            .writes
-            .entry(id)
-            .or_insert_with(|| self.host.data[&id].clone());
-        if Arc::get_mut(state).is_none() {
-            *state = Arc::new(state.downcast_ref::<T>().expect("registered type").clone());
+        let data = self
+            .data
+            .as_mut()
+            .ok_or_else(|| Error::Rejected("query attempted a state change".into()))?;
+        let state = data
+            .get_mut(&id)
+            .ok_or_else(|| Error::Missing(T::KEY.into()))?;
+        let codec = &self.host.registry.resources[&id];
+        for frame in &mut self.frames {
+            frame.entry(id).or_insert_with(|| (codec.checkpoint)(state));
         }
         Ok(Arc::get_mut(state)
-            .expect("unique staged resource")
+            .expect("exclusive transaction resource")
             .downcast_mut()
-            .expect("registered type"))
+            .expect("registered resource type"))
+    }
+    fn resolve(&mut self, frame: HashMap<TypeId, Checkpoint>, commit: bool) {
+        for (id, checkpoint) in frame {
+            let codec = &self.host.registry.resources[&id];
+            let state = self
+                .data
+                .as_mut()
+                .expect("writable transaction")
+                .get_mut(&id)
+                .unwrap();
+            if commit {
+                (codec.commit)(state, checkpoint);
+            } else {
+                (codec.restore)(state, checkpoint);
+            }
+        }
     }
 
     pub fn allocate(&mut self) -> Result<u64> {
+        require(
+            self.data.is_some(),
+            "query attempted to allocate an identity",
+        )?;
         let id = self.next_id;
         self.next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         Ok(id)
@@ -155,7 +194,6 @@ impl<'a> Transaction<'a> {
     /// A failed nested attempt restores its own changes while retaining its caller's work.
     pub fn attempt<R: Request>(&mut self, request: R) -> Result<R::Response> {
         let checkpoint = (
-            self.writes.clone(),
             self.jobs.len(),
             self.cancelled.len(),
             self.notices.len(),
@@ -163,15 +201,17 @@ impl<'a> Transaction<'a> {
             self.next_id,
             self.next_notice,
         );
+        self.frames.push(HashMap::default());
         let result = self.call(request);
+        let frame = self.frames.pop().expect("attempt frame");
+        self.resolve(frame, result.is_ok());
         if result.is_err() {
-            self.writes = checkpoint.0;
-            self.jobs.truncate(checkpoint.1);
-            self.cancelled.truncate(checkpoint.2);
-            self.notices.truncate(checkpoint.3);
-            self.cancelled_jobs.truncate(checkpoint.4);
-            self.next_id = checkpoint.5;
-            self.next_notice = checkpoint.6;
+            self.jobs.truncate(checkpoint.0);
+            self.cancelled.truncate(checkpoint.1);
+            self.notices.truncate(checkpoint.2);
+            self.cancelled_jobs.truncate(checkpoint.3);
+            self.next_id = checkpoint.4;
+            self.next_notice = checkpoint.5;
         }
         result
     }
@@ -285,13 +325,13 @@ impl<'a> Transaction<'a> {
             }),
             "action has changed",
         )?;
-        self.edit_owned::<Actions>()?.0.remove(&person);
+        self.edit_owned::<Actions>()?.0.erase(&person);
         self.notify(ActionFinished { person })
     }
     pub fn cancel_action(&mut self, person: PersonId) -> Result<()> {
         if let Some(action) = self.get::<Actions>()?.0.get(&person).cloned() {
             action.cancel.invoke(self)?;
-            if self.edit_owned::<Actions>()?.0.remove(&person).is_some() {
+            if self.edit_owned::<Actions>()?.0.erase(&person) {
                 self.notify(ActionFinished { person })?;
             }
         }
@@ -299,14 +339,18 @@ impl<'a> Transaction<'a> {
     }
     pub(crate) fn validate(&self) -> Result<()> {
         // Each feature owns validation of its state. Cross-feature checks can be registered as listeners.
-        for (id, write) in &self.writes {
+        for (id, checkpoint) in &self.frames[0] {
             let codec = &self.host.registry.resources[id];
-            (codec.validate_changes)(write, &self.host.data[id])?;
+            (codec.validate_checkpoint)(&self.data.as_ref().unwrap()[id], checkpoint.as_ref())?;
         }
         self.host.revision.checked_add(1).ok_or(Error::Overflow)?;
         Ok(())
     }
-    pub(crate) fn finish(mut self) -> Changes {
+    pub(crate) fn finish(mut self, commit: bool) -> Changes {
+        while let Some(frame) = self.frames.pop() {
+            self.resolve(frame, commit);
+        }
+
         if !self.cancelled_jobs.is_empty() {
             self.cancelled_jobs.sort_unstable();
             self.cancelled_jobs.dedup();
@@ -318,7 +362,7 @@ impl<'a> Transaction<'a> {
             });
         }
         Changes {
-            writes: self.writes,
+            data: self.data.take().expect("writable transaction"),
             jobs: self.jobs,
             cancelled: self.cancelled,
             notices: self.notices,

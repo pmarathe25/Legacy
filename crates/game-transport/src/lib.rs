@@ -1,7 +1,7 @@
 //! Travel owns position, arrival, and interruption. No work is credited in transit.
 use game_core::*;
+use game_packed::Packed;
 use game_sim::*;
-use game_storage::Table;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
@@ -21,9 +21,27 @@ pub enum Location {
     },
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Positions(pub Table<PersonId, Location>);
+pub struct Positions(pub Packed<PersonId, Location>);
 impl Resource for Positions {
     const KEY: &'static str = "transport.positions";
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new(self.0.begin())
+    }
+    fn restore(&mut self, c: Checkpoint) {
+        self.0.rollback(
+            *c.downcast::<game_packed::Mark>()
+                .expect("position checkpoint"),
+        );
+    }
+    fn commit(&mut self, c: Checkpoint) {
+        self.0.commit(
+            *c.downcast::<game_packed::Mark>()
+                .expect("position checkpoint"),
+        );
+    }
+    fn validate_checkpoint(&self, _: &dyn std::any::Any) -> Result<()> {
+        Ok(())
+    }
 }
 pub fn area(positions: &Positions, person: PersonId) -> Result<AreaId> {
     match positions.0.get(&person) {

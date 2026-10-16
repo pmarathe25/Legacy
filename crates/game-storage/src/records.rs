@@ -16,6 +16,12 @@ impl<K, V> Default for Records<K, V> {
     }
 }
 impl<K: Ord + Clone, V: Clone> Records<K, V> {
+    pub fn version(&self) -> Version<K, Arc<V>> {
+        self.0.version()
+    }
+    pub fn matches(&self, version: &Version<K, Arc<V>>) -> bool {
+        version.matches(&self.0)
+    }
     pub fn new() -> Self {
         Self::default()
     }

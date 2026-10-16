@@ -11,3 +11,5 @@ Run `cargo test -p game-characters`. Tests cover plan continuation, stale-stock 
 Reviews process at most 128 due people per committed request, in stable person order. Idle minds retain their authored observation and decision cadence. Active minds use a compact ordered set; sleeping minds use an indexed deadline queue. Busy minds sleep until the action deadline or a hunger interruption threshold supplied by physiology. Completion and cancellation send an internal signal that wakes the mind on the authored grid. Cursor state prevents reviewing an earlier actor twice at the same clock time. Save/load restores these deadlines.
 
 Candidate inputs are 56-byte numeric records. Trait weights use five numeric channels and visit only recorded deviations from authored defaults. Decision explanations are built after selection. New mechanics that invalidate a physiological forecast must also invalidate the corresponding mind's deadline; ordinary progress does not require waking every actor.
+
+Minds use indexed dense rows. Checkpoints journal changed people and snapshot the small rules/schedule metadata. Physical row slots never determine review order.

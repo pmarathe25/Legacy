@@ -19,7 +19,7 @@ pub fn patch_key(id: u64) -> String {
 pub fn with_prefix<'a>(
     facts: &'a Facts,
     prefix: &'a str,
-) -> impl Iterator<Item = (&'a Arc<str>, &'a Fact)> {
+) -> impl Iterator<Item = (&'a Arc<str>, FactRef<'a>)> {
     facts
         .range((
             std::ops::Bound::Included(prefix),
@@ -60,26 +60,16 @@ pub(super) fn remember(
     tx.edit::<Knowledge>()?
         .0
         .modify(person, Facts::default, |facts| {
-            if let Some(fact) = facts.0.get_mut(cached.key.as_ref()) {
-                if !Arc::ptr_eq(&fact.value, &cached.value) {
-                    fact.value = cached.value.clone();
-                }
-                fact.source = person;
-                fact.observed = observed;
-                fact.revision = revision;
-                fact.confidence = 100;
-            } else {
-                facts.insert(
-                    cached.key.clone(),
-                    Fact {
-                        value: cached.value.clone(),
-                        source: person,
-                        observed,
-                        revision,
-                        confidence: 100,
-                    },
-                );
-            }
+            facts.insert(
+                cached.key.clone(),
+                Fact {
+                    value: cached.value.clone(),
+                    source: person,
+                    observed,
+                    revision,
+                    confidence: 100,
+                },
+            );
         });
     Ok(())
 }
@@ -118,22 +108,34 @@ impl Request for ObservePatch {
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.request::<ObserveSurroundings>(|tx, r| {
         let area = game_transport::area(tx.get()?, r.person)?;
-        let roads = tx
-            .get::<game_land::Land>()?
-            .0
-            .shared(&area)
-            .ok_or_else(|| Error::Missing("area".into()))?;
-        remember(tx, r.person, Subject::Roads(area), FactValue::Roads(roads))?;
-        // Patches here are exposed resources; distant patches are never enumerated into memory.
-        let patches: Vec<_> = tx
-            .get::<game_ecology::Ecology>()
-            .map(|s| s.in_area(area).collect())
-            .unwrap_or_default();
-        for patch in patches {
-            tx.call(ObservePatch {
-                person: r.person,
-                patch,
-            })?;
+        if tx.has_before::<ObservePatch>() {
+            let roads = tx
+                .get::<game_land::Land>()?
+                .0
+                .shared(&area)
+                .ok_or_else(|| Error::Missing("area".into()))?;
+            remember(tx, r.person, Subject::Roads(area), FactValue::Roads(roads))?;
+            let patches: Vec<_> = tx
+                .get::<game_ecology::Ecology>()
+                .map(|world| world.in_area(area).collect())
+                .unwrap_or_default();
+            for patch in patches {
+                tx.call(ObservePatch {
+                    person: r.person,
+                    patch,
+                })?;
+            }
+        } else {
+            let scene = scenes::visible(tx, area)?;
+            let stamp = game_facts::Stamp {
+                source: r.person,
+                observed: tx.now(),
+                revision: tx.revision_after(),
+                confidence: 100,
+            };
+            tx.edit::<Knowledge>()?
+                .0
+                .modify(r.person, Facts::default, |f| f.0.observe(scene, stamp));
         }
         // Inspect newly encountered accessible containers; refreshing a known stock
         // requires deliberate inspection, so remembered stock can still become stale.

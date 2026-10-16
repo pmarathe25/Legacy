@@ -524,6 +524,11 @@ pub fn normalize(world: &World, actors: &mut [Actor]) {
             .cloned()
             .zip(a.facts.clone())
             .collect();
-        a.facts = std::array::from_fn(|i| facts[world.source(a.id).keys[i].as_ref()].clone());
+        a.facts = std::array::from_fn(|i| {
+            facts
+                .get(world.source(a.id).keys[i].as_ref())
+                .unwrap()
+                .to_owned()
+        });
     }
 }

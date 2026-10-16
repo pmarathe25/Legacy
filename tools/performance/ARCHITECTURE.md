@@ -1,12 +1,70 @@
 # Architectural headroom
 
-**Decision:** Typed pending requests and append-only transaction logs are now in production. Continue toward packed hot component stores with row-level undo, retaining persistent sparse records for histories, relationships, and other cold data. Production feature state still uses persistent tables; the packed-state and temporal kernels below remain experiments.
+**Decision:** Hot component stores now use `game-packed` dense rows and nested undo journals. Shared immutable scenes in `game-facts` replace repeated per-person observation writes. Cold histories, relationships, and other sparse state retain persistent tables. Typed pending requests and one owner-checked host remain. The earlier isolated packed-state kernel and analytical intervals below are historical experiments; the composed implementation now has its own measurements.
+
+## Production layout and tradeoffs
+
+The transaction owns the resource map during a writable phase and checkpoints each resource lazily. Default checkpoints clone persistent cold resources. Hot owners record a row-journal mark and their small metadata; failed nested work restores both. Successful inner work retains undo until the enclosing phase commits. Queries borrow the committed map and reject mutation. Request errors, validation failures, and worker panics restore the map before returning to the caller.
+
+Bodies, motivations, personal knowledge headers, positions, actions, and the reverse permission index use dense indexed rows. Bulk physiology traverses physical rows using the bounded worker pool. Death effects explicitly sort IDs before dispatch. Physical compaction never becomes an identity or arbitration order. Scenes share visible roads/patch payloads while keeping source/time/revision/confidence personal. Explicit reports, deliberate stock inspection, visibility, stale knowledge, and per-patch hooks retain their semantics.
+
+The default ID index uses 256-entry pages with sparse/dense representations. It avoids both tree lookup per component access and allocation proportional to the maximum ID. `hash-index` compares a per-row hash map with ordered keys. Extremely sparse IDs can favor that alternative. `compact-storage` grows row capacity more tightly and releases bulk undo buffers; the fast default retains reusable buffers. These are storage policies under the same host, not different game engines.
+
+Cloning a packed revision is constant-time. The first write while a complete revision is retained copies its dense rows and index. This shifts snapshot cost to the writer, and can enlarge the first committed boundary. Ordinary borrowed reads and small public observation DTOs do not hold complete revisions. The economy benchmark's `LEGACY_HOLD_READERS` mode retains six actual feature resources and checks their streaming fingerprints through advancement, births/deaths, and loading.
+
+Storage commit/restore hooks are infallible bookkeeping, not gameplay callbacks. The row store coalesces writes within each savepoint, retains successful nested undo for outer rollback, reuses bulk buffers, and journals structural swaps. Cold resources keep their previous snapshot contract. Differential tests exercise both index implementations, gappy IDs, nested bulk/structural edits, retained readers, and injected worker panics.
+
+The reference is `7a71e15` with benchmark-only setup for extra patches and initial historical facts. Its target directory is isolated from the working build. The comparison checks exact serialized logical state and continued execution after loading; storage policy and index slots are excluded from saves. Rich histories use shared templates; unique histories are not established by this fixture.
+
+Reproduce the policy comparisons:
+
+```sh
+python3 tools/performance/run.py --workload economy --population 10000 20000 --workers 1
+python3 tools/performance/run.py --workload economy --population 1000 --workers 1 --history 1000 --extra-patches 64
+python3 tools/performance/run.py --workload economy --population 20000 --workers 1 --hold-readers
+python3 tools/performance/run.py --workload economy --population 20000 --workers 1 --hash-index
+python3 tools/performance/run.py --workload economy --population 20000 --workers 1 --compact-storage
+python3 tools/performance/run.py --workload packed --allocation-profile
+python3 tools/performance/run.py --workload packed --allocation-profile --hash-index
+```
+
+## Measured policy tradeoffs
+
+The [full production measurements](README.md#production-measurements) compare the exact same logical simulation. Paged dense rows and shared scenes improve ordinary 10,000/20,000/100,000-person advancement by about 2.3–2.4×. Richer worlds with 64 extra patches improve about 20×; adding 1,000 shared historical facts per added character yields about 22× at 1,000 people. Canonical saves match the reference, including after structural changes and loading.
+
+At 100,000 people, three-run one-worker medians:
+
+| Policy | Simulated minutes/s | Active RSS MiB | Requested live heap MiB |
+| --- | ---: | ---: | ---: |
+| Previous persistent hot state | 17.5 | 167.7 | 125.5 |
+| Paged index, reusable buffers | 41.4 | 169.3 | 140.9 |
+| Per-row hash index | 24.1 | 214.1 | 160.1 |
+| Paged index, compact buffers/capacity | 39.1 | 170.5 | 124.9 |
+
+Heap counts use separate instrumented runs; throughput/RSS use ordinary builds. Compact storage demonstrates lower requested heap, not a guaranteed lower resident footprint. The default remains paged indexing with reusable buffers. At smaller ordinary populations this raises RSS about 35% for more than twice the speed; the richer 10,000-person fixture improves both speed and RSS substantially.
+
+The [production index benchmark](benches/packed.rs) uses 100,000 `u64` rows, one million deterministic random lookups, and ten canonical scans. Physical insertion order is reversed. Three-run uninstrumented medians:
+
+| ID distribution | Index | Random reads ms | Canonical scans ms | Requested heap MiB |
+| --- | --- | ---: | ---: | ---: |
+| Consecutive | Paged | 24.79 | 3.65 | 2.79 |
+| Consecutive | Hash | 30.28 | 19.87 | 6.00 |
+| One ID every 1,024 | Paged | 95.39 | 54.04 | 14.10 |
+| One ID every 1,024 | Hash | 31.95 | 19.48 | 6.00 |
+| One ID every trillion | Paged | 97.13 | 43.85 | 14.10 |
+| One ID every trillion | Hash | 29.23 | 19.26 | 6.00 |
+
+Paged indexes fit the measured worlds' clustered IDs. Hashing is about three times faster and uses less than half the heap for extremely sparse IDs. Both scale with occupied data, never the maximum ID. Future campaign ID distributions should determine the policy; one isolated dense result is insufficient. These index-only figures exclude the complete game and use requested heap from instrumented construction.
+
+A retained complete revision shifts its copying cost to the first writer. At 100,000 people the measured six-resource snapshot changes active RSS from 169.3 to 227.5 MiB, with 41.4 to 40.9 minutes/s throughput. Creation is about 0.003 ms and the maximum measured advancement boundary stays below 9.0 ms. Those readers start at fixture initialization, before mature per-character heap payloads accumulate. Frequent new global snapshots are a different workload; use borrowed reads or focused public DTOs for ordinary queries.
+
+The reference setup patch is retained at [reference/7a71e15-fixtures.patch](reference/7a71e15-fixtures.patch). Apply it to a detached `7a71e15` worktree to add the same rich inputs and retained-reader checks. Use a separate Cargo target directory: reusing one across old/new worktrees can reuse stale dependency artifacts.
 
 ## Where time remains
 
 Before the typed-request migration, a sampled 20,000-person production run attributed about 76% of advancement samples to character reviews, including 28.5% in observation. Physiology ticks accounted for about 7.5%. These are inclusive samples, not additive phase timers. A follow-up profile after the production changes below, with 1,248 advancement samples, attributes about 81% to reviews, 32% to observation, 19% to remembering facts, and 8% to physiology. Position lookup accounts for about 8% of flat samples; permission lookup and knowledge-tree copying remain visible. Relative shares are not absolute phase timings. Whole-game throughput barely changes with additional workers.
 
-The next architectural gain therefore needs to remove copying, lookups, and dispatch from observation and decisions, and expose independent preparation batches. A faster arithmetic kernel alone leaves most current work intact.
+Those earlier samples motivated the production changes above. A new 100,000-person profile has 3,064 advancement samples: reviews account for about 67%, observation 24%, and physiology 19% inclusively. Journalled knowledge-row editing accounts for about 11% of flat samples; schedule maintenance remains visible. Next experiments should reduce repeated row resolution/undo preparation, evaluate interval forecasts against their now-larger physiology share, and integrate independent preparation batches only with an explicit read/effect contract. A faster arithmetic kernel alone leaves most current work intact.
 
 ## Packed state and transactional undo
 
@@ -91,7 +149,7 @@ The small two-choice workload loses to serial at one, two, and four workers in 1
 
 Timing includes owner query dispatch, actual immutable knowledge/object/position reads, and result construction. Person IDs are already batched before timing. It excludes observation refresh, arbitration, action effects, and GPU conversion. Histories are shared templates, as in the ordinary perception fixture.
 
-**Decision:** Retain serial preparation for tiny workloads. A production phase pilot should prepare sufficiently rich independent queries in bounded workers, then apply receiver effects in stable order. It needs an explicit read-view contract or revalidation when earlier effects alter a prepared query's inputs. The experiment establishes preparation headroom, not whole-game parallelism; it is not wired into character reviews yet.
+**Decision:** Retain serial preparation for tiny workloads. A further production phase pilot should prepare sufficiently rich independent queries in bounded workers, then apply receiver effects in stable order. It needs an explicit read-view contract or revalidation when earlier effects alter a prepared query's inputs. The experiment establishes preparation headroom, not whole-game parallelism; it is not wired into character reviews yet.
 
 ## Analytical intervals
 
@@ -99,12 +157,12 @@ The [temporal probe](benches/architecture/temporal.rs) replaces repeated linear 
 
 For 20,000 passive bodies over one day, the pure fold took about 89–96 ms and exact projection 0.27–0.40 ms. Harm is disabled in that timing fixture so no death interrupts the interval. At 100,000 bodies the values were 438.9/1.32 ms. This is a several-hundred-fold arithmetic gain on an uninterrupted interval; it does not skip intervening actions or events in a running game.
 
-Physiology accounts for about 8% of the follow-up advancement profile. Removing that cost entirely would improve this fixture by at most about 9%, before replacement overhead. Wider gains require event forecasts and materialization at every rate change, action, injury, meal, recovery, and death boundary. Passive queries must read the owning physiology phase's logical tick; another request reaching the same host timestamp must not advance needs early. Skipping character reviews without preserving their observations and provenance would change gameplay.
+Physiology was about 8% before packed storage and is about 19% in the latest 100,000-person sample. Removing it entirely would give at most about 23% in that fixture, before replacement costs. An actual lazy implementation must measure the cost of projection on reads and maintaining event forecasts. Wider gains require event forecasts and materialization at every rate change, action, injury, meal, recovery, and death boundary. Passive queries must read the owning physiology phase's logical tick; another request reaching the same host timestamp must not advance needs early. Skipping character reviews without preserving their observations and provenance would change gameplay.
 
 ## Migration sequence
 
 1. **Typed pending messages — complete:** One request executor and the existing wire shape remain. Loading/binding, unregistered types, failed-job retries, cancellation, receipts, and retained snapshots are checked. Composed survival and memory measurements justify the production representation.
-2. **Hot row journal:** Pilot body rows and observation provenance. Feature-owned edit guards record old rows before returning mutable access. Nested savepoints retain inner undo until the enclosing phase commits; panic or validation failure reverses all writes and metadata. Cold records keep persistent snapshots. Avoid two authoritative copies of a component.
+2. **Hot row journal — in production:** Bodies and other hot stores now use dense rows and undo; shared scenes separate observation payloads from personal evidence. Continue measuring further component owners. Feature-owned edit guards record old rows before returning mutable access. Nested savepoints retain inner undo until the enclosing phase commits; panic or validation failure reverses all writes and metadata. Cold records keep persistent snapshots. Avoid two authoritative copies of a component.
 3. **Feature-owned phases:** Collect due IDs once, borrow packed read views, prepare independent observations/candidates in bounded workers, then resolve claims and receiver-owned effects in stable order. Keep logical phase boundaries fixed across CPU/GPU backends and worker counts. Content remains immutable runtime catalogs referenced by IDs.
 4. **Forecast passive intervals:** Adopt analytical updates where the owning mechanic can enumerate every invalidating event. Keep cadence and knowledge semantics explicit. Keep inert/dead records out of hot sweeps. Region partitioning can follow declared cross-region reads and effects; it is not a substitute for those declarations.
 

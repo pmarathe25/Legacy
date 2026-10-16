@@ -347,6 +347,7 @@ dependencies = [
  "game-lifecycle",
  "game-lineage",
  "game-objects",
+ "game-packed",
  "game-physiology",
  "game-property",
  "game-provisioning",
@@ -464,6 +465,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-facts"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-storage",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-genetics"
 version = "0.2.0"
 dependencies = [
@@ -571,8 +582,10 @@ dependencies = [
  "game-cargo",
  "game-core",
  "game-ecology",
+ "game-facts",
  "game-land",
  "game-objects",
+ "game-packed",
  "game-physiology",
  "game-property",
  "game-sim",
@@ -720,6 +733,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-packed"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "rayon",
+ "rustc-hash 2.1.3",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-performance"
 version = "0.2.0"
 dependencies = [
@@ -735,6 +759,7 @@ dependencies = [
  "game-logistics",
  "game-objects",
  "game-openings",
+ "game-packed",
  "game-physiology",
  "game-property",
  "game-provisioning",
@@ -760,6 +785,7 @@ dependencies = [
  "game-core",
  "game-land",
  "game-objects",
+ "game-packed",
  "game-property",
  "game-sim",
  "game-skills",
@@ -794,6 +820,7 @@ dependencies = [
  "game-core",
  "game-land",
  "game-objects",
+ "game-packed",
  "game-physiology",
  "game-sim",
  "game-skills",
@@ -873,6 +900,7 @@ name = "game-sim"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-packed",
  "game-storage",
  "rayon",
  "rustc-hash 2.1.3",
@@ -926,6 +954,7 @@ dependencies = [
  "game-core",
  "game-land",
  "game-objects",
+ "game-packed",
  "game-physiology",
  "game-property",
  "game-sim",

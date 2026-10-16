@@ -1,6 +1,6 @@
 //! Autonomous survival uses individual knowledge, committed plans, and explainable utility.
+use game_packed::Packed;
 use game_provisioning as plans;
-use game_storage::Records;
 mod rules;
 mod scheduling;
 mod utility;
@@ -20,11 +20,12 @@ pub struct Mind {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Minds {
-    pub people: Records<PersonId, Mind>,
+    pub people: Packed<PersonId, Mind>,
     pub rules: Rules,
     pub running: bool,
     schedule: scheduling::Schedule,
 }
+type MindMark = (game_packed::Mark, Rules, bool, scheduling::Schedule);
 impl Resource for Minds {
     const KEY: &'static str = "characters.minds";
     fn validate(&self) -> Result<()> {
@@ -48,7 +49,31 @@ impl Resource for Minds {
             "invalid review agenda",
         )
     }
-    fn validate_changes(&self, _previous: &Self) -> Result<()> {
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new((
+            self.people.begin(),
+            self.rules.clone(),
+            self.running,
+            self.schedule.clone(),
+        ))
+    }
+    fn restore(&mut self, checkpoint: Checkpoint) {
+        let (mark, rules, running, schedule) =
+            *checkpoint.downcast::<MindMark>().expect("mind checkpoint");
+        self.people.rollback(mark);
+        self.rules = rules;
+        self.running = running;
+        self.schedule = schedule;
+    }
+    fn commit(&mut self, checkpoint: Checkpoint) {
+        self.people.commit(
+            checkpoint
+                .downcast::<MindMark>()
+                .expect("mind checkpoint")
+                .0,
+        );
+    }
+    fn validate_checkpoint(&self, _checkpoint: &dyn std::any::Any) -> Result<()> {
         self.rules.validate()
     }
 }
@@ -272,7 +297,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.subscribe::<game_physiology::Died>("forget-dead-mind", |tx, event| {
         let state = tx.edit::<Minds>()?;
-        state.people.remove(&event.person);
+        state.people.erase(&event.person);
         state.schedule.agenda.set(event.person, None);
         state.schedule.ready.remove(&event.person);
         Ok(())
@@ -292,7 +317,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                         .all(|p| state.schedule.ready.contains_key(p) || actions.contains_key(p))),
             "invalid review clock",
         )?;
-        for (person, mind) in &host.get::<Minds>()?.people {
+        for (person, mind) in host.get::<Minds>()?.people.iter() {
             require(
                 host.get::<game_physiology::Bodies>()?
                     .people

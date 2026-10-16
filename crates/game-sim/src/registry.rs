@@ -1,9 +1,28 @@
 use crate::*;
 use serde::de::DeserializeOwned;
 use std::any::Any;
+pub type Checkpoint = Box<dyn Any + Send + Sync>;
 /// Mutable fields must clone independently; resource state cannot share mutable aliases.
 pub trait Resource: Clone + Default + Serialize + DeserializeOwned + Send + Sync + 'static {
     const KEY: &'static str;
+    /// Snapshot metadata or begin a row journal. These storage hooks must not run gameplay.
+    fn checkpoint(&mut self) -> Checkpoint {
+        Box::new(self.clone())
+    }
+    fn restore(&mut self, checkpoint: Checkpoint) {
+        *self = *checkpoint
+            .downcast::<Self>()
+            .expect("resource checkpoint type");
+    }
+    /// Infallible storage housekeeping; keep nested undo until the outer commit.
+    fn commit(&mut self, _checkpoint: Checkpoint) {}
+    fn validate_checkpoint(&self, checkpoint: &dyn Any) -> Result<()> {
+        self.validate_changes(
+            checkpoint
+                .downcast_ref::<Self>()
+                .expect("resource checkpoint type"),
+        )
+    }
     fn allocated_ids(&self) -> Vec<u64> {
         vec![]
     }
@@ -42,7 +61,10 @@ pub(crate) struct Codec {
     pub decode: fn(&str) -> Result<Stored>,
     pub ids: fn(&Stored) -> Vec<u64>,
     pub validate: fn(&Stored) -> Result<()>,
-    pub validate_changes: fn(&Stored, &Stored) -> Result<()>,
+    pub checkpoint: fn(&mut Stored) -> Checkpoint,
+    pub restore: fn(&mut Stored, Checkpoint),
+    pub commit: fn(&mut Stored, Checkpoint),
+    pub validate_checkpoint: fn(&Stored, &dyn Any) -> Result<()>,
 }
 #[derive(Default)]
 pub(crate) struct Registry {
@@ -121,10 +143,13 @@ impl Builder {
                         .allocated_ids()
                 },
                 validate: |s| s.downcast_ref::<T>().expect("registered type").validate(),
-                validate_changes: |s, old| {
+                checkpoint: |s| mutable::<T>(s).checkpoint(),
+                restore: |s, checkpoint| mutable::<T>(s).restore(checkpoint),
+                commit: |s, checkpoint| mutable::<T>(s).commit(checkpoint),
+                validate_checkpoint: |s, checkpoint| {
                     s.downcast_ref::<T>()
-                        .expect("registered type")
-                        .validate_changes(old.downcast_ref::<T>().expect("registered type"))
+                        .expect("resource type")
+                        .validate_checkpoint(checkpoint)
                 },
             },
         );
@@ -253,4 +278,11 @@ impl Default for Builder {
 }
 pub(crate) fn json_error(e: serde_json::Error) -> Error {
     Error::InvalidSave(e.to_string())
+}
+
+fn mutable<T: Resource>(stored: &mut Stored) -> &mut T {
+    Arc::get_mut(stored)
+        .expect("exclusive transaction resource")
+        .downcast_mut()
+        .expect("registered resource type")
 }

@@ -1,0 +1,156 @@
+diff --git a/crates/game-knowledge/src/lib.rs b/crates/game-knowledge/src/lib.rs
+index 68c0dbd..eb8da3e 100644
+--- a/crates/game-knowledge/src/lib.rs
++++ b/crates/game-knowledge/src/lib.rs
+@@ -88,6 +88,9 @@ impl Resource for Knowledge {
+     }
+ }
+ #[derive(Clone, Serialize, Deserialize)]
++pub struct Initialize {pub person:PersonId,pub facts:Facts}
++impl Request for Initialize {const KEY:&'static str="knowledge.initialize";type Response=();}
++#[derive(Clone, Serialize, Deserialize)]
+ pub struct ObserveStore {
+     pub person: PersonId,
+     pub inventory: InventoryId,
+@@ -142,6 +145,11 @@ pub fn view(host: &Host, person: PersonId) -> Result<Facts> {
+ pub fn plugin(b: &mut Builder) -> Result<()> {
+     b.plugin("knowledge", 1)?;
+     b.resource::<Knowledge>()?;
++    b.request::<Initialize>(|tx,r|{
++        require(!tx.get::<Knowledge>()?.0.contains_key(&r.person),"knowledge already initialized")?;
++        tx.edit::<Knowledge>()?.0.insert(r.person,r.facts);
++        Ok(())
++    })?;
+     b.validate_save(|host| {
+         require(
+             host.get::<Knowledge>()?.0.values().all(|facts| {
+diff --git a/tools/performance/benches/economy.rs b/tools/performance/benches/economy.rs
+index 255bdb1..a93e810 100644
+--- a/tools/performance/benches/economy.rs
++++ b/tools/performance/benches/economy.rs
+@@ -40,6 +40,23 @@ fn main() {
+             .map(|r| r.len())
+             .sum::<usize>()
+     );
++    let freeze = Instant::now();
++    let readers = game_performance::setting("LEGACY_HOLD_READERS", false).then(|| {
++        (
++            h.get::<game_physiology::Bodies>().unwrap().clone(),
++            h.get::<game_characters::Minds>().unwrap().clone(),
++            h.get::<game_knowledge::Knowledge>().unwrap().clone(),
++            h.get::<game_transport::Positions>().unwrap().clone(),
++            h.get::<game_sim::Actions>().unwrap().clone(),
++            h.get::<game_property::Property>().unwrap().clone(),
++        )
++    });
++    let freeze_ms = freeze.elapsed().as_secs_f64() * 1000.;
++    let reader_hash = readers.as_ref().map(fingerprint);
++    println!(
++        "held_readers={} freeze_ms={freeze_ms:.6}",
++        readers.is_some()
++    );
+     let initial = game_performance::stock(&sim, &stores);
+     let init = start.elapsed();
+     sample.report("initialize");
+@@ -74,6 +91,11 @@ fn main() {
+             .values()
+             .all(|p| p.alive && p.health > 0)
+     );
++    assert_eq!(
++        readers.as_ref().map(fingerprint),
++        reader_hash,
++        "committed readers changed"
++    );
+     let remaining = game_performance::stock(&sim, &stores);
+     assert!(remaining < initial);
+     if ticks == 120 {
+@@ -100,6 +122,11 @@ fn main() {
+     assert_eq!(loaded.save().unwrap(), sim.save().unwrap());
+     follow.check(&sim);
+     follow.check(&loaded);
++    assert_eq!(
++        readers.as_ref().map(fingerprint),
++        reader_hash,
++        "readers changed through structural churn"
++    );
+     sample.report("save_load_continue");
+     game_performance::metrics::rss();
+     let hash = save.bytes().fold(0xcbf29ce484222325u64, |h, b| {
+@@ -119,3 +146,21 @@ fn main() {
+         initial - remaining
+     );
+ }
++
++fn fingerprint<T: serde::Serialize>(value: &T) -> u64 {
++    struct Sink(u64);
++    impl std::io::Write for Sink {
++        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
++            for b in bytes {
++                self.0 = (self.0 ^ u64::from(*b)).wrapping_mul(0x100000001b3);
++            }
++            Ok(bytes.len())
++        }
++        fn flush(&mut self) -> std::io::Result<()> {
++            Ok(())
++        }
++    }
++    let mut sink = Sink(0xcbf29ce484222325);
++    serde_json::to_writer(&mut sink, value).unwrap();
++    sink.0
++}
+diff --git a/tools/performance/src/lib.rs b/tools/performance/src/lib.rs
+index a38bcb5..fbded4d 100644
+--- a/tools/performance/src/lib.rs
++++ b/tools/performance/src/lib.rs
+@@ -48,6 +48,37 @@ pub fn fixture(count: usize, workers: usize, distributed: bool) -> (Simulation,
+             stores.push(inv);
+         }
+     }
++    let extra_patches = setting("LEGACY_EXTRA_PATCHES", 0usize);
++    for area in &areas {
++        for _ in 0..extra_patches {
++            h.dispatch(game_ecology::Create(game_ecology::Patch {
++                area: *area,
++                capacity: 1_000_000,
++                good: game_cargo::FOOD,
++                renew: 0,
++                stock: 1_000_000,
++            }))
++            .unwrap();
++        }
++    }
++    let history = setting("LEGACY_HISTORY", 0usize);
++    let value = std::sync::Arc::new(game_knowledge::FactValue::from(
++        serde_json::json!({"story":"shared historical account"}),
++    ));
++    let memories: game_knowledge::Facts = (0..history)
++        .map(|i| {
++            (
++                format!("memory:{i:08}").into(),
++                game_knowledge::Fact {
++                    value: value.clone(),
++                    source: ruler,
++                    observed: SimTime(0),
++                    revision: 0,
++                    confidence: 90,
++                },
++            )
++        })
++        .collect();
+     for store in &stores {
+         h.dispatch(game_cargo::Deposit {
+             inventory: *store,
+@@ -76,6 +107,13 @@ pub fn fixture(count: usize, workers: usize, distributed: bool) -> (Simulation,
+             allow: true,
+         })
+         .unwrap();
++        if history > 0 {
++            h.dispatch(game_knowledge::Initialize {
++                person,
++                facts: memories.clone(),
++            })
++            .unwrap();
++        }
+         h.dispatch(game_characters::Register {
+             person,
+             mind: Default::default(),
