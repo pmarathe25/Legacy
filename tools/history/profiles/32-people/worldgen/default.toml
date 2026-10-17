@@ -1,0 +1,1441 @@
+id = "worldgen/default"
+version = 1
+[data]
+population = 32
+areas = 4
+# This initial history uses the live simulation and its current accelerated needs.
+history = 172800000
+physiology = "campaign"
+characters = "campaign"
+social_life = "campaign"
+health = "basic"
+name_starts = ["Al", "Bran", "Cor", "Dar", "El", "Fen", "Gal", "Har", "Is", "Kel", "Lor", "Mer", "Nor", "Or", "Pen", "Rav", "Sel", "Tal", "Val", "Wen"]
+name_ends = ["a", "en", "in", "or", "eth", "an", "el", "is", "ar", "wen", "wyn", "ren", "as", "il", "on", "ith"]
+
+[[data.biomes]]
+name = "Alder Woodland"
+climate = "river-valley"
+food = "nuts"
+material = "timber"
+material_renew_per_person = 20
+renewal_warmth = 3
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "mushrooms"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "wild-garlic"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sorrel"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "nettles"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "willow"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "flax-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "grain-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "root-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "rosehips"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "elderberries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sloes"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rowan-berries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "walnuts"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "maple-sap"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes]]
+name = "Tidal Coast"
+climate = "maritime"
+food = "fish"
+material = "clay"
+material_renew_per_person = 0
+renewal_warmth = 0
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "shellfish"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "seaweed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "salt"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "sand"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "reeds"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "flax-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "mint"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rushes"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "kelp"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes]]
+name = "Reed Fen"
+climate = "wetland"
+food = "roots"
+material = "reeds"
+material_renew_per_person = 20
+renewal_warmth = 10
+renewal_rain = 3
+[[data.biomes.resources]]
+object = "river-fish"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "cranberries"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "rushes"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "willow"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "herb-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "mint"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 3
+
+[[data.biomes]]
+name = "Iron Highland"
+climate = "highland"
+food = "nuts"
+material = "iron-ore"
+material_renew_per_person = 0
+renewal_warmth = 3
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "stone"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "slate"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "juniper"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "barley-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "oats-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "turnips-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "chamomile"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 3
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "lichen"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "moss"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "pinecones"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes]]
+name = "Dry Grassland"
+climate = "dry-steppe"
+food = "wild-berries"
+material = "stone"
+material_renew_per_person = 0
+renewal_warmth = 5
+renewal_rain = 2
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "millet-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "chickpeas-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "lentils-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "mustard-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "hemp-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "coriander"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "ochre"
+stock_per_person = 80
+renew_per_person = 0
+
+[[data.biomes]]
+name = "Beech Grove"
+climate = "temperate-forest"
+food = "chestnuts"
+material = "timber"
+material_renew_per_person = 20
+renewal_warmth = 4
+renewal_rain = 2
+[[data.biomes.resources]]
+object = "acorns"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "hazelnuts"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "mushrooms"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "blackberries"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "beeswax"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "honey"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "rye-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "cabbage-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 4
+minimum_rain = 2
+
+[[data.biomes.resources]]
+object = "rosehips"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "elderberries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sloes"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rowan-berries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "walnuts"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "maple-sap"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes]]
+name = "Chalk Downs"
+climate = "rain-shadow"
+food = "sorrel"
+material = "limestone"
+material_renew_per_person = 0
+renewal_warmth = 5
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "stone"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "lavender"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "chamomile"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "hemp-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "oats-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "leeks-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "woad-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "ochre"
+stock_per_person = 80
+renew_per_person = 0
+
+[[data.biomes]]
+name = "Copper Foothills"
+climate = "highland"
+food = "cloudberries"
+material = "copper-ore"
+material_renew_per_person = 0
+renewal_warmth = 1
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "tin-ore"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "stone"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 1
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "juniper"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 1
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 1
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "buckwheat-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 1
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "barley-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 1
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 1
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "lichen"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "moss"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "pinecones"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes]]
+name = "Mild Estuary"
+climate = "maritime"
+food = "shellfish"
+material = "sand"
+material_renew_per_person = 0
+renewal_warmth = 0
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "fish"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "seaweed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "salt"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "reeds"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "nettles"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "hemp-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "kelp"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes]]
+name = "Willow Floodplain"
+climate = "floodplain"
+food = "river-fish"
+material = "willow"
+material_renew_per_person = 20
+renewal_warmth = 7
+renewal_rain = 3
+[[data.biomes.resources]]
+object = "roots"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "rushes"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "mint"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "flax-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "bean-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "onions-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 7
+minimum_rain = 3
+
+[[data.biomes]]
+name = "Warm Scrub"
+climate = "mediterranean"
+food = "olives"
+material = "cork"
+material_renew_per_person = 20
+renewal_warmth = 10
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "figs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "grapes"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "limestone"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "lavender"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "juniper"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "olives-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "grapes-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "figs-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sesame-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "madder-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 10
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "rosehips"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "elderberries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sloes"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rowan-berries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "walnuts"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "maple-sap"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes]]
+name = "Desert Oasis"
+climate = "oasis"
+food = "dates"
+material = "clay"
+material_renew_per_person = 0
+renewal_warmth = 15
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "figs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "salt"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "sand"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "bamboo"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "dates-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "cotton-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "millet-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "chickpeas-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 15
+minimum_rain = 1
+
+[[data.biomes]]
+name = "Monsoon Thicket"
+climate = "monsoon"
+food = "orchard-fruit"
+material = "bamboo"
+material_renew_per_person = 20
+renewal_warmth = 16
+renewal_rain = 4
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "tea-leaf"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "cotton-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "tea-leaf-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "squash-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "sesame-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+[[data.biomes.resources]]
+object = "coriander"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 16
+minimum_rain = 4
+
+[[data.biomes]]
+name = "Northern Bog"
+climate = "boreal"
+food = "cloudberries"
+material = "reeds"
+material_renew_per_person = 20
+renewal_warmth = 0
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "cranberries"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "mushrooms"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "juniper"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "oats-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rye-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "turnips-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+
+[[data.biomes.resources]]
+object = "lichen"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "moss"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "pinecones"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes]]
+name = "Fruit Vale"
+climate = "river-valley"
+food = "apples"
+material = "timber"
+material_renew_per_person = 20
+renewal_warmth = 5
+renewal_rain = 2
+[[data.biomes.resources]]
+object = "pears"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "plums"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "honey"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "beeswax"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "apples-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "pears-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "plums-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "fruit-cuttings"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "peas-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 5
+minimum_rain = 2
+
+[[data.biomes.resources]]
+object = "rosehips"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "elderberries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sloes"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "rowan-berries"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "walnuts"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "maple-sap"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 5
+minimum_rain = 1
+[[data.biomes]]
+name = "Red Earth Basin"
+climate = "subtropical"
+food = "roots"
+material = "ochre"
+material_renew_per_person = 0
+renewal_warmth = 12
+renewal_rain = 2
+[[data.biomes.resources]]
+object = "clay"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "copper-ore"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "sand"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "sesame"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "sunflower-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "millet-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "sunflower-planting-stock"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "squash-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "madder-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 12
+minimum_rain = 2
+
+[[data.biomes]]
+name = "Rainforest Margin"
+climate = "rainforest"
+food = "orchard-fruit"
+material = "bamboo"
+material_renew_per_person = 20
+renewal_warmth = 18
+renewal_rain = 5
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "mint"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "tea-leaf"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "cotton-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "hops-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "herb-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+
+[[data.biomes]]
+name = "Mountain Meadow"
+climate = "alpine"
+food = "cloudberries"
+material = "slate"
+material_renew_per_person = 0
+renewal_warmth = 0
+renewal_rain = 1
+[[data.biomes.resources]]
+object = "stone"
+stock_per_person = 80
+renew_per_person = 0
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "chamomile"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "sorrel"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "buckwheat-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "oats-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "cabbage-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "root-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "lichen"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "moss"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1
+[[data.biomes.resources]]
+object = "pinecones"
+stock_per_person = 60
+renew_per_person = 15
+minimum_warmth = 0
+minimum_rain = 1

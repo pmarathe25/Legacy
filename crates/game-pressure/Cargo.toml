@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-vitality.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
 game-storage.workspace = true
@@ -14,9 +15,11 @@ game-conflict.workspace = true
 game-relationships.workspace = true
 game-traits.workspace = true
 game-lineage.workspace = true
+game-knowledge.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-content.workspace = true
 game-land.workspace = true
 game-objects.workspace = true
 game-cargo.workspace = true

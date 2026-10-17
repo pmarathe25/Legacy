@@ -1,0 +1,22 @@
+id = "environment/rain-shadow"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 10
+rain = 2
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 25
+rain = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 12
+rain = 2
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 1
+rain = 1

@@ -1,7 +1,9 @@
 //! Founding, votes, executable access rules, and revocable offices.
+mod membership;
 use game_core::*;
 use game_sim::*;
 use game_storage::Records;
+pub use membership::*;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,6 +35,8 @@ pub struct Proposal {
     pub terms: AccessRule,
     pub votes: BTreeMap<PersonId, bool>,
     pub adopted: bool,
+    #[serde(default)]
+    pub enacted: bool,
     pub closed: bool,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -182,6 +186,41 @@ pub fn holds(
         .and_then(|i| i.offices.get(office))
         == Some(&person)
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RuleAdopted {
+    pub institution: InstitutionId,
+    pub proposal: u64,
+    pub enacted: bool,
+}
+impl Event for RuleAdopted {
+    const KEY: &'static str = "institutions.rule-adopted";
+}
+fn enact(tx: &mut Transaction<'_>, p: &Proposal, person: PersonId) -> Result<bool> {
+    if tx.registered::<CanCommit>()
+        && !tx.call(CanCommit {
+            institution: p.institution,
+            person,
+            custodian: p.terms.custodian,
+        })?
+    {
+        return Ok(false);
+    }
+    for user in &p.terms.users {
+        tx.call(game_property::Permit {
+            issuer: p.terms.custodian,
+            person: *user,
+            inventory: p.terms.inventory,
+            allow: true,
+        })?;
+    }
+    tx.edit::<Institutions>()?
+        .groups
+        .get_mut(&p.institution)
+        .unwrap()
+        .rules
+        .push(p.terms.clone());
+    Ok(true)
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("institutions", 1)?;
     b.resource::<Institutions>()?;
@@ -224,14 +263,27 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         if let Procedure::Leader(p) = r.procedure {
             require(group.members.contains(&p), "unknown leader")?;
         }
+        let previous = group.procedure.clone();
         tx.edit::<Institutions>()?
             .groups
             .get_mut(&r.institution)
             .unwrap()
-            .procedure = r.procedure;
+            .procedure = r.procedure.clone();
+        if previous != r.procedure {
+            tx.emit(
+                ProcedureChanged {
+                    institution: r.institution,
+                    previous,
+                    procedure: r.procedure,
+                },
+                r.responses.into_iter().collect(),
+            )?;
+        }
         Ok(())
     })?;
+    membership::register(b)?;
     b.request::<Found>(|tx, r| {
+        require(!r.0.members.is_empty(), "founding needs members")?;
         require(
             r.0.rules.is_empty(),
             "found with proposed rather than adopted rules",
@@ -259,6 +311,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 terms: r.terms,
                 votes: BTreeMap::new(),
                 adopted: false,
+                enacted: false,
                 closed: false,
             },
         );
@@ -286,32 +339,23 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         p.votes.insert(r.person, r.support);
         let adopted = passed(&i.procedure, &i.members, &p.votes);
         if adopted {
-            require(
-                !tx.registered::<CanCommit>()
-                    || tx.call(CanCommit {
-                        institution: proposal.institution,
-                        person: r.person,
-                        custodian: proposal.terms.custodian,
-                    })?,
-                "custodian refuses to enact the decision",
-            )?;
-            for person in &proposal.terms.users {
-                tx.call(game_property::Permit {
-                    issuer: proposal.terms.custodian,
-                    person: *person,
-                    inventory: proposal.terms.inventory,
-                    allow: true,
-                })?;
-            }
-            let s = tx.edit::<Institutions>()?;
-            let p = s.proposals.get_mut(&r.proposal).unwrap();
+            let enacted = enact(tx, &proposal, r.person)?;
+            let p = tx
+                .edit::<Institutions>()?
+                .proposals
+                .get_mut(&r.proposal)
+                .unwrap();
             p.adopted = true;
+            p.enacted = enacted;
             p.closed = true;
-            s.groups
-                .get_mut(&proposal.institution)
-                .unwrap()
-                .rules
-                .push(proposal.terms);
+            tx.emit(
+                RuleAdopted {
+                    institution: proposal.institution,
+                    proposal: r.proposal,
+                    enacted,
+                },
+                i.members.iter().copied().collect(),
+            )?;
         } else if tx.get::<Institutions>()?.proposals[&r.proposal].votes.len() == i.members.len() {
             tx.edit::<Institutions>()?
                 .proposals
@@ -339,30 +383,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 },
             "individual decision unavailable",
         )?;
+        let enacted = if r.support {
+            enact(tx, &proposal, r.person)?
+        } else {
+            false
+        };
         if r.support {
-            require(
-                !tx.registered::<CanCommit>()
-                    || tx.call(CanCommit {
-                        institution: proposal.institution,
-                        person: r.person,
-                        custodian: proposal.terms.custodian,
-                    })?,
-                "custodian refuses to enact the decision",
+            tx.emit(
+                RuleAdopted {
+                    institution: proposal.institution,
+                    proposal: r.proposal,
+                    enacted,
+                },
+                vec![r.person],
             )?;
-            for person in &proposal.terms.users {
-                tx.call(game_property::Permit {
-                    issuer: proposal.terms.custodian,
-                    person: *person,
-                    inventory: proposal.terms.inventory,
-                    allow: true,
-                })?;
-            }
-            tx.edit::<Institutions>()?
-                .groups
-                .get_mut(&proposal.institution)
-                .unwrap()
-                .rules
-                .push(proposal.terms);
         }
         let p = tx
             .edit::<Institutions>()?
@@ -370,6 +404,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get_mut(&r.proposal)
             .unwrap();
         p.adopted = r.support;
+        p.enacted = enacted;
         p.closed = true;
         Ok(r.support)
     })?;
@@ -397,9 +432,7 @@ impl Institutions {
     fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Institution>) -> Result<()> {
         for i in rows {
             require(
-                !i.members.is_empty()
-                    && !i.name.is_empty()
-                    && i.offices.values().all(|p| i.members.contains(p)),
+                !i.name.is_empty() && i.offices.values().all(|p| i.members.contains(p)),
                 "invalid institution",
             )?;
             if let Procedure::Leader(p) = i.procedure {

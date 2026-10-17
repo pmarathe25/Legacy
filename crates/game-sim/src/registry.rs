@@ -57,7 +57,7 @@ type Stopper = Box<dyn Fn(&Host) -> Result<Option<String>> + Send + Sync>;
 pub(crate) struct Codec {
     pub key: &'static str,
     pub owner: usize,
-    pub encode: fn(&Stored) -> Result<Box<serde_json::value::RawValue>>,
+    pub encode: fn(&Stored, &mut dyn std::io::Write) -> Result<()>,
     pub decode: fn(&str) -> Result<Stored>,
     pub ids: fn(&Stored) -> Vec<u64>,
     pub validate: fn(&Stored) -> Result<()>,
@@ -71,15 +71,15 @@ pub(crate) struct Registry {
     pub resources: HashMap<TypeId, Codec>,
     pub owners: Vec<Arc<str>>,
     pub typed: HashMap<TypeId, Stored>,
-    pub batches: BTreeMap<String, usize>,
-    pub request_owners: BTreeMap<String, usize>,
-    pub listeners: BTreeMap<String, BTreeMap<String, Listener>>,
+    pub batches: HashMap<String, usize>,
+    pub request_owners: HashMap<String, usize>,
+    pub listeners: HashMap<String, BTreeMap<String, Listener>>,
     pub save_checks: Vec<fn(&Host) -> Result<()>>,
     pub guards: Vec<Guard>,
     pub stops: Vec<Stopper>,
     pub plugins: BTreeMap<String, u32>,
-    pub before: BTreeMap<String, BTreeMap<String, Listener>>,
-    pub decoders: BTreeMap<String, Decoder>,
+    pub before: HashMap<String, BTreeMap<String, Listener>>,
+    pub decoders: HashMap<String, Decoder>,
 }
 impl Registry {
     pub fn bind(&self, envelope: Envelope) -> Result<Pending> {
@@ -128,13 +128,12 @@ impl Builder {
             Codec {
                 key: T::KEY,
                 owner: self.owner,
-                encode: |s| {
-                    serde_json::value::to_raw_value(s.downcast_ref::<T>().expect("registered type"))
+                encode: |s, out| {
+                    serde_json::to_writer(out, s.downcast_ref::<T>().expect("registered type"))
                         .map_err(json_error)
                 },
                 decode: |v| {
                     let x: T = serde_json::from_str(v).map_err(json_error)?;
-                    x.validate()?;
                     Ok(Arc::new(x))
                 },
                 ids: |s| {

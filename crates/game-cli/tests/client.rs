@@ -90,3 +90,35 @@ fn the_existing_executable_discovers_added_scenario_files() {
             .contains("new-start: New start")
     );
 }
+
+#[test]
+fn everyday_actions_resolve_the_same_keys_as_typed_commands() {
+    for (text, expected) in [
+        (
+            "craft weave-basket 19",
+            Command::Craft {
+                recipe: "weave-basket".into(),
+                inventory: InventoryId(19),
+            },
+        ),
+        (
+            "plant rye 19",
+            Command::Plant {
+                crop: "rye".into(),
+                seed: InventoryId(19),
+            },
+        ),
+        (
+            "pursue whittle 19",
+            Command::Pursue {
+                activity: "whittle".into(),
+                inventory: InventoryId(19),
+            },
+        ),
+    ] {
+        match parse(text).unwrap() {
+            Input::Command(actual) => assert_eq!(actual, expected),
+            _ => panic!("wrong input"),
+        }
+    }
+}

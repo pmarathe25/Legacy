@@ -61,6 +61,90 @@ fn distant_observation_cannot_reveal_stock() {
 }
 
 #[test]
+fn searching_a_moved_store_records_absence_without_revealing_its_destination() {
+    let mut f = setup();
+    f.host
+        .dispatch(game_cargo::Deposit {
+            inventory: f.pack,
+            good: game_cargo::FOOD,
+            quantity: 10,
+        })
+        .unwrap();
+    for person in [f.other, f.guardian] {
+        f.host
+            .dispatch(ObserveStore {
+                person,
+                inventory: f.pack,
+            })
+            .unwrap();
+    }
+    f.host
+        .dispatch(game_property::Permit {
+            issuer: f.ruler,
+            person: f.other,
+            inventory: f.pack,
+            allow: true,
+        })
+        .unwrap();
+    f.host
+        .dispatch(ObserveSurroundings { person: f.other })
+        .unwrap();
+    let untouched = view(&f.host, f.guardian).unwrap();
+    f.host
+        .dispatch(game_transport::Move {
+            person: f.ruler,
+            destination: f.away,
+        })
+        .unwrap();
+    run(&mut f.host, SimTime(2 * MINUTE.0));
+    f.host
+        .dispatch(ObserveStore {
+            person: f.other,
+            inventory: f.pack,
+        })
+        .unwrap();
+    let facts = view(&f.host, f.other).unwrap();
+    assert!(known::<Stock>(&facts, &store_key(f.pack)).is_none());
+    assert_eq!(
+        facts
+            .get(store_key(f.pack).as_str())
+            .unwrap()
+            .value
+            .decode::<serde_json::Value>()
+            .unwrap(),
+        serde_json::json!({"absent_from":f.home})
+    );
+    assert_eq!(
+        known::<StoreLocation>(&facts, &location_key(f.pack))
+            .unwrap()
+            .area,
+        f.home
+    );
+    assert_eq!(view(&f.host, f.guardian).unwrap(), untouched);
+    assert_eq!(
+        f.host.get::<game_cargo::Cargo>().unwrap().0[&f.pack].amount(game_cargo::FOOD),
+        10
+    );
+    let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    for host in [&mut f.host, &mut loaded] {
+        host.dispatch(game_transport::Move {
+            person: f.ruler,
+            destination: f.home,
+        })
+        .unwrap();
+        run(host, SimTime(4 * MINUTE.0));
+        host.dispatch(ObserveSurroundings { person: f.other })
+            .unwrap();
+        assert_eq!(
+            known::<Stock>(&view(host, f.other).unwrap(), &store_key(f.pack)).unwrap()
+                [&game_cargo::FOOD],
+            10
+        );
+    }
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
 fn fixture_state_roundtrips_with_only_required_plugins() {
     let f = setup();
     let save = f.host.save().unwrap();

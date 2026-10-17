@@ -1,5 +1,4 @@
 use super::*;
-/// Defaults are the isolated survival fixture; campaigns select an authored profile.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rules {

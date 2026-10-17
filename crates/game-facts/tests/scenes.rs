@@ -51,6 +51,37 @@ fn shared_scenes_keep_individual_evidence_without_per_fact_payload_copies() {
     ));
 }
 #[test]
+fn payload_deltas_ignore_metadata_and_include_overrides_and_disappeared_memories() {
+    fn delta(new: &Facts<String>, old: &Facts<String>) -> BTreeMap<String, Option<String>> {
+        let mut changes = BTreeMap::new();
+        new.changed_values(old, |key, value| {
+            changes.insert(key.to_string(), value.map(|v| v.as_ref().clone()));
+        });
+        changes
+    }
+    let s = scene(&["patch:1", "roads:1"], None);
+    let mut facts = Facts::default();
+    facts.observe(s.clone(), stamp(1));
+    let old = facts.clone();
+    facts.observe(s.clone(), stamp(2));
+    assert!(delta(&facts, &old).is_empty());
+    facts.insert("roads:1".into(), fact("reported map", 3));
+    assert_eq!(
+        delta(&facts, &old),
+        BTreeMap::from([("roads:1".into(), Some("reported map".into()))])
+    );
+    let reported = facts.clone();
+    facts.observe(s, stamp(4));
+    assert_eq!(
+        delta(&facts, &reported),
+        BTreeMap::from([("roads:1".into(), Some("roads:1".into()))])
+    );
+    assert_eq!(
+        delta(&Facts::default(), &facts),
+        BTreeMap::from([("patch:1".into(), None), ("roads:1".into(), None)])
+    );
+}
+#[test]
 fn moves_membership_changes_overrides_and_wire_form_preserve_old_evidence() {
     let a = scene(&["patch:1", "roads:1"], None);
     let mut facts = Facts::default();

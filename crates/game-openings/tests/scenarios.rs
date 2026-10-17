@@ -36,6 +36,33 @@ fn builder() -> Builder {
     game_armies::plugin(&mut b).unwrap();
     game_pressure::plugin(&mut b).unwrap();
     game_communities::plugin(&mut b).unwrap();
+    game_stockpiles::plugin(&mut b).unwrap();
+    game_wayfaring::plugin(&mut b).unwrap();
+    game_care::plugin(&mut b).unwrap();
+    game_horticulture::plugin(&mut b).unwrap();
+    game_livelihoods::plugin(&mut b).unwrap();
+    game_pastimes::plugin(&mut b).unwrap();
+    game_heredity::plugin(&mut b).unwrap();
+    game_households::plugin(&mut b).unwrap();
+    game_exchange::plugin(&mut b).unwrap();
+    game_works::plugin(&mut b).unwrap();
+    game_preservation::plugin(&mut b).unwrap();
+    game_equipment::plugin(&mut b).unwrap();
+    game_affiliation::plugin(&mut b).unwrap();
+    game_grievances::plugin(&mut b).unwrap();
+    game_campaign::plugin(&mut b).unwrap();
+    game_vitality::plugin(&mut b).unwrap();
+    game_nutrition::plugin(&mut b).unwrap();
+    game_cultivars::plugin(&mut b).unwrap();
+    game_botany::plugin(&mut b).unwrap();
+    game_items::plugin(&mut b).unwrap();
+    game_sentiment::plugin(&mut b).unwrap();
+    game_demand::plugin(&mut b).unwrap();
+    game_food_storage::plugin(&mut b).unwrap();
+    game_maturation::plugin(&mut b).unwrap();
+    game_shelter::plugin(&mut b).unwrap();
+    game_exposure::plugin(&mut b).unwrap();
+    game_wellbeing::plugin(&mut b).unwrap();
     game_openings::plugin(&mut b).unwrap();
     b
 }

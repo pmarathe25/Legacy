@@ -95,9 +95,49 @@ fn supplies(tx: &Transaction<'_>, person: PersonId) -> Result<Option<InventoryId
             .then_some(id)
     }).next())
 }
+/// The affiliation owner records actual accepted membership, never edits our indexes.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Membership {
+    pub institution: InstitutionId,
+    pub person: PersonId,
+    pub attachment: Option<Attachment>,
+}
+impl Request for Membership {
+    const KEY: &'static str = "communities.membership";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("communities", 1)?;
     b.resource::<Communities>()?;
+    b.request::<Membership>(|tx, r| {
+        let group = &tx.get::<game_institutions::Institutions>()?.groups[&r.institution];
+        require(
+            group.members.contains(&r.person) == r.attachment.is_some(),
+            "membership differs from institution",
+        )?;
+        let area = group.jurisdiction;
+        let s = tx.edit::<Communities>()?;
+        if let Some(attachment) = r.attachment {
+            s.members.insert(r.person, r.institution);
+            s.attachments.insert(r.person, attachment);
+            s.places.entry(area).or_default().insert(r.institution, ());
+        } else {
+            s.members.remove(&r.person);
+            s.attachments.remove(&r.person);
+            let affected: Vec<_> = s
+                .attachments
+                .iter()
+                .filter(
+                    |(_, a)| matches!(a,Attachment::Fear(p)|Attachment::Loyalty(p) if *p==r.person),
+                )
+                .map(|(p, _)| *p)
+                .collect();
+            for person in affected {
+                s.attachments.insert(person, Attachment::Independent);
+            }
+        }
+        Ok(())
+    })?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Communities>()?.enabled = true;
         Ok(())

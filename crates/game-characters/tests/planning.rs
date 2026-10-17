@@ -19,6 +19,78 @@ fn prepared() -> Fixture {
     f.host.dispatch(game_physiology::Start).unwrap();
     f
 }
+
+#[test]
+fn a_missing_supplier_is_disproved_before_repeated_attempts_can_displace_local_foraging() {
+    let mut f = prepared();
+    f.host
+        .dispatch(game_cargo::Consume {
+            inventory: f.store,
+            good: game_cargo::FOOD,
+            quantity: 1000,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_cargo::Deposit {
+            inventory: f.pack,
+            good: game_cargo::FOOD,
+            quantity: 100,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_property::Permit {
+            issuer: f.ruler,
+            person: f.other,
+            inventory: f.pack,
+            allow: true,
+        })
+        .unwrap();
+    let bad = f.pack;
+    observe(&mut f, bad);
+    let own = f
+        .host
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(f.other),
+            capacity: 1000,
+        })
+        .unwrap();
+    let patch = f
+        .host
+        .dispatch(game_ecology::Create(game_ecology::Patch {
+            area: f.home,
+            good: game_cargo::FOOD,
+            stock: 100,
+            capacity: 100,
+            renew: 0,
+        }))
+        .unwrap();
+    f.host
+        .dispatch(game_transport::Move {
+            person: f.ruler,
+            destination: f.away,
+        })
+        .unwrap();
+    f.host
+        .dispatch(Register {
+            person: f.other,
+            mind: Default::default(),
+        })
+        .unwrap();
+    run(&mut f.host, SimTime(33 * MINUTE.0));
+    f.host.dispatch(Start).unwrap();
+    run(&mut f.host, SimTime(42 * MINUTE.0));
+    assert_eq!(f.host.get::<Minds>().unwrap().people[&f.other].failures, 1);
+    assert_eq!(
+        f.host.get::<game_ecology::Ecology>().unwrap().patches[&patch].stock,
+        90
+    );
+    assert_eq!(food(&f.host, bad), 100);
+    assert_eq!(food(&f.host, own), 0);
+    assert_eq!(
+        f.host.get::<game_physiology::Bodies>().unwrap().people[&f.other].hunger,
+        2
+    );
+}
 fn visit(f: &mut Fixture, destination: AreaId) {
     let arrives = f
         .host
@@ -110,7 +182,10 @@ fn committed_meal_plan_crosses_two_roads_and_survives_saving_in_transit() {
     ));
     assert_eq!(
         f.host.get::<Minds>().unwrap().people[&f.other].plan,
-        Some(Plan::Meal { inventory })
+        Some(Plan::Meal {
+            inventory,
+            good: Some(game_cargo::FOOD)
+        })
     );
     assert_eq!(food(&f.host, inventory), 100);
     let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
@@ -151,10 +226,10 @@ fn interrupted_travel_resumes_from_the_actual_road_position() {
     assert!(
         matches!(f.host.get::<game_transport::Positions>().unwrap().0[&f.other], Location::Road { elapsed, .. } if elapsed == MINUTE)
     );
-    run(&mut f.host, SimTime(36 * MINUTE.0));
-    // A minute waiting for review, one minute to finish this road, then two on the next.
+    run(&mut f.host, SimTime(35 * MINUTE.0));
+    // Resume immediately, finish the remaining minute, then traverse the next two.
     assert_eq!(food(&f.host, inventory), 100);
-    run(&mut f.host, SimTime(37 * MINUTE.0));
+    run(&mut f.host, SimTime(36 * MINUTE.0));
     assert_eq!(
         f.host.get::<game_transport::Positions>().unwrap().0[&f.other],
         Location::At(third)
@@ -313,13 +388,11 @@ fn urgent_hunger_interrupts_rest_and_death_clears_the_plan() {
         .unwrap();
     f.host.dispatch(Start).unwrap();
     run(&mut f.host, SimTime(100 * MINUTE.0));
-    assert!(
-        !f.host
-            .get::<game_sim::Actions>()
-            .unwrap()
-            .0
-            .contains_key(&f.other)
-    );
+    // The original rest was canceled; another decision can finish eating and
+    // begin a new rest instead of waiting another review interval.
+    let rest = &f.host.get::<game_sim::Actions>().unwrap().0[&f.other];
+    assert_eq!(rest.kind, "rest");
+    assert_eq!(rest.until, Some(SimTime(160 * MINUTE.0)));
     assert_eq!(food(&f.host, f.store), 990);
     assert_eq!(
         f.host.get::<game_physiology::Bodies>().unwrap().people[&f.other].hunger,
@@ -375,7 +448,7 @@ fn urgent_hunger_interrupts_authored_labor_without_refunding_consumed_inputs() {
         .unwrap();
     f.host.dispatch(Start).unwrap();
     run(&mut f.host, SimTime(100 * MINUTE.0));
-    assert_eq!(food(&f.host, inventory), 990);
+    assert_eq!(food(&f.host, inventory), 980);
     assert_eq!(
         f.host.get::<game_workshop::Workshop>().unwrap().waste[&game_cargo::TIMBER],
         5
@@ -385,11 +458,12 @@ fn urgent_hunger_interrupts_authored_labor_without_refunding_consumed_inputs() {
     assert_eq!(stock.amount(GoodId(8)), 0);
     assert!(stock.reserved.is_empty());
     assert!(
-        !f.host
+        f.host
             .get::<game_sim::Actions>()
             .unwrap()
             .0
-            .contains_key(&f.other)
+            .get(&f.other)
+            .is_none_or(|a| a.kind != "craft")
     );
     run(&mut f.host, SimTime(159 * MINUTE.0));
     assert_eq!(

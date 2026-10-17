@@ -325,16 +325,26 @@ fn admiration_can_support_a_leader_without_ballots_or_fear() {
             },
         })
         .unwrap();
-    let save = h.save().unwrap();
     assert!(
         h.dispatch(game_institutions::Decide {
             person: p[0],
             proposal,
             support: true
         })
-        .is_err()
+        .unwrap()
     );
-    assert_eq!(h.save().unwrap(), save);
+    let adopted = &h
+        .get::<game_institutions::Institutions>()
+        .unwrap()
+        .proposals[&proposal];
+    assert!(adopted.adopted);
+    assert!(!adopted.enacted);
+    // Refusal preserves standing access until the custodian separately withdraws it.
+    assert!(
+        h.get::<game_property::Property>()
+            .unwrap()
+            .allowed(p[0], packs[1])
+    );
     advance(&mut h, 15);
     h.dispatch(game_social_life::Talk {
         person: p[0],
@@ -453,4 +463,46 @@ fn resistance_can_force_the_aggressor_to_abandon_a_demand() {
             .is_empty()
     );
     assert!(h.get::<game_physiology::Bodies>().unwrap().people[&p[0]].health < 100);
+}
+
+#[test]
+fn members_meeting_elsewhere_keep_their_institutions_original_locality_index() {
+    let (mut h, p, _) = setup(10, true);
+    h.dispatch(game_social_life::Talk {
+        person: p[0],
+        other: p[1],
+    })
+    .unwrap();
+    run(&mut h);
+    let home = game_transport::area(h.get().unwrap(), p[0]).unwrap();
+    let away = h
+        .dispatch(game_land::CreateArea {
+            name: "Visiting place".into(),
+        })
+        .unwrap();
+    h.dispatch(game_land::Link {
+        from: home,
+        to: away,
+        duration: MINUTE,
+    })
+    .unwrap();
+    for person in &p {
+        h.dispatch(game_transport::Move {
+            person: *person,
+            destination: away,
+        })
+        .unwrap();
+    }
+    advance(&mut h, 60);
+    h.dispatch(game_social_life::Talk {
+        person: p[0],
+        other: p[1],
+    })
+    .unwrap();
+    advance(&mut h, 65);
+    let state = h.get::<game_communities::Communities>().unwrap();
+    assert!(state.places.contains_key(&home));
+    assert!(!state.places.contains_key(&away));
+    assert!(game_communities::view(&h, p[0]).unwrap().is_empty());
+    builder().load(&h.save().unwrap(), 4).unwrap();
 }

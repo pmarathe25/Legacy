@@ -7,6 +7,16 @@ pub struct Simulation {
     host: Host,
 }
 impl Simulation {
+    /// Developer research start: no history warmup or player assignment.
+    pub fn uncontrolled(
+        seed: u64,
+        workers: usize,
+        store: &mut game_content::Store,
+    ) -> Result<Self> {
+        let mut host = plugins::builder()?.build(seed, workers)?;
+        game_openings::seed_world(&mut host, store, seed)?;
+        Ok(Self { host })
+    }
     pub fn new(scenario: &str, seed: u64, workers: usize) -> Result<Self> {
         Self::with_content(
             scenario,
@@ -32,6 +42,9 @@ impl Simulation {
     }
     pub fn save(&self) -> Result<String> {
         self.host.save()
+    }
+    pub fn save_to(&self, writer: &mut dyn std::io::Write) -> Result<()> {
+        self.host.save_to(writer)
     }
     pub fn submit(&mut self, sequence: u64, command: Command) -> Result<CommandResult> {
         binding::submit(&mut self.host, sequence, command)

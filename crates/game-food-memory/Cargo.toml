@@ -1,0 +1,17 @@
+[package]
+name = "game-food-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-vitality.workspace = true
+game-sim.workspace = true
+game-nutrition.workspace = true
+game-property.workspace = true
+game-core.workspace = true
+game-knowledge.workspace = true
+game-objects.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -5,64 +5,64 @@ version = 1
 id = 20
 name = "Wild berries"
 mass = 1
-tags = ["food", "wild"]
-food = { portion = 6, relief = 35 }
+tags = ["food", "wild", "plant"]
+food = { portion = 6, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
 
 [data.objects.orchard-fruit]
 id = 21
 name = "Orchard fruit"
 mass = 2
-tags = ["food", "crop"]
-food = { portion = 5, relief = 45 }
+tags = ["food", "crop", "plant"]
+food = { portion = 5, relief = 45, shelf_days = 10, nutrients = { energy = 45, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
 
 [data.objects.roots]
 id = 22
 name = "Edible roots"
 mass = 2
-tags = ["food", "crop"]
-food = { portion = 8, relief = 50 }
+tags = ["food", "crop", "plant"]
+food = { portion = 8, relief = 50, shelf_days = 20, nutrients = { energy = 50, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
 
 [data.objects.beans]
 id = 23
 name = "Beans"
 mass = 1
-tags = ["food", "crop"]
-food = { portion = 8, relief = 55 }
+tags = ["food", "crop", "plant"]
+food = { portion = 8, relief = 55, shelf_days = 360, nutrients = { energy = 55, protein = 20, fat = 3, fibre = 10, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 0, alertness = 0 } }
 
 [data.objects.barley]
 id = 24
 name = "Barley"
 mass = 1
-tags = ["food", "crop"]
-food = { portion = 10, relief = 60 }
+tags = ["food", "crop", "plant"]
+food = { portion = 10, relief = 60, shelf_days = 360, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
 
 [data.objects.rice]
 id = 25
 name = "Rice"
 mass = 1
-tags = ["food", "crop"]
-food = { portion = 10, relief = 60 }
+tags = ["food", "crop", "plant"]
+food = { portion = 10, relief = 60, shelf_days = 360, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
 
 [data.objects.fish]
 id = 26
 name = "Fresh fish"
 mass = 2
 tags = ["food", "wild"]
-food = { portion = 5, relief = 45 }
+food = { portion = 5, relief = 45, shelf_days = 2, nutrients = { energy = 45, protein = 24, fat = 8, fibre = 0, vitamins = 4, minerals = 10 }, effects = { health = 0, mood = 0, alertness = 0 } }
 
 [data.objects.mushrooms]
 id = 27
 name = "Edible mushrooms"
 mass = 1
-tags = ["food", "wild"]
-food = { portion = 6, relief = 30 }
+tags = ["food", "wild", "plant"]
+food = { portion = 6, relief = 30, shelf_days = 3, nutrients = { energy = 30, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
 
 [data.objects.nuts]
 id = 28
 name = "Forest nuts"
 mass = 1
-tags = ["food", "wild"]
-food = { portion = 5, relief = 50 }
+tags = ["food", "wild", "plant"]
+food = { portion = 5, relief = 50, shelf_days = 180, nutrients = { energy = 50, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
 
 [data.objects.flour]
 id = 29
@@ -75,46 +75,46 @@ id = 30
 name = "Bread"
 mass = 1
 tags = ["food", "crafted"]
-food = { portion = 4, relief = 75 }
+food = { portion = 4, relief = 75, shelf_days = 5, nutrients = { energy = 75, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
 
 [data.objects.vegetable-stew]
 id = 31
 name = "Vegetable stew"
 mass = 2
 tags = ["food", "crafted"]
-food = { portion = 5, relief = 85 }
+food = { portion = 5, relief = 85, shelf_days = 2, nutrients = { energy = 85, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = 3, alertness = -2 } }
 
 [data.objects.dried-fish]
 id = 32
 name = "Dried fish"
 mass = 1
 tags = ["food", "crafted"]
-food = { portion = 3, relief = 65 }
+food = { portion = 3, relief = 65, shelf_days = 180, nutrients = { energy = 65, protein = 24, fat = 8, fibre = 0, vitamins = 4, minerals = 10 }, effects = { health = 0, mood = 0, alertness = 0 } }
 
 [data.objects.berry-cakes]
 id = 33
 name = "Berry cakes"
 mass = 1
 tags = ["food", "crafted"]
-food = { portion = 4, relief = 65 }
+food = { portion = 4, relief = 65, shelf_days = 7, nutrients = { energy = 65, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }
 
 [data.objects.healing-herbs]
 id = 34
 name = "Healing herbs"
 mass = 1
-tags = ["herb", "ingredient"]
+tags = ["herb", "ingredient", "plant"]
 
 [data.objects.reeds]
 id = 35
 name = "Reeds"
 mass = 1
-tags = ["fiber", "wild"]
+tags = ["fiber", "wild", "plant"]
 
 [data.objects.flax]
 id = 36
 name = "Flax fiber"
 mass = 1
-tags = ["fiber", "crop"]
+tags = ["fiber", "crop", "plant"]
 
 [data.objects.clay]
 id = 37
@@ -138,7 +138,7 @@ tags = ["mineral", "material"]
 id = 40
 name = "Charcoal"
 mass = 1
-tags = ["fuel", "material"]
+tags = ["fuel", "material", "fuel-hours:3"]
 
 [data.objects.iron]
 id = 41
@@ -150,7 +150,7 @@ tags = ["metal", "material"]
 id = 42
 name = "Linen cloth"
 mass = 1
-tags = ["textile", "material"]
+tags = ["repair-cloth", "textile", "material"]
 
 [data.objects.rope]
 id = 43
@@ -186,43 +186,43 @@ tags = ["tool", "crafted"]
 id = 48
 name = "Root seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.bean-seed]
 id = 49
 name = "Bean seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.barley-seed]
 id = 50
 name = "Barley seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.rice-seed]
 id = 51
 name = "Rice seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.flax-seed]
 id = 52
 name = "Flax seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.herb-seed]
 id = 53
 name = "Herb seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.fruit-cuttings]
 id = 54
 name = "Fruit cuttings"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 
 [data.objects.reed-mat]
 id = 55

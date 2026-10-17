@@ -90,14 +90,21 @@ impl Resource for Social {
         Ok(())
     }
     fn validate_changes(&self, old: &Self) -> Result<()> {
-        for (person, links) in self.relationships.changed(&old.relationships) {
-            for (other, relation) in links {
+        let empty_links = Table::new();
+        for (person, links, previous) in self.relationships.changed_pairs(&old.relationships) {
+            for (other, relation) in links.changed(previous.unwrap_or(&empty_links)) {
                 require(person != other, "self relationship")?;
                 relation.validate()?;
             }
         }
-        for (_, values) in self.values.changed(&old.values) {
-            validate_values(values)?;
+        let empty_values = Table::new();
+        for (_, values, previous) in self.values.changed_pairs(&old.values) {
+            require(
+                values
+                    .changed(previous.unwrap_or(&empty_values))
+                    .all(|(key, v)| !key.trim().is_empty() && (-100..=100).contains(v)),
+                "invalid personal values",
+            )?;
         }
         Ok(())
     }

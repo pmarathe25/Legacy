@@ -55,6 +55,16 @@ impl Request for Birth {
     const KEY: &'static str = "lifecycle.birth";
     type Response = PersonId;
 }
+/// Reproductive aging follows the body's inherited natural lifespan, independently of attachment.
+pub fn fertile(body: &game_physiology::Body, adult_age: SimDuration, at: SimTime) -> bool {
+    let age = at.0.saturating_sub(body.born.0);
+    body.alive
+        && body.kind == game_physiology::Kind::Mortal
+        && age >= adult_age.0
+        && body
+            .life_limit
+            .is_some_and(|end| age < end.0.saturating_sub(body.born.0) / 3 * 2)
+}
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conceive {
     pub mother: PersonId,
@@ -153,8 +163,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             game_physiology::capable(tx, person)?;
             let body = &tx.get::<game_physiology::Bodies>()?.people[&person];
             require(
-                tx.now().0 - body.born.0 >= tx.get::<Population>()?.adult_age.0,
-                "parent is immature",
+                fertile(body, tx.get::<Population>()?.adult_age, tx.now()),
+                "parent is outside their reproductive lifespan",
             )?;
         }
         require(
@@ -185,20 +195,44 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(id)
     })?;
     b.request::<Deliver>(|tx, r| {
-        let p = tx
-            .edit::<Population>()?
+        let Some(p) = tx
+            .get::<Population>()?
             .pregnancies
-            .remove(&r.pregnancy)
-            .unwrap();
-        if game_physiology::capable(tx, p.mother).is_ok()
-            && let Ok(area) = game_transport::area(tx.get()?, p.mother)
-        {
+            .get(&r.pregnancy)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if game_physiology::capable(tx, p.mother).is_err() {
+            tx.edit::<Population>()?.pregnancies.remove(&r.pregnancy);
+        } else if let Ok(area) = game_transport::area(tx.get()?, p.mother) {
+            tx.edit::<Population>()?.pregnancies.remove(&r.pregnancy);
             tx.call(Birth {
                 mother: p.mother,
                 father: p.father,
                 caregiver: p.caregiver,
                 area,
             })?;
+        } else {
+            // Travel cannot silently erase a pregnancy. Deliver at the next settled location.
+            let next = match tx.get::<game_transport::Positions>()?.0.get(&p.mother) {
+                Some(game_transport::Location::Transit { arrives, .. }) => {
+                    (*arrives).max(tx.now().after(MINUTE)?)
+                }
+                _ => tx.now().after(HOUR)?,
+            };
+            let job = tx.schedule(
+                next,
+                15,
+                Deliver {
+                    pregnancy: r.pregnancy,
+                },
+            )?;
+            tx.edit::<Population>()?
+                .pregnancies
+                .get_mut(&r.pregnancy)
+                .unwrap()
+                .job = job;
         }
         Ok(())
     })?;

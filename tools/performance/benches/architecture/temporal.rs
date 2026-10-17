@@ -112,6 +112,8 @@ pub fn verify() {
             hunger: edge(27),
             fatigue: edge(31),
             health: (x >> 35) % 101,
+            maximum_health: None,
+            fatigue_fraction: 0,
             resting: x & 4 != 0,
             last: SimTime(last),
             life_limit: (x & 8 != 0).then_some(SimTime(last.saturating_add(x % 500))),
@@ -151,6 +153,8 @@ pub fn measure(n: usize) {
             resting: i % 2 == 0,
             last: SimTime(0),
             life_limit: None,
+            maximum_health: None,
+            fatigue_fraction: 0,
         })
         .collect();
     let at = SimTime(DAY.0);

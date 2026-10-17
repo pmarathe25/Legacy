@@ -37,6 +37,7 @@ fn generated_individuals_use_new_authored_traits_and_their_actual_ranges() {
             minimum: -20,
             maximum: -10,
             default: -15,
+            founder_spread: 65535,
             weights: Default::default(),
         },
     );

@@ -1,9 +1,11 @@
 //! Claims and standing permissions never replace physical custody.
+mod use_goods;
 use game_core::*;
 use game_sim::*;
 use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub use use_goods::*;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Claim {
     pub claimant: PersonId,
@@ -123,6 +125,7 @@ impl Event for Taking {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("property", 1)?;
     b.resource::<Property>()?;
+    use_goods::register(b)?;
     b.validate_save(|h| {
         let p = h.get::<Property>()?;
         for id in p.claims.keys().chain(p.access.keys()) {
@@ -168,12 +171,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             "actor is elsewhere",
         )?;
         let from = r.transfer.from;
+        let unauthorized = !tx.get::<Property>()?.allowed(r.actor, from);
+        tx.call(Use {
+            actor: r.actor,
+            inventory: from,
+            purpose: "taking".into(),
+        })?;
         tx.call(r.transfer)?;
         tx.emit(
             Taking {
                 actor: r.actor,
                 inventory: from,
-                unauthorized: r.unauthorized,
+                unauthorized,
             },
             vec![r.actor],
         )

@@ -44,6 +44,14 @@ pub enum Command {
         recipe: String,
         inventory: InventoryId,
     },
+    Plant {
+        crop: String,
+        seed: InventoryId,
+    },
+    Pursue {
+        activity: String,
+        inventory: InventoryId,
+    },
     Treat {
         patient: PersonId,
         supplies: InventoryId,
@@ -121,6 +129,7 @@ pub struct PlayerView {
     pub battles: Vec<game_conflict::BattleView>,
     pub neighbors: Vec<game_social_life::Neighbor>,
     pub communities: Vec<game_communities::CommunityView>,
+    pub pastimes: BTreeMap<String, u64>,
     pub events: Vec<PlayerEvent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

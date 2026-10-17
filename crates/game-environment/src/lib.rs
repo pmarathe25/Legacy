@@ -31,11 +31,22 @@ impl Request for ConfigureArea {
     const KEY: &'static str = "environment.configure-area";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Changed {
+    pub area: AreaId,
+    pub previous: Option<Climate>,
+}
+impl Event for Changed {
+    const KEY: &'static str = "environment.changed";
+}
 pub fn at<'a>(tx: &'a Transaction<'_>, area: AreaId) -> Result<&'a Season> {
+    climate(tx, area)?.at(tx.now())
+}
+pub fn climate<'a>(tx: &'a Transaction<'_>, area: AreaId) -> Result<&'a Climate> {
     if let Some(climate) = tx.get::<Regions>()?.0.get(&area) {
-        climate.at(tx.now())
+        Ok(climate)
     } else {
-        tx.get::<Climate>()?.at(tx.now())
+        tx.get::<Climate>()
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +72,44 @@ impl Resource for Climate {
     }
 }
 impl Climate {
+    pub fn matching_duration(
+        &self,
+        from: SimTime,
+        to: SimTime,
+        matches: impl Fn(&Season) -> bool,
+    ) -> Result<SimDuration> {
+        require(to >= from, "climate interval runs backwards")?;
+        let year = self.year()?;
+        require(year > 0, "climate has not been configured")?;
+        let span = to.0 - from.0;
+        let good: u64 = self
+            .seasons
+            .iter()
+            .filter(|s| matches(s))
+            .map(|s| s.duration.0)
+            .sum();
+        let mut result = span / year * good;
+        let mut left = span % year;
+        let mut offset = from.0 % year;
+        while left > 0 {
+            for season in &self.seasons {
+                if offset >= season.duration.0 {
+                    offset -= season.duration.0;
+                    continue;
+                }
+                let length = (season.duration.0 - offset).min(left);
+                offset = 0;
+                if matches(season) {
+                    result += length;
+                }
+                left -= length;
+                if left == 0 {
+                    break;
+                }
+            }
+        }
+        Ok(SimDuration(result))
+    }
     pub fn year(&self) -> Result<u64> {
         self.seasons.iter().try_fold(0u64, |q, s| {
             q.checked_add(s.duration.0).ok_or(Error::Overflow)
@@ -98,7 +147,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<ConfigureArea>(|tx, r| {
         r.climate.validate()?;
         require(!r.climate.seasons.is_empty(), "empty regional climate")?;
+        let previous = tx.get::<Regions>()?.0.get(&r.area).cloned().or_else(|| {
+            tx.get::<Climate>()
+                .ok()
+                .filter(|c| !c.seasons.is_empty())
+                .cloned()
+        });
         tx.edit::<Regions>()?.0.insert(r.area, r.climate);
+        tx.emit(
+            Changed {
+                area: r.area,
+                previous,
+            },
+            vec![],
+        )?;
         Ok(())
     })?;
     b.request::<Configure>(|tx, r| {

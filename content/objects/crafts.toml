@@ -1,0 +1,194 @@
+id = "objects/crafts"
+version = 1
+
+[data.objects.basket]
+id = 182
+name = "Woven basket"
+mass = 2
+tags = ["crafted", "household"]
+
+[data.objects.wooden-bowl]
+id = 183
+name = "Wooden bowl"
+mass = 1
+tags = ["crafted", "household"]
+
+[data.objects.wooden-spoon]
+id = 184
+name = "Wooden spoon"
+mass = 1
+tags = ["crafted", "household"]
+
+[data.objects.clay-cup]
+id = 185
+name = "Clay cup"
+mass = 1
+tags = ["crafted", "household"]
+
+[data.objects.clay-lamp]
+id = 186
+name = "Clay lamp"
+mass = 2
+tags = ["crafted", "household"]
+
+[data.objects.candle]
+id = 187
+name = "Wax candle"
+mass = 1
+tags = ["crafted", "pastime"]
+
+[data.objects.oil-lamp-fuel]
+id = 188
+name = "Prepared lamp oil"
+mass = 1
+tags = ["crafted", "pastime"]
+
+[data.objects.incense]
+id = 189
+name = "Resin incense"
+mass = 1
+tags = ["crafted", "pastime"]
+
+[data.objects.herbal-tea]
+id = 190
+name = "Herbal tea leaves"
+mass = 1
+tags = ["crafted", "pastime"]
+
+[data.objects.flower-garland]
+id = 191
+name = "Flower garland"
+mass = 1
+tags = ["crafted", "pastime"]
+
+[data.objects.wooden-flute]
+id = 192
+name = "Wooden flute"
+mass = 1
+tags = ["crafted", "instrument"]
+
+[data.objects.reed-pipe]
+id = 193
+name = "Reed pipe"
+mass = 1
+tags = ["crafted", "instrument"]
+
+[data.objects.clay-ocarina]
+id = 194
+name = "Clay ocarina"
+mass = 1
+tags = ["crafted", "instrument"]
+
+[data.objects.carved-token]
+id = 195
+name = "Carved wooden token"
+mass = 1
+tags = ["crafted", "art"]
+
+[data.objects.painted-tile]
+id = 196
+name = "Painted tile"
+mass = 2
+tags = ["crafted", "art"]
+
+[data.objects.woven-ribbon]
+id = 197
+name = "Woven ribbon"
+mass = 1
+tags = ["crafted", "art"]
+
+[data.objects.tunic]
+id = 199
+name = "Linen tunic"
+mass = 2
+tags = ["warmth:7", "crafted", "clothing"]
+
+[data.objects.cotton-tunic]
+id = 200
+name = "Cotton tunic"
+mass = 2
+tags = ["warmth:7", "crafted", "clothing"]
+
+[data.objects.cloak]
+id = 201
+name = "Canvas cloak"
+mass = 3
+tags = ["warmth:7", "crafted", "clothing"]
+
+[data.objects.sandals]
+id = 202
+name = "Fiber sandals"
+mass = 1
+tags = ["crafted", "clothing"]
+
+[data.objects.blanket]
+id = 203
+name = "Woven blanket"
+mass = 3
+tags = ["warmth:7", "crafted", "household"]
+
+[data.objects.bandages]
+id = 204
+name = "Clean bandages"
+mass = 1
+tags = ["crafted", "medicine"]
+
+[data.objects.salve]
+id = 205
+name = "Herbal salve"
+mass = 1
+tags = ["crafted", "medicine"]
+
+[data.objects.soap]
+id = 206
+name = "Lye soap"
+mass = 1
+tags = ["crafted", "household"]
+
+[data.objects.bronze-tools]
+id = 209
+name = "Bronze tools"
+mass = 3
+tags = ["crafted", "tool"]
+
+[data.objects.stone-tools]
+id = 210
+name = "Knapped stone tools"
+mass = 2
+tags = ["crafted", "tool"]
+
+[data.objects.copper-wire]
+id = 211
+name = "Copper wire"
+mass = 1
+tags = ["crafted", "material"]
+
+[data.objects.bronze-bell]
+id = 212
+name = "Bronze bell"
+mass = 2
+tags = ["crafted", "instrument"]
+
+[data.objects.roof-tile]
+id = 213
+name = "Roof tile"
+mass = 3
+tags = ["crafted", "material"]
+
+[data.objects.slate-shingle]
+id = 214
+name = "Slate shingle"
+mass = 3
+tags = ["crafted", "material"]
+
+[data.objects.mosaic]
+id = 215
+name = "Small mosaic"
+mass = 3
+tags = ["crafted", "art"]
+
+[data.objects.written-page]
+id = 216
+name = "Written page"
+mass = 1
+tags = ["crafted", "writing"]

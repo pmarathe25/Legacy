@@ -211,7 +211,10 @@ fn main() {
         for person in &people {
             let options = host.query(Options(*person)).unwrap();
             assert_eq!(options.len(), 1 + local_patches);
-            assert!(options.contains(&game_provisioning::Plan::Meal { inventory: store }));
+            assert!(options.contains(&game_provisioning::Plan::Meal {
+                inventory: store,
+                good: Some(game_cargo::FOOD)
+            }));
         }
         choices += start.elapsed().as_secs_f64() * 1000.;
         let start = Instant::now();

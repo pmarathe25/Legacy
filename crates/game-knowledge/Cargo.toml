@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-diagnostics.workspace = true
 game-storage.workspace = true
 game-packed.workspace = true
 game-facts.workspace = true

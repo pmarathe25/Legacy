@@ -1,0 +1,87 @@
+id = "traits/abilities"
+version = 1
+[data.traits.intelligence]
+founder_spread = 0
+name = "Intelligence"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.foresight]
+founder_spread = 0
+name = "Foresight"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.learning]
+founder_spread = 0
+name = "Learning"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.hardiness]
+founder_spread = 0
+name = "Hardiness"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.size]
+founder_spread = 0
+name = "Size"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.strength]
+founder_spread = 0
+name = "Strength"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.speed]
+founder_spread = 0
+name = "Speed"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.endurance]
+founder_spread = 0
+name = "Endurance"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.agility]
+founder_spread = 0
+name = "Agility"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.constitution]
+founder_spread = 0
+name = "Constitution"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.robustness]
+founder_spread = 0
+name = "Robustness"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.resilience]
+founder_spread = 0
+name = "Mental resilience"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.longevity]
+founder_spread = 0
+name = "Longevity"
+minimum = 250
+maximum = 3000
+default = 1000

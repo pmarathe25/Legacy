@@ -1,4 +1,5 @@
 //! Character-local facts and delayed reports. Queries never teach facts.
+pub use game_facts::with_prefix;
 use game_storage::{Records, Table};
 use std::sync::Arc;
 mod persistence;
@@ -27,6 +28,9 @@ impl Eq for Facts {}
 impl Facts {
     pub fn insert(&mut self, key: Arc<str>, mut fact: Fact) -> Option<Fact> {
         fact.value = FactValue::promote(fact.value, &key);
+        if matches!(fact.value.as_ref(), FactValue::Other(_)) {
+            self.1 = None;
+        }
         self.0.insert(key, fact)
     }
 }
@@ -47,12 +51,11 @@ impl FromIterator<(Arc<str>, Fact)> for Facts {
 }
 pub type Fact = game_facts::Fact<FactValue>;
 pub type FactRef<'a> = game_facts::FactRef<'a, FactValue>;
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(transparent)]
+#[derive(Clone, Debug, Default)]
 pub struct Knowledge(
     pub game_packed::Packed<PersonId, Facts>,
-    #[serde(skip)] Records<Subject, Cached>,
-    #[serde(skip)] Records<AreaId, scenes::CachedScene>,
+    Records<Subject, Cached>,
+    Records<AreaId, scenes::CachedScene>,
 );
 impl PartialEq for Knowledge {
     fn eq(&self, other: &Self) -> bool {
@@ -179,22 +182,34 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.validate_save(|host| {
+        let people = &host.get::<Knowledge>()?.0;
         require(
-            host.get::<Knowledge>()?.0.values().all(|facts| {
-                facts
-                    .values()
-                    .all(|f| f.observed <= host.now() && f.revision <= host.revision())
-            }),
+            people
+                .values()
+                .all(|f| f.valid_at(host.now(), host.revision())),
             "knowledge from a future observation",
         )
     });
     geography::register(b)?;
     b.request::<ObserveStore>(|tx, r| {
-        let area = game_cargo::locality(tx, r.inventory)?;
-        require(
-            game_transport::area(tx.get()?, r.person)? == area,
-            "cannot observe distant inventory",
-        )?;
+        let area = game_transport::area(tx.get()?, r.person)?;
+        if game_cargo::locality(tx, r.inventory).ok() != Some(area) {
+            let memory = tx
+                .get::<Knowledge>()?
+                .0
+                .get(&r.person)
+                .and_then(|f| known::<StoreLocation>(f, &location_key(r.inventory)));
+            require(
+                memory.is_some_and(|m| m.area == area),
+                "cannot observe distant inventory",
+            )?;
+            return geography::remember(
+                tx,
+                r.person,
+                Subject::Stock(r.inventory),
+                FactValue::Other(serde_json::json!({"absent_from":area})),
+            );
+        }
         let carrier = match tx.get::<game_cargo::Cargo>()?.0[&r.inventory].custody {
             game_cargo::Custody::Carried(p) => Some(p),
             _ => None,

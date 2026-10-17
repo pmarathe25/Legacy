@@ -9,3 +9,5 @@ The executable uses bundled [mimalloc](https://github.com/purpleprotocol/mimallo
 **Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
 
 **Verification:** Run `cargo test -p game-cli`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+
+`craft <recipe> <inventory>`, `plant <crop> <inventory>`, and `pursue <activity> <inventory>` expose production, new plantings, and personal pastimes. Keys come from the runtime catalogs; numeric inventories come from observations or developer fixtures. `status` includes the player's completed pastime counts.

@@ -1,0 +1,242 @@
+id = "pastimes/daily"
+version = 1
+
+[data.activities.whittle]
+name = "Whittle a keepsake"
+inputs = { timber = 1 }
+requires = {  }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "patience"
+concept = "carving"
+skill = "carving"
+
+[data.activities.play-reed-pipe]
+name = "Play a reed pipe"
+inputs = {  }
+requires = { reed-pipe = 1 }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "music"
+skill = "music"
+
+[data.activities.play-flute]
+name = "Play a wooden flute"
+inputs = {  }
+requires = { wooden-flute = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "music"
+skill = "music"
+
+[data.activities.play-ocarina]
+name = "Play a clay ocarina"
+inputs = {  }
+requires = { clay-ocarina = 1 }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "music"
+skill = "music"
+
+[data.activities.ring-bell]
+name = "Practice bell rhythms"
+inputs = {  }
+requires = { bronze-bell = 1 }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "music"
+skill = "music"
+
+[data.activities.sketch]
+name = "Sketch on paper"
+inputs = { paper = 1, ink = 1 }
+requires = {  }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "painting"
+skill = "painting"
+
+[data.activities.write]
+name = "Write a personal reflection"
+inputs = { paper = 1, ink = 1 }
+requires = {  }
+duration = 1200000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "writing"
+skill = "writing"
+
+[data.activities.read]
+name = "Read a written page"
+inputs = {  }
+requires = { written-page = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "writing"
+skill = "reading"
+
+[data.activities.paint]
+name = "Practice with earth pigments"
+inputs = { pigment = 1, bark = 1 }
+requires = {  }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "painting"
+skill = "painting"
+
+[data.activities.weave-pattern]
+name = "Try a woven pattern"
+inputs = { linen-thread = 1 }
+requires = {  }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "weaving"
+skill = "weaving"
+
+[data.activities.savor-tea]
+name = "Prepare and savor herbal tea"
+inputs = { herbal-tea = 1, timber = 1 }
+requires = {  }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "hedonism"
+concept = "herbalism"
+skill = "herbalism"
+
+[data.activities.savor-leaf-tea]
+name = "Prepare leaf tea"
+inputs = { tea-leaf = 2, timber = 1 }
+requires = {  }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "reflection"
+skill = "herbalism"
+
+[data.activities.burn-incense]
+name = "Reflect with incense"
+inputs = { incense = 1 }
+requires = {  }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "reflection"
+skill = "reflection"
+
+[data.activities.candlelight]
+name = "Sit quietly by candlelight"
+inputs = { candle = 1 }
+requires = {  }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "reflection"
+skill = "reflection"
+
+[data.activities.lamplight]
+name = "Reflect by lamplight"
+inputs = { oil-lamp-fuel = 1 }
+requires = { clay-lamp = 1 }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "reflection"
+skill = "reflection"
+
+[data.activities.arrange-garland]
+name = "Arrange a flower garland"
+inputs = { flower-garland = 1 }
+requires = {  }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "decoration"
+skill = "decoration"
+
+[data.activities.arrange-mosaic]
+name = "Study a mosaic pattern"
+inputs = {  }
+requires = { mosaic = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "decoration"
+skill = "decoration"
+
+[data.activities.token-game]
+name = "Practice a game of tokens"
+inputs = {  }
+requires = { carved-token = 2 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "play"
+skill = "play"
+
+[data.activities.tend-clothing]
+name = "Clean and mend a tunic"
+inputs = { linen-thread = 1, soap = 1 }
+requires = { tunic = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "discipline"
+concept = "cleanliness"
+skill = "weaving"
+
+[data.activities.braid-ribbon]
+name = "Practice decorative braiding"
+inputs = { hemp-thread = 1 }
+requires = { woven-ribbon = 1 }
+duration = 600000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "decoration"
+skill = "weaving"
+
+[data.activities.nature-journal]
+name = "Keep a nature journal"
+inputs = { moss-paper = 1, berry-ink = 1 }
+requires = {  }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "writing"
+skill = "writing"
+
+[data.activities.flower-study]
+name = "Study pressed flowers"
+inputs = {  }
+requires = { pressed-flowers = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "contemplation"
+concept = "decoration"
+skill = "decoration"
+
+[data.activities.doll-play]
+name = "Play with a woven doll"
+inputs = {  }
+requires = { woven-doll = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "play"
+skill = "play"
+
+[data.activities.mask-play]
+name = "Practice a masked story"
+inputs = {  }
+requires = { painted-mask = 1 }
+duration = 900000
+satisfaction_span = 14400000
+affinity = "creativity"
+concept = "play"
+skill = "storytelling"

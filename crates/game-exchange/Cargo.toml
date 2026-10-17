@@ -1,0 +1,34 @@
+[package]
+name = "game-exchange"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-vitality.workspace = true
+game-sentiment.workspace = true
+game-demand.workspace = true
+game-nutrition.workspace = true
+game-environment.workspace = true
+game-diagnostics.workspace=true
+game-care.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-characters.workspace = true
+game-social-life.workspace = true
+game-relationships.workspace = true
+game-traits.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-transport.workspace = true
+game-objects.workspace = true
+game-agreements.workspace = true
+game-health.workspace = true
+game-lineage.workspace = true
+game-physiology.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-items.workspace = true
+game-land.workspace = true

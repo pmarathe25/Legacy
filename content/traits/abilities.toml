@@ -1,0 +1,74 @@
+id = "traits/abilities"
+version = 1
+[data.traits.intelligence]
+name = "Intelligence"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.foresight]
+name = "Foresight"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.learning]
+name = "Learning"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.hardiness]
+name = "Hardiness"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.size]
+name = "Size"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.strength]
+name = "Strength"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.speed]
+name = "Speed"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.endurance]
+name = "Endurance"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.agility]
+name = "Agility"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.constitution]
+name = "Constitution"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.robustness]
+name = "Robustness"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.resilience]
+name = "Mental resilience"
+minimum = 0
+maximum = 16000
+default = 1000
+
+[data.traits.longevity]
+name = "Longevity"
+minimum = 250
+maximum = 3000
+default = 1000

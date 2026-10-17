@@ -15,18 +15,6 @@ pub fn roads_key(id: AreaId) -> String {
 pub fn patch_key(id: u64) -> String {
     format!("patch:{id}")
 }
-/// Seek directly to a semantic key namespace; unrelated memories stay cold.
-pub fn with_prefix<'a>(
-    facts: &'a Facts,
-    prefix: &'a str,
-) -> impl Iterator<Item = (&'a Arc<str>, FactRef<'a>)> {
-    facts
-        .range((
-            std::ops::Bound::Included(prefix),
-            std::ops::Bound::Unbounded,
-        ))
-        .take_while(move |(key, _)| key.starts_with(prefix))
-}
 pub fn known<T: serde::de::DeserializeOwned + Clone + 'static>(
     facts: &Facts,
     key: &str,
@@ -107,6 +95,7 @@ impl Request for ObservePatch {
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.request::<ObserveSurroundings>(|tx, r| {
+        let _measurement = game_diagnostics::span("observe surroundings");
         let area = game_transport::area(tx.get()?, r.person)?;
         if tx.has_before::<ObservePatch>() {
             let roads = tx
@@ -159,8 +148,9 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 let known = memory
                     .1
                     .get(&Subject::Stock(*id))
-                    .map(|cached| facts.contains_key(cached.key.as_ref()))
-                    .unwrap_or_else(|| facts.contains_key(store_key(*id).as_str()));
+                    .map(|cached| facts.get(cached.key.as_ref()))
+                    .unwrap_or_else(|| facts.get(store_key(*id).as_str()))
+                    .is_some_and(|f| matches!(f.value.as_ref(), FactValue::Stock(_)));
                 if known {
                     return false;
                 }

@@ -1,0 +1,830 @@
+id = "livelihoods/daily"
+version = 1
+[data]
+interval = 7200000
+
+[[data.goals]]
+object = "bread"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "porridge"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "flatbread"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "lentil-soup"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "pea-soup"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "roast-chestnuts"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "nut-bread"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "dried-fruit"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "fruit-preserve"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "pickled-vegetables"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "salted-fish"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "smoked-shellfish"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "rice-cakes"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "sesame-cakes"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "honey-cakes"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "roast-squash"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "herbed-roots"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "greens-stew"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "onion-broth"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "olive-bread"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "date-cakes"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "vegetable-stew"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "dried-fish"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "berry-cakes"
+quantity = 12
+priority = 50
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "medicine"
+quantity = 4
+priority = 70
+affinity = "empathy"
+concept = "care"
+
+[[data.goals]]
+object = "bandages"
+quantity = 8
+priority = 50
+affinity = "empathy"
+concept = "care"
+
+[[data.goals]]
+object = "salve"
+quantity = 4
+priority = 45
+affinity = "empathy"
+concept = "care"
+
+[[data.goals]]
+object = "tunic"
+quantity = 1
+priority = 45
+affinity = "discipline"
+concept = "weaving"
+
+[[data.goals]]
+object = "cotton-tunic"
+quantity = 1
+priority = 45
+affinity = "discipline"
+concept = "weaving"
+
+[[data.goals]]
+object = "cloak"
+quantity = 1
+priority = 45
+affinity = "patience"
+concept = "weaving"
+
+[[data.goals]]
+object = "blanket"
+quantity = 1
+priority = 45
+affinity = "patience"
+concept = "weaving"
+
+[[data.goals]]
+object = "sandals"
+quantity = 1
+priority = 45
+affinity = "discipline"
+concept = "weaving"
+
+[[data.goals]]
+object = "soap"
+quantity = 6
+priority = 40
+affinity = "discipline"
+concept = "cleanliness"
+
+[[data.goals]]
+object = "basket"
+quantity = 1
+priority = 40
+affinity = "discipline"
+concept = "weaving"
+
+[[data.goals]]
+object = "pottery"
+quantity = 3
+priority = 40
+affinity = "patience"
+concept = "pottery"
+
+[[data.goals]]
+object = "wooden-bowl"
+quantity = 1
+priority = 40
+affinity = "patience"
+concept = "carving"
+
+[[data.goals]]
+object = "stone-tools"
+quantity = 2
+priority = 50
+affinity = "discipline"
+concept = "knapping"
+
+[[data.goals]]
+object = "iron-tools"
+quantity = 1
+priority = 55
+affinity = "ambition"
+concept = "smithing"
+
+[[data.goals]]
+object = "bronze-tools"
+quantity = 1
+priority = 55
+affinity = "ambition"
+concept = "smithing"
+
+[[data.goals]]
+object = "fishing-net"
+quantity = 1
+priority = 45
+affinity = "patience"
+concept = "weaving"
+
+[[data.goals]]
+object = "candle"
+quantity = 8
+priority = 40
+affinity = "contemplation"
+concept = "reflection"
+
+[[data.goals]]
+object = "oil-lamp-fuel"
+quantity = 8
+priority = 40
+affinity = "contemplation"
+concept = "reflection"
+
+[[data.goals]]
+object = "incense"
+quantity = 6
+priority = 45
+affinity = "contemplation"
+concept = "reflection"
+
+[[data.goals]]
+object = "herbal-tea"
+quantity = 8
+priority = 45
+affinity = "hedonism"
+concept = "herbalism"
+
+[[data.goals]]
+object = "flower-garland"
+quantity = 2
+priority = 40
+affinity = "creativity"
+concept = "decoration"
+
+[[data.goals]]
+object = "reed-pipe"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "music"
+
+[[data.goals]]
+object = "wooden-flute"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "music"
+
+[[data.goals]]
+object = "clay-ocarina"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "music"
+
+[[data.goals]]
+object = "carved-token"
+quantity = 2
+priority = 45
+affinity = "creativity"
+concept = "carving"
+
+[[data.goals]]
+object = "painted-tile"
+quantity = 2
+priority = 45
+affinity = "creativity"
+concept = "painting"
+
+[[data.goals]]
+object = "mosaic"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "decoration"
+
+[[data.goals]]
+object = "woven-ribbon"
+quantity = 2
+priority = 45
+affinity = "creativity"
+concept = "decoration"
+
+[[data.goals]]
+object = "written-page"
+quantity = 2
+priority = 45
+affinity = "contemplation"
+concept = "writing"
+
+[[data.goals]]
+object = "bronze-bell"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "music"
+
+[[data.goals]]
+object = "oats-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "rye-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "millet-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "buckwheat-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "lentils-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "peas-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "chickpeas-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "cabbage-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "onions-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "turnips-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "squash-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "leeks-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "hemp-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "cotton-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "woad-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "madder-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "tea-leaf-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "sesame-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "sunflower-planting-stock"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "hops-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "coriander-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "mustard-planting-stock"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "apples-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "pears-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "plums-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "grapes-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "olives-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "dates-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "figs-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "root-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "bean-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "barley-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "rice-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "flax-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "herb-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "fruit-cuttings"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "grain-seed"
+quantity = 10
+priority = 55
+affinity = "patience"
+concept = "cultivation"
+
+[[data.goals]]
+object = "rosehip-preserve"
+quantity = 10
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "elderberry-preserve"
+quantity = 10
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "sloe-paste"
+quantity = 10
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "rowan-jelly"
+quantity = 10
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "kelp-broth"
+quantity = 12
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "lichen-bread"
+quantity = 12
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "chestnut-cakes"
+quantity = 12
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "walnut-cakes"
+quantity = 12
+priority = 45
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "trail-rations"
+quantity = 12
+priority = 45
+affinity = "discipline"
+concept = "cooking"
+
+[[data.goals]]
+object = "pressed-flowers"
+quantity = 4
+priority = 45
+affinity = "contemplation"
+concept = "decoration"
+
+[[data.goals]]
+object = "woven-doll"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "play"
+
+[[data.goals]]
+object = "clay-figurine"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "decoration"
+
+[[data.goals]]
+object = "painted-mask"
+quantity = 1
+priority = 45
+affinity = "creativity"
+concept = "play"
+
+[[data.goals]]
+object = "shell-beads"
+quantity = 4
+priority = 45
+affinity = "creativity"
+concept = "decoration"
+
+[[data.goals]]
+object = "earthen-store-kit"
+quantity = 1
+priority = 22
+affinity = "foresight"
+concept = "pottery"
+
+[[data.goals]]
+object = "cellar-kit"
+quantity = 1
+priority = 18
+affinity = "foresight"
+concept = "construction"
+
+[[data.goals]]
+object = "reed-shelter-kit"
+quantity = 1
+priority = 32
+affinity = "risk-tolerance"
+concept = "construction"
+
+[[data.goals]]
+object = "insulated-hall-kit"
+quantity = 1
+priority = 25
+affinity = "foresight"
+concept = "construction"
+
+[[data.goals]]
+object = "quilted-coat"
+quantity = 1
+priority = 35
+affinity = "foresight"
+concept = "tailoring"
+
+[[data.goals]]
+object = "waxed-cloak"
+quantity = 1
+priority = 30
+affinity = "foresight"
+concept = "tailoring"
+
+[[data.goals]]
+object = "strong-tea"
+quantity = 20
+priority = 25
+affinity = "hedonism"
+concept = "brewing"
+
+[[data.goals]]
+object = "coffee-brew"
+quantity = 20
+priority = 25
+affinity = "hedonism"
+concept = "brewing"
+
+[[data.goals]]
+object = "cocoa-drink"
+quantity = 20
+priority = 25
+affinity = "hedonism"
+concept = "cooking"
+
+[[data.goals]]
+object = "dreamleaf-infusion"
+quantity = 20
+priority = 15
+affinity = "hedonism"
+concept = "brewing"
+
+[[data.goals]]
+object = "curing-root-batch"
+quantity = 24
+priority = 35
+affinity = "foresight"
+concept = "preservation"
+
+[[data.goals]]
+object = "fermenting-rice-mash"
+quantity = 30
+priority = 20
+affinity = "hedonism"
+concept = "brewing"
+
+[[data.goals]]
+object = "fermenting-beans"
+quantity = 24
+priority = 30
+affinity = "foresight"
+concept = "preservation"

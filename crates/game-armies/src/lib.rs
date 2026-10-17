@@ -103,11 +103,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             game_transport::area(tx.get()?, r.person)? == game_cargo::locality(tx, u.supply)?,
             "unit supplies are elsewhere",
         )?;
-        require(
-            tx.get::<game_property::Property>()?
-                .allowed(r.person, u.supply),
-            "no unit supply access",
-        )?;
+        tx.call(game_property::Use {
+            actor: r.person,
+            inventory: u.supply,
+            purpose: "supplying".into(),
+        })?;
         let hungry = u
             .members
             .iter()

@@ -1,0 +1,13 @@
+id = "agriculture/crops"
+version = 1
+[data.crops.grain]
+name = "Grain"
+seed_object = "grain-seed"
+seed_input = 10
+output_object = "grain"
+yield_units = 100
+growth = 7776000000
+sow_labor = 3600000
+harvest_labor = 3600000
+minimum_warmth = 1
+minimum_rain = 1

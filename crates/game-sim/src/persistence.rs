@@ -57,17 +57,16 @@ impl Host {
         Ok(())
     }
     pub fn save(&self) -> Result<String> {
+        let mut bytes = Vec::new();
+        self.save_to(&mut bytes)?;
+        Ok(String::from_utf8(bytes).expect("JSON is UTF-8"))
+    }
+    pub fn save_to(&self, out: &mut dyn std::io::Write) -> Result<()> {
         self.validate_saved_state()?;
-        let resources = self
-            .registry
-            .resources
-            .iter()
-            .map(|(id, codec)| Ok((codec.key.into(), (codec.encode)(&self.data[id])?)))
-            .collect::<Result<_>>()?;
-        serde_json::to_string(&Save {
+        let metadata = serde_json::to_string(&Save {
             version: 1,
             plugins: self.registry.plugins.clone(),
-            resources,
+            resources: BTreeMap::<String, ()>::new(),
             time: self.time,
             seed: self.seed,
             revision: self.revision,
@@ -77,7 +76,25 @@ impl Host {
             notices: self.notices.clone(),
             receipts: self.receipts.clone(),
         })
-        .map_err(registry::json_error)
+        .map_err(registry::json_error)?;
+        let (prefix, suffix) = metadata
+            .split_once("\"resources\":{}")
+            .expect("resource slot");
+        let io = |e: std::io::Error| Error::InvalidSave(e.to_string());
+        out.write_all(prefix.as_bytes()).map_err(&io)?;
+        out.write_all(b"\"resources\":{").map_err(&io)?;
+        let mut codecs: Vec<_> = self.registry.resources.iter().collect();
+        codecs.sort_by_key(|(_, c)| c.key);
+        for (n, (id, codec)) in codecs.into_iter().enumerate() {
+            if n > 0 {
+                out.write_all(b",").map_err(&io)?;
+            }
+            serde_json::to_writer(&mut *out, codec.key).map_err(registry::json_error)?;
+            out.write_all(b":").map_err(&io)?;
+            (codec.encode)(&self.data[id], out)?;
+        }
+        out.write_all(b"}").map_err(&io)?;
+        out.write_all(suffix.as_bytes()).map_err(io)
     }
 }
 impl Builder {
@@ -135,9 +152,6 @@ impl Builder {
                 notice.at <= save.time && notice.sequence < save.next_notice,
                 "invalid saved event",
             )?;
-        }
-        for (id, codec) in &host.registry.resources {
-            (codec.validate)(&host.data[id])?;
         }
         host.time = save.time;
         host.revision = save.revision;

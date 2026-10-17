@@ -144,6 +144,8 @@ impl World {
                 resting: false,
                 last: at,
                 life_limit: None,
+                maximum_health: None,
+                fatigue_fraction: 0,
             },
             mind: Mind::default(),
             facts: std::array::from_fn(|i| Fact {

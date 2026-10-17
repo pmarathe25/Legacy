@@ -372,7 +372,15 @@ fn public_company_is_timed_cancellable_and_visible_only_locally() {
             .get::<game_social_life::SocialLife>()
             .unwrap()
             .meetings
-            .is_empty()
+            .get(&view.person.unwrap())
+            .is_none()
+    );
+    assert!(
+        !sim.debug_host()
+            .get::<game_social_life::SocialLife>()
+            .unwrap()
+            .meetings
+            .contains_key(&other)
     );
     let names = &sim
         .debug_host()
@@ -431,7 +439,7 @@ fn new_craft_chains_transform_real_supplies_into_food() {
 }
 
 #[test]
-fn default_history_forms_named_compacts_with_executable_permissions() {
+fn default_history_develops_livelihoods_interests_and_unprescribed_social_arrangements() {
     assert_eq!(
         game_assembly::default_scenario(&mut Store::standard()).unwrap(),
         "generated"
@@ -441,19 +449,41 @@ fn default_history_forms_named_compacts_with_executable_permissions() {
     let opening = host.get::<game_openings::Opening>().unwrap();
     let history = opening.generated.as_ref().unwrap();
     assert_eq!(host.now(), history.until);
-    assert_eq!(history.until.0, history.settings.history.0);
+    assert_eq!(
+        history.until.0,
+        game_worldgen::EPOCH.0 + history.settings.history.0
+    );
     let initial = opening.definition.as_ref().unwrap();
     assert!(initial.institutions.is_empty());
     assert!(initial.bonds.is_empty());
     let institutions = host.get::<game_institutions::Institutions>().unwrap();
     assert!(
-        !institutions.groups.is_empty(),
-        "friendships should have time to form compacts"
+        host.get::<game_livelihoods::Livelihoods>()
+            .unwrap()
+            .achieved
+            .values()
+            .any(|n| *n > 0)
+    );
+    assert!(
+        !host
+            .get::<game_horticulture::Gardens>()
+            .unwrap()
+            .plots
+            .is_empty()
+    );
+    // Leisure is optional: this short history may be occupied by other chosen work.
+    assert!(host.get::<game_pastimes::Pastimes>().unwrap().enabled);
+    assert!(
+        host.get::<game_social_life::SocialLife>()
+            .unwrap()
+            .people
+            .values()
+            .any(|p| p.encounters > 0)
     );
     for (id, institution) in &institutions.groups {
         assert!(institution.name.ends_with("Hearth") || institution.name.ends_with("Company"));
         assert!(institution.offices.is_empty());
-        assert!(institution.rules.len() >= 2);
+        // Departures may retire every old access practice, while preserving the historical group.
         for rule in &institution.rules {
             for person in &rule.users {
                 assert!(
@@ -484,7 +514,7 @@ fn history_uses_the_same_live_rules_with_zero_duration_and_worker_variations() {
         "history = 0",
     );
     let empty = Simulation::with_content("generated", 1, 1, &mut Store::new(&pack.root)).unwrap();
-    assert_eq!(empty.now(), SimTime(0));
+    assert_eq!(empty.now(), game_worldgen::EPOCH);
     assert!(
         empty
             .debug_host()

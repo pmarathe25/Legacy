@@ -1,5 +1,6 @@
 //! Seed physical initial conditions, not societies or fabricated historical outcomes.
 use game_core::*;
+pub const EPOCH: SimTime = SimTime(360 * 100 * DAY.0);
 use game_scenarios::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -23,9 +24,29 @@ pub struct Biome {
     pub name: String,
     pub climate: String,
     pub food: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub food_stock_per_person: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub food_renew_per_person: Option<u64>,
     pub material: String,
+    #[serde(default)]
+    pub material_renew_per_person: u64,
     pub renewal_warmth: i32,
     pub renewal_rain: u32,
+    #[serde(default)]
+    pub resources: Vec<Deposit>,
+}
+/// Independent resource populations share a place, each with its own replenishment.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deposit {
+    pub object: String,
+    pub stock_per_person: u64,
+    pub renew_per_person: u64,
+    #[serde(default)]
+    pub minimum_warmth: Option<i32>,
+    #[serde(default)]
+    pub minimum_rain: u32,
 }
 impl Settings {
     pub fn validate(&self) -> Result<()> {
@@ -41,7 +62,23 @@ impl Settings {
                     .iter()
                     .chain(&self.name_ends)
                     .all(|s| !s.trim().is_empty())
-                && self.biomes.iter().all(|b| !b.name.trim().is_empty()),
+                && self.biomes.iter().all(|b| {
+                    !b.name.trim().is_empty()
+                        && !b.climate.is_empty()
+                        && !b.food.is_empty()
+                        && !b.material.is_empty()
+                        && (1..=1_000_000).contains(&b.food_stock_per_person.unwrap_or(600))
+                        && b.food_renew_per_person.unwrap_or(400)
+                            <= b.food_stock_per_person.unwrap_or(600)
+                        && b.material_renew_per_person <= 200
+                        && b.resources.len() <= 64
+                        && b.resources.iter().all(|r| {
+                            !r.object.is_empty()
+                                && (1..=1_000_000).contains(&r.stock_per_person)
+                                && r.renew_per_person <= r.stock_per_person
+                                && (r.minimum_rain == 0 || r.minimum_warmth.is_some())
+                        })
+                }),
             "invalid world generation settings",
         )
     }
@@ -111,16 +148,17 @@ pub fn generate(
         }
         let locals = settings.population.div_ceil(settings.areas) as u64 + 2;
         for (kind, object, stock, renew) in [
-            ("food", &biome.food, locals * 600, locals * 400),
+            (
+                "food",
+                &biome.food,
+                locals * biome.food_stock_per_person.unwrap_or(600),
+                locals * biome.food_renew_per_person.unwrap_or(400),
+            ),
             (
                 "material",
                 &biome.material,
                 locals * 200,
-                if ["stone", "iron-ore", "clay"].contains(&biome.material.as_str()) {
-                    0
-                } else {
-                    locals * 20
-                },
+                locals * biome.material_renew_per_person,
             ),
         ] {
             d.patches.push(Patch {
@@ -138,6 +176,18 @@ pub fn generate(
                 },
             });
         }
+        for (n, resource) in biome.resources.iter().enumerate() {
+            d.patches.push(Patch {
+                key: format!("resource-{index}-{n}"),
+                area: area.clone(),
+                object: resource.object.clone(),
+                stock: locals * resource.stock_per_person,
+                capacity: locals * resource.stock_per_person,
+                renew: locals * resource.renew_per_person,
+                renewal_warmth: resource.minimum_warmth,
+                renewal_rain: resource.minimum_rain,
+            });
+        }
     }
     for index in 0..settings.population + 2 {
         let guardian = index >= settings.population;
@@ -147,20 +197,36 @@ pub fn generate(
             format!("person-{index}")
         };
         let area = format!("area-{}", if guardian { 0 } else { index % settings.areas });
-        let traits = catalog
+        let traits: BTreeMap<String, i32> = catalog
             .definitions
             .iter()
-            .enumerate()
-            .map(|(i, (key, t))| {
+            .map(|(key, t)| {
+                let stream = key.bytes().fold(1000u64, |n, c| {
+                    n.wrapping_mul(31).wrapping_add(u64::from(c))
+                });
                 let span = (i64::from(t.maximum) - i64::from(t.minimum) + 1) as u64;
                 (
                     key.clone(),
-                    (i64::from(t.minimum) + (draw(1000 + i as u64, index as u64) % span) as i64)
-                        as i32,
+                    if t.minimum == 0 && t.default > 0 && t.maximum >= t.default.saturating_mul(8) {
+                        let n = draw(stream, index as u64) % 10000;
+                        let ability = if n < 9500 {
+                            n % 2001
+                        } else {
+                            2000 + (n - 9500) * 28
+                        };
+                        (ability * t.default as u64 / 1000)
+                            .clamp(t.minimum as u64, t.maximum as u64)
+                            as i32
+                    } else {
+                        (i64::from(t.minimum) + (draw(stream, index as u64) % span) as i64) as i32
+                    },
                 )
             })
             .collect();
         let belief = |stream| (draw(stream, index as u64) % 21) as i32 - 10;
+        let capacity = 500
+            + traits.get("size").copied().unwrap_or(1000).max(0) as u64
+            + traits.get("strength").copied().unwrap_or(1000).max(0) as u64 / 2;
         d.people.push(People {
             key: key.clone(),
             count: 1,
@@ -187,7 +253,7 @@ pub fn generate(
             key: format!("pack-{index}"),
             area: None,
             carried_by: Some(key.clone()),
-            capacity: 2000,
+            capacity: capacity.max(1200),
             owner: key.clone(),
             access: vec![key.clone()],
             known_to: vec![key],
@@ -197,4 +263,16 @@ pub fn generate(
     }
     d.validate()?;
     Ok(d)
+}
+
+/// Varied adult ages relative to an explicit nonnegative calendar epoch.
+pub fn birth_time(seed: u64, key: &str, epoch: SimTime) -> SimTime {
+    let stream = key
+        .bytes()
+        .fold(0u64, |n, c| n.wrapping_mul(31).wrapping_add(u64::from(c)));
+    SimTime(
+        epoch
+            .0
+            .saturating_sub((18 + random(seed, stream, 0) % 28) * 365 * DAY.0),
+    )
 }

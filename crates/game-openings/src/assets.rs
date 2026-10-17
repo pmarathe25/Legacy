@@ -12,6 +12,8 @@ pub(super) struct Assets {
     pub health: game_health::TreatmentRules,
     pub invocation: Option<game_invocation::Configure>,
     pub social_life: Option<game_social_life::Rules>,
+    pub livelihoods: game_livelihoods::Install,
+    pub pastimes: game_pastimes::Install,
 }
 impl Assets {
     pub fn load(store: &mut Store, scenario: &Definition) -> Result<Self> {
@@ -19,6 +21,8 @@ impl Assets {
         let traits = game_traits::load(store)?;
         let crops = game_agriculture::load(store, &objects)?;
         let recipes = game_workshop::load(store, &objects)?;
+        let livelihoods = game_livelihoods::load(store, &objects)?;
+        let pastimes = game_pastimes::load(store, &objects)?;
         let characters = game_characters::load(store, &scenario.characters)?;
         let body = game_physiology::load(store, &scenario.physiology)?;
         let climate = game_environment::load(store, &scenario.environment)?;
@@ -85,6 +89,8 @@ impl Assets {
             health,
             invocation,
             social_life,
+            livelihoods,
+            pastimes,
         })
     }
     pub fn install(self, host: &mut Host) -> Result<()> {
@@ -92,6 +98,8 @@ impl Assets {
         host.dispatch(game_traits::Install(self.traits))?;
         host.dispatch(game_agriculture::InstallCrops(self.crops))?;
         host.dispatch(self.recipes)?;
+        host.dispatch(self.livelihoods)?;
+        host.dispatch(self.pastimes)?;
         host.dispatch(game_physiology::Configure(self.body))?;
         host.dispatch(game_characters::Configure(self.characters))?;
         host.dispatch(game_environment::Configure(self.climate))?;

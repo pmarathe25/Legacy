@@ -8,6 +8,8 @@ An explicit report or inspection can override a scene entry. The next scene obse
 
 `get`, `iter`, and `range` return borrowed `FactRef` values. Reading a view does not copy payloads or increment their reference counts. Use `to_owned` when a report or snapshot must outlive that view. Serialization emits the ordinary logical fact map in key order, without exposing scene layout.
 
+The shared decoder uses a typed payload when possible and borrows an existing JSON value for fallback decoding. Namespace scans and evidence-time validation also live with the generic fact representation.
+
 Clones preserve independent evidence and immutable history. Tests cover shared payloads, changes of scene membership, explicit overrides, retained readers, ranges, duplicate scene keys, and exact logical serialization.
 
 Run `cargo test -p game-facts`.

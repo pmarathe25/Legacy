@@ -1,0 +1,176 @@
+id = "objects/planting"
+version = 1
+
+[data.objects.oats-seed]
+id = 237
+name = "Oats planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.rye-seed]
+id = 238
+name = "Rye planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.millet-seed]
+id = 239
+name = "Millet planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.buckwheat-seed]
+id = 240
+name = "Buckwheat planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.lentils-seed]
+id = 241
+name = "Lentils planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.peas-seed]
+id = 242
+name = "Peas planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.chickpeas-seed]
+id = 243
+name = "Chickpeas planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.cabbage-seed]
+id = 244
+name = "Cabbage planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.onions-seed]
+id = 245
+name = "Onions planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.turnips-seed]
+id = 246
+name = "Turnips planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.squash-seed]
+id = 247
+name = "Squash planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.leeks-seed]
+id = 248
+name = "Leeks planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.hemp-seed]
+id = 249
+name = "Hemp fiber planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.cotton-seed]
+id = 250
+name = "Cotton fiber planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.woad-seed]
+id = 251
+name = "Woad leaves planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.madder-seed]
+id = 252
+name = "Madder root planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.tea-leaf-seed]
+id = 253
+name = "Tea leaves planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.sesame-seed]
+id = 254
+name = "Sesame seed planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.sunflower-planting-stock]
+id = 255
+name = "Sunflower seed planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.hops-seed]
+id = 256
+name = "Hops planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.coriander-seed]
+id = 257
+name = "Coriander planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.mustard-planting-stock]
+id = 258
+name = "Mustard seed planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.apples-seed]
+id = 259
+name = "Apples planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.pears-seed]
+id = 260
+name = "Pears planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.plums-seed]
+id = 261
+name = "Plums planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.grapes-seed]
+id = 262
+name = "Grapes planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.olives-seed]
+id = 263
+name = "Olives planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.dates-seed]
+id = 264
+name = "Dates planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.figs-seed]
+id = 265
+name = "Figs planting stock"
+mass = 1
+tags = ["seed", "plant"]

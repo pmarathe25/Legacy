@@ -86,3 +86,47 @@ fn a_fathers_death_does_not_cancel_an_existing_pregnancy() {
     assert_eq!(state.families.len(), 1);
     assert_eq!(state.families.values().next().unwrap().father, f.ruler);
 }
+
+#[test]
+fn reproductive_aging_follows_inherited_lifespan_without_forbidding_late_partnerships() {
+    let f = setup();
+    let mut body = f.host.get::<game_physiology::Bodies>().unwrap().people[&f.other];
+    let adult = SimDuration(18 * 365 * DAY.0);
+    assert!(!fertile(&body, adult, SimTime(17 * 365 * DAY.0)));
+    assert!(fertile(&body, adult, SimTime(30 * 365 * DAY.0)));
+    assert!(!fertile(&body, adult, SimTime(60 * 365 * DAY.0)));
+    body.life_limit = Some(SimTime(160 * 365 * DAY.0));
+    assert!(fertile(&body, adult, SimTime(60 * 365 * DAY.0)));
+    body.alive = false;
+    assert!(!fertile(&body, adult, SimTime(60 * 365 * DAY.0)));
+}
+
+#[test]
+fn travelling_at_the_due_time_does_not_erase_a_pregnancy() {
+    let mut f = setup();
+    run(&mut f.host, SimTime(18 * 365 * DAY.0));
+    let id = f
+        .host
+        .dispatch(Conceive {
+            mother: f.other,
+            father: f.ruler,
+            caregiver: f.other,
+        })
+        .unwrap();
+    let due = f.host.get::<Population>().unwrap().pregnancies[&id].due;
+    run(&mut f.host, SimTime(due.0 - MINUTE.0));
+    f.host
+        .dispatch(game_transport::Move {
+            person: f.other,
+            destination: f.away,
+        })
+        .unwrap();
+    run(&mut f.host, due);
+    assert_eq!(f.host.get::<Population>().unwrap().pregnancies.len(), 1);
+    assert!(f.host.get::<Population>().unwrap().families.is_empty());
+    let save = f.host.save().unwrap();
+    f.host = builder().load(&save, 2).unwrap();
+    run(&mut f.host, due.after(SimDuration(3 * MINUTE.0)).unwrap());
+    assert!(f.host.get::<Population>().unwrap().pregnancies.is_empty());
+    assert_eq!(f.host.get::<Population>().unwrap().families.len(), 1);
+}

@@ -122,11 +122,30 @@ fn queue(tx: &mut Transaction<'_>, id: u64) -> Result<()> {
     tx.edit::<Battles>()?.0.get_mut(&id).unwrap().scheduled = Some(job);
     Ok(())
 }
+type WaitingVersion = game_storage::Version<u64, std::sync::Arc<Battle>>;
+thread_local! {
+    static WAITING:std::cell::RefCell<(Option<WaitingVersion>,Vec<u64>)>=Default::default();
+}
 fn awaiting(host: &Host) -> Result<Option<String>> {
-    for (id, b) in &host.get::<Battles>()?.0 {
-        if b.finished || b.scheduled.is_some() {
-            continue;
+    let battles = &host.get::<Battles>()?.0;
+    let waiting = WAITING.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        if cache
+            .0
+            .as_ref()
+            .is_none_or(|version| !battles.matches(version))
+        {
+            cache.1 = battles
+                .iter()
+                .filter(|(_, b)| !b.finished && b.scheduled.is_none() && !b.controlled.is_empty())
+                .map(|(id, _)| *id)
+                .collect();
+            cache.0 = Some(battles.version());
         }
+        cache.1.clone()
+    });
+    for id in waiting {
+        let b = &battles[&id];
         for person in &b.controlled {
             if b.fighters[person].health > 0
                 && !b.orders.contains_key(person)
@@ -235,7 +254,17 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Round>(|tx, r| {
         let snapshot = tx.get::<Battles>()?.0[&r.battle].clone();
-        let effects = resolve(&snapshot);
+        let strength = snapshot
+            .fighters
+            .keys()
+            .map(|p| (*p, game_vitality::ability(tx, *p, "strength")))
+            .collect();
+        let agility = snapshot
+            .fighters
+            .keys()
+            .map(|p| (*p, game_vitality::ability(tx, *p, "agility")))
+            .collect();
+        let effects = resolution::resolve_with_agility(&snapshot, &strength, &agility);
         for effect in effects {
             match effect {
                 Effect::Moved(person, point) => {

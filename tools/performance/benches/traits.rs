@@ -13,6 +13,7 @@ fn main() {
         definitions.definitions.insert(
             format!("trait:{id:05}"),
             Trait {
+                founder_spread: u16::MAX,
                 name: format!("Trait {id}"),
                 minimum: -100,
                 maximum: 100,

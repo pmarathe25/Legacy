@@ -1,0 +1,128 @@
+id = "workshop/preservation"
+version = 1
+
+[data.recipes.make-storage-jars]
+inputs = { "clay" = 80, "timber" = 15 }
+output = "earthen-store-kit"
+quantity = 1
+duration = 3600000
+skill = "pottery"
+
+[data.recipes.make-cellar-lining]
+inputs = { "stone" = 100, "timber" = 60, "clay" = 20 }
+output = "cellar-kit"
+quantity = 1
+duration = 7200000
+skill = "construction"
+
+[data.recipes.brew-tea]
+inputs = { "tea-leaf" = 6, "fresh-water" = 20, "timber" = 2 }
+output = "strong-tea"
+quantity = 20
+duration = 900000
+skill = "brewing"
+
+[data.recipes.brew-herb-infusion]
+inputs = { "mint" = 4, "fresh-water" = 20, "timber" = 2 }
+output = "herb-infusion"
+quantity = 20
+duration = 900000
+skill = "brewing"
+
+[data.recipes.dry-mushrooms]
+inputs = { "mushrooms" = 20, "timber" = 4 }
+output = "dried-mushrooms"
+quantity = 10
+duration = 1800000
+skill = "preservation"
+
+[data.recipes.cook-root-feast]
+inputs = { "roots" = 12, "nuts" = 8, "fresh-water" = 10, "timber" = 3 }
+output = "root-feast"
+quantity = 20
+duration = 1800000
+skill = "cooking"
+
+[data.recipes.salt-roots]
+inputs = { "roots" = 24, "salt" = 4 }
+output = "curing-root-batch"
+quantity = 24
+duration = 1800000
+skill = "preservation"
+
+[data.recipes.prepare-rice-mash]
+inputs = { "rice" = 16, "fresh-water" = 20, "timber" = 2 }
+output = "fermenting-rice-mash"
+quantity = 30
+duration = 3600000
+skill = "brewing"
+
+[data.recipes.prepare-bean-ferment]
+inputs = { "soybean" = 24, "salt" = 2, "fresh-water" = 6 }
+output = "fermenting-beans"
+quantity = 24
+duration = 2700000
+skill = "preservation"
+
+[data.recipes.brew-coffee]
+inputs = { "coffee-cherry" = 6, "fresh-water" = 20, "timber" = 2 }
+output = "coffee-brew"
+quantity = 20
+duration = 1200000
+skill = "brewing"
+
+[data.recipes.brew-cocoa]
+inputs = { "cacao-pod" = 6, "fresh-water" = 20, "timber" = 2 }
+output = "cocoa-drink"
+quantity = 20
+duration = 1200000
+skill = "cooking"
+
+[data.recipes.brew-dreamleaf]
+inputs = { "dreamleaf" = 4, "fresh-water" = 20, "timber" = 2 }
+output = "dreamleaf-infusion"
+quantity = 20
+duration = 1200000
+skill = "brewing"
+
+[data.recipes.prepare-cassava]
+inputs = { "cassava" = 24, "fresh-water" = 10, "timber" = 4 }
+output = "cassava-flour"
+quantity = 16
+duration = 7200000
+skill = "cooking"
+
+[data.recipes.weave-reed-shelter]
+inputs = { "reeds" = 80, "timber" = 80, "rope" = 10 }
+output = "reed-shelter-kit"
+quantity = 1
+duration = 7200000
+skill = "construction"
+
+[data.recipes.frame-insulated-hall]
+inputs = { "timber" = 180, "clay" = 80, "reeds" = 40, "rope" = 10 }
+output = "insulated-hall-kit"
+quantity = 1
+duration = 14400000
+skill = "construction"
+
+[data.recipes.sew-quilted-coat]
+inputs = { "cotton-cloth" = 14, "cotton-thread" = 2 }
+output = "quilted-coat"
+quantity = 1
+duration = 7200000
+skill = "tailoring"
+
+[data.recipes.wax-cloak]
+inputs = { "cloth" = 10, "beeswax" = 3 }
+output = "waxed-cloak"
+quantity = 1
+duration = 3600000
+skill = "tailoring"
+
+[data.recipes.gin-cotton]
+inputs = { "cotton-bolls" = 20 }
+output = "cotton"
+quantity = 12
+duration = 1800000
+skill = "fiber"

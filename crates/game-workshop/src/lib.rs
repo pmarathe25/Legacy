@@ -1,9 +1,11 @@
 //! Recipes and timed manufacturing. Inputs are consumed once, never by previews.
 use game_storage::{Records, Table};
 mod catalog;
+mod reachability;
 pub use catalog::{InstallRecipes, load};
 use game_core::*;
 use game_sim::*;
+pub use reachability::RecipeChoices;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,6 +22,8 @@ struct Work {
     inventory: InventoryId,
     job: ScheduleId,
     reservation: u64,
+    #[serde(default)]
+    strain: Option<game_cultivars::Strain>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Workshop {
@@ -55,6 +59,17 @@ pub struct Craft {
 impl Request for Craft {
     const KEY: &'static str = "workshop.craft";
     type Response = SimTime;
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Produced {
+    pub person: PersonId,
+    pub inventory: InventoryId,
+    pub good: GoodId,
+    pub quantity: u64,
+    pub skill: String,
+}
+impl Event for Produced {
+    const KEY: &'static str = "workshop.produced";
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Complete {
@@ -99,11 +114,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Craft>(|tx, r| {
         game_physiology::capable(tx, r.person)?;
-        require(
-            tx.get::<game_property::Property>()?
-                .allowed(r.person, r.inventory),
-            "no input access",
-        )?;
+        tx.call(game_property::Use {
+            actor: r.person,
+            inventory: r.inventory,
+            purpose: "crafting".into(),
+        })?;
         require(
             game_transport::area(tx.get()?, r.person)? == game_cargo::locality(tx, r.inventory)?,
             "workshop is elsewhere",
@@ -114,6 +129,17 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get(&r.recipe)
             .cloned()
             .ok_or_else(|| Error::Missing("recipe".into()))?;
+        let species = tx
+            .get::<game_cultivars::Cultivars>()
+            .ok()
+            .filter(|s| s.enabled)
+            .and_then(|s| s.goods.get(&recipe.output))
+            .copied();
+        let strain = species.and_then(|species| {
+            recipe.inputs.keys().find_map(|g| {
+                game_cultivars::representative(tx, r.inventory, *g).filter(|s| s.species == species)
+            })
+        });
         for (good, quantity) in &recipe.inputs {
             tx.call(game_cargo::Consume {
                 inventory: r.inventory,
@@ -136,12 +162,28 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 inventory: r.inventory,
                 job,
                 reservation,
+                strain,
             },
         );
         Ok(until)
     })?;
     b.request::<Complete>(|tx, r| {
         let w = tx.get::<Workshop>()?.work[&r.person].clone();
+        if game_transport::area(tx.get()?, r.person)
+            .ok()
+            .is_none_or(|area| game_cargo::locality(tx, w.inventory).ok() != Some(area))
+        {
+            tx.cancel_action(r.person)?;
+            return Ok(());
+        }
+        if let Some(strain) = w.strain.clone() {
+            tx.call(game_cultivars::Expect {
+                inventory: w.inventory,
+                good: w.recipe.output,
+                quantity: w.recipe.quantity,
+                strain,
+            })?;
+        }
         tx.call(game_cargo::DepositReserved {
             reservation: w.reservation,
             inventory: w.inventory,
@@ -152,11 +194,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.edit::<Workshop>()?.work.remove(&r.person);
         tx.call(game_skills::Practice {
             person: r.person,
-            skill: w.recipe.skill,
+            skill: w.recipe.skill.clone(),
             effort: w.recipe.duration.0 / MINUTE.0 + 1,
             attribution: w.job.0,
         })?;
-        Ok(())
+        tx.emit(
+            Produced {
+                person: r.person,
+                inventory: w.inventory,
+                good: w.recipe.output,
+                quantity: w.recipe.quantity,
+                skill: w.recipe.skill,
+            },
+            vec![r.person],
+        )
     })?;
     b.request::<Cancel>(|tx, r| {
         if let Some(w) = tx.edit::<Workshop>()?.work.remove(&r.person) {

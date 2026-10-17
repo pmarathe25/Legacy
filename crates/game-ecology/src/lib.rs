@@ -87,6 +87,32 @@ pub struct Gather {
     pub quantity: u64,
     pub destination: InventoryId,
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PlantGrowth {
+    pub patch: u64,
+    pub plant: Patch,
+    pub reserved: u64,
+    pub minimum_warmth: Option<i32>,
+    pub minimum_rain: u32,
+}
+#[derive(Clone, Copy, Serialize, Deserialize)]
+pub struct RenewalOutcome {
+    pub growth: u64,
+    pub decay: u64,
+}
+impl Request for PlantGrowth {
+    const KEY: &'static str = "ecology.plant-growth";
+    type Response = Option<RenewalOutcome>;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PlantOrigin {
+    pub patch: u64,
+    pub quantity: u64,
+}
+impl Request for PlantOrigin {
+    const KEY: &'static str = "ecology.plant-origin";
+    type Response = Vec<game_cultivars::Lot>;
+}
 impl Request for Gather {
     const KEY: &'static str = "ecology.gather";
     type Response = SimTime;
@@ -208,6 +234,19 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Finish>(|tx, r| {
         let work = tx.get::<Ecology>()?.gathering[&r.person].clone();
         let good = tx.get::<Ecology>()?.patches[&work.patch].good;
+        if tx.registered::<PlantOrigin>() {
+            let lots = tx.call(PlantOrigin {
+                patch: work.patch,
+                quantity: work.quantity,
+            })?;
+            if !lots.is_empty() {
+                tx.call(game_cultivars::ExpectLots {
+                    inventory: work.destination,
+                    good,
+                    lots,
+                })?;
+            }
+        }
         tx.call(game_cargo::DepositReserved {
             reservation: work.reservation,
             inventory: work.destination,
@@ -256,9 +295,38 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 dormant.insert(*id);
             }
         }
+        let mut growths = std::collections::BTreeMap::new();
+        if tx.registered::<PlantGrowth>() {
+            let patches: Vec<_> = tx
+                .get::<Ecology>()?
+                .patches
+                .iter()
+                .map(|(id, p)| (*id, p.clone()))
+                .collect();
+            for (id, plant) in patches {
+                let s = tx.get::<Ecology>()?;
+                let rule = s.renewal.get(&id);
+                let request = PlantGrowth {
+                    patch: id,
+                    plant,
+                    reserved: s.reserved.get(&id).copied().unwrap_or(0),
+                    minimum_warmth: rule.map(|r| r.minimum_warmth),
+                    minimum_rain: rule.map_or(0, |r| r.minimum_rain),
+                };
+                if let Some(result) = tx.call(request)? {
+                    growths.insert(id, result);
+                }
+            }
+        }
         tx.edit_with_compute::<Ecology, _>(|state, pool| {
             state.patches.update(pool, |id, patch| {
-                if !dormant.contains(id) {
+                if let Some(result) = growths.get(id) {
+                    patch.stock = patch
+                        .stock
+                        .saturating_sub(result.decay)
+                        .saturating_add(result.growth)
+                        .min(patch.capacity);
+                } else if !dormant.contains(id) {
                     patch.stock = patch.stock.saturating_add(patch.renew).min(patch.capacity);
                 }
             })

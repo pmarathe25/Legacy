@@ -3,12 +3,31 @@ use game_content::{Document, Stamp, Store};
 use game_core::*;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Food {
     pub portion: u64,
     pub relief: u64,
+    #[serde(default)]
+    pub nutrients: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub effects: FoodEffects,
+    #[serde(default)]
+    pub shelf_days: Option<u32>,
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FoodEffects {
+    pub health: i32,
+    pub mood: i32,
+    pub alertness: i32,
+    pub substance: Option<String>,
+    pub dependence: u32,
+    pub duration: SimDuration,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -20,6 +39,22 @@ pub struct Object {
     pub tags: BTreeSet<String>,
     #[serde(default)]
     pub food: Option<Food>,
+}
+impl Object {
+    pub fn shelf_days(&self) -> Option<u64> {
+        let food = self.food.as_ref()?;
+        Some(
+            food.shelf_days
+                .map(u64::from)
+                .or_else(|| {
+                    self.tags
+                        .iter()
+                        .find_map(|t| t.strip_prefix("shelf-days:")?.parse().ok())
+                })
+                .unwrap_or(30)
+                .max(1),
+        )
+    }
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,6 +68,10 @@ pub struct Objects {
     pub stamps: Vec<Stamp>,
     #[serde(skip)]
     ids: BTreeMap<GoodId, String>,
+    #[serde(skip)]
+    foods: Arc<BTreeMap<GoodId, Food>>,
+    #[serde(skip)]
+    masses: BTreeMap<GoodId, u64>,
 }
 impl Resource for Objects {
     const KEY: &'static str = "objects.catalog";
@@ -49,14 +88,29 @@ impl Resource for Objects {
             )?;
             if let Some(food) = &o.food {
                 require(food.portion > 0 && food.relief > 0, "invalid edible object")?;
+                require(
+                    food.shelf_days.is_none_or(|d| d > 0)
+                        && food.nutrients.keys().all(|s| !s.is_empty())
+                        && (food.effects.dependence == 0
+                            || (food
+                                .effects
+                                .substance
+                                .as_ref()
+                                .is_some_and(|s| !s.is_empty())
+                                && food.effects.duration.0 > 0)),
+                    "invalid food properties",
+                )?;
             }
         }
         require(
             self.ids.len() == self.items.len()
-                && self
-                    .items
-                    .iter()
-                    .all(|(key, o)| self.ids.get(&o.id) == Some(key)),
+                && self.masses.len() == self.items.len()
+                && self.foods.len() == self.items.values().filter(|o| o.food.is_some()).count()
+                && self.items.iter().all(|(key, o)| {
+                    self.ids.get(&o.id) == Some(key)
+                        && self.masses.get(&o.id) == Some(&o.mass)
+                        && self.foods.get(&o.id) == o.food.as_ref()
+                }),
             "invalid object index",
         )
     }
@@ -68,19 +122,33 @@ struct SavedObjects {
 }
 impl From<SavedObjects> for Objects {
     fn from(saved: SavedObjects) -> Self {
-        let ids = saved
-            .items
-            .iter()
-            .map(|(key, object)| (object.id, key.clone()))
-            .collect();
-        Self {
+        let mut objects = Self {
             items: saved.items,
             stamps: saved.stamps,
-            ids,
-        }
+            ..Default::default()
+        };
+        objects.rebuild();
+        objects
     }
 }
 impl Objects {
+    fn rebuild(&mut self) {
+        self.ids = self
+            .items
+            .iter()
+            .map(|(key, o)| (o.id, key.clone()))
+            .collect();
+        self.foods = Arc::new(
+            self.items
+                .values()
+                .filter_map(|o| o.food.clone().map(|f| (o.id, f)))
+                .collect(),
+        );
+        self.masses = self.items.values().map(|o| (o.id, o.mass)).collect();
+    }
+    pub fn food_rules(&self) -> &Arc<BTreeMap<GoodId, Food>> {
+        &self.foods
+    }
     pub fn by_id(&self, id: GoodId) -> Result<&Object> {
         self.ids
             .get(&id)
@@ -94,20 +162,27 @@ impl Objects {
             .ok_or_else(|| Error::InvalidConfiguration(format!("unknown object {key}")))
     }
     pub fn mass(&self, id: GoodId, quantity: u64) -> Result<u64> {
-        self.by_id(id)?
-            .mass
+        self.masses
+            .get(&id)
+            .ok_or_else(|| Error::InvalidConfiguration(format!("unknown object ID {}", id.0)))?
             .checked_mul(quantity)
             .ok_or(Error::Overflow)
+    }
+    pub fn has_meal<'a>(&self, stock: impl IntoIterator<Item = (&'a GoodId, &'a u64)>) -> bool {
+        stock
+            .into_iter()
+            .any(|(id, q)| self.foods.get(id).is_some_and(|f| *q >= f.portion))
     }
     pub fn meal<'a>(
         &self,
         stock: impl IntoIterator<Item = (&'a GoodId, &'a u64)>,
     ) -> Option<(GoodId, Food)> {
         stock.into_iter().find_map(|(id, q)| {
-            self.by_id(*id)
-                .ok()?
-                .food
-                .as_ref()
+            if *q == 0 {
+                return None;
+            }
+            self.foods
+                .get(id)
                 .filter(|food| *q >= food.portion)
                 .map(|food| (*id, food.clone()))
         })
@@ -143,7 +218,8 @@ impl Request for Install {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("objects", 1)?;
     b.resource::<Objects>()?;
-    b.request::<Install>(|tx, r| {
+    b.request::<Install>(|tx, mut r| {
+        r.0.rebuild();
         r.0.validate()?;
         require(
             tx.get::<Objects>()?.items.is_empty(),

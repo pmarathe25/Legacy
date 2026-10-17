@@ -1,0 +1,350 @@
+id = "agriculture/regional"
+version = 1
+
+[data.crops.oats]
+name = "Oats planting"
+seed_object = "oats-seed"
+seed_input = 8
+output_object = "oats"
+yield_units = 100
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 3
+minimum_rain = 2
+
+[data.crops.rye]
+name = "Rye planting"
+seed_object = "rye-seed"
+seed_input = 8
+output_object = "rye"
+yield_units = 120
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 0
+minimum_rain = 1
+
+[data.crops.millet]
+name = "Millet planting"
+seed_object = "millet-seed"
+seed_input = 8
+output_object = "millet"
+yield_units = 140
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 12
+minimum_rain = 1
+
+[data.crops.buckwheat]
+name = "Buckwheat planting"
+seed_object = "buckwheat-seed"
+seed_input = 8
+output_object = "buckwheat"
+yield_units = 160
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 5
+minimum_rain = 2
+
+[data.crops.lentils]
+name = "Lentils planting"
+seed_object = "lentils-seed"
+seed_input = 8
+output_object = "lentils"
+yield_units = 180
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 8
+minimum_rain = 1
+
+[data.crops.peas]
+name = "Peas planting"
+seed_object = "peas-seed"
+seed_input = 8
+output_object = "peas"
+yield_units = 100
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 3
+minimum_rain = 2
+
+[data.crops.chickpeas]
+name = "Chickpeas planting"
+seed_object = "chickpeas-seed"
+seed_input = 8
+output_object = "chickpeas"
+yield_units = 120
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 12
+minimum_rain = 1
+
+[data.crops.cabbage]
+name = "Cabbage planting"
+seed_object = "cabbage-seed"
+seed_input = 8
+output_object = "cabbage"
+yield_units = 140
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 3
+minimum_rain = 3
+
+[data.crops.onions]
+name = "Onions planting"
+seed_object = "onions-seed"
+seed_input = 8
+output_object = "onions"
+yield_units = 160
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 5
+minimum_rain = 1
+
+[data.crops.turnips]
+name = "Turnips planting"
+seed_object = "turnips-seed"
+seed_input = 8
+output_object = "turnips"
+yield_units = 180
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 0
+minimum_rain = 2
+
+[data.crops.squash]
+name = "Squash planting"
+seed_object = "squash-seed"
+seed_input = 8
+output_object = "squash"
+yield_units = 100
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 12
+minimum_rain = 3
+
+[data.crops.leeks]
+name = "Leeks planting"
+seed_object = "leeks-seed"
+seed_input = 8
+output_object = "leeks"
+yield_units = 120
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 3
+minimum_rain = 3
+
+[data.crops.hemp]
+name = "Hemp fiber planting"
+seed_object = "hemp-seed"
+seed_input = 8
+output_object = "hemp"
+yield_units = 140
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 8
+minimum_rain = 2
+
+[data.crops.cotton]
+name = "Cotton fiber planting"
+seed_object = "cotton-seed"
+seed_input = 8
+output_object = "cotton"
+yield_units = 160
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 18
+minimum_rain = 2
+
+[data.crops.woad]
+name = "Woad leaves planting"
+seed_object = "woad-seed"
+seed_input = 8
+output_object = "woad"
+yield_units = 180
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 5
+minimum_rain = 1
+
+[data.crops.madder]
+name = "Madder root planting"
+seed_object = "madder-seed"
+seed_input = 8
+output_object = "madder"
+yield_units = 100
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 8
+minimum_rain = 2
+
+[data.crops.tea-leaf]
+name = "Tea leaves planting"
+seed_object = "tea-leaf-seed"
+seed_input = 8
+output_object = "tea-leaf"
+yield_units = 120
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 14
+minimum_rain = 4
+
+[data.crops.sesame]
+name = "Sesame seed planting"
+seed_object = "sesame-seed"
+seed_input = 8
+output_object = "sesame"
+yield_units = 140
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 16
+minimum_rain = 1
+
+[data.crops.sunflower-seed]
+name = "Sunflower seed planting"
+seed_object = "sunflower-planting-stock"
+seed_input = 8
+output_object = "sunflower-seed"
+yield_units = 160
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 10
+minimum_rain = 1
+
+[data.crops.hops]
+name = "Hops planting"
+seed_object = "hops-seed"
+seed_input = 8
+output_object = "hops"
+yield_units = 180
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 8
+minimum_rain = 3
+
+[data.crops.coriander]
+name = "Coriander planting"
+seed_object = "coriander-seed"
+seed_input = 8
+output_object = "coriander"
+yield_units = 100
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 10
+minimum_rain = 1
+
+[data.crops.mustard-seed]
+name = "Mustard seed planting"
+seed_object = "mustard-planting-stock"
+seed_input = 8
+output_object = "mustard-seed"
+yield_units = 120
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 5
+minimum_rain = 1
+
+[data.crops.apples]
+name = "Apples planting"
+seed_object = "apples-seed"
+seed_input = 8
+output_object = "apples"
+yield_units = 140
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 5
+minimum_rain = 2
+
+[data.crops.pears]
+name = "Pears planting"
+seed_object = "pears-seed"
+seed_input = 8
+output_object = "pears"
+yield_units = 160
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 8
+minimum_rain = 2
+
+[data.crops.plums]
+name = "Plums planting"
+seed_object = "plums-seed"
+seed_input = 8
+output_object = "plums"
+yield_units = 180
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 8
+minimum_rain = 2
+
+[data.crops.grapes]
+name = "Grapes planting"
+seed_object = "grapes-seed"
+seed_input = 8
+output_object = "grapes"
+yield_units = 100
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 12
+minimum_rain = 1
+
+[data.crops.olives]
+name = "Olives planting"
+seed_object = "olives-seed"
+seed_input = 8
+output_object = "olives"
+yield_units = 120
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 15
+minimum_rain = 1
+
+[data.crops.dates]
+name = "Dates planting"
+seed_object = "dates-seed"
+seed_input = 8
+output_object = "dates"
+yield_units = 140
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 20
+minimum_rain = 1
+
+[data.crops.figs]
+name = "Figs planting"
+seed_object = "figs-seed"
+seed_input = 8
+output_object = "figs"
+yield_units = 160
+growth = 7776000000
+sow_labor = 900000
+harvest_labor = 1200000
+minimum_warmth = 16
+minimum_rain = 1

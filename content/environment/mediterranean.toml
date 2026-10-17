@@ -1,0 +1,22 @@
+id = "environment/mediterranean"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 16
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 30
+rain = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 21
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 11
+rain = 4

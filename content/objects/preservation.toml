@@ -1,0 +1,149 @@
+id = "objects/preservation"
+version = 1
+[data.objects.earthen-store-kit]
+id = 400
+name = "Earthen storage jars and racks"
+mass = 80
+tags = ["storage:sealed", "storage-capacity:10000", "crafted"]
+[data.objects.cellar-kit]
+id = 401
+name = "Cellar framing and lining"
+mass = 150
+tags = ["storage:cellar", "storage-capacity:100000", "crafted"]
+[data.objects.fresh-water]
+id = 402
+name = "Fresh water"
+mass = 1
+tags = ["water", "liquid"]
+
+[data.objects.strong-tea]
+id = 410
+name = "Strong tea"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 5, shelf_days = 2, nutrients = { energy = 5, protein = 0, fat = 0, fibre = 0, vitamins = 1, minerals = 1 }, effects = { health = 0, mood = 6, alertness = 12, substance = "caffeine", dependence = 8, duration = 21600000 } }
+
+[data.objects.herb-infusion]
+id = 411
+name = "Herb infusion"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 5, shelf_days = 2, nutrients = { energy = 5, protein = 0, fat = 0, fibre = 0, vitamins = 4, minerals = 3 }, effects = { health = 1, mood = 5, alertness = 0 } }
+
+[data.objects.rice-ale]
+id = 412
+name = "Rice ale"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 20, shelf_days = 45, nutrients = { energy = 20, protein = 1, fat = 0, fibre = 0, vitamins = 1, minerals = 1 }, effects = { health = -2, mood = 12, alertness = -12, substance = "alcohol", dependence = 25, duration = 21600000 } }
+
+[data.objects.dreamleaf-infusion]
+id = 413
+name = "Dreamleaf infusion"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 5, shelf_days = 2, nutrients = { energy = 5, protein = 0, fat = 0, fibre = 0, vitamins = 0, minerals = 0 }, effects = { health = -4, mood = 25, alertness = -20, substance = "dreamleaf", dependence = 90, duration = 43200000 } }
+
+[data.objects.cured-roots]
+id = 414
+name = "Salt-cured roots"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 8, relief = 45, shelf_days = 180, nutrients = { energy = 45, protein = 3, fat = 0, fibre = 6, vitamins = 6, minerals = 10 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.dried-mushrooms]
+id = 415
+name = "Dried mushrooms"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 35, shelf_days = 180, nutrients = { energy = 35, protein = 8, fat = 1, fibre = 5, vitamins = 5, minerals = 7 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.fermented-beans]
+id = 416
+name = "Fermented beans"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 65, shelf_days = 120, nutrients = { energy = 65, protein = 24, fat = 6, fibre = 8, vitamins = 6, minerals = 8 }, effects = { health = 1, mood = 5, alertness = 0 } }
+
+[data.objects.root-feast]
+id = 417
+name = "Heavy root and nut stew"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 6, relief = 100, shelf_days = 2, nutrients = { energy = 100, protein = 10, fat = 12, fibre = 8, vitamins = 8, minerals = 6 }, effects = { health = 1, mood = 12, alertness = -10 } }
+
+[data.objects.coffee-brew]
+id = 418
+name = "Coffee brew"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 5, shelf_days = 2, nutrients = { energy = 5, protein = 0, fat = 0, fibre = 0, vitamins = 1, minerals = 1 }, effects = { health = 0, mood = 5, alertness = 25, substance = "caffeine", dependence = 15, duration = 21600000 } }
+
+[data.objects.cocoa-drink]
+id = 419
+name = "Cocoa drink"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 30, shelf_days = 2, nutrients = { energy = 30, protein = 4, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 4 } }
+
+[data.objects.bitter-berries]
+id = 420
+name = "Bitter wild berries"
+mass = 1
+tags = ["food", "plant", "wild"]
+food = { portion = 8, relief = 25, shelf_days = 4, nutrients = { energy = 25, protein = 1, fat = 0, fibre = 4, vitamins = 3, minerals = 2 }, effects = { health = -15, mood = -8, alertness = -8 } }
+
+[data.objects.cassava-flour]
+id = 422
+name = "Prepared cassava flour"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 6, relief = 60, shelf_days = 180, nutrients = { energy = 60, protein = 1, fat = 0, fibre = 3, vitamins = 1, minerals = 2 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.curing-root-batch]
+id = 430
+name = "Curing root batch"
+mass = 1
+tags = ["prepared", "matures:cured-roots", "maturation-days:5", "maturation-min:0", "maturation-max:30"]
+
+[data.objects.fermenting-rice-mash]
+id = 431
+name = "Fermenting rice mash"
+mass = 1
+tags = ["prepared", "matures:rice-ale", "maturation-days:12", "maturation-min:8", "maturation-max:30"]
+
+[data.objects.fermenting-beans]
+id = 432
+name = "Fermenting beans"
+mass = 1
+tags = ["prepared", "matures:fermented-beans", "maturation-days:8", "maturation-min:12", "maturation-max:34"]
+
+[data.objects.reed-shelter-kit]
+id = 440
+name = "Reed shelter kit"
+mass = 120
+tags = ["shelter-insulation:8", "hearth-heat:15", "crafted"]
+
+[data.objects.insulated-hall-kit]
+id = 441
+name = "Insulated hall kit"
+mass = 250
+tags = ["shelter-insulation:18", "hearth-heat:18", "crafted"]
+
+[data.objects.quilted-coat]
+id = 442
+name = "Quilted coat"
+mass = 12
+tags = ["clothing", "warmth:20", "crafted"]
+
+[data.objects.waxed-cloak]
+id = 443
+name = "Waxed cloak"
+mass = 8
+tags = ["clothing", "warmth:12", "weatherproof", "crafted"]
+
+[data.objects.cotton-bolls]
+id = 444
+name = "Cotton bolls"
+mass = 1
+tags = ["plant", "fiber"]

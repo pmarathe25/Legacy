@@ -140,8 +140,15 @@ impl Host {
             .and_then(|s| s.downcast_ref())
             .ok_or_else(|| Error::Missing(T::KEY.into()))
     }
+    /// Recent notices: at least 1024 or the latest complete transaction.
+    /// Collect after each commit when every event must be retained externally.
     pub fn notices(&self) -> impl Iterator<Item = &Notice> {
         self.notices.iter()
+    }
+    /// Seek into the bounded committed journal without rescanning older notices.
+    pub fn notices_since(&self, sequence: u64) -> impl Iterator<Item = &Notice> {
+        let first = self.notices.partition_point(|n| n.sequence <= sequence);
+        self.notices.range(first..)
     }
     /// Internal requests and due work share exactly the same transaction path.
     pub fn dispatch<R: Request>(&mut self, request: R) -> Result<R::Response> {
@@ -244,10 +251,11 @@ impl Host {
             self.job_keys.insert(job.id, key);
             self.jobs.insert(key, job);
         }
+        let retained = 1024.max(changes.notices.len());
         for notice in changes.notices {
             self.notices.push_back(notice);
         }
-        while self.notices.len() > 1024 {
+        while self.notices.len() > retained {
             self.notices.pop_front();
         }
         self.next_id = changes.next_id;

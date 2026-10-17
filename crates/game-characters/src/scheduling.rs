@@ -57,13 +57,62 @@ pub(super) enum Next {
     Waiting(Option<SimTime>),
 }
 
-pub(super) fn wake(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
+#[derive(Clone, Serialize, Deserialize)]
+struct Resume {
+    person: PersonId,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    hunger_only: bool,
+}
+impl Request for Resume {
+    const KEY: &'static str = "characters.resume";
+    type Response = ();
+}
+fn prompted(tx: &Transaction<'_>, state: &Minds, person: PersonId, hunger_only: bool) -> bool {
+    state.people.get(&person).is_some_and(|m| {
+        let body = &tx.get::<game_physiology::Bodies>().unwrap().people[&person];
+        body.hunger >= state.rules.meal_hunger
+            || (!hunger_only && (m.plan.is_some() || body.fatigue > state.rules.rest_fatigue))
+    })
+}
+pub(super) fn food_action(mind: &Mind, kind: &str) -> bool {
+    mind.plan.is_some() && matches!(kind, "gather" | "travel")
+}
+pub(super) fn register(b: &mut Builder) -> Result<()> {
+    b.subscribe::<game_physiology::Fed>("characters.fed", |tx, e| wake(tx, e.patient, true))?;
+    b.request::<Resume>(|tx, r| {
+        let state = tx.get::<Minds>()?;
+        if !state.running
+            || !prompted(tx, state, r.person, r.hunger_only)
+            || tx
+                .get::<Actions>()?
+                .0
+                .get(&r.person)
+                .is_some_and(|a| food_action(&state.people[&r.person], &a.kind))
+        {
+            return Ok(());
+        }
+        review(tx, r.person)?;
+        if tx.get::<Minds>()?.people.contains_key(&r.person) {
+            let next = next(tx, r.person)?;
+            tx.edit::<Minds>()?.schedule.set(r.person, next);
+        }
+        Ok(())
+    })
+}
+pub(super) fn wake(tx: &mut Transaction<'_>, person: PersonId, hunger_only: bool) -> Result<()> {
     let state = tx.get::<Minds>()?;
-    if state.running
-        && state.people.contains_key(&person)
-        && !state.schedule.ready.contains_key(&person)
-    {
-        tx.edit::<Minds>()?.schedule.set(person, Next::Active);
+    if state.running && state.people.contains_key(&person) {
+        let resume = prompted(tx, state, person, hunger_only);
+        if !state.schedule.ready.contains_key(&person) {
+            tx.edit::<Minds>()?.schedule.set(person, Next::Active);
+        }
+        if resume {
+            let request = Resume {
+                person,
+                hunger_only,
+            };
+            tx.schedule(tx.now(), 50, request)?;
+        }
     }
     Ok(())
 }
@@ -75,7 +124,7 @@ pub(super) fn next(tx: &Transaction<'_>, person: PersonId) -> Result<Next> {
     };
     let body = &tx.get::<game_physiology::Bodies>()?.people[&person];
     let interruptible = state.rules.hunger_interrupts.contains(&action.kind)
-        && state.people[&person].plan.is_none();
+        && !food_action(&state.people[&person], &action.kind);
     if interruptible && body.hunger >= state.rules.urgent_hunger {
         return Ok(Next::Active);
     }

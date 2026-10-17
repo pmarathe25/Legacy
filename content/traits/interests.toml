@@ -1,0 +1,14 @@
+id = "traits/interests"
+version = 1
+[data.traits.creativity]
+name = "Creativity"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { goal = 1 }
+[data.traits.contemplation]
+name = "Contemplation"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { effort = -1 }

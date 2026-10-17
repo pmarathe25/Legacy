@@ -1,0 +1,261 @@
+id = "workshop/seedkeeping"
+version = 1
+
+[data.recipes.save-grain-seed]
+inputs = { grain = 12 }
+output = "grain-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-root-seed]
+inputs = { roots = 12 }
+output = "root-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-bean-seed]
+inputs = { beans = 12 }
+output = "bean-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-barley-seed]
+inputs = { barley = 12 }
+output = "barley-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-rice-seed]
+inputs = { rice = 12 }
+output = "rice-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-flax-seed]
+inputs = { flax = 12 }
+output = "flax-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-herb-seed]
+inputs = { healing-herbs = 12 }
+output = "herb-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-fruit-cuttings]
+inputs = { orchard-fruit = 12 }
+output = "fruit-cuttings"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-oats-seed]
+inputs = { oats = 12 }
+output = "oats-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-rye-seed]
+inputs = { rye = 12 }
+output = "rye-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-millet-seed]
+inputs = { millet = 12 }
+output = "millet-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-buckwheat-seed]
+inputs = { buckwheat = 12 }
+output = "buckwheat-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-lentils-seed]
+inputs = { lentils = 12 }
+output = "lentils-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-peas-seed]
+inputs = { peas = 12 }
+output = "peas-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-chickpeas-seed]
+inputs = { chickpeas = 12 }
+output = "chickpeas-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-cabbage-seed]
+inputs = { cabbage = 12 }
+output = "cabbage-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-onions-seed]
+inputs = { onions = 12 }
+output = "onions-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-turnips-seed]
+inputs = { turnips = 12 }
+output = "turnips-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-squash-seed]
+inputs = { squash = 12 }
+output = "squash-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-leeks-seed]
+inputs = { leeks = 12 }
+output = "leeks-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-hemp-seed]
+inputs = { hemp = 12 }
+output = "hemp-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-cotton-seed]
+inputs = { cotton-bolls = 12 }
+output = "cotton-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-woad-seed]
+inputs = { woad = 12 }
+output = "woad-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-madder-seed]
+inputs = { madder = 12 }
+output = "madder-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-tea-leaf-seed]
+inputs = { tea-leaf = 12 }
+output = "tea-leaf-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-sesame-seed]
+inputs = { sesame = 12 }
+output = "sesame-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-sunflower-planting-stock]
+inputs = { sunflower-seed = 12 }
+output = "sunflower-planting-stock"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-hops-seed]
+inputs = { hops = 12 }
+output = "hops-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-coriander-seed]
+inputs = { coriander = 12 }
+output = "coriander-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-mustard-planting-stock]
+inputs = { mustard-seed = 12 }
+output = "mustard-planting-stock"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-apples-seed]
+inputs = { apples = 12 }
+output = "apples-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-pears-seed]
+inputs = { pears = 12 }
+output = "pears-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-plums-seed]
+inputs = { plums = 12 }
+output = "plums-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-grapes-seed]
+inputs = { grapes = 12 }
+output = "grapes-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-olives-seed]
+inputs = { olives = 12 }
+output = "olives-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-dates-seed]
+inputs = { dates = 12 }
+output = "dates-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"
+
+[data.recipes.save-figs-seed]
+inputs = { figs = 12 }
+output = "figs-seed"
+quantity = 10
+duration = 600000
+skill = "seedkeeping"

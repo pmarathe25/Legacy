@@ -1,0 +1,522 @@
+id = "agriculture/diverse"
+version = 1
+
+[data.crops.potato]
+name = "Potato planting"
+seed_object = "potato-stock"
+seed_input = 8
+output_object = "potato"
+yield_units = 700
+growth = 7776000000
+natural_growth = 7776000000
+natural_yield = 700
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = -2
+maximum_warmth = 26
+minimum_rain = 2
+maximum_rain = 9
+lifespan = 31536000000
+
+[data.crops.yam]
+name = "Yam planting"
+seed_object = "yam-stock"
+seed_input = 8
+output_object = "yam"
+yield_units = 1000
+growth = 18144000000
+natural_growth = 18144000000
+natural_yield = 1000
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 18
+maximum_warmth = 36
+minimum_rain = 3
+maximum_rain = 10
+lifespan = 36288000000
+
+[data.crops.carrot]
+name = "Carrot planting"
+seed_object = "carrot-stock"
+seed_input = 8
+output_object = "carrot"
+yield_units = 420
+growth = 6912000000
+natural_growth = 6912000000
+natural_yield = 420
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 2
+maximum_warmth = 27
+minimum_rain = 2
+maximum_rain = 8
+lifespan = 31536000000
+
+[data.crops.spinach]
+name = "Spinach planting"
+seed_object = "spinach-stock"
+seed_input = 8
+output_object = "spinach"
+yield_units = 280
+growth = 3888000000
+natural_growth = 3888000000
+natural_yield = 280
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = -3
+maximum_warmth = 24
+minimum_rain = 3
+maximum_rain = 9
+lifespan = 31536000000
+
+[data.crops.beet]
+name = "Beet planting"
+seed_object = "beet-stock"
+seed_input = 8
+output_object = "beet"
+yield_units = 540
+growth = 7344000000
+natural_growth = 7344000000
+natural_yield = 540
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 1
+maximum_warmth = 30
+minimum_rain = 2
+maximum_rain = 8
+lifespan = 31536000000
+
+[data.crops.sorghum]
+name = "Sorghum planting"
+seed_object = "sorghum-stock"
+seed_input = 8
+output_object = "sorghum"
+yield_units = 650
+growth = 9504000000
+natural_growth = 9504000000
+natural_yield = 650
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 15
+maximum_warmth = 42
+minimum_rain = 0
+maximum_rain = 5
+lifespan = 31536000000
+
+[data.crops.quinoa]
+name = "Quinoa planting"
+seed_object = "quinoa-stock"
+seed_input = 8
+output_object = "quinoa"
+yield_units = 360
+growth = 9072000000
+natural_growth = 9072000000
+natural_yield = 360
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = -4
+maximum_warmth = 28
+minimum_rain = 0
+maximum_rain = 6
+lifespan = 31536000000
+
+[data.crops.amaranth]
+name = "Amaranth planting"
+seed_object = "amaranth-stock"
+seed_input = 8
+output_object = "amaranth"
+yield_units = 400
+growth = 6480000000
+natural_growth = 6480000000
+natural_yield = 400
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 10
+maximum_warmth = 38
+minimum_rain = 1
+maximum_rain = 7
+lifespan = 31536000000
+
+[data.crops.taro]
+name = "Taro planting"
+seed_object = "taro-stock"
+seed_input = 8
+output_object = "taro"
+yield_units = 950
+growth = 18144000000
+natural_growth = 18144000000
+natural_yield = 950
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 18
+maximum_warmth = 36
+minimum_rain = 5
+maximum_rain = 14
+lifespan = 36288000000
+
+[data.crops.cassava]
+name = "Cassava planting"
+seed_object = "cassava-stock"
+seed_input = 8
+output_object = "cassava"
+yield_units = 1200
+growth = 25920000000
+natural_growth = 25920000000
+natural_yield = 1200
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 20
+maximum_warmth = 40
+minimum_rain = 1
+maximum_rain = 10
+lifespan = 51840000000
+
+[data.crops.banana]
+name = "Banana planting"
+seed_object = "banana-stock"
+seed_input = 8
+output_object = "banana"
+yield_units = 1000
+growth = 36288000000
+natural_growth = 36288000000
+natural_yield = 1000
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 18
+maximum_warmth = 36
+minimum_rain = 4
+maximum_rain = 13
+regrowth = 12960000000
+lifespan = 189216000000
+
+[data.crops.plantain]
+name = "Plantain planting"
+seed_object = "plantain-stock"
+seed_input = 8
+output_object = "plantain"
+yield_units = 1100
+growth = 38880000000
+natural_growth = 38880000000
+natural_yield = 1100
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 18
+maximum_warmth = 36
+minimum_rain = 4
+maximum_rain = 13
+regrowth = 15552000000
+lifespan = 189216000000
+
+[data.crops.apricot]
+name = "Apricot planting"
+seed_object = "apricot-stock"
+seed_input = 8
+output_object = "apricot"
+yield_units = 700
+growth = 77760000000
+natural_growth = 77760000000
+natural_yield = 700
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 4
+maximum_warmth = 34
+minimum_rain = 1
+maximum_rain = 7
+regrowth = 25920000000
+lifespan = 1103760000000
+
+[data.crops.peach]
+name = "Peach planting"
+seed_object = "peach-stock"
+seed_input = 8
+output_object = "peach"
+yield_units = 800
+growth = 69120000000
+natural_growth = 69120000000
+natural_yield = 800
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 5
+maximum_warmth = 34
+minimum_rain = 2
+maximum_rain = 8
+regrowth = 25920000000
+lifespan = 693792000000
+
+[data.crops.cherry]
+name = "Cherry planting"
+seed_object = "cherry-stock"
+seed_input = 8
+output_object = "cherry"
+yield_units = 650
+growth = 86400000000
+natural_growth = 86400000000
+natural_yield = 650
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 2
+maximum_warmth = 30
+minimum_rain = 2
+maximum_rain = 8
+regrowth = 27648000000
+lifespan = 1261440000000
+
+[data.crops.almond]
+name = "Almond planting"
+seed_object = "almond-stock"
+seed_input = 8
+output_object = "almond"
+yield_units = 400
+growth = 95040000000
+natural_growth = 95040000000
+natural_yield = 400
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 5
+maximum_warmth = 38
+minimum_rain = 0
+maximum_rain = 5
+regrowth = 28512000000
+lifespan = 1734480000000
+
+[data.crops.pistachio]
+name = "Pistachio planting"
+seed_object = "pistachio-stock"
+seed_input = 8
+output_object = "pistachio"
+yield_units = 320
+growth = 120960000000
+natural_growth = 120960000000
+natural_yield = 320
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 10
+maximum_warmth = 43
+minimum_rain = 0
+maximum_rain = 4
+regrowth = 29376000000
+lifespan = 2207520000000
+
+[data.crops.peanut]
+name = "Peanut planting"
+seed_object = "peanut-stock"
+seed_input = 8
+output_object = "peanut"
+yield_units = 550
+growth = 11232000000
+natural_growth = 11232000000
+natural_yield = 550
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 14
+maximum_warmth = 37
+minimum_rain = 1
+maximum_rain = 7
+lifespan = 31536000000
+
+[data.crops.soybean]
+name = "Soybean planting"
+seed_object = "soybean-stock"
+seed_input = 8
+output_object = "soybean"
+yield_units = 600
+growth = 9936000000
+natural_growth = 9936000000
+natural_yield = 600
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 10
+maximum_warmth = 35
+minimum_rain = 2
+maximum_rain = 8
+lifespan = 31536000000
+
+[data.crops.broad-bean]
+name = "Broad bean planting"
+seed_object = "broad-bean-stock"
+seed_input = 8
+output_object = "broad-bean"
+yield_units = 560
+growth = 7776000000
+natural_growth = 7776000000
+natural_yield = 560
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 0
+maximum_warmth = 28
+minimum_rain = 2
+maximum_rain = 8
+lifespan = 31536000000
+
+[data.crops.fenugreek]
+name = "Fenugreek planting"
+seed_object = "fenugreek-stock"
+seed_input = 8
+output_object = "fenugreek"
+yield_units = 260
+growth = 5616000000
+natural_growth = 5616000000
+natural_yield = 260
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 8
+maximum_warmth = 35
+minimum_rain = 0
+maximum_rain = 6
+lifespan = 31536000000
+
+[data.crops.ginger]
+name = "Ginger planting"
+seed_object = "ginger-stock"
+seed_input = 8
+output_object = "ginger"
+yield_units = 500
+growth = 20736000000
+natural_growth = 20736000000
+natural_yield = 500
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 18
+maximum_warmth = 35
+minimum_rain = 4
+maximum_rain = 12
+lifespan = 41472000000
+
+[data.crops.chili]
+name = "Chili planting"
+seed_object = "chili-stock"
+seed_input = 8
+output_object = "chili"
+yield_units = 300
+growth = 8208000000
+natural_growth = 8208000000
+natural_yield = 300
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 14
+maximum_warmth = 38
+minimum_rain = 1
+maximum_rain = 8
+lifespan = 31536000000
+
+[data.crops.cucumber]
+name = "Cucumber planting"
+seed_object = "cucumber-stock"
+seed_input = 8
+output_object = "cucumber"
+yield_units = 750
+growth = 5184000000
+natural_growth = 5184000000
+natural_yield = 750
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 12
+maximum_warmth = 34
+minimum_rain = 3
+maximum_rain = 10
+lifespan = 31536000000
+
+[data.crops.tomato]
+name = "Tomato planting"
+seed_object = "tomato-stock"
+seed_input = 8
+output_object = "tomato"
+yield_units = 800
+growth = 7776000000
+natural_growth = 7776000000
+natural_yield = 800
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 10
+maximum_warmth = 35
+minimum_rain = 2
+maximum_rain = 9
+lifespan = 31536000000
+
+[data.crops.sweet-potato]
+name = "Sweet potato planting"
+seed_object = "sweet-potato-stock"
+seed_input = 8
+output_object = "sweet-potato"
+yield_units = 900
+growth = 10368000000
+natural_growth = 10368000000
+natural_yield = 900
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 14
+maximum_warmth = 36
+minimum_rain = 2
+maximum_rain = 10
+lifespan = 31536000000
+
+[data.crops.coffee-cherry]
+name = "Coffee cherry planting"
+seed_object = "coffee-cherry-stock"
+seed_input = 8
+output_object = "coffee-cherry"
+yield_units = 450
+growth = 77760000000
+natural_growth = 77760000000
+natural_yield = 450
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 14
+maximum_warmth = 30
+minimum_rain = 4
+maximum_rain = 12
+regrowth = 15552000000
+lifespan = 946080000000
+
+[data.crops.cacao-pod]
+name = "Cacao pod planting"
+seed_object = "cacao-pod-stock"
+seed_input = 8
+output_object = "cacao-pod"
+yield_units = 500
+growth = 95040000000
+natural_growth = 95040000000
+natural_yield = 500
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 20
+maximum_warmth = 34
+minimum_rain = 6
+maximum_rain = 14
+regrowth = 15552000000
+lifespan = 1103760000000
+
+[data.crops.dreamleaf]
+name = "Dreamleaf planting"
+seed_object = "dreamleaf-stock"
+seed_input = 8
+output_object = "dreamleaf"
+yield_units = 300
+growth = 8640000000
+natural_growth = 8640000000
+natural_yield = 300
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 10
+maximum_warmth = 34
+minimum_rain = 2
+maximum_rain = 8
+regrowth = 6048000000
+lifespan = 126144000000
+
+[data.crops.sugar-beet]
+name = "Sugar beet planting"
+seed_object = "sugar-beet-stock"
+seed_input = 8
+output_object = "sugar-beet"
+yield_units = 900
+growth = 10368000000
+natural_growth = 10368000000
+natural_yield = 900
+sow_labor = 3600000
+harvest_labor = 7200000
+minimum_warmth = 2
+maximum_warmth = 30
+minimum_rain = 2
+maximum_rain = 8
+lifespan = 31536000000

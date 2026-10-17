@@ -1,0 +1,212 @@
+id = "workshop/diverse-crops"
+version = 1
+
+[data.recipes.save-potato-stock]
+inputs = { "potato" = 12 }
+output = "potato-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-yam-stock]
+inputs = { "yam" = 12 }
+output = "yam-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-carrot-stock]
+inputs = { "carrot" = 12 }
+output = "carrot-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-spinach-stock]
+inputs = { "spinach" = 12 }
+output = "spinach-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-beet-stock]
+inputs = { "beet" = 12 }
+output = "beet-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-sorghum-stock]
+inputs = { "sorghum" = 12 }
+output = "sorghum-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-quinoa-stock]
+inputs = { "quinoa" = 12 }
+output = "quinoa-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-amaranth-stock]
+inputs = { "amaranth" = 12 }
+output = "amaranth-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-taro-stock]
+inputs = { "taro" = 12 }
+output = "taro-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-cassava-stock]
+inputs = { "cassava" = 12 }
+output = "cassava-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-banana-stock]
+inputs = { "banana" = 12 }
+output = "banana-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-plantain-stock]
+inputs = { "plantain" = 12 }
+output = "plantain-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-apricot-stock]
+inputs = { "apricot" = 12 }
+output = "apricot-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-peach-stock]
+inputs = { "peach" = 12 }
+output = "peach-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-cherry-stock]
+inputs = { "cherry" = 12 }
+output = "cherry-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-almond-stock]
+inputs = { "almond" = 12 }
+output = "almond-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-pistachio-stock]
+inputs = { "pistachio" = 12 }
+output = "pistachio-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-peanut-stock]
+inputs = { "peanut" = 12 }
+output = "peanut-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-soybean-stock]
+inputs = { "soybean" = 12 }
+output = "soybean-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-broad-bean-stock]
+inputs = { "broad-bean" = 12 }
+output = "broad-bean-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-fenugreek-stock]
+inputs = { "fenugreek" = 12 }
+output = "fenugreek-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-ginger-stock]
+inputs = { "ginger" = 12 }
+output = "ginger-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-chili-stock]
+inputs = { "chili" = 12 }
+output = "chili-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-cucumber-stock]
+inputs = { "cucumber" = 12 }
+output = "cucumber-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-tomato-stock]
+inputs = { "tomato" = 12 }
+output = "tomato-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-sweet-potato-stock]
+inputs = { "sweet-potato" = 12 }
+output = "sweet-potato-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-coffee-cherry-stock]
+inputs = { "coffee-cherry" = 12 }
+output = "coffee-cherry-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-cacao-pod-stock]
+inputs = { "cacao-pod" = 12 }
+output = "cacao-pod-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-dreamleaf-stock]
+inputs = { "dreamleaf" = 12 }
+output = "dreamleaf-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"
+
+[data.recipes.save-sugar-beet-stock]
+inputs = { "sugar-beet" = 12 }
+output = "sugar-beet-stock"
+quantity = 10
+duration = 1800000
+skill = "seedkeeping"

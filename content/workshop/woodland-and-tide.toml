@@ -1,0 +1,156 @@
+id = "workshop/woodland-and-tide"
+version = 1
+
+[data.recipes.grind-chestnuts]
+inputs = { chestnuts = 16 }
+output = "sweet-chestnut-flour"
+quantity = 14
+duration = 600000
+skill = "milling"
+
+[data.recipes.reduce-maple-sap]
+inputs = { maple-sap = 20, timber = 3 }
+output = "maple-syrup"
+quantity = 8
+duration = 1200000
+skill = "cooking"
+
+[data.recipes.preserve-rosehips]
+inputs = { rosehips = 12, honey = 2, timber = 2 }
+output = "rosehip-preserve"
+quantity = 10
+duration = 900000
+skill = "cooking"
+
+[data.recipes.preserve-elderberries]
+inputs = { elderberries = 12, honey = 2, timber = 2 }
+output = "elderberry-preserve"
+quantity = 10
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-sloe-paste]
+inputs = { sloes = 12, maple-syrup = 2, timber = 2 }
+output = "sloe-paste"
+quantity = 10
+duration = 900000
+skill = "cooking"
+
+[data.recipes.make-rowan-jelly]
+inputs = { rowan-berries = 12, honey = 2, timber = 2 }
+output = "rowan-jelly"
+quantity = 10
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-kelp-broth]
+inputs = { kelp = 12, shellfish = 4, timber = 2 }
+output = "kelp-broth"
+quantity = 16
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-lichen-bread]
+inputs = { lichen = 8, flour = 8, timber = 2 }
+output = "lichen-bread"
+quantity = 14
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-chestnut-cakes]
+inputs = { sweet-chestnut-flour = 12, timber = 2 }
+output = "chestnut-cakes"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-walnut-cakes]
+inputs = { walnuts = 8, flour = 8, timber = 2 }
+output = "walnut-cakes"
+quantity = 14
+duration = 900000
+skill = "cooking"
+
+[data.recipes.mix-trail-rations]
+inputs = { dried-fruit = 6, nuts = 6, dried-fish = 3 }
+output = "trail-rations"
+quantity = 12
+duration = 600000
+skill = "cooking"
+
+[data.recipes.char-pinecones]
+inputs = { pinecones = 12 }
+output = "charcoal"
+quantity = 5
+duration = 1500000
+skill = "charcoal"
+
+[data.recipes.make-moss-paper]
+inputs = { moss = 8, bark = 4 }
+output = "moss-paper"
+quantity = 8
+duration = 1200000
+skill = "papermaking"
+
+[data.recipes.make-berry-ink]
+inputs = { elderberries = 6, resin = 1 }
+output = "berry-ink"
+quantity = 6
+duration = 600000
+skill = "writing"
+
+[data.recipes.write-with-berry-ink]
+inputs = { moss-paper = 1, berry-ink = 1 }
+output = "written-page"
+quantity = 1
+duration = 900000
+skill = "writing"
+
+[data.recipes.wax-cloth]
+inputs = { cloth = 4, beeswax = 2 }
+output = "waxed-cloth"
+quantity = 4
+duration = 900000
+skill = "weaving"
+
+[data.recipes.weave-screen]
+inputs = { willow = 8, reeds = 8, rope = 2 }
+output = "woven-screen"
+quantity = 1
+duration = 1500000
+skill = "weaving"
+
+[data.recipes.press-flowers]
+inputs = { lavender = 4, moss-paper = 1 }
+output = "pressed-flowers"
+quantity = 4
+duration = 600000
+skill = "decoration"
+
+[data.recipes.weave-doll]
+inputs = { rushes = 4, linen-thread = 1 }
+output = "woven-doll"
+quantity = 1
+duration = 900000
+skill = "weaving"
+
+[data.recipes.shape-figurine]
+inputs = { clay = 3, timber = 2 }
+output = "clay-figurine"
+quantity = 1
+duration = 1200000
+skill = "pottery"
+
+[data.recipes.paint-mask]
+inputs = { timber = 2, pigment = 1, rope = 1 }
+output = "painted-mask"
+quantity = 1
+duration = 1500000
+skill = "carving"
+
+[data.recipes.shape-shell-beads]
+inputs = { shellfish = 8 }
+output = "shell-beads"
+quantity = 4
+duration = 900000
+skill = "carving"

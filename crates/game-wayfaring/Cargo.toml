@@ -1,0 +1,31 @@
+[package]
+name = "game-wayfaring"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-diagnostics.workspace = true
+game-vitality.workspace = true
+game-ecology.workspace = true
+serde.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-transport.workspace = true
+game-physiology.workspace = true
+game-characters.workspace = true
+game-knowledge.workspace = true
+game-provisioning.workspace = true
+game-livelihoods.workspace = true
+game-relationships.workspace = true
+game-traits.workspace = true
+game-lineage.workspace = true
+[dev-dependencies]
+game-land.workspace = true
+game-content.workspace = true
+game-skills.workspace = true
+game-objects.workspace = true
+serde_json.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-workshop.workspace = true

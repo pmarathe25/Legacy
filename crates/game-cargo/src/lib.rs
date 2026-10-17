@@ -3,6 +3,8 @@ use game_core::*;
 use game_sim::*;
 use game_storage::{Records, Table};
 mod carriers;
+mod food;
+mod goods;
 use serde::{Deserialize, Serialize};
 pub const FOOD: GoodId = GoodId(1);
 pub const TIMBER: GoodId = GoodId(2);
@@ -29,6 +31,17 @@ pub struct Inventory {
     pub reserved_mass: u64,
 }
 impl Inventory {
+    /// No locality exists while a container or its carrier is on a road.
+    pub fn area(&self, positions: &game_transport::Positions) -> Option<AreaId> {
+        match self.custody {
+            Custody::Area(area) => Some(area),
+            Custody::Carried(person) => match positions.0.get(&person) {
+                Some(game_transport::Location::At(area)) => Some(*area),
+                _ => None,
+            },
+            Custody::Road { .. } => None,
+        }
+    }
     pub fn amount(&self, good: GoodId) -> u64 {
         *self.goods.get(&good).unwrap_or(&0)
     }
@@ -258,39 +271,24 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         })
     })?;
     b.request::<Deposit>(|tx, r| {
-        require(r.quantity > 0, "quantity must be positive")?;
-        let mass = tx
-            .get::<game_objects::Objects>()?
-            .mass(r.good, r.quantity)?;
-        let inv = tx
-            .edit::<Cargo>()?
-            .0
-            .get_mut(&r.inventory)
-            .ok_or_else(|| Error::Missing("inventory".into()))?;
-        require(
-            inv.used()?.checked_add(mass).ok_or(Error::Overflow)? <= inv.capacity,
-            "capacity exceeded",
-        )?;
-        inv.mass = inv.mass.checked_add(mass).ok_or(Error::Overflow)?;
-        let q = inv.goods.entry(r.good).or_default();
-        *q = q.checked_add(r.quantity).ok_or(Error::Overflow)?;
-        Ok(())
+        add(tx, r.inventory, r.good, r.quantity)?;
+        tx.notify(Changed {
+            inventory: r.inventory,
+            destination: None,
+            good: r.good,
+            quantity: r.quantity,
+            added: true,
+        })
     })?;
     b.request::<Consume>(|tx, r| {
-        require(r.quantity > 0, "quantity must be positive")?;
-        let mass = tx
-            .get::<game_objects::Objects>()?
-            .mass(r.good, r.quantity)?;
-        let inv = tx
-            .edit::<Cargo>()?
-            .0
-            .get_mut(&r.inventory)
-            .ok_or_else(|| Error::Missing("inventory".into()))?;
-        let q = inv.goods.entry(r.good).or_default();
-        require(*q >= r.quantity, "insufficient stock")?;
-        *q -= r.quantity;
-        inv.mass = inv.mass.checked_sub(mass).ok_or(Error::Overflow)?;
-        Ok(())
+        remove(tx, r.inventory, r.good, r.quantity)?;
+        tx.notify(Changed {
+            inventory: r.inventory,
+            destination: None,
+            good: r.good,
+            quantity: r.quantity,
+            added: false,
+        })
     })?;
     b.request::<DropCarried>(|tx, r| {
         if tx.get::<Cargo>()?.carried(r.person).next().is_none() {
@@ -342,15 +340,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             locality(tx, r.from)? == locality(tx, r.to)?,
             "goods must be carried between areas",
         )?;
-        tx.call(Consume {
+        remove(tx, r.from, r.good, r.quantity)?;
+        add(tx, r.to, r.good, r.quantity)?;
+        tx.notify(Changed {
             inventory: r.from,
+            destination: Some(r.to),
             good: r.good,
             quantity: r.quantity,
-        })?;
-        tx.call(Deposit {
-            inventory: r.to,
-            good: r.good,
-            quantity: r.quantity,
+            added: false,
         })
     })
 }
@@ -365,4 +362,58 @@ impl Cargo {
         }
         Ok(())
     }
+}
+
+/// Committed stock movement; consumers can preserve ages across real transfers.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Changed {
+    pub inventory: InventoryId,
+    pub destination: Option<InventoryId>,
+    pub good: GoodId,
+    pub quantity: u64,
+    pub added: bool,
+}
+impl Event for Changed {
+    const KEY: &'static str = "cargo.changed";
+}
+fn add(
+    tx: &mut Transaction<'_>,
+    inventory: InventoryId,
+    good: GoodId,
+    quantity: u64,
+) -> Result<()> {
+    require(quantity > 0, "quantity must be positive")?;
+    let mass = tx.get::<game_objects::Objects>()?.mass(good, quantity)?;
+    let inv = tx
+        .edit::<Cargo>()?
+        .0
+        .get_mut(&inventory)
+        .ok_or_else(|| Error::Missing("inventory".into()))?;
+    require(
+        inv.used()?.checked_add(mass).ok_or(Error::Overflow)? <= inv.capacity,
+        "capacity exceeded",
+    )?;
+    inv.mass = inv.mass.checked_add(mass).ok_or(Error::Overflow)?;
+    let q = inv.goods.entry(good).or_default();
+    *q = q.checked_add(quantity).ok_or(Error::Overflow)?;
+    Ok(())
+}
+fn remove(
+    tx: &mut Transaction<'_>,
+    inventory: InventoryId,
+    good: GoodId,
+    quantity: u64,
+) -> Result<()> {
+    require(quantity > 0, "quantity must be positive")?;
+    let mass = tx.get::<game_objects::Objects>()?.mass(good, quantity)?;
+    let inv = tx
+        .edit::<Cargo>()?
+        .0
+        .get_mut(&inventory)
+        .ok_or_else(|| Error::Missing("inventory".into()))?;
+    let q = inv.goods.entry(good).or_default();
+    require(*q >= quantity, "insufficient stock")?;
+    *q -= quantity;
+    inv.mass = inv.mass.checked_sub(mass).ok_or(Error::Overflow)?;
+    Ok(())
 }

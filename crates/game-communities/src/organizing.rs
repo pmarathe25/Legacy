@@ -162,6 +162,12 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
     if !eligible(tx, a, b)? {
         return Ok(());
     }
+    if tx.get::<Communities>()?.members.get(&a).is_some_and(|id| {
+        tx.get::<game_institutions::Institutions>()
+            .is_ok_and(|s| s.groups[id].members.len() > 2)
+    }) {
+        return Ok(());
+    }
     let Some((procedure, attachments)) = choose(tx, a, b, forced)? else {
         return Ok(());
     };
@@ -240,9 +246,10 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
         s.members.insert(p, id);
         s.attachments.insert(p, basis);
     }
+    let jurisdiction = tx.get::<game_institutions::Institutions>()?.groups[&id].jurisdiction;
     tx.edit::<Communities>()?
         .places
-        .entry(area)
+        .entry(jurisdiction)
         .or_default()
         .insert(id, ());
     if existing.is_none() {

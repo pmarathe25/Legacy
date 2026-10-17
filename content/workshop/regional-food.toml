@@ -1,0 +1,247 @@
+id = "workshop/regional-food"
+version = 1
+
+[data.recipes.mill-oats]
+inputs = { oats = 20 }
+output = "groats"
+quantity = 16
+duration = 600000
+skill = "milling"
+
+[data.recipes.mill-rye]
+inputs = { rye = 20 }
+output = "groats"
+quantity = 16
+duration = 600000
+skill = "milling"
+
+[data.recipes.mill-millet]
+inputs = { millet = 20 }
+output = "groats"
+quantity = 16
+duration = 600000
+skill = "milling"
+
+[data.recipes.mill-buckwheat]
+inputs = { buckwheat = 20 }
+output = "groats"
+quantity = 16
+duration = 600000
+skill = "milling"
+
+[data.recipes.grind-acorns]
+inputs = { acorns = 20 }
+output = "nut-meal"
+quantity = 12
+duration = 900000
+skill = "milling"
+
+[data.recipes.grind-hazelnuts]
+inputs = { hazelnuts = 16 }
+output = "nut-meal"
+quantity = 14
+duration = 600000
+skill = "milling"
+
+[data.recipes.press-sesame]
+inputs = { sesame = 16 }
+output = "oil"
+quantity = 6
+duration = 1200000
+skill = "pressing"
+
+[data.recipes.press-sunflower-seed]
+inputs = { sunflower-seed = 16 }
+output = "oil"
+quantity = 6
+duration = 1200000
+skill = "pressing"
+
+[data.recipes.press-olives]
+inputs = { olives = 16 }
+output = "oil"
+quantity = 6
+duration = 1200000
+skill = "pressing"
+
+[data.recipes.dry-apples]
+inputs = { apples = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.dry-pears]
+inputs = { pears = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.dry-plums]
+inputs = { plums = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.dry-grapes]
+inputs = { grapes = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.dry-dates]
+inputs = { dates = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.dry-figs]
+inputs = { figs = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.dry-orchard-fruit]
+inputs = { orchard-fruit = 15, timber = 2 }
+output = "dried-fruit"
+quantity = 9
+duration = 1500000
+skill = "cooking"
+
+[data.recipes.cook-porridge]
+inputs = { groats = 12, timber = 2 }
+output = "porridge"
+quantity = 16
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-flatbread]
+inputs = { groats = 12, oil = 1, timber = 2 }
+output = "flatbread"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-lentil-soup]
+inputs = { lentils = 12, onions = 4, timber = 2 }
+output = "lentil-soup"
+quantity = 18
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-pea-soup]
+inputs = { peas = 12, leeks = 4, timber = 2 }
+output = "pea-soup"
+quantity = 18
+duration = 900000
+skill = "cooking"
+
+[data.recipes.roast-chestnuts]
+inputs = { chestnuts = 16, timber = 2 }
+output = "roast-chestnuts"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-nut-bread]
+inputs = { nut-meal = 8, flour = 8, timber = 2 }
+output = "nut-bread"
+quantity = 14
+duration = 900000
+skill = "cooking"
+
+[data.recipes.preserve-fruit]
+inputs = { plums = 12, honey = 3, timber = 2 }
+output = "fruit-preserve"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.pickle-cabbage]
+inputs = { cabbage = 16, salt = 2 }
+output = "pickled-vegetables"
+quantity = 14
+duration = 900000
+skill = "cooking"
+
+[data.recipes.salt-fish]
+inputs = { fish = 15, salt = 3 }
+output = "salted-fish"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.smoke-shellfish]
+inputs = { shellfish = 15, timber = 4 }
+output = "smoked-shellfish"
+quantity = 9
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-rice-cakes]
+inputs = { rice = 12, oil = 1, timber = 2 }
+output = "rice-cakes"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-sesame-cakes]
+inputs = { sesame = 6, flour = 8, timber = 2 }
+output = "sesame-cakes"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-honey-cakes]
+inputs = { honey = 4, flour = 8, timber = 2 }
+output = "honey-cakes"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.roast-squash]
+inputs = { squash = 16, oil = 1, timber = 2 }
+output = "roast-squash"
+quantity = 14
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-herbed-roots]
+inputs = { roots = 12, wild-garlic = 3, timber = 2 }
+output = "herbed-roots"
+quantity = 14
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-greens]
+inputs = { sorrel = 12, onions = 4, timber = 2 }
+output = "greens-stew"
+quantity = 16
+duration = 900000
+skill = "cooking"
+
+[data.recipes.cook-onion-broth]
+inputs = { onions = 12, leeks = 4, timber = 2 }
+output = "onion-broth"
+quantity = 18
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-olive-bread]
+inputs = { olives = 6, flour = 8, timber = 2 }
+output = "olive-bread"
+quantity = 12
+duration = 900000
+skill = "cooking"
+
+[data.recipes.bake-date-cakes]
+inputs = { dates = 6, flour = 8, timber = 2 }
+output = "date-cakes"
+quantity = 12
+duration = 900000
+skill = "cooking"

@@ -4,23 +4,23 @@ version = 1
 id = 1
 name = "Grain"
 mass = 1
-tags = ["food"]
-food = { portion = 10, relief = 60 }
+tags = ["food", "plant"]
+food = { portion = 10, relief = 60, shelf_days = 360, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
 [data.objects.timber]
 id = 2
 name = "Timber"
 mass = 1
-tags = ["material"]
+tags = ["material", "plant", "woody", "fuel-hours:1"]
 [data.objects.grain-seed]
 id = 3
 name = "Grain seed"
 mass = 1
-tags = ["seed"]
+tags = ["seed", "plant"]
 [data.objects.medicine]
 id = 4
 name = "Medicine"
 mass = 1
-tags = ["medicine"]
+tags = ["medical", "medicine"]
 [data.objects.tool]
 id = 5
 name = "Tool"

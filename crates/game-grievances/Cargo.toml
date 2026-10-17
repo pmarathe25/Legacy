@@ -1,0 +1,21 @@
+[package]
+name="game-grievances"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+[dependencies]
+game-diagnostics.workspace = true
+game-vitality.workspace = true
+game-agriculture.workspace=true
+game-core.workspace=true
+game-sim.workspace=true
+game-storage.workspace=true
+game-property.workspace=true
+game-relationships.workspace=true
+game-traits.workspace=true
+game-characters.workspace=true
+game-pressure.workspace=true
+game-transport.workspace=true
+game-physiology.workspace=true
+game-lineage.workspace=true
+serde.workspace=true

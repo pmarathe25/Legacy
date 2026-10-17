@@ -91,7 +91,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 good: r.good,
                 quantity: r.quantity,
             },
-            unauthorized: false,
+            unauthorized: true,
         })?;
         tx.edit::<Logistics>()?.0.insert(
             r.carrier,

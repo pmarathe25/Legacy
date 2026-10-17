@@ -1,0 +1,20 @@
+[package]
+name = "game-names"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-social-life.workspace = true
+game-lifecycle.workspace = true
+game-physiology.workspace = true
+game-transport.workspace = true
+serde.workspace = true
+[dev-dependencies]
+game-land.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-objects.workspace = true
+serde_json.workspace = true

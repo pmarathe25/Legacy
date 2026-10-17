@@ -1,0 +1,10 @@
+id = "social-life/campaign"
+version = 1
+[data]
+duration = 1800000
+# Need growth scale, not a prohibition on talking more often.
+contact_interval = 86400000
+retry = 600000
+max_hunger = 90
+max_fatigue = 30
+candidates = 16

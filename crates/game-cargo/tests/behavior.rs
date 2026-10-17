@@ -3,6 +3,121 @@ use game_cargo::*;
 use support::*;
 
 #[test]
+fn good_indexes_follow_transfers_old_snapshots_removal_and_loading() {
+    let mut f = setup();
+    let before = f.host.get::<Cargo>().unwrap().clone();
+    assert_eq!(before.stores_with(FOOD, 1), vec![f.store]);
+    f.host
+        .dispatch(Transfer {
+            from: f.store,
+            to: f.pack,
+            good: FOOD,
+            quantity: 1000,
+        })
+        .unwrap();
+    let current = f.host.get::<Cargo>().unwrap();
+    assert_eq!(current.stores_with(FOOD, 1), vec![f.pack]);
+    assert_eq!(before.stores_with(FOOD, 1), vec![f.store]);
+    assert_eq!(current.stores_with(FOOD, 1001), vec![]);
+    assert_eq!(current.stores_with(FOOD, 1), vec![f.pack]);
+    let saved = f.host.save().unwrap();
+    let loaded = builder().load(&saved, 2).unwrap();
+    assert_eq!(
+        loaded.get::<Cargo>().unwrap().stores_with(FOOD, 1),
+        vec![f.pack]
+    );
+    let mut removed = current.clone();
+    removed.0.remove(&f.pack);
+    assert!(removed.stores_with(FOOD, 1).is_empty());
+    assert_eq!(current.stores_with(FOOD, 1), vec![f.pack]);
+}
+
+#[test]
+fn allocation_free_locality_follows_real_carriers_and_excludes_roads() {
+    let mut f = setup();
+    let local = |h: &game_sim::Host, id| {
+        h.get::<Cargo>().unwrap().0[&id].area(h.get::<game_transport::Positions>().unwrap())
+    };
+    assert_eq!(local(&f.host, f.pack), Some(f.home));
+    assert_eq!(local(&f.host, f.store), Some(f.home));
+    f.host
+        .dispatch(game_transport::Move {
+            person: f.ruler,
+            destination: f.away,
+        })
+        .unwrap();
+    assert_eq!(local(&f.host, f.pack), None);
+    f.host.advance(game_core::SimTime(120_000), 1000).unwrap();
+    assert_eq!(local(&f.host, f.pack), Some(f.away));
+    let mut road = f.host.get::<Cargo>().unwrap().0[&f.pack].clone();
+    road.custody = Custody::Road {
+        from: f.home,
+        to: f.away,
+        elapsed: game_core::SimDuration(1),
+        duration: game_core::SimDuration(120_000),
+    };
+    assert_eq!(road.area(f.host.get().unwrap()), None);
+}
+#[test]
+fn current_food_index_tracks_consumption_snapshots_and_catalogs() {
+    let mut f = setup();
+    let objects = game_objects::standard().unwrap();
+    assert_eq!(
+        f.host.get::<Cargo>().unwrap().food_stores(&objects),
+        vec![f.store]
+    );
+    let before = f.host.get::<Cargo>().unwrap().clone();
+    f.host
+        .dispatch(Transfer {
+            from: f.store,
+            to: f.pack,
+            good: FOOD,
+            quantity: 1000,
+        })
+        .unwrap();
+    assert_eq!(
+        f.host.get::<Cargo>().unwrap().food_stores(&objects),
+        vec![f.pack]
+    );
+    assert_eq!(before.food_stores(&objects), vec![f.store]);
+    assert_eq!(
+        f.host.get::<Cargo>().unwrap().food_stores(&objects),
+        vec![f.pack]
+    );
+    let mut wire = serde_json::to_value(&objects).unwrap();
+    wire["items"]["grain"]["food"] = serde_json::Value::Null;
+    let inedible = serde_json::from_value(wire).unwrap();
+    assert!(
+        f.host
+            .get::<Cargo>()
+            .unwrap()
+            .food_stores(&inedible)
+            .is_empty()
+    );
+    let saved = f.host.save().unwrap();
+    let loaded = builder().load(&saved, 2).unwrap();
+    assert_eq!(
+        loaded.get::<Cargo>().unwrap().food_stores(&objects),
+        vec![f.pack]
+    );
+    assert_eq!(loaded.save().unwrap(), saved);
+    f.host
+        .dispatch(Consume {
+            inventory: f.pack,
+            good: FOOD,
+            quantity: 1000,
+        })
+        .unwrap();
+    assert!(
+        f.host
+            .get::<Cargo>()
+            .unwrap()
+            .food_stores(&objects)
+            .is_empty()
+    );
+}
+
+#[test]
 fn contention_and_failed_capacity_checks_conserve_stock() {
     let mut f = setup();
     let tiny = f

@@ -59,7 +59,7 @@ pub fn initialize(host: &mut Host, store: &mut Store, id: &str, seed: u64) -> Re
         "opening already initialized",
     )?;
     if id == "generated" {
-        return history::initialize(host, store, seed);
+        return history::initialize(host, store, seed, true);
     }
     let definitions = game_scenarios::load(store)?;
     let selected = if id == "random" {
@@ -87,4 +87,12 @@ pub fn initialize(host: &mut Host, store: &mut Store, id: &str, seed: u64) -> Re
     opening.definition = Some(definition.data);
     host.dispatch(Remember(opening))?;
     Ok(())
+}
+/// Physical initial conditions, with every person autonomous and no protected player.
+pub fn seed_world(host: &mut Host, store: &mut Store, seed: u64) -> Result<()> {
+    require(
+        host.get::<Opening>()?.scenario.is_empty(),
+        "opening already initialized",
+    )?;
+    history::initialize(host, store, seed, false)
 }

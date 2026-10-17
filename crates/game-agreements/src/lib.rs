@@ -187,7 +187,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 good: t.good,
                 quantity: t.quantity,
             },
-            unauthorized: false,
+            unauthorized: true,
         })?;
         let a = tx.edit::<Agreements>()?.0.get_mut(&r.agreement).unwrap();
         a.fulfilled.insert(r.term);

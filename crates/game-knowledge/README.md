@@ -4,6 +4,8 @@ Owns per-person facts with source, observation time, and confidence. Views retur
 
 `ObserveStore` records stock, location, capacity, and mass. `ObserveSurroundings` learns local roads and exposed resource patches, and discovers accessible local containers not previously inspected. Refreshing remembered inventory stock requires `ObserveStore`. `ObservePatch` cannot inspect a distant resource.
 
+Searching a previously observed store at its remembered location can disprove its presence. `ObserveStore` then records `{"absent_from": area}` under the stock key, rather than inventing its new location or contents. Food projections exclude the absent container as both a supplier and a gathering destination. Finding it again restores ordinary stock and location evidence. Uninformed remote inspection still fails, and another observer's beliefs remain unchanged.
+
 `Tell` requires both people at the same place and passes only the selected fact. `Report` is the lower-level delayed-delivery operation used by communication systems and fixtures. Neither operation also transfers unrelated knowledge. Reports retain the original observation time and commit order, with reduced confidence. A delayed report cannot replace newer evidence recorded at the same clock time.
 
 `route` constructs routes from recorded roads, including known endpoints not yet visited. Routing looks up only reached areas in these recorded snapshots; it does not reconstruct or copy the whole known graph for each query. Actual transport validates each road separately. Newly closed roads remain believed open until observation or communication supplies the change.

@@ -114,11 +114,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 && game_cargo::locality(tx, r.supplies)? == area,
             "care is not local",
         )?;
-        require(
-            tx.get::<game_property::Property>()?
-                .allowed(r.caregiver, r.supplies),
-            "no supply access",
-        )?;
+        tx.call(game_property::Use {
+            actor: r.caregiver,
+            inventory: r.supplies,
+            purpose: "treatment".into(),
+        })?;
         let rules = tx.get::<TreatmentRules>()?.clone();
         tx.call(game_cargo::Consume {
             inventory: r.supplies,

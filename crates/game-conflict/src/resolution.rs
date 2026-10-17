@@ -17,7 +17,14 @@ pub enum Effect {
         amount: u64,
     },
 }
-pub fn resolve(b: &Battle) -> Vec<Effect> {
+pub fn resolve(b: &Battle, strength: &BTreeMap<PersonId, u64>) -> Vec<Effect> {
+    resolve_with_agility(b, strength, &BTreeMap::new())
+}
+pub fn resolve_with_agility(
+    b: &Battle,
+    strength: &BTreeMap<PersonId, u64>,
+    agility: &BTreeMap<PersonId, u64>,
+) -> Vec<Effect> {
     let mut positions: BTreeMap<_, _> = b.fighters.iter().map(|(p, f)| (*p, f.point)).collect();
     let mut orders = b.orders.clone();
     for (person, f) in &b.fighters {
@@ -59,13 +66,29 @@ pub fn resolve(b: &Battle) -> Vec<Effect> {
                 <= i128::from(b.reach).pow(2)
             && b.map.clear(positions[&person], positions[&target])
         {
+            let base = b.damage.saturating_mul(
+                strength
+                    .get(&person)
+                    .copied()
+                    .unwrap_or(1000)
+                    .saturating_add(100),
+            ) / 1100;
+            let power = base.max(u64::from(b.damage > 0));
+            let power = if power == 0 {
+                0
+            } else {
+                (power.saturating_mul(game_vitality::factor(
+                    agility.get(&person).copied().unwrap_or(1000),
+                )) / game_vitality::factor(agility.get(&target).copied().unwrap_or(1000)))
+                .max(1)
+            };
             let amount = damage.entry(target).or_default();
-            *amount = amount.saturating_add(b.damage);
-            if b.damage > 0 {
+            *amount = amount.saturating_add(power);
+            if power > 0 {
                 hits.push(Effect::Hit {
                     actor: person,
                     target,
-                    amount: b.damage,
+                    amount: power,
                 });
             }
         }

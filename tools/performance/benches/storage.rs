@@ -65,6 +65,8 @@ fn rows(n: u64) -> Vec<Person> {
                 hunger: id % 25,
                 fatigue: id % 10,
                 health: 100,
+                maximum_health: None,
+                fatigue_fraction: 0,
                 resting: false,
                 last: SimTime(0),
                 life_limit: None,

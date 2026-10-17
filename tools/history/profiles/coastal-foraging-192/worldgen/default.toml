@@ -1,0 +1,45 @@
+id = "worldgen/default"
+version = 1
+[data]
+population = 192
+areas = 12
+# Only physical founding conditions differ; institutions and relationships are unscripted.
+history = 172800000
+physiology = "campaign"
+characters = "campaign"
+social_life = "campaign"
+health = "basic"
+name_starts = ["Al", "Bran", "Cor", "Dar", "El", "Fen", "Gal", "Har", "Is", "Kel", "Lor", "Mer", "Nor", "Or", "Pen", "Rav", "Sel", "Tal", "Val", "Wen"]
+name_ends = ["a", "en", "in", "or", "eth", "an", "el", "is", "ar", "wen", "wyn", "ren", "as", "il", "on", "ith"]
+
+[[data.biomes]]
+name = "Tidal Headland"
+climate = "dry-coast"
+food = "shellfish"
+food_stock_per_person = 600
+food_renew_per_person = 10
+material = "timber"
+material_renew_per_person = 4
+renewal_warmth = 18
+renewal_rain = 0
+
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 4
+minimum_warmth = 18
+minimum_rain = 0
+
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 2
+minimum_warmth = 18
+minimum_rain = 0
+
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 2
+minimum_warmth = 18
+minimum_rain = 0

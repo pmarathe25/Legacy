@@ -23,24 +23,18 @@ impl Request for Cancel {
     type Response = ();
 }
 fn disposition(tx: &Transaction<'_>, p: PersonId, key: &str) -> i64 {
-    tx.get::<game_traits::Traits>()
-        .map_or(500, |t| t.disposition(p, key))
+    game_vitality::disposition(tx, p, key)
 }
 fn ready(tx: &Transaction<'_>, person: PersonId) -> bool {
     let Ok(state) = tx.get::<SocialLife>() else {
         return false;
     };
-    state
-        .people
-        .get(&person)
-        .is_some_and(|p| p.area.is_some() && p.retry_at <= tx.now())
+    game_vitality::can_converse(tx, person)
+        && state.people.get(&person).is_some_and(|p| p.area.is_some())
         && tx.get::<game_physiology::Bodies>().is_ok_and(|s| {
-            s.people.get(&person).is_some_and(|p| {
-                p.alive
-                    && p.health > 0
-                    && p.hunger < state.rules.max_hunger
-                    && p.fatigue <= state.rules.max_fatigue
-            })
+            s.people
+                .get(&person)
+                .is_some_and(|p| p.alive && p.health > 0)
         })
         && tx
             .get::<Actions>()
@@ -57,7 +51,17 @@ fn affinity(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> i64 {
         })
 }
 fn willing(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> bool {
-    ready(tx, person) && affinity(tx, person, other) >= -20
+    if !ready(tx, person) {
+        return false;
+    }
+    let body = &tx.get::<game_physiology::Bodies>().unwrap().people[&person];
+    let grievance = tx
+        .get::<game_relationships::Social>()
+        .ok()
+        .and_then(|s| s.relationships.get(&person)?.get(&other))
+        .map_or(0, |r| i64::from(r.grievance));
+    200 + affinity(tx, person, other) * 3 + company_motivation(tx, person) - grievance * 8
+        > body.hunger.min(10000) as i64 * 2 + body.fatigue.min(10000) as i64 * 3
 }
 fn share(tx: &mut Transaction<'_>, sender: PersonId, recipient: PersonId) -> Result<()> {
     // Rotate through the speaker's memories without consulting the listener's private knowledge.
@@ -123,19 +127,12 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         if !ready(tx, r.person) {
             return Ok(false);
         }
+        if company_motivation(tx, r.person) <= 0 {
+            return Ok(false);
+        }
         let state = tx.get::<SocialLife>()?;
         let p = &state.people[&r.person];
-        let elapsed = tx.now().0.saturating_sub(p.last_contact.0);
-        let fellowship = tx
-            .get::<game_relationships::Social>()?
-            .values
-            .get(&r.person)
-            .and_then(|v| v.get("fellowship"))
-            .copied()
-            .unwrap_or(0);
-        let urge = 500 + disposition(tx, r.person, "sociability") + i64::from(fellowship);
-        if u128::from(elapsed) * (urge as u128) < u128::from(state.rules.contact_interval.0) * 1000
-        {
+        if p.retry_at > tx.now() {
             return Ok(false);
         }
         let area = p.area.unwrap();
@@ -147,6 +144,14 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .take(residents.len().min(state.rules.candidates))
             .map(|(p, _)| *p)
             .collect();
+        let explore = random(tx.seed(), r.person.0, p.encounters.wrapping_add(901)) % 1000
+            < ((disposition(tx, r.person, "sociability")
+                + disposition(tx, r.person, "risk-tolerance"))
+                / 4) as u64;
+        let familiar = tx
+            .get::<game_relationships::Social>()?
+            .relationships
+            .get(&r.person);
         let chosen = peers
             .iter()
             .copied()
@@ -158,7 +163,12 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             })
             .max_by_key(|other| {
                 (
-                    affinity(tx, r.person, *other) - if p.recent == Some(*other) { 10 } else { 0 },
+                    affinity(tx, r.person, *other) - if p.recent == Some(*other) { 10 } else { 0 }
+                        + if explore && familiar.is_none_or(|ties| !ties.contains_key(other)) {
+                            200
+                        } else {
+                            0
+                        },
                     std::cmp::Reverse(*other),
                 )
             });

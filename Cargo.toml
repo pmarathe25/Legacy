@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "tools/performance", "tools/compute"]
+members = ["crates/*", "tools/performance", "tools/compute", "tools/history"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,26 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-utility = { path = "crates/game-utility" }
+game-parenthood = { path = "crates/game-parenthood" }
+game-names = { path = "crates/game-names" }
+game-naming = { path = "crates/game-naming" }
+game-items = { path = "crates/game-items" }
+game-sentiment = { path = "crates/game-sentiment" }
+game-demand = { path = "crates/game-demand" }
+game-exposure = { path = "crates/game-exposure" }
+game-shelter = { path = "crates/game-shelter" }
+game-botany = { path = "crates/game-botany" }
+game-crops = { path = "crates/game-crops" }
+game-cultivars = { path = "crates/game-cultivars" }
+game-maturation = { path = "crates/game-maturation" }
+game-food-storage = { path = "crates/game-food-storage" }
+game-nutrition = { path = "crates/game-nutrition" }
+game-soma = { path = "crates/game-soma" }
+game-wellbeing = { path = "crates/game-wellbeing" }
+game-vitality = { path = "crates/game-vitality" }
+game-body = { path = "crates/game-body" }
+game-food-memory = { path = "crates/game-food-memory" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 rayon = "1"
@@ -62,6 +82,26 @@ game-traits = { path = "crates/game-traits" }
 game-transport = { path = "crates/game-transport" }
 game-workshop = { path = "crates/game-workshop" }
 game-worldgen = { path = "crates/game-worldgen" }
+game-wayfaring = { path = "crates/game-wayfaring" }
+game-stockpiles = { path = "crates/game-stockpiles" }
+game-horticulture = { path = "crates/game-horticulture" }
+game-care = { path = "crates/game-care" }
+game-pastimes = { path = "crates/game-pastimes" }
+game-livelihoods = { path = "crates/game-livelihoods" }
+
+game-heredity = { path = "crates/game-heredity" }
+game-households = { path = "crates/game-households" }
+game-exchange = { path = "crates/game-exchange" }
+game-works = { path = "crates/game-works" }
+game-preservation = { path = "crates/game-preservation" }
+game-equipment = { path = "crates/game-equipment" }
+game-affiliation = { path = "crates/game-affiliation" }
+
+game-campaign = { path = "crates/game-campaign" }
+
+game-diagnostics = { path = "crates/game-diagnostics" }
+
+game-grievances = { path = "crates/game-grievances" }
 
 [profile.dev]
 debug = 1
@@ -74,3 +114,10 @@ incremental = false
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# Optimized research builds avoid whole-workspace LTO during simulation iteration.
+[profile.simulation]
+inherits = "release"
+lto = false
+codegen-units = 16
+debug = 1

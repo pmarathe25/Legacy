@@ -13,7 +13,10 @@ pub struct Fixture {
     pub pack: InventoryId,
 }
 pub fn setup() -> Fixture {
-    let mut host = builder().build(7, 1).unwrap();
+    setup_with(builder())
+}
+pub fn setup_with(builder: Builder) -> Fixture {
+    let mut host = builder.build(7, 1).unwrap();
     host.dispatch(game_objects::Install(game_objects::standard().unwrap()))
         .unwrap();
     let home = host

@@ -10,10 +10,12 @@ impl Request for CancelPerson {
 fn builder() -> Builder {
     let mut b = Builder::new();
     game_land::plugin(&mut b).unwrap();
+    game_traits::plugin(&mut b).unwrap();
     game_transport::plugin(&mut b).unwrap();
     game_objects::plugin(&mut b).unwrap();
     game_cargo::plugin(&mut b).unwrap();
     game_property::plugin(&mut b).unwrap();
+    game_knowledge::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_lineage::plugin(&mut b).unwrap();
@@ -26,6 +28,10 @@ fn builder() -> Builder {
 }
 fn setup() -> (Host, Vec<PersonId>, AreaId) {
     let mut h = builder().build(9, 1).unwrap();
+    h.dispatch(game_traits::Install(
+        game_traits::load(&mut game_content::Store::standard()).unwrap(),
+    ))
+    .unwrap();
     let area = h
         .dispatch(game_land::CreateArea {
             name: "Grove".into(),
@@ -88,6 +94,28 @@ fn interrupted_or_fatal_pressure_releases_both_actions_and_never_fabricates_subm
 #[test]
 fn a_mortal_can_die_resisting_without_a_forced_submission_or_damage_cap() {
     let (mut h, p, _) = setup();
+    h.dispatch(game_knowledge::ObserveSurroundings { person: p[1] })
+        .unwrap();
+    h.dispatch(game_traits::Set {
+        person: p[1],
+        profile: [("risk-tolerance".into(), 1000), ("aggression".into(), 1000)].into(),
+    })
+    .unwrap();
+    h.dispatch(game_relationships::Initialize {
+        person: p[1],
+        beliefs: Default::default(),
+        values: [("independence".into(), 100)].into(),
+    })
+    .unwrap();
+    h.dispatch(game_relationships::SetRelationship {
+        observer: p[1],
+        other: p[0],
+        relationship: game_relationships::Relationship {
+            grievance: 100,
+            ..Default::default()
+        },
+    })
+    .unwrap();
     h.dispatch(game_physiology::Damage {
         person: p[1],
         amount: 80,
@@ -103,6 +131,101 @@ fn a_mortal_can_die_resisting_without_a_forced_submission_or_damage_cap() {
     assert!(h.get::<Pressure>().unwrap().active.is_empty());
     assert!(h.get::<Actions>().unwrap().0.is_empty());
     assert!(!h.notices().any(|n| n.kind == Submitted::KEY));
+}
+
+fn independent(h: &mut Host, person: PersonId) {
+    h.dispatch(game_traits::Set {
+        person,
+        profile: [("risk-tolerance".into(), 500), ("aggression".into(), 0)].into(),
+    })
+    .unwrap();
+    h.dispatch(game_relationships::Initialize {
+        person,
+        beliefs: Default::default(),
+        values: [("independence".into(), 100)].into(),
+    })
+    .unwrap();
+}
+
+#[test]
+fn an_independent_character_can_escape_after_injury_using_a_known_road() {
+    let (mut h, p, away) = setup();
+    independent(&mut h, p[1]);
+    h.dispatch(game_knowledge::ObserveSurroundings { person: p[1] })
+        .unwrap();
+    h.dispatch(DemandSubmission {
+        leader: p[0],
+        subject: p[1],
+    })
+    .unwrap();
+    assert_eq!(h.get::<Actions>().unwrap().0[&p[1]].kind, "combat");
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        while host.advance(SimTime(MINUTE.0), 128).unwrap().stop == Stop::Budget {}
+        assert!(host.get::<Pressure>().unwrap().active.is_empty());
+        assert!(
+            matches!(host.get::<game_transport::Positions>().unwrap().0[&p[1]], game_transport::Location::Transit { to, .. } if to == away)
+        );
+        assert!(host.get::<game_physiology::Bodies>().unwrap().people[&p[1]].health < 100);
+        assert!(!host.notices().any(|n| n.kind == Submitted::KEY));
+        assert!(host.notices().any(|n| n.kind == Fled::KEY));
+        run(host);
+        assert_eq!(
+            game_transport::area(host.get().unwrap(), p[1]).unwrap(),
+            away
+        );
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn a_vulnerable_person_can_flee_before_being_struck_but_cannot_use_an_unknown_or_closed_road() {
+    for road in ["known", "unknown", "closed"] {
+        let (mut h, p, away) = setup();
+        independent(&mut h, p[1]);
+        h.dispatch(game_traits::Set {
+            person: p[0],
+            profile: [("size".into(), 3000)].into(),
+        })
+        .unwrap();
+        h.dispatch(game_traits::Set {
+            person: p[1],
+            profile: [
+                ("size".into(), 300),
+                ("foresight".into(), 4000),
+                ("aggression".into(), 0),
+            ]
+            .into(),
+        })
+        .unwrap();
+        if road != "unknown" {
+            h.dispatch(game_knowledge::ObserveSurroundings { person: p[1] })
+                .unwrap();
+        }
+        if road == "closed" {
+            let from = game_transport::area(h.get().unwrap(), p[1]).unwrap();
+            h.dispatch(game_land::CloseRoad { from, to: away }).unwrap();
+        }
+        h.dispatch(DemandSubmission {
+            leader: p[0],
+            subject: p[1],
+        })
+        .unwrap();
+        assert!(!h.notices().any(|n| n.kind == Submitted::KEY));
+        assert_eq!(
+            h.get::<game_physiology::Bodies>().unwrap().people[&p[1]].health,
+            100
+        );
+        if road == "known" {
+            assert_eq!(h.get::<Actions>().unwrap().0[&p[1]].kind, "travel");
+            assert!(h.notices().any(|n| n.kind == Fled::KEY));
+        } else {
+            assert_eq!(h.get::<Actions>().unwrap().0[&p[1]].kind, "combat");
+            assert_eq!(h.get::<Pressure>().unwrap().active.len(), 2);
+            assert!(!h.notices().any(|n| n.kind == Fled::KEY));
+        }
+        h.save().unwrap();
+    }
 }
 #[test]
 fn a_distant_or_player_controlled_person_requires_a_different_response_path() {
@@ -133,4 +256,55 @@ fn a_distant_or_player_controlled_person_requires_a_different_response_path() {
         .is_err()
     );
     assert_eq!(h.save().unwrap(), save);
+}
+
+#[test]
+fn anticipated_visible_force_can_prompt_submission_before_an_injury() {
+    let (mut h, p, _) = setup();
+    h.dispatch(game_traits::Set {
+        person: p[0],
+        profile: [("size".into(), 3000)].into(),
+    })
+    .unwrap();
+    h.dispatch(game_traits::Set {
+        person: p[1],
+        profile: [("size".into(), 300), ("foresight".into(), 4000)].into(),
+    })
+    .unwrap();
+    h.dispatch(DemandSubmission {
+        leader: p[0],
+        subject: p[1],
+    })
+    .unwrap();
+    assert!(h.get::<Pressure>().unwrap().active.is_empty());
+    assert_eq!(
+        h.get::<game_physiology::Bodies>().unwrap().people[&p[1]].health,
+        100
+    );
+    assert!(h.notices().any(|n| n.kind == Submitted::KEY));
+    assert!(!h.notices().any(|n| n.kind == "conflict.struck"));
+}
+#[test]
+fn a_refused_demand_does_not_force_a_gentle_leader_to_attack() {
+    let (mut h, p, _) = setup();
+    h.dispatch(game_traits::Set {
+        person: p[0],
+        profile: [
+            ("aggression".into(), 0),
+            ("ambition".into(), 0),
+            ("patience".into(), 1000),
+        ]
+        .into(),
+    })
+    .unwrap();
+    h.dispatch(DemandSubmission {
+        leader: p[0],
+        subject: p[1],
+    })
+    .unwrap();
+    assert!(h.get::<Pressure>().unwrap().active.is_empty());
+    assert!(h.notices().any(|n| n.kind == BackedDown::KEY));
+    assert!(!h.notices().any(|n| n.kind == Submitted::KEY));
+    let save = h.save().unwrap();
+    assert_eq!(builder().load(&save, 4).unwrap().save().unwrap(), save);
 }

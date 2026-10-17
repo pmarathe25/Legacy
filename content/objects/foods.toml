@@ -1,0 +1,373 @@
+id = "objects/foods"
+version = 1
+
+[data.objects.oats]
+id = 100
+name = "Oats"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 10, relief = 60, shelf_days = 360, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.rye]
+id = 101
+name = "Rye"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 10, relief = 60, shelf_days = 360, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.millet]
+id = 102
+name = "Millet"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 10, relief = 55, shelf_days = 360, nutrients = { energy = 55, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.buckwheat]
+id = 103
+name = "Buckwheat"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 10, relief = 55, shelf_days = 360, nutrients = { energy = 55, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.lentils]
+id = 104
+name = "Lentils"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 55, shelf_days = 360, nutrients = { energy = 55, protein = 20, fat = 3, fibre = 10, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.peas]
+id = 105
+name = "Peas"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 45, shelf_days = 360, nutrients = { energy = 45, protein = 20, fat = 3, fibre = 10, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.chickpeas]
+id = 106
+name = "Chickpeas"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 55, shelf_days = 360, nutrients = { energy = 55, protein = 20, fat = 3, fibre = 10, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.cabbage]
+id = 107
+name = "Cabbage"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 10, relief = 35, shelf_days = 3, nutrients = { energy = 35, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.onions]
+id = 108
+name = "Onions"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 30, shelf_days = 20, nutrients = { energy = 30, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.turnips]
+id = 109
+name = "Turnips"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 45, shelf_days = 20, nutrients = { energy = 45, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.squash]
+id = 110
+name = "Squash"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 50, shelf_days = 20, nutrients = { energy = 50, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.leeks]
+id = 111
+name = "Leeks"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 35, shelf_days = 3, nutrients = { energy = 35, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.apples]
+id = 112
+name = "Apples"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 5, relief = 45, shelf_days = 10, nutrients = { energy = 45, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.pears]
+id = 113
+name = "Pears"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 5, relief = 45, shelf_days = 10, nutrients = { energy = 45, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.plums]
+id = 114
+name = "Plums"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 40, shelf_days = 10, nutrients = { energy = 40, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.grapes]
+id = 115
+name = "Grapes"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 40, shelf_days = 10, nutrients = { energy = 40, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.olives]
+id = 116
+name = "Olives"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 45, shelf_days = 10, nutrients = { energy = 45, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.dates]
+id = 117
+name = "Dates"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 4, relief = 50, shelf_days = 10, nutrients = { energy = 50, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.figs]
+id = 118
+name = "Figs"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 4, relief = 45, shelf_days = 10, nutrients = { energy = 45, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.chestnuts]
+id = 119
+name = "Chestnuts"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 5, relief = 55, shelf_days = 180, nutrients = { energy = 55, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.hazelnuts]
+id = 120
+name = "Hazelnuts"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 5, relief = 55, shelf_days = 180, nutrients = { energy = 55, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.acorns]
+id = 121
+name = "Acorns"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 25, shelf_days = 180, nutrients = { energy = 25, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.blackberries]
+id = 122
+name = "Blackberries"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.cranberries]
+id = 123
+name = "Cranberries"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 30, shelf_days = 10, nutrients = { energy = 30, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.cloudberries]
+id = 124
+name = "Cloudberries"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 5, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.wild-garlic]
+id = 125
+name = "Wild garlic"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 25, shelf_days = 3, nutrients = { energy = 25, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.sorrel]
+id = 126
+name = "Sorrel"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 25, shelf_days = 3, nutrients = { energy = 25, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.seaweed]
+id = 127
+name = "Edible seaweed"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 8, relief = 30, shelf_days = 3, nutrients = { energy = 30, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.shellfish]
+id = 128
+name = "Shellfish"
+mass = 1
+tags = ["food", "wild"]
+food = { portion = 5, relief = 45, shelf_days = 2, nutrients = { energy = 45, protein = 24, fat = 8, fibre = 0, vitamins = 4, minerals = 10 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.river-fish]
+id = 129
+name = "River fish"
+mass = 1
+tags = ["food", "wild"]
+food = { portion = 5, relief = 45, shelf_days = 2, nutrients = { energy = 45, protein = 24, fat = 8, fibre = 0, vitamins = 4, minerals = 10 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.honey]
+id = 130
+name = "Wild honey"
+mass = 1
+tags = ["food", "wild"]
+food = { portion = 3, relief = 40, shelf_days = 1000, nutrients = { energy = 40, protein = 0, fat = 0, fibre = 0, vitamins = 0, minerals = 1 }, effects = { health = 0, mood = 5, alertness = 0 } }
+
+[data.objects.sesame]
+id = 131
+name = "Sesame seed"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 50, shelf_days = 180, nutrients = { energy = 50, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.sunflower-seed]
+id = 132
+name = "Sunflower seed"
+mass = 1
+tags = ["food", "plant"]
+food = { portion = 6, relief = 50, shelf_days = 180, nutrients = { energy = 50, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.porridge]
+id = 217
+name = "Cereal porridge"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 65, shelf_days = 2, nutrients = { energy = 65, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 3, alertness = -2 } }
+
+[data.objects.flatbread]
+id = 218
+name = "Millet flatbread"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 70, shelf_days = 5, nutrients = { energy = 70, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.lentil-soup]
+id = 219
+name = "Lentil soup"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 75, shelf_days = 2, nutrients = { energy = 75, protein = 20, fat = 3, fibre = 10, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 3, alertness = -2 } }
+
+[data.objects.pea-soup]
+id = 220
+name = "Pea soup"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 70, shelf_days = 2, nutrients = { energy = 70, protein = 20, fat = 3, fibre = 10, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 3, alertness = -2 } }
+
+[data.objects.roast-chestnuts]
+id = 221
+name = "Roasted chestnuts"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 65, shelf_days = 180, nutrients = { energy = 65, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.nut-bread]
+id = 222
+name = "Nut bread"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 80, shelf_days = 180, nutrients = { energy = 80, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.dried-fruit]
+id = 223
+name = "Dried fruit"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 60, shelf_days = 180, nutrients = { energy = 60, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.fruit-preserve]
+id = 224
+name = "Fruit preserve"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 60, shelf_days = 120, nutrients = { energy = 60, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.pickled-vegetables]
+id = 225
+name = "Pickled vegetables"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 55, shelf_days = 120, nutrients = { energy = 55, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.salted-fish]
+id = 226
+name = "Salted fish"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 65, shelf_days = 180, nutrients = { energy = 65, protein = 24, fat = 8, fibre = 0, vitamins = 4, minerals = 10 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.smoked-shellfish]
+id = 227
+name = "Smoked shellfish"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 60, shelf_days = 180, nutrients = { energy = 60, protein = 24, fat = 8, fibre = 0, vitamins = 4, minerals = 10 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.rice-cakes]
+id = 228
+name = "Rice cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 70, shelf_days = 7, nutrients = { energy = 70, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }
+
+[data.objects.sesame-cakes]
+id = 229
+name = "Sesame cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 80, shelf_days = 7, nutrients = { energy = 80, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }
+
+[data.objects.honey-cakes]
+id = 230
+name = "Honey cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 80, shelf_days = 7, nutrients = { energy = 80, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }
+
+[data.objects.roast-squash]
+id = 231
+name = "Roasted squash"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 65, shelf_days = 3, nutrients = { energy = 65, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.herbed-roots]
+id = 232
+name = "Herbed roots"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 70, shelf_days = 3, nutrients = { energy = 70, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.greens-stew]
+id = 233
+name = "Wild greens stew"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 60, shelf_days = 2, nutrients = { energy = 60, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = 3, alertness = -2 } }
+
+[data.objects.onion-broth]
+id = 234
+name = "Onion broth"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 55, shelf_days = 2, nutrients = { energy = 55, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = 3, alertness = -2 } }
+
+[data.objects.olive-bread]
+id = 235
+name = "Olive bread"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 80, shelf_days = 5, nutrients = { energy = 80, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.date-cakes]
+id = 236
+name = "Date cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 80, shelf_days = 7, nutrients = { energy = 80, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }

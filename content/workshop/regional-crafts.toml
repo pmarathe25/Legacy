@@ -1,0 +1,422 @@
+id = "workshop/regional-crafts"
+version = 1
+
+[data.recipes.spin-flax]
+inputs = { flax = 8 }
+output = "linen-thread"
+quantity = 6
+duration = 900000
+skill = "spinning"
+
+[data.recipes.spin-hemp]
+inputs = { hemp = 8 }
+output = "hemp-thread"
+quantity = 6
+duration = 900000
+skill = "spinning"
+
+[data.recipes.spin-cotton]
+inputs = { cotton = 8 }
+output = "cotton-thread"
+quantity = 6
+duration = 900000
+skill = "spinning"
+
+[data.recipes.weave-cotton]
+inputs = { cotton-thread = 8 }
+output = "cotton-cloth"
+quantity = 4
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-nettles]
+inputs = { nettles = 12 }
+output = "nettle-cloth"
+quantity = 4
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-canvas]
+inputs = { hemp-thread = 10 }
+output = "canvas"
+quantity = 4
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-linen-thread]
+inputs = { linen-thread = 8 }
+output = "cloth"
+quantity = 5
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.twist-hemp-rope]
+inputs = { hemp = 8 }
+output = "rope"
+quantity = 5
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-basket]
+inputs = { willow = 8 }
+output = "basket"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-rush-basket]
+inputs = { rushes = 10 }
+output = "basket"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-ribbon]
+inputs = { linen-thread = 3, blue-dye = 1 }
+output = "woven-ribbon"
+quantity = 2
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.sew-tunic]
+inputs = { cloth = 4, linen-thread = 1 }
+output = "tunic"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.sew-cotton-tunic]
+inputs = { cotton-cloth = 4, cotton-thread = 1 }
+output = "cotton-tunic"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.sew-cloak]
+inputs = { canvas = 5, hemp-thread = 1 }
+output = "cloak"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-blanket]
+inputs = { nettle-cloth = 6 }
+output = "blanket"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.weave-sandals]
+inputs = { hemp = 6, rope = 1 }
+output = "sandals"
+quantity = 1
+duration = 1200000
+skill = "weaving"
+
+[data.recipes.saw-planks]
+inputs = { timber = 8 }
+output = "planks"
+quantity = 6
+duration = 1200000
+skill = "carpentry"
+
+[data.recipes.carve-pegs]
+inputs = { timber = 2 }
+output = "wooden-pegs"
+quantity = 10
+duration = 600000
+skill = "carpentry"
+
+[data.recipes.carve-bowl]
+inputs = { timber = 3 }
+output = "wooden-bowl"
+quantity = 1
+duration = 1200000
+skill = "carving"
+
+[data.recipes.carve-spoon]
+inputs = { timber = 1 }
+output = "wooden-spoon"
+quantity = 2
+duration = 600000
+skill = "carving"
+
+[data.recipes.shape-cups]
+inputs = { clay = 4, timber = 2 }
+output = "clay-cup"
+quantity = 4
+duration = 1200000
+skill = "pottery"
+
+[data.recipes.shape-lamps]
+inputs = { clay = 6, timber = 2 }
+output = "clay-lamp"
+quantity = 2
+duration = 1200000
+skill = "pottery"
+
+[data.recipes.fire-roof-tiles]
+inputs = { clay = 12, charcoal = 3 }
+output = "roof-tile"
+quantity = 8
+duration = 1800000
+skill = "pottery"
+
+[data.recipes.split-slate]
+inputs = { slate = 12 }
+output = "slate-shingle"
+quantity = 10
+duration = 1500000
+skill = "masonry"
+
+[data.recipes.burn-lime]
+inputs = { limestone = 12, charcoal = 4 }
+output = "lime"
+quantity = 8
+duration = 2700000
+skill = "masonry"
+
+[data.recipes.mix-mortar]
+inputs = { lime = 4, sand = 8 }
+output = "mortar"
+quantity = 10
+duration = 900000
+skill = "masonry"
+
+[data.recipes.melt-glass]
+inputs = { sand = 10, lime = 2, charcoal = 5 }
+output = "glass"
+quantity = 6
+duration = 2700000
+skill = "glassmaking"
+
+[data.recipes.smelt-copper]
+inputs = { copper-ore = 10, charcoal = 5 }
+output = "copper"
+quantity = 5
+duration = 2700000
+skill = "smithing"
+
+[data.recipes.smelt-tin]
+inputs = { tin-ore = 8, charcoal = 4 }
+output = "tin"
+quantity = 4
+duration = 2400000
+skill = "smithing"
+
+[data.recipes.alloy-bronze]
+inputs = { copper = 4, tin = 1, charcoal = 2 }
+output = "bronze"
+quantity = 5
+duration = 1800000
+skill = "smithing"
+
+[data.recipes.forge-bronze-tools]
+inputs = { bronze = 3, timber = 2, charcoal = 2 }
+output = "bronze-tools"
+quantity = 1
+duration = 1800000
+skill = "smithing"
+
+[data.recipes.draw-copper-wire]
+inputs = { copper = 2 }
+output = "copper-wire"
+quantity = 6
+duration = 1200000
+skill = "smithing"
+
+[data.recipes.cast-bell]
+inputs = { bronze = 2, clay = 2, charcoal = 2 }
+output = "bronze-bell"
+quantity = 1
+duration = 1800000
+skill = "smithing"
+
+[data.recipes.knap-tools]
+inputs = { stone = 6, timber = 2 }
+output = "stone-tools"
+quantity = 2
+duration = 1200000
+skill = "knapping"
+
+[data.recipes.grind-ochre]
+inputs = { ochre = 4 }
+output = "pigment"
+quantity = 4
+duration = 600000
+skill = "painting"
+
+[data.recipes.extract-blue-dye]
+inputs = { woad = 8, timber = 2 }
+output = "blue-dye"
+quantity = 4
+duration = 1500000
+skill = "dyeing"
+
+[data.recipes.extract-red-dye]
+inputs = { madder = 8, timber = 2 }
+output = "red-dye"
+quantity = 4
+duration = 1500000
+skill = "dyeing"
+
+[data.recipes.dye-cloth]
+inputs = { cloth = 4, blue-dye = 1 }
+output = "dyed-cloth"
+quantity = 4
+duration = 1200000
+skill = "dyeing"
+
+[data.recipes.make-rag-paper]
+inputs = { bark = 4, nettle-cloth = 2 }
+output = "paper"
+quantity = 8
+duration = 1800000
+skill = "papermaking"
+
+[data.recipes.make-ink]
+inputs = { charcoal = 2, resin = 1 }
+output = "ink"
+quantity = 6
+duration = 900000
+skill = "writing"
+
+[data.recipes.write-page]
+inputs = { paper = 1, ink = 1 }
+output = "written-page"
+quantity = 1
+duration = 1200000
+skill = "writing"
+
+[data.recipes.carve-flute]
+inputs = { bamboo = 2 }
+output = "wooden-flute"
+quantity = 1
+duration = 1500000
+skill = "carving"
+
+[data.recipes.cut-reed-pipe]
+inputs = { reeds = 3 }
+output = "reed-pipe"
+quantity = 1
+duration = 900000
+skill = "carving"
+
+[data.recipes.shape-ocarina]
+inputs = { clay = 3, timber = 2 }
+output = "clay-ocarina"
+quantity = 1
+duration = 1200000
+skill = "pottery"
+
+[data.recipes.carve-token]
+inputs = { timber = 1 }
+output = "carved-token"
+quantity = 2
+duration = 900000
+skill = "carving"
+
+[data.recipes.paint-tile]
+inputs = { brick = 2, pigment = 1 }
+output = "painted-tile"
+quantity = 2
+duration = 1200000
+skill = "painting"
+
+[data.recipes.set-mosaic]
+inputs = { glass = 2, mortar = 1, painted-tile = 2 }
+output = "mosaic"
+quantity = 1
+duration = 1800000
+skill = "masonry"
+
+[data.recipes.dip-candles]
+inputs = { beeswax = 4, linen-thread = 1 }
+output = "candle"
+quantity = 8
+duration = 900000
+skill = "candlemaking"
+
+[data.recipes.prepare-lamp-fuel]
+inputs = { oil = 4, linen-thread = 1 }
+output = "oil-lamp-fuel"
+quantity = 8
+duration = 600000
+skill = "candlemaking"
+
+[data.recipes.blend-incense]
+inputs = { resin = 4, juniper = 2 }
+output = "incense"
+quantity = 6
+duration = 600000
+skill = "herbalism"
+
+[data.recipes.blend-tea]
+inputs = { mint = 4, chamomile = 4 }
+output = "herbal-tea"
+quantity = 8
+duration = 600000
+skill = "herbalism"
+
+[data.recipes.weave-garland]
+inputs = { lavender = 4, rushes = 2 }
+output = "flower-garland"
+quantity = 2
+duration = 600000
+skill = "weaving"
+
+[data.recipes.cut-bandages]
+inputs = { cloth = 4 }
+output = "bandages"
+quantity = 8
+duration = 600000
+skill = "healing"
+
+[data.recipes.make-salve]
+inputs = { healing-herbs = 6, oil = 2, beeswax = 2 }
+output = "salve"
+quantity = 4
+duration = 1200000
+skill = "healing"
+
+[data.recipes.prepare-bandaged-medicine]
+inputs = { healing-herbs = 6, bandages = 2 }
+output = "medicine"
+quantity = 3
+duration = 1200000
+skill = "healing"
+
+[data.recipes.burn-ash]
+inputs = { timber = 8 }
+output = "wood-ash"
+quantity = 4
+duration = 1500000
+skill = "charcoal"
+
+[data.recipes.leach-lye]
+inputs = { wood-ash = 6 }
+output = "lye"
+quantity = 4
+duration = 1200000
+skill = "soapmaking"
+
+[data.recipes.boil-soap]
+inputs = { lye = 4, oil = 4, timber = 2 }
+output = "soap"
+quantity = 6
+duration = 1800000
+skill = "soapmaking"
+
+[data.recipes.cut-nettle-bandages]
+inputs = { nettle-cloth = 4 }
+output = "bandages"
+quantity = 8
+duration = 600000
+skill = "healing"
+
+[data.recipes.cut-cotton-bandages]
+inputs = { cotton-cloth = 4 }
+output = "bandages"
+quantity = 8
+duration = 600000
+skill = "healing"

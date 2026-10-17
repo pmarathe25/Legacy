@@ -1,0 +1,22 @@
+id = "environment/boreal"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 4
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 16
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 3
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = -14
+rain = 2

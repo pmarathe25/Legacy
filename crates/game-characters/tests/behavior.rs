@@ -41,7 +41,10 @@ fn stale_stock_causes_failure_learning_and_backoff() {
     run(&mut f.host, SimTime(MINUTE.0 * 75));
     let m = &f.host.get::<Minds>().unwrap().people[&f.other];
     assert_eq!(m.failures, 1);
-    assert_eq!(m.retry_after[&(f.store.0 * 2 + 10)], SimTime(MINUTE.0 * 76));
+    assert_eq!(
+        m.retry_after.values().copied().collect::<Vec<_>>(),
+        vec![SimTime(MINUTE.0 * 76)]
+    );
     run(&mut f.host, SimTime(MINUTE.0 * 100));
     assert_eq!(f.host.get::<Minds>().unwrap().people[&f.other].failures, 1);
 }
@@ -131,26 +134,24 @@ fn learned_values_change_choices_with_physical_options_held_constant() {
     learned.dispatch(Start).unwrap();
     run(&mut f.host, SimTime(MINUTE.0 * 32));
     run(&mut learned, SimTime(MINUTE.0 * 32));
+    assert_eq!(food(&f.host, f.store), 990);
+    assert_eq!(food(&learned, f.store), 1000);
     assert_eq!(
-        f.host.get::<Minds>().unwrap().people[&f.other]
-            .last
-            .as_ref()
-            .unwrap()
-            .id,
-        f.store.0 * 2 + 10
+        learned.get::<game_sim::Actions>().unwrap().0[&f.other].kind,
+        "rest"
     );
     assert_eq!(
         learned.get::<Minds>().unwrap().people[&f.other]
             .last
             .as_ref()
             .unwrap()
-            .id,
-        patch * 2 + 11
+            .reasons,
+        vec!["fatigue"]
     );
 }
 
 #[test]
-fn an_early_action_cancellation_wakes_a_parked_mind_on_the_authored_grid() {
+fn an_early_action_cancellation_prompts_a_parked_mind_with_unmet_needs() {
     let mut f = setup();
     f.host
         .dispatch(Register {
@@ -183,7 +184,7 @@ fn an_early_action_cancellation_wakes_a_parked_mind_on_the_authored_grid() {
     }
     assert_eq!(
         f.host.get::<game_sim::Actions>().unwrap().0[&f.guardian].until,
-        Some(SimTime(72 * MINUTE.0))
+        Some(SimTime(71 * MINUTE.0))
     );
     assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
 }

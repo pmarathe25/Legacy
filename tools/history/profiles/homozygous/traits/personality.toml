@@ -1,0 +1,65 @@
+id = "traits/personality"
+version = 1
+[data.traits.discipline]
+founder_spread = 0
+name = "Discipline"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { effort = -1 }
+[data.traits.ambition]
+founder_spread = 0
+name = "Ambition"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { goal = 2 }
+[data.traits.sociability]
+founder_spread = 0
+name = "Sociability"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { value = 1 }
+[data.traits.risk-tolerance]
+founder_spread = 0
+name = "Risk tolerance"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { risk = -2 }
+[data.traits.hedonism]
+founder_spread = 0
+name = "Hedonism"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { need = 1 }
+[data.traits.empathy]
+founder_spread = 0
+name = "Empathy"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { value = 2 }
+[data.traits.aggression]
+founder_spread = 0
+name = "Aggression"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { risk = -1 }
+[data.traits.honesty]
+founder_spread = 0
+name = "Honesty"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { value = 1 }
+[data.traits.patience]
+founder_spread = 0
+name = "Patience"
+minimum = 0
+maximum = 1000
+default = 500
+weights = { effort = -1 }

@@ -96,6 +96,25 @@ fn route(
                 inventory,
             },
         ),
+        Command::Plant { crop, seed } => value(
+            tx,
+            game_horticulture::Plant {
+                person,
+                crop,
+                inventory: seed,
+            },
+        ),
+        Command::Pursue {
+            activity,
+            inventory,
+        } => value(
+            tx,
+            game_pastimes::Pursue {
+                person,
+                activity,
+                inventory,
+            },
+        ),
         Command::Treat { patient, supplies } => value(
             tx,
             game_health::Treat {
@@ -227,6 +246,15 @@ pub fn observe(host: &Host) -> Result<PlayerView> {
             .copied()
             .collect(),
         borrowed_memories: game_invocation::memories(host)?,
+        pastimes: person
+            .and_then(|p| {
+                host.get::<game_pastimes::Pastimes>()
+                    .ok()?
+                    .experiences
+                    .get(&p)
+            })
+            .map(|rows| rows.iter().map(|(k, n)| (k.clone(), *n)).collect())
+            .unwrap_or_default(),
         battles: person
             .map(|p| game_conflict::view(host, p))
             .transpose()?

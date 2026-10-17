@@ -1,0 +1,199 @@
+id = "objects/woodland-and-tide"
+version = 1
+
+[data.objects.rosehips]
+id = 300
+name = "Rosehips"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 5, relief = 40, shelf_days = 10, nutrients = { energy = 40, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.elderberries]
+id = 301
+name = "Elderberries"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 6, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.sloes]
+id = 302
+name = "Sloes"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 6, relief = 30, shelf_days = 10, nutrients = { energy = 30, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.rowan-berries]
+id = 303
+name = "Rowan berries"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 6, relief = 25, shelf_days = 10, nutrients = { energy = 25, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.lichen]
+id = 304
+name = "Edible lichen"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 8, relief = 30, shelf_days = 3, nutrients = { energy = 30, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.kelp]
+id = 305
+name = "Kelp fronds"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 8, relief = 35, shelf_days = 3, nutrients = { energy = 35, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = -1, alertness = 0 } }
+
+[data.objects.maple-sap]
+id = 306
+name = "Maple sap"
+mass = 1
+tags = ["ingredient", "wild", "plant", "woody"]
+
+[data.objects.pinecones]
+id = 307
+name = "Pinecones"
+mass = 1
+tags = ["fuel", "wild", "plant", "woody", "fuel-hours:1"]
+
+[data.objects.moss]
+id = 308
+name = "Soft moss"
+mass = 1
+tags = ["fiber", "wild", "plant"]
+
+[data.objects.walnuts]
+id = 309
+name = "Walnuts"
+mass = 1
+tags = ["food", "wild", "plant"]
+food = { portion = 5, relief = 55, shelf_days = 180, nutrients = { energy = 55, protein = 12, fat = 22, fibre = 6, vitamins = 4, minerals = 7 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.sweet-chestnut-flour]
+id = 310
+name = "Chestnut flour"
+mass = 1
+tags = ["ingredient"]
+
+[data.objects.maple-syrup]
+id = 311
+name = "Maple syrup"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 55, shelf_days = 1000, nutrients = { energy = 55, protein = 0, fat = 0, fibre = 0, vitamins = 0, minerals = 1 }, effects = { health = 0, mood = 5, alertness = 0 } }
+
+[data.objects.rosehip-preserve]
+id = 312
+name = "Rosehip preserve"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 60, shelf_days = 120, nutrients = { energy = 60, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.elderberry-preserve]
+id = 313
+name = "Elderberry preserve"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 60, shelf_days = 120, nutrients = { energy = 60, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.sloe-paste]
+id = 314
+name = "Sloe fruit paste"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 55, shelf_days = 120, nutrients = { energy = 55, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.rowan-jelly]
+id = 315
+name = "Rowan jelly"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 50, shelf_days = 120, nutrients = { energy = 50, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.kelp-broth]
+id = 316
+name = "Kelp broth"
+mass = 2
+tags = ["food", "crafted"]
+food = { portion = 5, relief = 65, shelf_days = 2, nutrients = { energy = 65, protein = 4, fat = 1, fibre = 7, vitamins = 12, minerals = 6 }, effects = { health = 1, mood = 3, alertness = -2 } }
+
+[data.objects.lichen-bread]
+id = 317
+name = "Lichen bread"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 60, shelf_days = 5, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 0, alertness = 0 } }
+
+[data.objects.chestnut-cakes]
+id = 318
+name = "Chestnut cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 75, shelf_days = 7, nutrients = { energy = 75, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }
+
+[data.objects.walnut-cakes]
+id = 319
+name = "Walnut cakes"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 4, relief = 80, shelf_days = 7, nutrients = { energy = 80, protein = 6, fat = 10, fibre = 3, vitamins = 3, minerals = 3 }, effects = { health = 0, mood = 10, alertness = 0 } }
+
+[data.objects.trail-rations]
+id = 320
+name = "Mixed trail rations"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 3, relief = 80, shelf_days = 180, nutrients = { energy = 80, protein = 2, fat = 1, fibre = 6, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }
+
+[data.objects.moss-paper]
+id = 321
+name = "Moss paper"
+mass = 1
+tags = ["crafted", "writing"]
+
+[data.objects.berry-ink]
+id = 322
+name = "Berry ink"
+mass = 1
+tags = ["crafted", "writing"]
+
+[data.objects.waxed-cloth]
+id = 323
+name = "Waxed cloth"
+mass = 1
+tags = ["crafted", "material"]
+
+[data.objects.woven-screen]
+id = 324
+name = "Woven screen"
+mass = 3
+tags = ["crafted", "household"]
+
+[data.objects.pressed-flowers]
+id = 325
+name = "Pressed flowers"
+mass = 1
+tags = ["crafted", "art"]
+
+[data.objects.woven-doll]
+id = 326
+name = "Woven doll"
+mass = 1
+tags = ["crafted", "art"]
+
+[data.objects.clay-figurine]
+id = 327
+name = "Clay figurine"
+mass = 2
+tags = ["crafted", "art"]
+
+[data.objects.painted-mask]
+id = 328
+name = "Painted wooden mask"
+mass = 1
+tags = ["crafted", "art"]
+
+[data.objects.shell-beads]
+id = 329
+name = "Shell beads"
+mass = 1
+tags = ["crafted", "art"]

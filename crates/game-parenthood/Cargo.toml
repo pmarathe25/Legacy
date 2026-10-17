@@ -1,0 +1,17 @@
+[package]
+name = "game-parenthood"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-households.workspace = true
+game-lifecycle.workspace = true
+game-physiology.workspace = true
+game-relationships.workspace = true
+game-vitality.workspace = true
+game-lineage.workspace = true
+game-characters.workspace = true
+serde.workspace = true

@@ -12,6 +12,11 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 0
 minimum_rain = 1
+natural_growth = 8640000000
+natural_yield = 640
+maximum_warmth = 30
+maximum_rain = 9
+lifespan = 31536000000
 
 [data.crops.beans]
 name = "Bean field"
@@ -24,6 +29,11 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 8
 minimum_rain = 2
+natural_growth = 8208000000
+natural_yield = 520
+maximum_warmth = 40
+maximum_rain = 9
+lifespan = 31536000000
 
 [data.crops.barley]
 name = "Barley field"
@@ -36,6 +46,11 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 3
 minimum_rain = 1
+natural_growth = 7776000000
+natural_yield = 720
+maximum_warmth = 30
+maximum_rain = 9
+lifespan = 31536000000
 
 [data.crops.rice]
 name = "Rice paddy"
@@ -48,6 +63,11 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 15
 minimum_rain = 5
+natural_growth = 12960000000
+natural_yield = 880
+maximum_warmth = 40
+maximum_rain = 14
+lifespan = 31536000000
 
 [data.crops.flax]
 name = "Flax field"
@@ -60,6 +80,11 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 5
 minimum_rain = 2
+natural_growth = 8640000000
+natural_yield = 400
+maximum_warmth = 30
+maximum_rain = 9
+lifespan = 31536000000
 
 [data.crops.herbs]
 name = "Medicinal herb bed"
@@ -72,6 +97,11 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 8
 minimum_rain = 2
+natural_growth = 5184000000
+natural_yield = 400
+maximum_warmth = 40
+maximum_rain = 9
+lifespan = 31536000000
 
 [data.crops.orchard]
 name = "Young orchard"
@@ -84,3 +114,9 @@ sow_labor = 1800000
 harvest_labor = 1800000
 minimum_warmth = 10
 minimum_rain = 2
+natural_growth = 9504000000
+natural_yield = 720
+maximum_warmth = 40
+maximum_rain = 9
+lifespan = 1103760000000
+regrowth = 25920000000

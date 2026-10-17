@@ -3,6 +3,9 @@ use game_core::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize, ser::SerializeMap};
 use std::{ops::Bound, sync::Arc};
+pub mod archive;
+mod writing;
+pub use writing::View as SharedView;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fact<V> {
     pub value: Arc<V>,
@@ -173,6 +176,55 @@ impl<V: Clone> Facts<V> {
     }
 }
 impl<V> Facts<V> {
+    pub fn valid_at(&self, at: SimTime, revision: u64) -> bool {
+        self.values()
+            .all(|f| f.observed <= at && f.revision <= revision)
+    }
+    /// Visit changed immutable payloads, including removals. Metadata-only
+    /// refreshes are ignored; equivalent payload copies may be visited again.
+    pub fn changed_values(
+        &self,
+        previous: &Self,
+        mut visit: impl FnMut(&Arc<str>, Option<&Arc<V>>),
+    ) {
+        let mut keys: Vec<_> = self
+            .cold
+            .changed_pairs(&previous.cold)
+            .filter(|(_, value, old)| old.is_none_or(|old| !Arc::ptr_eq(&value.value, &old.value)))
+            .map(|(k, _, _)| k.clone())
+            .chain(
+                previous
+                    .cold
+                    .changed_pairs(&self.cold)
+                    .filter(|(_, _, current)| current.is_none())
+                    .map(|(k, _, _)| k.clone()),
+            )
+            .collect();
+        let same_scene = match (&self.local, &previous.local) {
+            (Some(a), Some(b)) => Arc::ptr_eq(&a.scene, &b.scene),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_scene {
+            for local in [&self.local, &previous.local].into_iter().flatten() {
+                keys.extend(local.scene.keys.iter().cloned());
+            }
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        for key in keys {
+            let new = self.get(&key).map(|f| f.value);
+            let old = previous.get(&key).map(|f| f.value);
+            let same = match (new, old) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                visit(&key, new);
+            }
+        }
+    }
     pub fn get(&self, key: &str) -> Option<FactRef<'_, V>> {
         if let Some(local) = &self.local
             && let Some(i) = local.scene.find(key)
@@ -243,6 +295,29 @@ impl<V> Facts<V> {
                 (_, None) => cold.next().map(|(k, f)| (k, f.view())),
             }
         })
+    }
+}
+/// Seek directly to a key namespace without visiting unrelated memories.
+pub fn with_prefix<'a, V>(
+    facts: &'a Facts<V>,
+    prefix: &'a str,
+) -> impl Iterator<Item = (&'a Arc<str>, FactRef<'a, V>)> {
+    facts
+        .range((Bound::Included(prefix), Bound::Unbounded))
+        .take_while(move |(key, _)| key.starts_with(prefix))
+}
+/// Decode the typed payload first, borrowing its JSON form when already available.
+pub fn decode<T: serde::de::DeserializeOwned + Clone + 'static>(
+    typed: &dyn std::any::Any,
+    wire: &impl Serialize,
+    json: Option<&serde_json::Value>,
+) -> Option<T> {
+    if let Some(value) = typed.downcast_ref::<T>() {
+        return Some(value.clone());
+    }
+    match json {
+        Some(value) => T::deserialize(value).ok(),
+        None => T::deserialize(&serde_json::to_value(wire).ok()?).ok(),
     }
 }
 impl<V: PartialEq> PartialEq for Facts<V> {

@@ -1,0 +1,23 @@
+[package]
+name = "game-food-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-vitality.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-preservation.workspace = true
+game-cargo.workspace = true
+game-objects.workspace = true
+game-environment.workspace = true
+game-transport.workspace = true
+game-property.workspace = true
+game-physiology.workspace = true
+game-knowledge.workspace = true
+game-characters.workspace = true
+game-lineage.workspace = true
+game-traits.workspace = true
+serde.workspace = true
+game-shelter.workspace = true

@@ -1,0 +1,314 @@
+id = "objects/materials"
+version = 1
+
+[data.objects.nettles]
+id = 133
+name = "Nettle fiber"
+mass = 1
+tags = ["fiber", "wild", "plant"]
+
+[data.objects.hemp]
+id = 134
+name = "Hemp fiber"
+mass = 1
+tags = ["fiber", "crop", "plant"]
+
+[data.objects.cotton]
+id = 135
+name = "Cotton fiber"
+mass = 1
+tags = ["fiber", "crop"]
+
+[data.objects.bark]
+id = 136
+name = "Tree bark"
+mass = 1
+tags = ["material", "wild", "plant", "woody", "fuel-hours:1"]
+
+[data.objects.resin]
+id = 137
+name = "Tree resin"
+mass = 1
+tags = ["material", "wild", "plant", "woody"]
+
+[data.objects.rushes]
+id = 138
+name = "Rushes"
+mass = 1
+tags = ["fiber", "wild", "plant"]
+
+[data.objects.willow]
+id = 139
+name = "Willow withies"
+mass = 1
+tags = ["material", "wild", "plant", "woody"]
+
+[data.objects.cork]
+id = 140
+name = "Cork bark"
+mass = 1
+tags = ["material", "wild"]
+
+[data.objects.bamboo]
+id = 141
+name = "Bamboo"
+mass = 2
+tags = ["material", "wild", "plant", "woody"]
+
+[data.objects.beeswax]
+id = 142
+name = "Beeswax"
+mass = 1
+tags = ["material", "wild"]
+
+[data.objects.salt]
+id = 143
+name = "Salt"
+mass = 1
+tags = ["mineral", "ingredient"]
+
+[data.objects.sand]
+id = 144
+name = "Quartz sand"
+mass = 2
+tags = ["mineral", "material"]
+
+[data.objects.limestone]
+id = 145
+name = "Limestone"
+mass = 4
+tags = ["mineral", "material"]
+
+[data.objects.slate]
+id = 146
+name = "Slate"
+mass = 4
+tags = ["mineral", "material"]
+
+[data.objects.copper-ore]
+id = 147
+name = "Copper ore"
+mass = 4
+tags = ["mineral", "material"]
+
+[data.objects.tin-ore]
+id = 148
+name = "Tin ore"
+mass = 4
+tags = ["mineral", "material"]
+
+[data.objects.ochre]
+id = 149
+name = "Ochre earth"
+mass = 1
+tags = ["mineral", "pigment"]
+
+[data.objects.woad]
+id = 150
+name = "Woad leaves"
+mass = 1
+tags = ["crop", "pigment", "plant"]
+
+[data.objects.madder]
+id = 151
+name = "Madder root"
+mass = 1
+tags = ["crop", "pigment", "plant"]
+
+[data.objects.lavender]
+id = 152
+name = "Lavender"
+mass = 1
+tags = ["herb", "wild", "plant"]
+
+[data.objects.mint]
+id = 153
+name = "Mint"
+mass = 1
+tags = ["herb", "wild", "plant"]
+
+[data.objects.chamomile]
+id = 154
+name = "Chamomile"
+mass = 1
+tags = ["herb", "wild", "plant"]
+
+[data.objects.juniper]
+id = 155
+name = "Juniper berries"
+mass = 1
+tags = ["herb", "wild", "plant"]
+
+[data.objects.tea-leaf]
+id = 156
+name = "Tea leaves"
+mass = 1
+tags = ["crop", "ingredient", "plant"]
+
+[data.objects.hops]
+id = 157
+name = "Hops"
+mass = 1
+tags = ["crop", "ingredient", "plant"]
+
+[data.objects.coriander]
+id = 158
+name = "Coriander"
+mass = 1
+tags = ["crop", "ingredient", "plant"]
+
+[data.objects.mustard-seed]
+id = 159
+name = "Mustard seed"
+mass = 1
+tags = ["crop", "ingredient", "plant"]
+
+[data.objects.groats]
+id = 160
+name = "Cereal groats"
+mass = 1
+tags = ["ingredient"]
+
+[data.objects.nut-meal]
+id = 161
+name = "Nut meal"
+mass = 1
+tags = ["ingredient"]
+
+[data.objects.oil]
+id = 162
+name = "Pressed seed oil"
+mass = 1
+tags = ["ingredient", "fuel"]
+
+[data.objects.linen-thread]
+id = 163
+name = "Linen thread"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.hemp-thread]
+id = 164
+name = "Hemp thread"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.cotton-thread]
+id = 165
+name = "Cotton thread"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.cotton-cloth]
+id = 166
+name = "Cotton cloth"
+mass = 1
+tags = ["repair-cloth", "textile", "material"]
+
+[data.objects.nettle-cloth]
+id = 167
+name = "Nettle cloth"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.canvas]
+id = 168
+name = "Canvas"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.blue-dye]
+id = 169
+name = "Blue dye"
+mass = 1
+tags = ["pigment", "material"]
+
+[data.objects.red-dye]
+id = 170
+name = "Red dye"
+mass = 1
+tags = ["pigment", "material"]
+
+[data.objects.pigment]
+id = 171
+name = "Ground ochre pigment"
+mass = 1
+tags = ["pigment", "material"]
+
+[data.objects.planks]
+id = 172
+name = "Sawn planks"
+mass = 2
+tags = ["material"]
+
+[data.objects.wooden-pegs]
+id = 173
+name = "Wooden pegs"
+mass = 1
+tags = ["material"]
+
+[data.objects.copper]
+id = 174
+name = "Copper ingot"
+mass = 3
+tags = ["metal", "material"]
+
+[data.objects.tin]
+id = 175
+name = "Tin ingot"
+mass = 3
+tags = ["metal", "material"]
+
+[data.objects.bronze]
+id = 176
+name = "Bronze ingot"
+mass = 3
+tags = ["metal", "material"]
+
+[data.objects.lime]
+id = 177
+name = "Burnt lime"
+mass = 2
+tags = ["material"]
+
+[data.objects.mortar]
+id = 178
+name = "Lime mortar"
+mass = 2
+tags = ["material"]
+
+[data.objects.glass]
+id = 179
+name = "Glass"
+mass = 2
+tags = ["material"]
+
+[data.objects.paper]
+id = 180
+name = "Rag paper"
+mass = 1
+tags = ["material", "writing"]
+
+[data.objects.ink]
+id = 181
+name = "Soot ink"
+mass = 1
+tags = ["material", "writing"]
+
+[data.objects.dyed-cloth]
+id = 198
+name = "Dyed cloth"
+mass = 1
+tags = ["textile", "material"]
+
+[data.objects.wood-ash]
+id = 207
+name = "Wood ash"
+mass = 1
+tags = ["material"]
+
+[data.objects.lye]
+id = 208
+name = "Ash lye"
+mass = 1
+tags = ["material"]

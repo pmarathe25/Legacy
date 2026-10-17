@@ -66,3 +66,40 @@ cargo test -p game-agriculture
 [game-worldgen](game-worldgen/README.md) generates seeded physical initial conditions without prebuilt societies. `game-openings` runs their live history before player control; generation is a pure utility rather than a second simulation host.
 
 [game-pressure](game-pressure/README.md) owns coercive demands, real conflict-backed fear, resistance, and submission events. It changes no institution or permission itself.
+
+| Daily-life owner | Responsibility | Physical action owners |
+| --- | --- | --- |
+| [game-livelihoods](game-livelihoods/README.md) | Individual stock goals, bounded ingredient planning, retries, and personal work interests | Ecology and workshop |
+| [game-horticulture](game-horticulture/README.md) | Voluntary planting and tending decisions | Agriculture |
+| [game-care](game-care/README.md) | Local personal concern, caregiver assignments, and gratitude | Health |
+| [game-pastimes](game-pastimes/README.md) | Authored individual activities, reusable possessions, skill practice, and learned interests | Cargo and the common action clock |
+
+All four subscribe to `game-characters::IdleReview` and depend on lower features. Characters has no dependency back to them. Generated openings enable the decision owners; authored fixtures keep their controlled behavior.
+
+[game-stockpiles](game-stockpiles/README.md) owns finite personal ground-cache indexes and composes cargo, property, and knowledge requests. [game-wayfaring](game-wayfaring/README.md) owns voluntary journey intentions and actual visit histories. Provisioning owns survival searches beyond familiar food sources. [The history tool](../tools/history/README.md) records unattended assembled runs without changing player observations or gameplay rules.
+
+## Longer histories
+
+[game-heredity](game-heredity/README.md) expresses inherited characteristics through traits. [game-households](game-households/README.md) owns voluntary families and dependent care. [game-exchange](game-exchange/README.md) composes consensual local swaps and aid requests. [game-affiliation](game-affiliation/README.md) handles admission, exit, and succession through institutions and communities.
+
+[game-works](game-works/README.md) retains individual creative works and personal evidence. [game-preservation](game-preservation/README.md) tracks food batch ages through cargo movements. [game-equipment](game-equipment/README.md) owns clothing condition, repair, and exposure decisions. [game-campaign](game-campaign/README.md) composes their generated-world enable requests. [game-diagnostics](game-diagnostics/README.md) provides optional process-local timing measurements.
+
+[game-grievances](game-grievances/README.md) owns witnessed complaints and individual responses to contested use. Property records claims; physical action owners retain locality, time, quantity, and capacity checks. [The deferred autonomy plan](../plans/unimplemented/character-autonomy.md) identifies remaining limits of feature priority and prescribed social templates.
+
+[game-food-memory](game-food-memory/README.md) indexes remembered edible stores and carried containers from immutable personal evidence. It is a query utility below provisioning, with no game resource or independent behavior. Payload deltas keep unchanged historical inventories out of repeated searches.
+
+## Biology, ecology, and personal value
+
+[game-body](game-body/README.md) provides pure bodily evolution; [game-soma](game-soma/README.md) owns physical bodies; [game-vitality](game-vitality/README.md) expresses inherited potential, aging, and experienced condition. [game-nutrition](game-nutrition/README.md) owns diets and dependence. Physiology composes eating and activity without editing these other owners' resources.
+
+[game-crops](game-crops/README.md) owns crop definitions and seasonal exposure; [game-cultivars](game-cultivars/README.md) owns diploid plant strains and stock provenance; [game-botany](game-botany/README.md) owns representative wild stands and seed banks. Agriculture owns plot labor and harvests. [game-food-storage](game-food-storage/README.md) supplies preservation conditions and built stores; [game-maturation](game-maturation/README.md) owns prepared batches that transform over elapsed time.
+
+[game-shelter](game-shelter/README.md) owns constructed indoor areas and finite fuel heat; [game-exposure](game-exposure/README.md) owns body temperature and thermal harm. Equipment owns worn garments and condition.
+
+[game-items](game-items/README.md) tracks sparse identities of actual cargo units. [game-sentiment](game-sentiment/README.md) owns personal memories and attachment, composing physical experience events. [game-demand](game-demand/README.md) owns personal evidence of others accepting goods. Exchange compares practical, sentimental, and expected resale value without a designated currency.
+
+[game-names](game-names/README.md) owns given and chosen identities, heard names, and personal forms of address. [game-naming](game-naming/README.md) composes parent choices, nicknames, earned descriptions, and voluntary self-renaming. Vitality supplies gradual physical and psychological development; wellbeing interprets childhood experiences and conversations without rewriting inherited potential.
+
+`game-parenthood` owns voluntary reproductive intentions over household attachments, experienced condition, current caregiving demands, and lifecycle biology. It reads feature-owned state and asks lifecycle to conceive; it owns no target population.
+
+`game-utility` supplies pure candidate comparison and switching rules. `game-food-memory` projects personal inventory evidence and contextual food appraisal; provisioning owns physical acquisition plans and their execution.

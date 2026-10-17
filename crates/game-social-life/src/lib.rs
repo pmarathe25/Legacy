@@ -81,6 +81,41 @@ pub struct Register {
     pub person: PersonId,
     pub name: String,
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Registered {
+    pub person: PersonId,
+    pub name: String,
+}
+impl Event for Registered {
+    const KEY: &'static str = "social-life.registered";
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Rename {
+    pub person: PersonId,
+    pub name: String,
+}
+impl Request for Rename {
+    const KEY: &'static str = "social-life.rename";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Renamed {
+    pub person: PersonId,
+    pub name: String,
+}
+impl Event for Renamed {
+    const KEY: &'static str = "social-life.renamed";
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct NameFor {
+    pub observer: PersonId,
+    pub person: PersonId,
+    pub fallback: String,
+}
+impl Request for NameFor {
+    const KEY: &'static str = "social-life.name-for";
+    type Response = String;
+}
 impl Request for Register {
     const KEY: &'static str = "social-life.register";
     type Response = ();
@@ -131,7 +166,13 @@ pub fn neighbors(host: &Host, observer: PersonId) -> Result<Vec<Neighbor>> {
         .filter(|p| **p != observer)
         .map(|p| Neighbor {
             person: *p,
-            name: state.people[p].name.clone(),
+            name: host
+                .query(NameFor {
+                    observer,
+                    person: *p,
+                    fallback: state.people[p].name.clone(),
+                })
+                .unwrap_or_else(|_| state.people[p].name.clone()),
             action: host
                 .get::<Actions>()
                 .ok()
@@ -175,6 +216,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Register>(|tx, r| {
+        require(!r.name.trim().is_empty(), "empty personal name")?;
         game_physiology::capable(tx, r.person)?;
         let area = game_transport::area(tx.get()?, r.person)?;
         require(
@@ -185,7 +227,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.edit::<SocialLife>()?.people.insert(
             r.person,
             Person {
-                name: r.name,
+                name: r.name.clone(),
                 last_contact: now,
                 retry_at: now,
                 recent: None,
@@ -194,9 +236,34 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 cursor: Some(r.person),
             },
         );
-        relocate(tx, r.person, Some(area))
+        relocate(tx, r.person, Some(area))?;
+        tx.emit(
+            Registered {
+                person: r.person,
+                name: r.name,
+            },
+            vec![r.person],
+        )
+    })?;
+    b.request::<Rename>(|tx, r| {
+        require(!r.name.trim().is_empty(), "empty personal name")?;
+        tx.edit::<SocialLife>()?
+            .people
+            .get_mut(&r.person)
+            .ok_or_else(|| Error::Missing("social identity".into()))?
+            .name = r.name.clone();
+        tx.emit(
+            Renamed {
+                person: r.person,
+                name: r.name,
+            },
+            vec![r.person],
+        )
     })?;
     b.before::<game_transport::Move>("social-life.depart", |tx, r| relocate(tx, r.person, None))?;
+    b.before::<game_transport::Carry>("social-life.carried", |tx, r| {
+        relocate(tx, r.passenger, None)
+    })?;
     b.subscribe::<game_transport::Arrived>("social-life.arrive", |tx, e| {
         relocate(tx, e.person, Some(e.area))
     })?;
@@ -204,4 +271,24 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         relocate(tx, e.person, None)
     })?;
     conversation::register(b)
+}
+
+/// A personal motive, not an action lock: loneliness and sociability compete with other interests.
+pub fn company_motivation(tx: &Transaction<'_>, person: PersonId) -> i64 {
+    let Ok(state) = tx.get::<SocialLife>() else {
+        return 0;
+    };
+    let Some(p) = state.people.get(&person) else {
+        return 0;
+    };
+    let sociability = game_vitality::disposition(tx, person, "sociability");
+    let fellowship = tx
+        .get::<game_relationships::Social>()
+        .ok()
+        .and_then(|s| s.values.get(&person)?.get("fellowship"))
+        .map_or(0, |value| i64::from(*value));
+    let elapsed = tx.now().0.saturating_sub(p.last_contact.0);
+    let scale = state.rules.contact_interval.0.max(1);
+    ((u128::from(elapsed) * (sociability + fellowship * 4).max(0) as u128) / u128::from(scale))
+        .min(10000) as i64
 }

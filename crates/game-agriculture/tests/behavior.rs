@@ -22,6 +22,7 @@ fn crops_require_paid_inputs_growth_and_harvest_labor() {
             steward: f.ruler,
             phase: Phase::Fallow,
             crop: "grain".into(),
+            ..Default::default()
         }))
         .unwrap();
     f.host
@@ -74,6 +75,7 @@ fn canceled_sowing_does_not_refund_consumed_seed() {
             steward: f.ruler,
             phase: Phase::Fallow,
             crop: "grain".into(),
+            ..Default::default()
         }))
         .unwrap();
     f.host
@@ -130,6 +132,7 @@ fn regional_climate_changes_real_crop_output() {
             steward: f.ruler,
             phase: Phase::Fallow,
             crop: "grain".into(),
+            ..Default::default()
         }))
         .unwrap();
     let remote = f
@@ -139,6 +142,7 @@ fn regional_climate_changes_real_crop_output() {
             steward: f.ruler,
             phase: Phase::Fallow,
             crop: "grain".into(),
+            ..Default::default()
         }))
         .unwrap();
     f.host

@@ -1,0 +1,13 @@
+id = "physiology/campaign"
+version = 1
+# Human-scale campaign clock: one meal daily; missed meals harm over several days.
+[data]
+lifespan = 2522880000000
+tick = 43200000
+hunger_per_tick = 15
+fatigue_per_tick = 2
+rest_per_tick = 8
+deprivation = 120
+harm_per_tick = 5
+guardian_recovery = 2
+max_health = 100

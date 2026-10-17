@@ -110,7 +110,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 good: r.good,
                 quantity: r.quantity,
             },
-            unauthorized: false,
+            unauthorized: true,
         })?;
         let n = tx
             .edit::<Projects>()?
@@ -136,11 +136,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             game_transport::area(tx.get()?, r.person)? == p.area,
             "builder is elsewhere",
         )?;
-        require(
-            tx.get::<game_property::Property>()?
-                .allowed(r.person, p.store),
-            "no project supply access",
-        )?;
+        tx.call(game_property::Use {
+            actor: r.person,
+            inventory: p.store,
+            purpose: "building".into(),
+        })?;
         for (good, quantity) in p.materials {
             tx.call(game_cargo::Consume {
                 inventory: p.store,

@@ -1,0 +1,22 @@
+id = "environment/monsoon"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 26
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 30
+rain = 9
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 25
+rain = 6
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 19
+rain = 2

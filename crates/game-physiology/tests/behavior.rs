@@ -4,8 +4,15 @@ use game_physiology::*;
 use support::*;
 
 #[test]
-fn actual_food_relief_and_inaccessible_abundance() {
+fn actual_food_relief_and_physically_distant_abundance() {
     let mut f = setup();
+    f.host
+        .dispatch(game_transport::Move {
+            person: f.other,
+            destination: f.away,
+        })
+        .unwrap();
+    run(&mut f.host, SimTime(2 * MINUTE.0));
     f.host.dispatch(Start).unwrap();
     run(&mut f.host, SimTime(MINUTE.0 * 35));
     let before = f.host.get::<Bodies>().unwrap().people[&f.other].hunger;
@@ -96,7 +103,8 @@ fn twenty_thousand_deaths_commit_in_stable_order_without_truncating_the_phase() 
             .all(|p| !p.alive && p.health == 0)
     );
     let notices: Vec<_> = host.notices().collect();
-    assert_eq!(notices.len(), 1024);
+    assert_eq!(notices.len(), 20_000);
+    assert_eq!(notices.first().unwrap().sequence, 1);
     assert_eq!(notices.last().unwrap().sequence, 20_000);
     assert!(
         notices
@@ -106,4 +114,72 @@ fn twenty_thousand_deaths_commit_in_stable_order_without_truncating_the_phase() 
     let saved = host.save().unwrap();
     let loaded = builder().load(&saved, 1).unwrap();
     assert_eq!(loaded.save().unwrap(), saved);
+}
+
+#[test]
+fn batched_physiology_matches_individual_ticks_across_boundaries_and_saturation() {
+    for seed in 0..200 {
+        let draw = |n| random(seed, 500, n);
+        let rules = Rules {
+            tick: SimDuration(7),
+            hunger_per_tick: draw(1) % 5,
+            fatigue_per_tick: draw(2) % 5,
+            rest_per_tick: draw(3) % 5,
+            deprivation: draw(4) % 120,
+            harm_per_tick: draw(5) % 8,
+            ..Default::default()
+        };
+        let initial = Body {
+            kind: if draw(6) % 2 == 0 {
+                Kind::Mortal
+            } else {
+                Kind::Guardian
+            },
+            born: SimTime(0),
+            alive: draw(7) % 4 != 0,
+            hunger: draw(8) % 100,
+            fatigue: draw(9) % 100,
+            health: draw(10) % 101,
+            maximum_health: None,
+            fatigue_fraction: 0,
+            resting: draw(11) % 2 == 0,
+            last: SimTime(3),
+            life_limit: Some(SimTime(draw(12) % 10000)),
+        };
+        let ticks = draw(13) % 1000;
+        let mut slow = initial;
+        for _ in 0..ticks {
+            if slow.alive {
+                if slow.kind == Kind::Mortal {
+                    slow.hunger = slow.hunger.saturating_add(rules.hunger_per_tick);
+                }
+                slow.fatigue = if slow.resting {
+                    slow.fatigue.saturating_sub(rules.rest_per_tick)
+                } else {
+                    slow.fatigue.saturating_add(rules.fatigue_per_tick)
+                };
+                if slow.kind == Kind::Guardian {
+                    slow.health = slow
+                        .health
+                        .saturating_add(rules.guardian_recovery)
+                        .min(rules.max_health);
+                } else if slow.hunger >= rules.deprivation {
+                    slow.health = slow.health.saturating_sub(rules.harm_per_tick);
+                }
+            }
+            slow.last.0 += rules.tick.0;
+            if slow.kind == Kind::Mortal && slow.life_limit.is_some_and(|t| t <= slow.last) {
+                slow.health = 0;
+            }
+        }
+        assert_eq!(
+            advance_body(
+                &initial,
+                &rules,
+                SimTime(initial.last.0 + ticks * rules.tick.0 + 3)
+            ),
+            slow,
+            "seed {seed}"
+        );
+    }
 }

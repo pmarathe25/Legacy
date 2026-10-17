@@ -1,0 +1,22 @@
+id = "environment/alpine"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 1
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 12
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 0
+rain = 3
+
+[[data.seasons]]
+duration = 7776000000
+warmth = -18
+rain = 2

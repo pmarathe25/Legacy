@@ -1,0 +1,392 @@
+id = "objects/diverse-crops"
+version = 1
+
+[data.objects.potato]
+id = 500
+name = "Potato"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 90, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.potato-stock]
+id = 800
+name = "Potato planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.yam]
+id = 501
+name = "Yam"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 75, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.yam-stock]
+id = 801
+name = "Yam planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.carrot]
+id = 502
+name = "Carrot"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 45, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.carrot-stock]
+id = 802
+name = "Carrot planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.spinach]
+id = 503
+name = "Spinach"
+mass = 1
+tags = ["plant", "food", "leaf"]
+food = { portion = 8, relief = 15, shelf_days = 5, nutrients = { energy = 15, protein = 4, fat = 1, fibre = 6, vitamins = 12, minerals = 7 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.spinach-stock]
+id = 803
+name = "Spinach planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.beet]
+id = 504
+name = "Beet"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 60, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.beet-stock]
+id = 804
+name = "Beet planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.sorghum]
+id = 505
+name = "Sorghum"
+mass = 1
+tags = ["plant", "food", "grain"]
+food = { portion = 8, relief = 65, shelf_days = 360, nutrients = { energy = 65, protein = 10, fat = 4, fibre = 6, vitamins = 3, minerals = 5 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.sorghum-stock]
+id = 805
+name = "Sorghum planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.quinoa]
+id = 506
+name = "Quinoa"
+mass = 1
+tags = ["plant", "food", "grain"]
+food = { portion = 8, relief = 65, shelf_days = 300, nutrients = { energy = 65, protein = 10, fat = 4, fibre = 6, vitamins = 3, minerals = 5 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.quinoa-stock]
+id = 806
+name = "Quinoa planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.amaranth]
+id = 507
+name = "Amaranth"
+mass = 1
+tags = ["plant", "food", "grain"]
+food = { portion = 8, relief = 65, shelf_days = 240, nutrients = { energy = 65, protein = 10, fat = 4, fibre = 6, vitamins = 3, minerals = 5 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.amaranth-stock]
+id = 807
+name = "Amaranth planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.taro]
+id = 508
+name = "Taro"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 30, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.taro-stock]
+id = 808
+name = "Taro planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.cassava]
+id = 509
+name = "Cassava"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 7, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = -12, mood = -3, alertness = -4 } }
+
+[data.objects.cassava-stock]
+id = 809
+name = "Cassava planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.banana]
+id = 510
+name = "Banana"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 7, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.banana-stock]
+id = 810
+name = "Banana planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.plantain]
+id = 511
+name = "Plantain"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 12, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.plantain-stock]
+id = 811
+name = "Plantain planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.apricot]
+id = 512
+name = "Apricot"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 8, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.apricot-stock]
+id = 812
+name = "Apricot planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.peach]
+id = 513
+name = "Peach"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 6, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.peach-stock]
+id = 813
+name = "Peach planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.cherry]
+id = 514
+name = "Cherry"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 6, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.cherry-stock]
+id = 814
+name = "Cherry planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.almond]
+id = 515
+name = "Almond"
+mass = 1
+tags = ["plant", "food", "nut"]
+food = { portion = 8, relief = 70, shelf_days = 300, nutrients = { energy = 70, protein = 15, fat = 25, fibre = 7, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.almond-stock]
+id = 815
+name = "Almond planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.pistachio]
+id = 516
+name = "Pistachio"
+mass = 1
+tags = ["plant", "food", "nut"]
+food = { portion = 8, relief = 70, shelf_days = 360, nutrients = { energy = 70, protein = 15, fat = 25, fibre = 7, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.pistachio-stock]
+id = 816
+name = "Pistachio planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.peanut]
+id = 517
+name = "Peanut"
+mass = 1
+tags = ["plant", "food", "nut"]
+food = { portion = 8, relief = 70, shelf_days = 180, nutrients = { energy = 70, protein = 15, fat = 25, fibre = 7, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.peanut-stock]
+id = 817
+name = "Peanut planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.soybean]
+id = 518
+name = "Soybean"
+mass = 1
+tags = ["plant", "food", "bean"]
+food = { portion = 8, relief = 65, shelf_days = 240, nutrients = { energy = 65, protein = 23, fat = 5, fibre = 10, vitamins = 6, minerals = 9 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.soybean-stock]
+id = 818
+name = "Soybean planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.broad-bean]
+id = 519
+name = "Broad bean"
+mass = 1
+tags = ["plant", "food", "bean"]
+food = { portion = 8, relief = 65, shelf_days = 240, nutrients = { energy = 65, protein = 23, fat = 5, fibre = 10, vitamins = 6, minerals = 9 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.broad-bean-stock]
+id = 819
+name = "Broad bean planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.fenugreek]
+id = 520
+name = "Fenugreek"
+mass = 1
+tags = ["plant", "food", "bean"]
+food = { portion = 8, relief = 65, shelf_days = 240, nutrients = { energy = 65, protein = 23, fat = 5, fibre = 10, vitamins = 6, minerals = 9 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.fenugreek-stock]
+id = 820
+name = "Fenugreek planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.ginger]
+id = 521
+name = "Ginger"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 60, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.ginger-stock]
+id = 821
+name = "Ginger planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.chili]
+id = 522
+name = "Chili"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.chili-stock]
+id = 822
+name = "Chili planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.cucumber]
+id = 523
+name = "Cucumber"
+mass = 1
+tags = ["plant", "food", "leaf"]
+food = { portion = 8, relief = 15, shelf_days = 8, nutrients = { energy = 15, protein = 4, fat = 1, fibre = 6, vitamins = 12, minerals = 7 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.cucumber-stock]
+id = 823
+name = "Cucumber planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.tomato]
+id = 524
+name = "Tomato"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.tomato-stock]
+id = 824
+name = "Tomato planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.sweet-potato]
+id = 525
+name = "Sweet potato"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 90, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.sweet-potato-stock]
+id = 825
+name = "Sweet potato planting stock"
+mass = 1
+tags = ["seed", "plant", "clonal"]
+
+[data.objects.coffee-cherry]
+id = 526
+name = "Coffee cherry"
+mass = 1
+tags = ["plant", "food", "fruit"]
+food = { portion = 8, relief = 35, shelf_days = 10, nutrients = { energy = 35, protein = 1, fat = 0, fibre = 4, vitamins = 10, minerals = 3 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.coffee-cherry-stock]
+id = 826
+name = "Coffee cherry planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.cacao-pod]
+id = 527
+name = "Cacao pod"
+mass = 1
+tags = ["plant", "food", "nut"]
+food = { portion = 8, relief = 70, shelf_days = 14, nutrients = { energy = 70, protein = 15, fat = 25, fibre = 7, vitamins = 5, minerals = 8 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.cacao-pod-stock]
+id = 827
+name = "Cacao pod planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.dreamleaf]
+id = 528
+name = "Dreamleaf"
+mass = 1
+tags = ["plant", "food", "leaf"]
+food = { portion = 8, relief = 15, shelf_days = 30, nutrients = { energy = 15, protein = 4, fat = 1, fibre = 6, vitamins = 12, minerals = 7 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.dreamleaf-stock]
+id = 828
+name = "Dreamleaf planting stock"
+mass = 1
+tags = ["seed", "plant"]
+
+[data.objects.sugar-beet]
+id = 529
+name = "Sugar beet"
+mass = 1
+tags = ["plant", "food", "root"]
+food = { portion = 8, relief = 55, shelf_days = 90, nutrients = { energy = 55, protein = 2, fat = 0, fibre = 5, vitamins = 6, minerals = 4 }, effects = { health = 0, mood = 1, alertness = 0 } }
+
+[data.objects.sugar-beet-stock]
+id = 829
+name = "Sugar beet planting stock"
+mass = 1
+tags = ["seed", "plant"]

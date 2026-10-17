@@ -1,0 +1,22 @@
+id = "environment/temperate-forest"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 12
+rain = 5
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 22
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 10
+rain = 5
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 0
+rain = 3

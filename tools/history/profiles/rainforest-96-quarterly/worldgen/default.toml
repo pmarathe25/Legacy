@@ -1,0 +1,85 @@
+id = "worldgen/default"
+version = 1
+[data]
+population = 96
+areas = 6
+# Experimental resource regime; no social structure is authored.
+history = 172800000
+physiology = "campaign"
+characters = "campaign"
+social_life = "campaign"
+health = "basic"
+name_starts = ["Al", "Bran", "Cor", "Dar", "El", "Fen", "Gal", "Har", "Is", "Kel", "Lor", "Mer", "Nor", "Or", "Pen", "Rav", "Sel", "Tal", "Val", "Wen"]
+name_ends = ["a", "en", "in", "or", "eth", "an", "el", "is", "ar", "wen", "wyn", "ren", "as", "il", "on", "ith"]
+
+[[data.biomes]]
+name = "Rainforest Margin"
+climate = "rainforest"
+food = "orchard-fruit"
+food_stock_per_person = 600
+food_renew_per_person = 10
+material = "bamboo"
+material_renew_per_person = 20
+renewal_warmth = 18
+renewal_rain = 5
+[[data.biomes.resources]]
+object = "timber"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "resin"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "bark"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "mint"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "healing-herbs"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "tea-leaf"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "rice-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "cotton-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "hops-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+[[data.biomes.resources]]
+object = "herb-seed"
+stock_per_person = 60
+renew_per_person = 20
+minimum_warmth = 18
+minimum_rain = 5
+

@@ -1,0 +1,22 @@
+id = "environment/rainforest"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 27
+rain = 8
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 29
+rain = 9
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 27
+rain = 8
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 25
+rain = 7

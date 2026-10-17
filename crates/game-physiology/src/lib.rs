@@ -1,135 +1,17 @@
 //! Needs, bodily harm, rest, and guardian recovery.
-use game_packed::Packed;
-mod compute;
-pub use compute::{advance_body, hunger_threshold};
+pub use game_body::{
+    Body, BodyView, Damaged, DeathCause, Died, Kind, Rested, Rules, advance_body, hunger_threshold,
+    load,
+};
 use game_core::*;
 use game_sim::*;
+pub use game_soma::{
+    Bodies, Configure, Create, Damage, Express, Heal, ShortenLife, Strain, capable, maximum_health,
+    view,
+};
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Kind {
-    Mortal,
-    Guardian,
-}
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Body {
-    pub kind: Kind,
-    pub born: SimTime,
-    pub alive: bool,
-    pub hunger: u64,
-    pub fatigue: u64,
-    pub health: u64,
-    pub resting: bool,
-    pub last: SimTime,
-    pub life_limit: Option<SimTime>,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Rules {
-    pub lifespan: SimDuration,
-    pub tick: SimDuration,
-    pub hunger_per_tick: u64,
-    pub fatigue_per_tick: u64,
-    pub rest_per_tick: u64,
-    pub deprivation: u64,
-    pub harm_per_tick: u64,
-    pub guardian_recovery: u64,
-
-    pub max_health: u64,
-}
-impl Default for Rules {
-    fn default() -> Self {
-        Self {
-            lifespan: SimDuration(DAY.0 * 365 * 80),
-            tick: MINUTE,
-            hunger_per_tick: 1,
-            fatigue_per_tick: 1,
-            rest_per_tick: 4,
-            deprivation: 120,
-            harm_per_tick: 1,
-            guardian_recovery: 2,
-
-            max_health: 100,
-        }
-    }
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Bodies {
-    pub people: Packed<PersonId, Body>,
-    pub rules: Rules,
-    pub ticking: bool,
-}
-type BodyMark = (game_packed::Mark, Rules, bool);
-impl Resource for Bodies {
-    fn allocated_ids(&self) -> Vec<u64> {
-        self.people.keys().map(|id| id.0).collect()
-    }
-    const KEY: &'static str = "physiology.bodies";
-    fn validate(&self) -> Result<()> {
-        self.validate_rows(self.people.rows().map(|(_, b)| b))
-    }
-    fn checkpoint(&mut self) -> Checkpoint {
-        Box::new((self.people.begin(), self.rules.clone(), self.ticking))
-    }
-    fn restore(&mut self, checkpoint: Checkpoint) {
-        let (mark, rules, ticking) = *checkpoint.downcast::<BodyMark>().expect("body checkpoint");
-        self.people.rollback(mark);
-        self.rules = rules;
-        self.ticking = ticking;
-    }
-    fn commit(&mut self, checkpoint: Checkpoint) {
-        self.people.commit(
-            checkpoint
-                .downcast::<BodyMark>()
-                .expect("body checkpoint")
-                .0,
-        );
-    }
-    fn validate_checkpoint(&self, checkpoint: &dyn std::any::Any) -> Result<()> {
-        let previous = checkpoint
-            .downcast_ref::<BodyMark>()
-            .expect("body checkpoint");
-        if self.rules != previous.1 {
-            return self.validate();
-        }
-        self.validate_rows(self.people.changed_since(&previous.0).map(|(_, row)| row))
-    }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct BodyView {
-    pub kind: Kind,
-    pub born: SimTime,
-    pub alive: bool,
-    pub hunger: u64,
-    pub fatigue: u64,
-    pub health: u64,
-}
-pub fn view(host: &Host, person: PersonId) -> Result<Option<BodyView>> {
-    Ok(host.get::<Bodies>()?.people.get(&person).map(|b| BodyView {
-        kind: b.kind,
-        born: b.born,
-        alive: b.alive,
-        hunger: b.hunger,
-        fatigue: b.fatigue,
-        health: b.health,
-    }))
-}
-pub fn capable(tx: &Transaction<'_>, person: PersonId) -> Result<()> {
-    let p = tx
-        .get::<Bodies>()?
-        .people
-        .get(&person)
-        .ok_or_else(|| Error::Missing("body".into()))?;
-    require(p.alive && p.health > 0, "actor cannot act")
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Create {
-    pub kind: Kind,
-    pub born: SimTime,
-}
-impl Request for Create {
-    const KEY: &'static str = "physiology.create";
-    type Response = PersonId;
-}
+mod eating;
+pub use eating::ConsumeEdible;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {
@@ -177,92 +59,39 @@ impl Request for CancelRest {
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Damage {
-    pub person: PersonId,
-    pub amount: u64,
+pub struct Fed {
+    pub caregiver: PersonId,
+    pub patient: PersonId,
+    pub good: GoodId,
+    pub quantity: u64,
 }
-impl Request for Damage {
-    const KEY: &'static str = "physiology.damage";
-    type Response = ();
+impl Event for Fed {
+    const KEY: &'static str = "physiology.fed";
 }
+/// Voluntary physical feeding: the caregiver supplies a locally present person.
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Died {
-    pub person: PersonId,
-    pub at: SimTime,
+pub struct Feed {
+    pub caregiver: PersonId,
+    pub patient: PersonId,
+    pub inventory: InventoryId,
 }
-impl Event for Died {
-    const KEY: &'static str = "physiology.died";
-}
-fn death(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
-    let body = &tx.get::<Bodies>()?.people[&person];
-    if body.kind == Kind::Mortal && body.alive && body.health == 0 {
-        tx.edit::<Bodies>()?.people.get_mut(&person).unwrap().alive = false;
-        tx.cancel_action(person)?;
-        tx.emit(
-            Died {
-                person,
-                at: tx.now(),
-            },
-            vec![person],
-        )?;
-    } else if body.kind == Kind::Guardian && body.health == 0 {
-        tx.cancel_action(person)?;
-    }
-    Ok(())
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Heal {
-    pub person: PersonId,
-    pub amount: u64,
-}
-impl Request for Heal {
-    const KEY: &'static str = "physiology.heal";
+impl Request for Feed {
+    const KEY: &'static str = "physiology.feed";
     type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Strain {
-    pub person: PersonId,
-    pub amount: u64,
-}
-impl Request for Strain {
-    const KEY: &'static str = "physiology.strain";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ShortenLife {
-    pub person: PersonId,
-    pub duration: SimDuration,
-}
-impl Request for ShortenLife {
-    const KEY: &'static str = "physiology.shorten_life";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Configure(pub Rules);
-impl Request for Configure {
-    const KEY: &'static str = "physiology.configure";
-    type Response = ();
-}
-pub fn load(store: &mut game_content::Store, key: &str) -> Result<Rules> {
-    let doc: game_content::Document<Rules> = store.load(&format!("physiology/{key}.toml"))?;
-    let check = Bodies {
-        rules: doc.data.clone(),
-        ..Default::default()
-    };
-    check.validate()?;
-    Ok(doc.data)
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
+    game_soma::plugin(b)?;
     b.plugin("physiology", 1)?;
-    b.resource::<Bodies>()?;
-    b.request::<Configure>(|tx, r| {
-        require(
-            tx.get::<Bodies>()?.people.is_empty(),
-            "physiology is in use",
-        )?;
-        tx.edit::<Bodies>()?.rules = r.0;
-        Ok(())
+    b.request::<game_property::Observers>(|tx, r| {
+        let positions = tx.get::<game_transport::Positions>()?;
+        let mut observers:Vec<_> = tx.get::<Bodies>()?.people.rows()
+            .filter(|(_,b)| b.alive && b.health > 0 && !b.resting)
+            .filter(|(p,_)| matches!(positions.0.get(p),Some(game_transport::Location::At(a)) if *a == r.area))
+            .map(|(p,_)| *p).collect();
+        observers.sort_unstable();
+        Ok(observers)
     })?;
+
     b.validate_save(|h| {
         for person in h.get::<game_transport::Positions>()?.0.keys() {
             require(
@@ -272,93 +101,22 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     });
-    b.request::<Create>(|tx, r| {
-        require(r.born <= tx.now(), "birth is in the future")?;
-        let person = PersonId(tx.allocate()?);
-        let max_health = tx.get::<Bodies>()?.rules.max_health;
-        let now = tx.now();
-        let life_limit = if r.kind == Kind::Mortal {
-            Some(r.born.after(tx.get::<Bodies>()?.rules.lifespan)?)
-        } else {
-            None
-        };
-        tx.edit::<Bodies>()?.people.insert(
-            person,
-            Body {
-                kind: r.kind,
-                born: r.born,
-                alive: true,
-                hunger: 0,
-                fatigue: 0,
-                health: max_health,
-                resting: false,
-                last: now,
-                life_limit,
-            },
-        );
-        Ok(person)
-    })?;
+
     b.request::<Start>(|tx, _| {
-        require(!tx.get::<Bodies>()?.ticking, "already ticking")?;
-        tx.edit::<Bodies>()?.ticking = true;
+        tx.call(game_soma::Begin)?;
         tx.schedule(tx.now().after(tx.get::<Bodies>()?.rules.tick)?, 0, Tick)?;
         Ok(())
     })?;
     b.request::<Tick>(|tx, _| {
-        let rules = tx.get::<Bodies>()?.rules.clone();
-        let at = tx.now();
-        tx.edit_with_compute::<Bodies, _>(|state, pool| {
-            state
-                .people
-                .update(pool, |_, body| *body = advance_body(body, &rules, at))
-        })?;
-        // Only deaths and incapacitated guardians require cross-feature effects.
-        let mut affected: Vec<_> = tx
-            .get::<Bodies>()?
-            .people
-            .rows()
-            .filter(|(_, p)| p.alive && p.health == 0)
-            .map(|(id, _)| *id)
-            .collect();
-        affected.sort_unstable();
-        for id in affected {
-            death(tx, id)?;
-        }
-        tx.schedule(tx.now().after(rules.tick)?, 0, Tick)?;
+        tx.call(game_soma::Advance)?;
+        tx.schedule(tx.now().after(tx.get::<Bodies>()?.rules.tick)?, 0, Tick)?;
         Ok(())
     })?;
-    b.request::<Eat>(|tx, r| {
-        capable(tx, r.person)?;
-        require(
-            !tx.get::<Actions>()?.0.contains_key(&r.person),
-            "actor is busy",
-        )?;
-        require(
-            tx.get::<game_property::Property>()?
-                .allowed(r.person, r.inventory),
-            "access denied",
-        )?;
-        require(
-            game_transport::area(tx.get()?, r.person)? == game_cargo::locality(tx, r.inventory)?,
-            "food is elsewhere",
-        )?;
-        let (good, food) = tx
-            .get::<game_objects::Objects>()?
-            .meal(&tx.get::<game_cargo::Cargo>()?.0[&r.inventory].goods)
-            .ok_or_else(|| Error::Rejected("no edible portion available".into()))?;
-        tx.call(game_cargo::Consume {
-            inventory: r.inventory,
-            good,
-            quantity: food.portion,
-        })?;
-        let body = tx.edit::<Bodies>()?.people.get_mut(&r.person).unwrap();
-        body.hunger = body.hunger.saturating_sub(food.relief);
-        Ok(())
-    })?;
+    eating::register(b)?;
     b.request::<Rest>(|tx, r| {
         capable(tx, r.person)?;
         game_transport::area(tx.get()?, r.person)?;
-        let until = tx.now().after(HOUR)?;
+        let until = tx.now().after(tx.get::<Bodies>()?.rules.tick.max(HOUR))?;
         let job = tx.schedule(until, 10, Wake { person: r.person })?;
         tx.start_action(
             r.person,
@@ -369,92 +127,31 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 job,
             },
         )?;
-        tx.edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .unwrap()
-            .resting = true;
+        tx.call(game_soma::SetResting {
+            person: r.person,
+            resting: true,
+        })?;
         Ok(until)
     })?;
     b.request::<Wake>(|tx, r| {
         tx.finish_action(r.person, "rest")?;
-        tx.edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .unwrap()
-            .resting = false;
-        Ok(())
+        tx.call(game_soma::SetResting {
+            person: r.person,
+            resting: false,
+        })?;
+        tx.emit(Rested { person: r.person }, vec![r.person])
     })?;
     b.batch::<Wake>(128)?;
     b.request::<CancelRest>(|tx, r| {
         tx.unschedule(r.job);
-        tx.edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .unwrap()
-            .resting = false;
+        tx.call(game_soma::SetResting {
+            person: r.person,
+            resting: false,
+        })?;
         Ok(())
     })?;
     b.before::<game_property::Take>("physiology.taking", |tx, r| capable(tx, r.actor))?;
     b.before::<game_transport::Move>("physiology.capability", |tx, r| capable(tx, r.person))?;
-    b.request::<Heal>(|tx, r| {
-        let max = tx.get::<Bodies>()?.rules.max_health;
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
-        require(p.alive, "cannot revive the dead")?;
-        p.health = p.health.saturating_add(r.amount).min(max);
-        Ok(())
-    })?;
-    b.request::<Strain>(|tx, r| {
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
-        p.fatigue = p.fatigue.saturating_add(r.amount);
-        Ok(())
-    })?;
-    b.request::<ShortenLife>(|tx, r| {
-        let now = tx.now();
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
-        if let Some(limit) = p.life_limit {
-            p.life_limit = Some(SimTime(limit.0.saturating_sub(r.duration.0)));
-            if p.life_limit.is_some_and(|limit| limit <= now) {
-                p.health = 0;
-            }
-        }
-        death(tx, r.person)
-    })?;
-    b.request::<Damage>(|tx, r| {
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
-        p.health = p.health.saturating_sub(r.amount);
-        death(tx, r.person)
-    })
-}
 
-impl Bodies {
-    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Body>) -> Result<()> {
-        require(
-            self.rules.tick.0 > 0 && self.rules.max_health > 0,
-            "invalid physiology rates",
-        )?;
-        for p in rows {
-            require(
-                p.health <= self.rules.max_health && (p.kind == Kind::Mortal || p.alive),
-                "invalid body",
-            )?;
-        }
-        Ok(())
-    }
+    Ok(())
 }

@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-cargo.workspace = true
+game-utility.workspace = true
+game-food-memory.workspace = true
+game-nutrition.workspace = true
+game-vitality.workspace = true
+game-diagnostics.workspace=true
 game-social-life.workspace = true
 game-storage.workspace = true
 game-packed.workspace = true
@@ -23,10 +29,10 @@ game-lineage.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 game-workshop.workspace = true
 game-property.workspace = true
 game-ecology.workspace = true
-game-cargo.workspace = true
 game-objects.workspace = true
 game-land.workspace = true
 game-skills.workspace = true

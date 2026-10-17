@@ -1,6 +1,5 @@
 use super::*;
-/// A cached payload is reused only when its immutable source still matches.
-/// Personal source/time/confidence remain on each fact; caches are never saved.
+/// Cache immutable payloads only while sources match; personal evidence stays on each fact.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(untagged)]
 pub enum FactValue {
@@ -41,20 +40,14 @@ impl<'de> Deserialize<'de> for FactValue {
 }
 impl FactValue {
     pub fn decode<T: serde::de::DeserializeOwned + Clone + 'static>(&self) -> Option<T> {
-        let typed: &dyn std::any::Any = match self {
-            Self::Roads(v) => v.as_ref(),
-            Self::Patch(v) => v,
-            Self::Stock(v) => v,
-            Self::Location(v) => v,
-            Self::Other(v) => v,
+        let (typed, json): (&dyn std::any::Any, _) = match self {
+            Self::Roads(v) => (v.as_ref(), None),
+            Self::Patch(v) => (v, None),
+            Self::Stock(v) => (v, None),
+            Self::Location(v) => (v, None),
+            Self::Other(v) => (v, Some(v)),
         };
-        if let Some(value) = typed.downcast_ref::<T>() {
-            return Some(value.clone());
-        }
-        match self {
-            Self::Other(value) => T::deserialize(value).ok(),
-            _ => T::deserialize(&serde_json::to_value(self).ok()?).ok(),
-        }
+        game_facts::decode(typed, self, json)
     }
     pub(super) fn promote(value: Arc<Self>, key: &str) -> Arc<Self> {
         let Self::Other(raw) = value.as_ref() else {

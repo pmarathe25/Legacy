@@ -5,6 +5,37 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-parenthood.workspace = true
+game-names.workspace = true
+game-naming.workspace = true
+game-sentiment.workspace = true
+game-items.workspace = true
+game-exposure.workspace = true
+game-shelter.workspace = true
+game-botany.workspace = true
+game-cultivars.workspace = true
+game-maturation.workspace = true
+game-food-storage.workspace = true
+game-nutrition.workspace = true
+game-wellbeing.workspace = true
+game-vitality.workspace = true
+game-grievances.workspace=true
+game-campaign.workspace = true
+game-heredity.workspace = true
+game-households.workspace = true
+game-exchange.workspace = true
+game-demand.workspace = true
+game-works.workspace = true
+game-preservation.workspace = true
+game-equipment.workspace = true
+game-affiliation.workspace = true
+
+game-wayfaring.workspace = true
+game-stockpiles.workspace = true
+game-horticulture.workspace = true
+game-care.workspace = true
+game-pastimes.workspace = true
+game-livelihoods.workspace = true
 game-pressure.workspace = true
 game-communities.workspace = true
 game-social-life.workspace = true
@@ -46,3 +77,5 @@ game-conflict.workspace = true
 game-confinement.workspace = true
 game-missions.workspace = true
 game-armies.workspace = true
+
+game-worldgen.workspace = true

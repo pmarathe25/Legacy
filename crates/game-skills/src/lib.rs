@@ -32,6 +32,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.resource::<Skills>()?;
     b.request::<Practice>(|tx, r| {
         require(!r.skill.is_empty() && r.effort > 0, "invalid practice")?;
+        let rate = game_vitality::ability(tx, r.person, "learning");
+        let effort = r.effort.saturating_mul(rate) / 1000;
         let s = tx.edit::<Skills>()?;
         require(
             s.credited.insert(r.attribution, ()).is_none(),
@@ -44,7 +46,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .entry(r.skill.into())
             .or_default();
         *level = level
-            .checked_add(gain(*level, r.effort))
+            .checked_add(gain(*level, effort))
             .ok_or(Error::Overflow)?;
         Ok(*level)
     })

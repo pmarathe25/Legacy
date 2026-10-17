@@ -1,0 +1,32 @@
+[package]
+name = "game-care"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-households.workspace = true
+game-diagnostics.workspace = true
+game-vitality.workspace = true
+game-food-memory.workspace=true
+game-objects.workspace = true
+game-knowledge.workspace=true
+game-social-life.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-transport.workspace = true
+game-physiology.workspace = true
+game-characters.workspace = true
+game-traits.workspace = true
+game-relationships.workspace = true
+game-health.workspace = true
+game-lineage.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-land.workspace = true
+game-content.workspace = true
+game-skills.workspace = true

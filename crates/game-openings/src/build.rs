@@ -38,7 +38,11 @@ pub(super) fn initialize(
     for (key, p) in d.actors() {
         let person = host.dispatch(game_physiology::Create {
             kind: p.kind,
-            born: SimTime(0),
+            born: if d.fixture {
+                SimTime(0)
+            } else {
+                game_worldgen::birth_time(seed, &key, host.now())
+            },
         })?;
         host.dispatch(game_transport::Place {
             person,
@@ -152,8 +156,8 @@ pub(super) fn initialize(
         let id = host.dispatch(game_agriculture::Create(game_agriculture::Plot {
             area: areas[&plot.area],
             steward: people[&plot.steward],
-            phase: game_agriculture::Phase::Fallow,
             crop: plot.crop.clone(),
+            ..Default::default()
         }))?;
         names.insert(plot.key.clone(), id.0);
     }
@@ -287,7 +291,6 @@ pub(super) fn initialize(
         })?;
     }
     // The identity resource is filled by the content loader after this binder returns.
-    // A construction-only request keeps writes with their owner.
     host.dispatch(SetNames(names))?;
     host.dispatch(game_physiology::Start)?;
     if d.autonomy {

@@ -1,5 +1,7 @@
 //! A refused demand can lead to real conflict; fear does not imply loyalty.
 use game_core::*;
+mod judgment;
+mod retreat;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
@@ -35,26 +37,27 @@ impl Event for Submitted {
     const KEY: &'static str = "pressure.submitted";
 }
 pub fn disposition(tx: &Transaction<'_>, person: PersonId, key: &str) -> i64 {
-    tx.get::<game_traits::Traits>()
-        .map_or(500, |t| t.disposition(person, key))
+    game_vitality::disposition(tx, person, key)
 }
 pub fn afraid(tx: &Transaction<'_>, subject: PersonId, leader: PersonId) -> Result<bool> {
-    let social = tx.get::<game_relationships::Social>()?;
-    let Some(rel) = social
-        .relationships
-        .get(&subject)
-        .and_then(|r| r.get(&leader))
-    else {
-        return Ok(false);
-    };
-    let authority = social
-        .beliefs
-        .get(&subject)
-        .map_or(0, |b| b.authority.clamp(-10, 10));
-    let resistance =
-        20 + disposition(tx, subject, "risk-tolerance") / 20 + i64::from(rel.grievance) / 5
-            - i64::from(authority);
-    Ok(i64::from(rel.fear) >= resistance.clamp(20, 95))
+    judgment::afraid(tx, subject, leader)
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackedDown {
+    pub leader: PersonId,
+    pub subject: PersonId,
+}
+impl Event for BackedDown {
+    const KEY: &'static str = "pressure.backed-down";
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Fled {
+    pub person: PersonId,
+    pub other: PersonId,
+    pub destination: AreaId,
+}
+impl Event for Fled {
+    const KEY: &'static str = "pressure.fled";
 }
 fn clear(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     if let Some(d) = tx.get::<Pressure>()?.active.get(&person).cloned() {
@@ -81,6 +84,7 @@ fn yield_to(tx: &mut Transaction<'_>, leader: PersonId, subject: PersonId) -> Re
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("pressure", 1)?;
     b.resource::<Pressure>()?;
+    retreat::register(b)?;
     b.validate_save(|h| {
         for (p, d) in &h.get::<Pressure>()?.active {
             require(
@@ -126,6 +130,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         )?;
         if afraid(tx, r.subject, r.leader)? {
             return yield_to(tx, r.leader, r.subject);
+        }
+        if !judgment::escalate(tx, r.leader, r.subject)? {
+            return tx.emit(
+                BackedDown {
+                    leader: r.leader,
+                    subject: r.subject,
+                },
+                vec![r.leader, r.subject],
+            );
+        }
+        if retreat::consider(tx, r.subject, r.leader)? {
+            return Ok(());
         }
         let fighters = [(r.leader, 1, 10), (r.subject, 2, 20)]
             .into_iter()
@@ -191,6 +207,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         } else if e.target == d.leader && afraid(tx, d.leader, d.subject)? {
             clear(tx, d.leader)
         } else {
+            retreat::consider(tx, e.target, e.actor)?;
             Ok(())
         }
     })

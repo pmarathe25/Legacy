@@ -16,7 +16,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo bench -p game-sim --bench kernel
 ```
 
-The default `generated` start creates 96 mortal individuals and two guardians across 12 natural areas, then simulates two days. Initial definitions contain no institutions or social bonds. People can share informally, develop collective decision practices, follow admired leaders, or comply with force. Their own responses determine the resulting arrangements and names. Generation settings and history duration live in [content/worldgen/default.toml](content/worldgen/default.toml). The current history model covers survival and small social groups, not full societies or multigenerational campaigns.
+The default `generated` start creates 96 mortal individuals and two guardians across 12 natural areas, then simulates two days. Initial definitions contain no institutions or social bonds. People can share informally, develop collective decision practices, follow admired leaders, or comply with force. Their own responses determine the resulting arrangements and names. Generation settings and history duration live in [content/worldgen/default.toml](content/worldgen/default.toml). During history, people also collect ingredients, follow production chains, save seed, tend plantings, help injured neighbors, and develop personal pastimes. The current model supports these daily lives and small social groups; full societies and multigenerational campaigns remain unfinished.
 
 The CLI reads commands from stdin or `--script <path>`. `run` takes seconds; authoritative times use milliseconds. For the kernel fixture, this script moves the ruler to the farm:
 
@@ -29,6 +29,8 @@ quit
 ```
 
 `--content <directory>` selects a content pack; repeated `--mod <directory>` arguments add overlays. [The content guide](content/README.md) explains runtime definitions, schemas, and extension without rebuilding.
+
+`craft <recipe> <inventory>` produces goods, `plant <crop> <inventory>` establishes and sows a planting, and `pursue <activity> <inventory>` starts personal leisure. `status` includes the player's completed pastime counts.
 
 `look` observes nearby roads and resources; `observe-patch <id>` inspects a local patch; `tell <person-id> <fact-key>` shares one remembered fact with someone at the same place.
 
@@ -56,8 +58,14 @@ See the [crate index](crates/README.md) for responsibilities and dependencies an
 
 Feature tests exercise timed movement and work, physical transfers, reservations, access and theft, needs and mortality, local facts and reports, learning and choice, committed food plans across travel and gathering, promises and default, institution rules, enforcement, construction, deliveries, parties, succession, guardian confinement, and invocation consent. Composed tests check passive observations, public command retries, CLI equivalence, worker counts, irregular advances, and continued execution after saving.
 
-Social life adds timed mutual conversations, companion preferences and refusal, asymmetric relationship changes, learned fellowship, and exchanges of personal evidence. Organizing distinguishes personal sharing, chosen voting, loyalty, and fear; coercive demands use actual combat and can be resisted. Area climates affect crop outcomes and optional seasonal regrowth. This adds saved resources and a plugin; earlier save manifests are incompatible.
+Social life adds timed mutual conversations, companion preferences and refusal, asymmetric relationship changes, learned fellowship, and exchanges of personal evidence. Organizing distinguishes personal sharing, chosen voting, loyalty, and fear; coercive demands use actual combat and can be resisted. Area climates affect crop outcomes and optional seasonal regrowth. The expanded catalogs contain 321 goods, 67 crops, 219 recipes, 18 biome compositions, and 24 pastimes. Four small decision owners compose existing physical actions for livelihoods, horticulture, care, and leisure. These add saved resources and plugins; earlier save manifests are incompatible.
+
+Characters develop physical and cognitive capabilities through childhood, with acquired effects from care and distress. Parents choose child names from their own experience; personal nicknames, titles, epithets, and self-chosen names persist separately.
 
 These tests establish their asserted fixture behavior. They do not establish complete autonomous enterprises, household care and childhood agency, full institutional invention and political procedures, regional trade, final tactical rules, or the final past-life benefit and recovery model. Those requirements still belong to the design documents and must be implemented in their owners.
 
 [Performance benchmarks](tools/performance/README.md) exercise storage, autonomous survival, queued input, and save/load. Hot components use indexed dense rows and nested undo journals; cold records keep persistent snapshots. Shared scenes separate visible values from personal evidence. Point updates and nested rollback avoid copying population tables. Storage policies trade reusable buffers and index memory against speed; complete retained snapshots impose a copy on the next write. These fixtures measure the implemented mechanics; the complete late-game economy and long-history workload remain to be built.
+
+Unattended long runs and event journals are available through [the history tool](tools/history/README.md). It starts at day zero with everyone autonomous. Voluntary visits and survival searches use remembered roads; finite personal ground caches and stock-aware cultivation address capacity bottlenecks through physical actions.
+
+Generated histories, study progress, journals, and analysis reports belong under the ignored `target/history/` directory.

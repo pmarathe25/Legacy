@@ -12,8 +12,13 @@ pub struct Trait {
     pub minimum: i32,
     pub maximum: i32,
     pub default: i32,
+    #[serde(default = "full_spread")]
+    pub founder_spread: u16,
     #[serde(default)]
     pub weights: BTreeMap<String, i32>,
+}
+fn full_spread() -> u16 {
+    u16::MAX
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -134,6 +139,16 @@ impl Traits {
             .unwrap_or(t.default);
         (i64::from(value) - i64::from(t.minimum)) * 1000
             / (i64::from(t.maximum) - i64::from(t.minimum)).max(1)
+    }
+    /// Raw ability units: 1000 is an ordinary baseline, not a ceiling.
+    pub fn ability(&self, person: PersonId, key: &str) -> u64 {
+        self.people
+            .get(&person)
+            .and_then(|p| p.get(key))
+            .copied()
+            .or_else(|| self.definitions.get(key).map(|d| d.default))
+            .unwrap_or(1000)
+            .max(0) as u64
     }
     pub fn validate_profile(&self, profile: &BTreeMap<String, i32>) -> Result<()> {
         for (key, value) in profile {

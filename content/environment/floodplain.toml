@@ -1,0 +1,22 @@
+id = "environment/floodplain"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 16
+rain = 7
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 28
+rain = 6
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 17
+rain = 5
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 7
+rain = 3

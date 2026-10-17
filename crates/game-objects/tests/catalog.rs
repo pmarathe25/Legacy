@@ -20,15 +20,17 @@ fn catalog_validates_ids_and_freezes_resolved_definitions() {
 
 #[test]
 fn extended_catalog_rebuilds_id_lookup_and_rejects_duplicate_saved_ids() {
-    let mut data = serde_json::to_value(standard().unwrap()).unwrap();
-    for id in 100..10_100 {
+    let base = standard().unwrap();
+    let first = base.items.values().map(|o| o.id.0).max().unwrap() + 1;
+    let mut data = serde_json::to_value(base).unwrap();
+    for id in first..first + 10_000 {
         data["items"][format!("object-{id}")] = serde_json::json!({
             "id": id, "name": format!("Object {id}"), "mass": id, "tags": [], "food": null
         });
     }
     let catalog: Objects = serde_json::from_value(data.clone()).unwrap();
     catalog.validate().unwrap();
-    for id in [100, 5000, 10_099] {
+    for id in [first, first + 4900, first + 9999] {
         assert_eq!(catalog.mass(GoodId(id), 2).unwrap(), 2 * id);
     }
     assert!(catalog.by_id(GoodId(99_999)).is_err());
@@ -37,7 +39,7 @@ fn extended_catalog_rebuilds_id_lookup_and_rejects_duplicate_saved_ids() {
         data,
         "derived index stays out of content and saves"
     );
-    data["items"]["object-100"]["id"] = 101.into();
+    data["items"][format!("object-{first}")]["id"] = (first + 1).into();
     let invalid: Objects = serde_json::from_value(data).unwrap();
     assert!(invalid.validate().is_err());
 }

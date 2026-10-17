@@ -143,3 +143,67 @@ fn unrelated_deposit_cannot_steal_output_capacity() {
         1
     );
 }
+
+#[test]
+fn a_carrier_leaving_with_the_workshop_interrupts_production_after_reload() {
+    let mut f = setup();
+    let pack = f
+        .host
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(f.other),
+            capacity: 100,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_cargo::Deposit {
+            inventory: pack,
+            good: game_cargo::TIMBER,
+            quantity: 5,
+        })
+        .unwrap();
+    f.host
+        .dispatch(Define {
+            name: "tool".into(),
+            recipe: recipe(),
+        })
+        .unwrap();
+    f.host
+        .dispatch(Craft {
+            person: f.ruler,
+            recipe: "tool".into(),
+            inventory: pack,
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_transport::Move {
+            person: f.other,
+            destination: f.away,
+        })
+        .unwrap();
+    let saved = f.host.save().unwrap();
+    let mut loaded = builder().load(&saved, 4).unwrap();
+    for host in [&mut f.host, &mut loaded] {
+        run(host, SimTime(HOUR.0));
+        assert_eq!(
+            host.get::<game_cargo::Cargo>().unwrap().0[&pack].amount(GoodId(8)),
+            0
+        );
+        assert!(
+            host.get::<game_cargo::Cargo>().unwrap().0[&pack]
+                .reserved
+                .is_empty()
+        );
+        assert_eq!(
+            host.get::<Workshop>().unwrap().waste[&game_cargo::TIMBER],
+            5
+        );
+        assert!(
+            !host
+                .get::<game_sim::Actions>()
+                .unwrap()
+                .0
+                .contains_key(&f.ruler)
+        );
+    }
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
+}

@@ -1,0 +1,22 @@
+id = "environment/subtropical"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 21
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 32
+rain = 6
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 23
+rain = 4
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 13
+rain = 2

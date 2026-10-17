@@ -126,3 +126,36 @@ fn append_logs_restore_nested_cancellations_notices_and_identities() {
         assert_eq!(host.save().unwrap(), loaded.save().unwrap());
     }
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Burst(u64);
+impl Request for Burst {
+    const KEY: &'static str = "logs.burst";
+    type Response = ();
+}
+#[test]
+fn one_large_committed_transaction_remains_complete_until_the_next_commit() {
+    fn burst_builder() -> Builder {
+        let mut b = builder();
+        b.request::<Burst>(|tx, r| {
+            for i in 0..r.0 {
+                tx.emit(Add(i), vec![])?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        b
+    }
+    let mut host = burst_builder().build(1, 1).unwrap();
+    host.dispatch(Burst(3000)).unwrap();
+    assert_eq!(host.notices_since(0).count(), 3000);
+    assert_eq!(host.notices().next().unwrap().sequence, 1);
+    let saved = host.save().unwrap();
+    let loaded = burst_builder().load(&saved, 2).unwrap();
+    assert_eq!(loaded.notices().count(), 3000);
+    assert_eq!(saved, loaded.save().unwrap());
+    // Normal retention resumes on a smaller commit; readers must collect per commit.
+    host.dispatch(Add(0)).unwrap();
+    assert_eq!(host.notices().count(), 1024);
+    assert_eq!(host.notices().last().unwrap().sequence, 3000);
+}

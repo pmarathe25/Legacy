@@ -8,6 +8,15 @@ struct Shared {
     keys: HashSet<Arc<str>>,
     values: HashSet<Arc<FactValue>>,
 }
+impl Serialize for Knowledge {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        let archive = game_facts::SharedView::new(self.0.iter().map(|(p, f)| (*p, &f.0)));
+        let mut map = s.serialize_map(Some(1))?;
+        map.serialize_entry("archive", &archive)?;
+        map.end()
+    }
+}
 impl<'de> Deserialize<'de> for Knowledge {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,
@@ -24,7 +33,25 @@ impl<'de> Deserialize<'de> for Knowledge {
             ) -> std::result::Result<Knowledge, A::Error> {
                 let mut shared = Shared::default();
                 let mut knowledge = Knowledge::default();
-                while let Some(person) = map.next_key()? {
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "archive" {
+                        if !knowledge.0.is_empty() {
+                            return Err(A::Error::custom("mixed knowledge formats"));
+                        }
+                        let archive =
+                            map.next_value::<game_facts::archive::Archive<FactValue>>()?;
+                        for (p, f) in archive
+                            .restore(|key, value| FactValue::promote(value, key))
+                            .map_err(A::Error::custom)?
+                        {
+                            knowledge.0.insert(p, Facts(f, None));
+                        }
+                        if map.next_key::<String>()?.is_some() {
+                            return Err(A::Error::custom("mixed knowledge formats"));
+                        }
+                        return Ok(knowledge);
+                    }
+                    let person = PersonId(key.parse().map_err(A::Error::custom)?);
                     let facts = map.next_value_seed(Memories(&mut shared))?;
                     if knowledge.0.insert(person, facts).is_some() {
                         return Err(A::Error::custom("duplicate person"));

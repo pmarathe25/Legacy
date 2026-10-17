@@ -21,14 +21,25 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         tx.call(game_lineage::Begin { person: r.0 })
     })
 }
-pub(super) fn initialize(host: &mut Host, store: &mut Store, seed: u64) -> Result<()> {
+pub(super) fn initialize(
+    host: &mut Host,
+    store: &mut Store,
+    seed: u64,
+    player: bool,
+) -> Result<()> {
+    host.advance(game_worldgen::EPOCH, 1)?;
     let settings = game_worldgen::load(store)?;
     let traits = game_traits::load(store)?;
     let definition = game_worldgen::generate(&settings, seed, &traits)?;
     let assets = assets::Assets::load(store, &definition)?;
     host.dispatch(game_communities::Enable)?;
     build::initialize(host, &definition, assets, seed, false)?;
-    let until = host.now().after(settings.history)?;
+    host.dispatch(game_campaign::Start)?;
+    let until = host.now().after(if player {
+        settings.history
+    } else {
+        SimDuration(0)
+    })?;
     loop {
         let p = host.advance(until, 256)?;
         match p.stop {
@@ -40,8 +51,9 @@ pub(super) fn initialize(host: &mut Host, store: &mut Store, seed: u64) -> Resul
         }
     }
     let ruler = PersonId(host.get::<Opening>()?.names[&definition.ruler]);
-    // No protected player existed during history: every individual used ordinary autonomy.
-    host.dispatch(BeginPlay(ruler))?;
+    if player {
+        host.dispatch(BeginPlay(ruler))?;
+    }
     let mut opening = host.get::<Opening>()?.clone();
     opening.scenario = "generated".into();
     opening.version = 1;

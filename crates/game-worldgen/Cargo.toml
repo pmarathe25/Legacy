@@ -12,3 +12,10 @@ game-physiology.workspace = true
 game-relationships.workspace = true
 game-traits.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+game-objects.workspace = true
+game-environment.workspace = true
+game-agriculture.workspace = true
+game-workshop.workspace = true

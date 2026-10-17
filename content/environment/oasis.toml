@@ -1,0 +1,22 @@
+id = "environment/oasis"
+version = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 25
+rain = 2
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 38
+rain = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 28
+rain = 1
+
+[[data.seasons]]
+duration = 7776000000
+warmth = 20
+rain = 2

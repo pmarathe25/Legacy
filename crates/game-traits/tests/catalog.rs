@@ -12,6 +12,7 @@ fn arbitrary_trait_names_change_existing_utility_terms_and_validate_profiles() {
             minimum: 0,
             maximum: 100,
             default: 0,
+            founder_spread: 65535,
             weights: BTreeMap::from([("goal".into(), 100)]),
         },
     );
@@ -48,6 +49,7 @@ fn sparse_profiles_preserve_lexical_clamping_and_default_traits_have_no_adjustme
                 minimum: -100,
                 maximum: 100,
                 default: 0,
+                founder_spread: 65535,
                 weights: BTreeMap::from([("need".into(), 10_000)]),
             },
         );
@@ -60,6 +62,7 @@ fn sparse_profiles_preserve_lexical_clamping_and_default_traits_have_no_adjustme
                 minimum: -100,
                 maximum: 100,
                 default: 0,
+                founder_spread: 65535,
                 weights: BTreeMap::from([("need".into(), 10_000)]),
             },
         );
@@ -87,6 +90,7 @@ fn changing_profiles_recompiles_weights_and_loading_reconstructs_them() {
             minimum: -100,
             maximum: 100,
             default: 0,
+            founder_spread: 65535,
             weights: std::collections::BTreeMap::from([("need".into(), 100)]),
         },
     );
