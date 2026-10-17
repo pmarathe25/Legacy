@@ -42,9 +42,10 @@ impl Resource for Nutrition {
         )?;
         require(
             self.people.values().all(|d| {
-                d.habits
-                    .values()
-                    .all(|h| h.level <= 1000 && h.tolerance <= 1000)
+                d.requirement_per_mille > 0
+                    && d.habits
+                        .values()
+                        .all(|h| h.level <= 1000 && h.tolerance <= 1000)
             }),
             "invalid dependence",
         )
@@ -53,9 +54,10 @@ impl Resource for Nutrition {
         require(self.needs == old.needs, "dietary requirements are frozen")?;
         require(
             self.people.changed(&old.people).all(|(_, d)| {
-                d.habits
-                    .values()
-                    .all(|h| h.level <= 1000 && h.tolerance <= 1000)
+                d.requirement_per_mille > 0
+                    && d.habits
+                        .values()
+                        .all(|h| h.level <= 1000 && h.tolerance <= 1000)
             }),
             "invalid dependence",
         )
@@ -70,6 +72,15 @@ impl Request for Enable {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Register {
     pub person: PersonId,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct SetDemand {
+    pub person: PersonId,
+    pub per_mille: u64,
+}
+impl Request for SetDemand {
+    const KEY: &'static str = "nutrition.demand";
+    type Response = ();
 }
 impl Request for Register {
     const KEY: &'static str = "nutrition.register";
@@ -137,17 +148,23 @@ pub fn preference(
     let Some(diet) = n.people.get(&p) else {
         return food.relief as i64;
     };
-    let hedonism = game_vitality::disposition(tx, p, "hedonism");
-    let foresight = tx
-        .get::<game_traits::Traits>()
-        .map_or(1000, |_| game_vitality::ability(tx, p, "foresight"))
-        .min(16000) as i64;
     let learned = diet.learned.get(&good);
     let mut score = food.relief.min(i64::MAX as u64) as i64;
     if let Some(learned) = learned {
-        let balances = diet.reserves_at(&n.needs, tx.now());
+        let hedonism = game_vitality::disposition(tx, p, "hedonism");
+        let foresight = tx
+            .get::<game_traits::Traits>()
+            .map_or(1000, |_| game_vitality::ability(tx, p, "foresight"))
+            .min(16000) as i64;
+
         for (key, need) in &n.needs {
-            let short = (need * 14_000).saturating_sub(*balances.get(key).unwrap_or(&0));
+            let balance = diet
+                .reserves
+                .get(key)
+                .copied()
+                .unwrap_or(0)
+                .saturating_sub(diet.used(*need, tx.now()));
+            let short = diet.target(*need, 14_000).saturating_sub(balance);
             score = score.saturating_add(
                 (short / 1000)
                     .min(*learned.nutrients.get(key).unwrap_or(&0))
@@ -205,8 +222,37 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         {
             return Ok(());
         }
-        let d = Diet::new(&tx.get::<Nutrition>()?.needs, tx.now());
+        let mut d = Diet::new(&tx.get::<Nutrition>()?.needs, tx.now());
+        if let Some((traits, life)) = tx.get::<game_traits::Traits>().ok().zip(
+            tx.get::<game_vitality::Vitality>()
+                .ok()
+                .and_then(|v| v.people.get(&r.person)),
+        ) {
+            d.requirement_per_mille = game_metabolism::demand(traits, life, r.person, tx.now());
+            for reserve in d.reserves.values_mut() {
+                *reserve = (u128::from(*reserve) * u128::from(d.requirement_per_mille) / 1000)
+                    .min(u128::from(u64::MAX)) as u64;
+            }
+        }
         tx.edit::<Nutrition>()?.people.insert(r.person, d);
+        Ok(())
+    })?;
+    b.request::<SetDemand>(|tx, r| {
+        require(r.per_mille > 0, "invalid dietary demand")?;
+        let n = tx.get::<Nutrition>()?;
+        let Some(d) = n
+            .people
+            .get(&r.person)
+            .filter(|d| n.enabled && d.requirement_per_mille != r.per_mille)
+        else {
+            return Ok(());
+        };
+        let reserves = d.reserves_at(&n.needs, tx.now());
+        let now = tx.now();
+        let d = tx.edit::<Nutrition>()?.people.get_mut(&r.person).unwrap();
+        d.reserves = reserves;
+        d.at = now;
+        d.requirement_per_mille = r.per_mille;
         Ok(())
     })?;
     b.request::<Deactivate>(|tx, r| {

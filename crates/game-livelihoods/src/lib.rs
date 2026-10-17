@@ -4,7 +4,10 @@ use game_core::*;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use std::{
+    collections::{BTreeMap, VecDeque},
+    sync::Arc,
+};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Goal {
@@ -47,7 +50,7 @@ struct Plan {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Livelihoods {
     pub enabled: bool,
-    pub rules: Option<Rules>,
+    pub rules: Option<Arc<Rules>>,
     pub stamps: Vec<game_content::Stamp>,
     plans: Table<PersonId, Plan>,
     pub retry_at: Table<PersonId, SimTime>,
@@ -61,6 +64,21 @@ impl Livelihoods {
 }
 impl Resource for Livelihoods {
     const KEY: &'static str = "livelihoods.people";
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        if self.rules.as_ref().map(Arc::as_ptr) != previous.rules.as_ref().map(Arc::as_ptr) {
+            return self.validate();
+        }
+        require(
+            !self.enabled || self.rules.is_some(),
+            "livelihoods lack rules",
+        )?;
+        require(
+            self.plans
+                .changed(&previous.plans)
+                .all(|(_, p)| p.quantity > 0 && p.steps.len() <= planning::MAX_STEPS),
+            "invalid work plan",
+        )
+    }
     fn validate(&self) -> Result<()> {
         if let Some(r) = &self.rules {
             r.validate()?;
@@ -264,7 +282,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             )?;
         }
         let s = tx.edit::<Livelihoods>()?;
-        s.rules = Some(r.rules);
+        s.rules = Some(Arc::new(r.rules));
         s.stamps = r.stamps;
         Ok(())
     })?;

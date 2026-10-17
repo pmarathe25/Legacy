@@ -143,7 +143,28 @@ pub struct Called {
 impl Event for Called {
     const KEY: &'static str = "names.called";
 }
+fn presentable(tx: &Transaction<'_>, speaker: PersonId, listener: PersonId) -> bool {
+    speaker == listener
+        || !game_communication::active(tx)
+        || (game_physiology::capable(tx, speaker).is_ok()
+            && game_physiology::capable(tx, listener).is_ok()
+            && game_vitality::can_converse(tx, speaker)
+            && game_communication::ability(tx, speaker, "vocalization") >= 80
+            && game_communication::ability(tx, listener, "hearing") >= 80
+            && game_communication::ability(tx, listener, "interpretation") >= 80)
+}
 fn hear(tx: &mut Transaction<'_>, listener: PersonId, person: PersonId) -> Result<()> {
+    hear_from(tx, listener, person, person)
+}
+fn hear_from(
+    tx: &mut Transaction<'_>,
+    listener: PersonId,
+    person: PersonId,
+    speaker: PersonId,
+) -> Result<()> {
+    if !presentable(tx, speaker, listener) {
+        return Ok(());
+    }
     if !tx.get::<Names>()?.identities.contains_key(&listener) {
         return Ok(());
     }
@@ -152,6 +173,15 @@ fn hear(tx: &mut Transaction<'_>, listener: PersonId, person: PersonId) -> Resul
         .people
         .get(&person)
     {
+        if tx
+            .get::<Names>()?
+            .heard
+            .get(&listener)
+            .and_then(|row| row.get(&person))
+            == Some(&p.name)
+        {
+            return Ok(());
+        }
         let name = p.name.clone();
         tx.edit::<Names>()?
             .heard
@@ -269,7 +299,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             if game_transport::area(tx.get()?, parent).ok()
                 == game_transport::area(tx.get()?, r.child).ok()
             {
-                hear(tx, parent, r.child)?;
+                hear_from(tx, parent, r.child, chooser)?;
                 hear(tx, r.child, parent)?;
             }
         }
@@ -280,7 +310,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 name,
                 given: true,
             },
-            vec![chooser, r.child],
+            if presentable(tx, chooser, r.child) {
+                vec![chooser, r.child]
+            } else {
+                vec![chooser]
+            },
         )
     })?;
     b.request::<Change>(|tx, r| {
@@ -307,6 +341,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get(&area)
             .into_iter()
             .flat_map(|row| row.keys().copied())
+            .filter(|p| presentable(tx, r.person, *p))
             .collect();
         for witness in &witnesses {
             hear(tx, *witness, r.person)?;
@@ -357,7 +392,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 game_transport::area(tx.get::<game_transport::Positions>().unwrap(), r.person).ok()
                     == Some(area)
             });
-        if present && r.kind == Kind::Nickname {
+        if present && presentable(tx, r.speaker, r.person) && r.kind == Kind::Nickname {
             tx.edit::<Names>()?
                 .offers
                 .entry(r.person)

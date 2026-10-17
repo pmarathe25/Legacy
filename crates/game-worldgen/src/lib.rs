@@ -239,8 +239,8 @@ pub fn generate(
             traits,
             name: Some(format!(
                 "{} {}",
-                name(index as u64 + 1000),
-                name(index as u64 + 2000)
+                game_communication::phonetic(seed, index as u64 + 1000),
+                game_communication::phonetic(seed, index as u64 + 2000)
             )),
             beliefs: game_relationships::Beliefs {
                 sharing: belief(30),

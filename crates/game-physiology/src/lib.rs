@@ -1,17 +1,17 @@
 //! Needs, bodily harm, rest, and guardian recovery.
 pub use game_body::{
-    Body, BodyView, Damaged, DeathCause, Died, Kind, Rested, Rules, advance_body, hunger_threshold,
-    load,
+    Body, BodyView, Damaged, DeathCause, Died, Kind, Rates, Rested, Rules, advance_body,
+    hunger_threshold, load,
 };
 use game_core::*;
 use game_sim::*;
 pub use game_soma::{
-    Bodies, Configure, Create, Damage, Express, Heal, ShortenLife, Strain, capable, maximum_health,
-    view,
+    Bodies, Configure, Create, Damage, Express, Heal, MetabolicEnvironment, ShortenLife, Strain,
+    capable, maximum_health, view,
 };
 use serde::{Deserialize, Serialize};
 mod eating;
-pub use eating::ConsumeEdible;
+pub use eating::{ConsumeEdible, Serve};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {

@@ -14,11 +14,27 @@ pub struct Households {
     pub next: Table<PersonId, SimTime>,
     pub dependents: Table<PersonId, PersonId>,
     pub review: Option<ScheduleId>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    pub food_care: Table<PersonId, FoodCare>,
     #[serde(skip)]
     wards: Table<PersonId, Table<PersonId, ()>>,
 }
 impl Resource for Households {
     const KEY: &'static str = "households.kin";
+    fn validate(&self) -> Result<()> {
+        require(
+            self.food_care.iter().all(|(p, i)| i.valid_for(*p)),
+            "invalid food care",
+        )
+    }
+    fn validate_changes(&self, old: &Self) -> Result<()> {
+        require(
+            self.food_care
+                .changed(&old.food_care)
+                .all(|(p, i)| i.valid_for(*p)),
+            "invalid food care",
+        )
+    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct ReviewDependents {
@@ -87,19 +103,13 @@ fn support(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
 }
 fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     let _measurement = game_diagnostics::span("dependent care");
-    let mut children: Vec<_> = tx
+    let children: Vec<_> = tx
         .get::<Households>()?
         .wards
         .get(&person)
         .into_iter()
         .flat_map(|s| s.keys().copied())
         .collect();
-    if let Ok(area) = game_transport::area(tx.get()?, person) {
-        // A departure must not hide nearby dependents later in the iteration.
-        children.sort_by_key(|child| {
-            game_transport::area(tx.get().unwrap(), *child).ok() != Some(area)
-        });
-    }
     for child in children {
         let body = tx.get::<game_physiology::Bodies>()?.people[&child];
         if !body.alive {
@@ -134,14 +144,39 @@ fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             continue;
         };
         if game_transport::area(tx.get()?, child).ok() != Some(area) {
-            if let Some(target) = tx.get::<Households>()?.nursery.get(&child).copied()
-                && !tx.get::<Actions>()?.0.contains_key(&person)
-                && tx
-                    .get::<game_characters::Minds>()?
-                    .people
-                    .get(&person)
-                    .is_none_or(|m| m.plan.is_none())
-                && let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person)
+            continue;
+        }
+        tx.edit::<Households>()?.nursery.insert(child, area);
+        if body.fatigue > tx.get::<game_characters::Minds>()?.rules.rest_fatigue
+            && !tx.get::<Actions>()?.0.contains_key(&child)
+            && !tx
+                .get::<game_characters::Minds>()?
+                .people
+                .contains_key(&child)
+        {
+            let _ = tx.attempt(game_physiology::Rest { person: child });
+        }
+    }
+    if tx.registered::<TendFood>() {
+        tx.call(TendFood { caregiver: person })?;
+    }
+    if !tx.get::<Actions>()?.0.contains_key(&person)
+        && !tx.get::<Households>()?.food_care.contains_key(&person)
+        && tx
+            .get::<game_characters::Minds>()?
+            .people
+            .get(&person)
+            .is_none_or(|m| m.plan.is_none())
+        && let Ok(area) = game_transport::area(tx.get()?, person)
+    {
+        let targets: Vec<_> = tx
+            .get::<Households>()?
+            .dependents_of(person)
+            .filter_map(|child| tx.get::<Households>().ok()?.nursery.get(&child).copied())
+            .filter(|a| *a != area)
+            .collect();
+        for target in targets {
+            if let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person)
                 && let Ok(route) = game_knowledge::route(facts, area, target)
                 && let Some(next) = route.areas.get(1)
             {
@@ -149,70 +184,21 @@ fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
                     person,
                     destination: *next,
                 });
-            }
-            continue;
-        }
-        tx.edit::<Households>()?.nursery.insert(child, area);
-        if body.fatigue > tx.get::<game_characters::Minds>()?.rules.rest_fatigue
-            && !tx.get::<Actions>()?.0.contains_key(&child)
-        {
-            let _ = tx.attempt(game_physiology::Rest { person: child });
-        }
-        if body.hunger < tx.get::<game_characters::Minds>()?.rules.meal_hunger {
-            continue;
-        }
-        let empathy = game_vitality::disposition(tx, person, "empathy");
-        let mut stores: Vec<_> = {
-            let claims = game_property::ClaimCosts::new(tx, person);
-            let objects = tx.get::<game_objects::Objects>()?;
-            let cargo = tx.get::<game_cargo::Cargo>()?;
-            let positions = tx.get::<game_transport::Positions>()?;
-            let known = if let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) {
-                game_food_memory::with_stores(person, facts, objects, |memory| {
-                    memory.among(
-                        cargo
-                            .food_stores(objects)
-                            .into_iter()
-                            .filter(|id| cargo.0[id].area(positions) == Some(area)),
-                    )
-                })
-            } else {
-                vec![]
-            };
-            known
-                .into_iter()
-                .chain(cargo.carried(person))
-                .filter(|id| {
-                    cargo.0.get(id).is_some_and(|i| {
-                        i.area(positions) == Some(area) && objects.has_meal(&i.goods)
-                    }) && claims.cost(*id) < body.hunger as i64 * 2 + empathy / 20
-                })
-                .collect()
-        };
-        // Compare the perceived consequences, then prefer one's own supplies.
-        let claims = game_property::ClaimCosts::new(tx, person);
-        let cargo = tx.get::<game_cargo::Cargo>()?;
-        stores.sort_by_cached_key(|id| {
-            (
-                claims.cost(*id),
-                !matches!(cargo.0[id].custody, game_cargo::Custody::Carried(p) if p == person),
-                *id,
-            )
-        });
-        stores.dedup();
-        for inventory in stores {
-            let result = tx.attempt(game_physiology::Feed {
-                caregiver: person,
-                patient: child,
-                inventory,
-            });
-            game_diagnostics::failure(&result);
-            if result.is_ok() {
                 break;
             }
         }
     }
     Ok(())
+}
+pub use game_provisioning::{FoodCare, TendFood};
+#[derive(Clone, Serialize, Deserialize)]
+pub struct RememberFoodCare {
+    pub caregiver: PersonId,
+    pub intent: Option<FoodCare>,
+}
+impl Request for RememberFoodCare {
+    const KEY: &'static str = "households.food-intent";
+    type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Tend {
@@ -243,6 +229,35 @@ impl Event for Fostered {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("households", 1)?;
     b.resource::<Households>()?;
+    b.request::<RememberFoodCare>(|tx, r| {
+        if let Some(intent) = &r.intent {
+            require(
+                intent.valid_for(r.caregiver) && intent.observed_at <= tx.now(),
+                "invalid care intention",
+            )?;
+            let continuing = tx
+                .get::<Households>()?
+                .food_care
+                .get(&r.caregiver)
+                .is_some_and(|old| old.beneficiary == intent.beneficiary);
+            if !continuing {
+                game_physiology::capable(tx, r.caregiver)?;
+                require(
+                    game_transport::area(tx.get()?, r.caregiver)?
+                        == game_transport::area(tx.get()?, intent.beneficiary)?,
+                    "care need was not observed locally",
+                )?;
+            }
+        }
+        if let Some(intent) = r.intent {
+            tx.edit::<Households>()?
+                .food_care
+                .insert(r.caregiver, intent);
+        } else {
+            tx.edit::<Households>()?.food_care.remove(&r.caregiver);
+        }
+        Ok(())
+    })?;
     b.request::<Foster>(|tx, r| {
         require(r.caregiver != r.child, "cannot care for oneself")?;
         game_physiology::capable(tx, r.caregiver)?;

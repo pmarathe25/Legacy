@@ -98,6 +98,13 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
             .map(|(g, q)| (*g, (*q).min(64)))
             .collect::<Vec<_>>()
     };
+    let custom_checks = tx.has_before::<Trade>();
+    // Each participant can decline before spending attention on possible terms.
+    if !custom_checks
+        && (willing(tx, a, b).is_ok_and(|yes| !yes) || willing(tx, b, a).is_ok_and(|yes| !yes))
+    {
+        return Ok(());
+    }
     let first_offers = offers(first);
     let second_offers = offers(second);
     let budget = (game_vitality::ability(tx, a, "intelligence") / 125).clamp(1, 64) as usize;
@@ -108,23 +115,27 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
             if offered == *requested {
                 continue;
             }
-            for offered_quantity in [1, 2, 4, 8].into_iter().filter(|q| *q <= held) {
-                for requested_quantity in [1, 2, 4, 8].into_iter().filter(|q| *q <= *available) {
+            let costs = [1, 2, 4, 8]
+                .into_iter()
+                .filter(|q| *q <= held)
+                .map(|q| Ok((q, values.cost(tx, offered, q)?)))
+                .collect::<Result<Vec<_>>>()?;
+            let benefits = [1, 2, 4, 8]
+                .into_iter()
+                .filter(|q| *q <= *available)
+                .map(|q| Ok((q, values.benefit(tx, *requested, q)?)))
+                .collect::<Result<Vec<_>>>()?;
+            for (offered_quantity, (cost, attachment)) in costs {
+                for (requested_quantity, benefit) in &benefits {
+                    let gain = benefit - cost - attachment;
                     let r = Trade {
                         first: a,
                         second: b,
                         offered,
                         requested: *requested,
                         offered_quantity,
-                        requested_quantity,
+                        requested_quantity: *requested_quantity,
                     };
-                    let gain = values.gain(
-                        tx,
-                        offered,
-                        offered_quantity,
-                        *requested,
-                        requested_quantity,
-                    )?;
                     if gain > 0 {
                         proposals.push((gain, r));
                     }
@@ -132,7 +143,7 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
             }
         }
     }
-    proposals.sort_by_key(|(gain, r)| {
+    let rank = |(gain, r): &(i64, Trade)| {
         (
             std::cmp::Reverse(*gain),
             r.offered,
@@ -140,8 +151,19 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
             r.offered_quantity,
             r.requested_quantity,
         )
-    });
+    };
+    if proposals.len() > budget {
+        proposals.select_nth_unstable_by_key(budget, rank);
+        proposals.truncate(budget);
+    }
+    proposals.sort_unstable_by_key(rank);
+    let mut recipient = valuation::Offers::new(b, second);
     for (_, r) in proposals.into_iter().take(budget) {
+        // The recipient evaluates their own unchanged snapshot. Failed terms still
+        // consume one proposal slot; settlement rechecks both parties and all hooks.
+        if !custom_checks && recipient.accepts(tx, &r).is_ok_and(|accepts| !accepts) {
+            continue;
+        }
         if tx.attempt(r).is_ok() {
             return Ok(());
         }

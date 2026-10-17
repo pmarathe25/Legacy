@@ -349,7 +349,7 @@ impl Definition {
 }
 pub fn load(store: &mut Store) -> Result<BTreeMap<String, Document<Definition>>> {
     let mut scenarios = BTreeMap::new();
-    for path in store.scan("scenarios")? {
+    for path in store.scan_optional("scenarios")? {
         let doc: Document<Definition> = store.load(&path)?;
         doc.data.validate()?;
         require(

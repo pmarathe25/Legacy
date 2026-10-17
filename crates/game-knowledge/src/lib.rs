@@ -108,7 +108,6 @@ impl Resource for Knowledge {
         Ok(())
     }
 }
-/// Privileged scenario input. Existing personal knowledge cannot be overwritten.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Initialize {
     pub person: PersonId,
@@ -138,7 +137,6 @@ impl Request for Report {
     const KEY: &'static str = "knowledge.report";
     type Response = SimTime;
 }
-/// Spoken information requires both people to be physically together.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Tell {
     pub sender: PersonId,
@@ -210,18 +208,16 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 FactValue::Other(serde_json::json!({"absent_from":area})),
             );
         }
-        let carrier = match tx.get::<game_cargo::Cargo>()?.0[&r.inventory].custody {
+        let container = &tx.get::<game_cargo::Cargo>()?.0[&r.inventory];
+        let carrier = match container.custody {
             game_cargo::Custody::Carried(p) => Some(p),
             _ => None,
         };
-        let container = &tx.get::<game_cargo::Cargo>()?.0[&r.inventory];
-        let capacity = container.capacity;
-        let mass = container.mass;
         let data = StoreLocation {
             area,
             carrier,
-            capacity,
-            mass,
+            capacity: container.capacity,
+            mass: container.mass,
         };
         let goods = container.goods.clone();
         geography::remember(
@@ -244,6 +240,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 == game_transport::area(tx.get()?, r.recipient)?,
             "recipient is elsewhere",
         )?;
+        if game_communication::active(tx) {
+            require(
+                game_communication::understood(tx, r.sender, r.recipient, &r.key, true)?,
+                "report was not understood",
+            )?;
+        }
         tx.call(Report {
             sender: r.sender,
             recipient: r.recipient,

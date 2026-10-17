@@ -293,6 +293,19 @@ fn expressed_disagreements_have_asymmetric_and_learned_consequences() {
         })
         .unwrap();
     }
+    for (speaker, listener, stance) in [(p[0], p[1], 10), (p[1], p[0], -10)] {
+        for concept in ["sharing", "authority"] {
+            h.dispatch(game_relationships::HearOpinion {
+                listener,
+                speaker,
+                via: speaker,
+                concept: concept.into(),
+                stance,
+                coerced: false,
+            })
+            .unwrap();
+        }
+    }
     h.dispatch(Talk {
         person: p[0],
         other: p[1],
@@ -375,4 +388,42 @@ fn bounded_search_rotates_past_unwilling_neighbors_and_protects_the_player() {
         .unwrap()
     );
     assert_eq!(h.get::<SocialLife>().unwrap().meetings[&p[0]].other, last);
+}
+
+#[test]
+fn an_unexpressed_private_belief_cannot_change_another_persons_conversation_response() {
+    let mut impressions = vec![];
+    for hidden in [-100, 100] {
+        let (mut h, _, _, p) = setup();
+        h.dispatch(game_relationships::DefineBeliefs {
+            person: p[0],
+            beliefs: game_relationships::Beliefs {
+                sharing: 10,
+                authority: 10,
+                honesty: 0,
+            },
+        })
+        .unwrap();
+        h.dispatch(game_relationships::DefineBeliefs {
+            person: p[1],
+            beliefs: game_relationships::Beliefs {
+                sharing: hidden,
+                authority: hidden,
+                honesty: 0,
+            },
+        })
+        .unwrap();
+        h.dispatch(Talk {
+            person: p[0],
+            other: p[1],
+        })
+        .unwrap();
+        run(&mut h, SimTime(5 * MINUTE.0));
+        let social = h.get::<game_relationships::Social>().unwrap();
+        impressions.push((
+            social.relationships[&p[0]][&p[1]].clone(),
+            social.values[&p[0]]["fellowship"],
+        ));
+    }
+    assert_eq!(impressions[0], impressions[1]);
 }

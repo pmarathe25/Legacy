@@ -1,0 +1,56 @@
+id = "foraging-fixture"
+version = 1
+[data]
+label = "Foraging fixture"
+fixture = true
+ruler = "ruler"
+physiology = "fixture"
+characters = "fixture"
+environment = "temperate"
+health = "basic"
+autonomy = true
+renewal = true
+
+[[data.areas]]
+key = "village"
+name = "Village"
+[[data.areas]]
+key = "forest"
+name = "Forest"
+[[data.links]]
+from = "village"
+to = "forest"
+duration = 120000
+
+[[data.people]]
+key = "ruler"
+count = 1
+kind = "Mortal"
+area = "village"
+[[data.people]]
+key = "forager"
+count = 1
+kind = "Mortal"
+area = "forest"
+
+[[data.inventories]]
+key = "provisions"
+area = "village"
+capacity = 1000
+owner = "ruler"
+known_to = ["ruler"]
+goods = {grain = 1000}
+[[data.inventories]]
+key = "foraging-pack"
+carried_by = "forager"
+capacity = 100
+owner = "forager"
+known_to = ["forager"]
+
+[[data.patches]]
+key = "food-patch"
+area = "forest"
+object = "grain"
+stock = 1000
+capacity = 1000
+renew = 100

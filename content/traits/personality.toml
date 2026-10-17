@@ -54,3 +54,27 @@ minimum = 0
 maximum = 1000
 default = 500
 weights = { effort = -1 }
+
+[data.traits.altruism]
+name = "Altruism"
+minimum = 0
+maximum = 1000
+default = 500
+
+[data.traits.conviction]
+name = "Conviction"
+minimum = 0
+maximum = 1000
+default = 500
+
+[data.traits.openness]
+name = "Openness"
+minimum = 0
+maximum = 1000
+default = 500
+
+[data.traits.assertiveness]
+name = "Assertiveness"
+minimum = 0
+maximum = 1000
+default = 500

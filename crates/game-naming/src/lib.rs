@@ -3,6 +3,7 @@ use game_core::*;
 use game_names::*;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
+mod choices;
 fn disposition(tx: &Transaction<'_>, p: PersonId, key: &str) -> i64 {
     game_vitality::disposition(tx, p, key)
 }
@@ -15,7 +16,13 @@ fn affection(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> i64 {
 fn first(name: &str) -> &str {
     name.split_whitespace().next().unwrap_or(name)
 }
-fn invent(tx: &Transaction<'_>, chooser: PersonId, child: PersonId) -> Result<String> {
+fn invent(tx: &mut Transaction<'_>, chooser: PersonId, child: PersonId) -> Result<String> {
+    if game_communication::active(tx) {
+        return tx.call(game_communication::Coin {
+            person: chooser,
+            salt: child.0,
+        });
+    }
     let names = tx.get::<Names>()?;
     let known: Vec<_> = names
         .heard
@@ -66,10 +73,22 @@ fn contextual(
     {
         return Ok(());
     }
-    let name = if kind == Kind::Title {
-        format!("{descriptor} {}", first(name))
+    let name = name.clone();
+    let translated = if game_communication::active(tx) {
+        Some(game_communication::render(&tx.call(
+            game_communication::WordFor {
+                person: speaker,
+                concept: format!("descriptor:{descriptor}"),
+            },
+        )?))
     } else {
-        format!("{} {descriptor}", first(name))
+        None
+    };
+    let descriptor = translated.as_deref().unwrap_or(descriptor);
+    let name = if kind == Kind::Title {
+        format!("{descriptor} {}", first(&name))
+    } else {
+        format!("{} {descriptor}", first(&name))
     };
     if name.chars().count() > 80 {
         return Ok(());
@@ -91,23 +110,7 @@ impl Request for Reconsider {
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("naming", 1)?;
-    b.request::<SuggestChild>(|tx, r| {
-        let names = tx.get::<Names>()?;
-        let beloved = names
-            .heard
-            .get(&r.chooser)
-            .into_iter()
-            .flat_map(|row| row.iter())
-            .filter(|(p, _)| **p != r.chooser)
-            .max_by_key(|(p, _)| (affection(tx, r.chooser, **p), std::cmp::Reverse(**p)));
-        if disposition(tx, r.chooser, "empathy") > disposition(tx, r.chooser, "creativity")
-            && let Some((person, name)) = beloved
-            && affection(tx, r.chooser, *person) >= 50
-        {
-            return Ok(first(name).into());
-        }
-        invent(tx, r.chooser, r.child)
-    })?;
+    b.request::<SuggestChild>(choices::suggest)?;
     b.request::<Reconsider>(|tx, r| {
         if !tx.get::<Names>()?.enabled
             || game_physiology::capable(tx, r.person).is_err()
@@ -128,7 +131,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             return Ok(false);
         }
         let names = tx.get::<Names>()?;
-        let identity = &names.identities[&r.person];
+        let identity = names.identities[&r.person].clone();
         let current = identity.changes.last().unwrap();
         let inertia = 500
             + disposition(tx, r.person, "patience") / 2

@@ -69,6 +69,11 @@ pub fn maturation(born: SimTime, at: SimTime, key: &str) -> u64 {
             curve(age, &[(0, 80), (2, 200), (12, 550), (20, 1000)])
         }
         "speed" | "agility" => curve(age, &[(0, 0), (1, 200), (6, 650), (16, 1000)]),
+        "vocalization" | "gesturing" => {
+            curve(age, &[(0, 200), (1, 320), (2, 520), (6, 840), (12, 1000)])
+        }
+        "interpretation" => curve(age, &[(0, 100), (1, 235), (2, 460), (6, 820), (12, 1000)]),
+        "hearing" => curve(age, &[(0, 298), (2, 460), (12, 730), (20, 1000)]),
         "language" => curve(age, &[(0, 0), (1, 150), (2, 400), (6, 800), (12, 1000)]),
         "intelligence" => curve(age, &[(0, 80), (2, 220), (6, 450), (14, 800), (20, 1000)]),
         "foresight" | "resilience" => curve(age, &[(0, 50), (6, 250), (14, 650), (24, 1000)]),

@@ -11,6 +11,9 @@ impl Request for Start {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("campaign", 1)?;
     b.request::<Start>(|tx, _| {
+        if tx.registered::<game_communication::Enable>() {
+            tx.call(game_communication::Enable)?;
+        }
         tx.call(game_agriculture::EnableNatural)?;
         tx.call(game_botany::Enable)?;
         tx.call(game_vitality::Enable)?;

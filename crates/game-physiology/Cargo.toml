@@ -24,5 +24,6 @@ serde.workspace = true
 rayon.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 game-land.workspace = true
 game-skills.workspace = true

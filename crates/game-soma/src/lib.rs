@@ -2,33 +2,56 @@
 use game_body::*;
 use game_core::*;
 use game_packed::Packed;
+use game_storage::Table;
+mod storage;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
 mod development;
 pub use development::{Express, maximum_health};
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub use game_metabolism::Environment as MetabolicEnvironment;
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(from = "storage::Saved")]
 pub struct Bodies {
     pub people: Packed<PersonId, Body>,
     pub rules: Rules,
     pub ticking: bool,
+    active: Table<PersonId, ()>,
+    clock: SimTime,
 }
-type BodyMark = (game_packed::Mark, Rules, bool);
+type BodyMark = (game_packed::Mark, Rules, bool, Table<PersonId, ()>, SimTime);
 impl Resource for Bodies {
     fn allocated_ids(&self) -> Vec<u64> {
         self.people.keys().map(|id| id.0).collect()
     }
     const KEY: &'static str = "physiology.bodies";
     fn validate(&self) -> Result<()> {
+        require(
+            self.active.len() == self.people.values().filter(|b| b.alive).count()
+                && self
+                    .active
+                    .keys()
+                    .all(|p| self.people.get(p).is_some_and(|b| b.alive)),
+            "invalid living index",
+        )?;
         self.validate_rows(self.people.rows().map(|(_, b)| b))
     }
     fn checkpoint(&mut self) -> Checkpoint {
-        Box::new((self.people.begin(), self.rules.clone(), self.ticking))
+        Box::new((
+            self.people.begin(),
+            self.rules.clone(),
+            self.ticking,
+            self.active.clone(),
+            self.clock,
+        ))
     }
     fn restore(&mut self, checkpoint: Checkpoint) {
-        let (mark, rules, ticking) = *checkpoint.downcast::<BodyMark>().expect("body checkpoint");
+        let (mark, rules, ticking, active, clock) =
+            *checkpoint.downcast::<BodyMark>().expect("body checkpoint");
         self.people.rollback(mark);
         self.rules = rules;
         self.ticking = ticking;
+        self.active = active;
+        self.clock = clock;
     }
     fn commit(&mut self, checkpoint: Checkpoint) {
         self.people.commit(
@@ -81,10 +104,17 @@ impl Request for Damage {
     const KEY: &'static str = "physiology.damage";
     type Response = ();
 }
+fn body_mut<'a>(tx: &'a mut Transaction<'_>, person: PersonId) -> Result<&'a mut Body> {
+    tx.edit::<Bodies>()?
+        .people
+        .get_mut(&person)
+        .ok_or_else(|| Error::Missing("body".into()))
+}
 fn death(tx: &mut Transaction<'_>, person: PersonId, injury: bool) -> Result<()> {
     let body = &tx.get::<Bodies>()?.people[&person];
     if body.kind == Kind::Mortal && body.alive && body.health == 0 {
         tx.edit::<Bodies>()?.people.get_mut(&person).unwrap().alive = false;
+        tx.edit::<Bodies>()?.active.remove(&person);
         tx.cancel_action(person)?;
         if tx.registered::<game_nutrition::Deactivate>() {
             tx.call(game_nutrition::Deactivate { person })?;
@@ -194,6 +224,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         } else {
             None
         };
+        tx.edit::<Bodies>()?.active.insert(person, ());
         tx.edit::<Bodies>()?.people.insert(
             person,
             Body {
@@ -205,6 +236,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 health: max_health,
                 maximum_health: None,
                 fatigue_fraction: 0,
+                hunger_fraction: 0,
+                recovery_fraction: 0,
+                metabolic_rates: Default::default(),
                 resting: false,
                 last: now,
                 life_limit,
@@ -214,11 +248,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Heal>(|tx, r| {
         let max = maximum_health(tx.get()?, r.person);
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
+        let p = body_mut(tx, r.person)?;
         require(p.alive, "cannot revive the dead")?;
         p.health = p.health.saturating_add(r.amount).min(max);
         Ok(())
@@ -226,21 +256,13 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Strain>(|tx, r| {
         let amount = r.amount.saturating_mul(1000)
             / game_vitality::factor(game_vitality::ability(tx, r.person, "endurance"));
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
+        let p = body_mut(tx, r.person)?;
         p.fatigue = p.fatigue.saturating_add(amount);
         Ok(())
     })?;
     b.request::<ShortenLife>(|tx, r| {
         let now = tx.now();
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
+        let p = body_mut(tx, r.person)?;
         if let Some(limit) = p.life_limit {
             p.life_limit = Some(SimTime(limit.0.saturating_sub(r.duration.0)));
             if p.life_limit.is_some_and(|limit| limit <= now) {
@@ -253,11 +275,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let amount = (r.amount.saturating_mul(1000)
             / game_vitality::factor(game_vitality::ability(tx, r.person, "robustness")))
         .max(u64::from(r.amount > 0));
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
+        let p = body_mut(tx, r.person)?;
         p.health = p.health.saturating_sub(amount);
         tx.emit(
             Damaged {
@@ -274,19 +292,40 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let at = tx.now();
         let traits = tx.get::<game_traits::Traits>().ok().cloned();
         let vitality = tx.get::<game_vitality::Vitality>().ok().cloned();
+        let mut environment = std::collections::BTreeMap::new();
+        if tx.registered::<MetabolicEnvironment>() {
+            let people: Vec<_> = tx.get::<Bodies>()?.living().map(|(p, _)| *p).collect();
+            for person in people {
+                environment.insert(person, tx.call(MetabolicEnvironment { person })?);
+            }
+        }
         tx.edit_with_compute::<Bodies, _>(|state, pool| {
-            state.people.update(pool, |p, body| {
-                *body =
-                    development::advance(body, &rules, at, *p, traits.as_ref(), vitality.as_ref())
-            })
+            let update = |p: &PersonId, body: &mut Body| {
+                *body = development::advance(
+                    body,
+                    &rules,
+                    at,
+                    *p,
+                    traits.as_ref(),
+                    vitality.as_ref(),
+                    environment.get(p).copied().unwrap_or_default(),
+                )
+            };
+            if state.active.len() < state.people.len() / 2 {
+                for id in state.active.keys() {
+                    update(id, state.people.get_mut(id).unwrap());
+                }
+            } else {
+                state.people.update(pool, update);
+            }
+            state.clock = at;
         })?;
         development::condition(tx)?;
         // Only deaths and incapacitated guardians require cross-feature effects.
         let mut affected: Vec<_> = tx
             .get::<Bodies>()?
-            .people
-            .rows()
-            .filter(|(_, p)| p.alive && p.health == 0)
+            .living()
+            .filter(|(_, p)| p.health == 0)
             .map(|(id, _)| *id)
             .collect();
         affected.sort_unstable();
@@ -301,22 +340,17 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<SetResting>(|tx, r| {
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
+        let p = body_mut(tx, r.person)?;
         p.resting = r.resting;
         Ok(())
     })?;
     b.request::<Nourish>(|tx, r| {
         let max = maximum_health(tx.get()?, r.person);
-        let p = tx
-            .edit::<Bodies>()?
-            .people
-            .get_mut(&r.person)
-            .ok_or_else(|| Error::Missing("body".into()))?;
+        let p = body_mut(tx, r.person)?;
         require(p.alive, "cannot feed a dead body")?;
+        if r.relief > p.hunger {
+            p.hunger_fraction = 0;
+        }
         p.hunger = p.hunger.saturating_sub(r.relief);
         p.health = if r.health >= 0 {
             p.health.saturating_add(r.health as u64).min(max)
@@ -344,6 +378,8 @@ impl Bodies {
             require(
                 p.health <= p.maximum(&self.rules)
                     && p.fatigue_fraction < 1000
+                    && p.hunger_fraction < 1000
+                    && p.recovery_fraction < 1000
                     && (p.kind == Kind::Mortal || p.alive),
                 "invalid body",
             )?;

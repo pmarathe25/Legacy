@@ -15,6 +15,7 @@ impl Pack {
         ));
         let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
         copy(&source, &root);
+        copy(&source.join("../tools/fixtures/content"), &root);
         Self { root }
     }
     pub fn edit(&self, path: &str, from: &str, to: &str) {

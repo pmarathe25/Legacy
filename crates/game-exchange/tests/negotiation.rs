@@ -352,3 +352,60 @@ fn autonomous_offers_revalue_stock_and_personal_acceptance_at_the_next_encounter
         6
     );
 }
+
+#[test]
+fn offer_shortcuts_preserve_refusals_and_allow_custom_trade_checks() {
+    let (base, a, b, first, second) = setup();
+    let saved = base.save().unwrap();
+    for custom in [false, true] {
+        let mut build = builder();
+        build
+            .request::<Meet>(|tx, r| {
+                tx.emit(
+                    game_social_life::Encounter {
+                        first: r.0,
+                        second: r.1,
+                    },
+                    vec![r.0, r.1],
+                )
+            })
+            .unwrap();
+        if custom {
+            build
+                .before::<game_exchange::Trade>("test.reconsider", |tx, r| {
+                    tx.call(game_relationships::SetRelationship {
+                        observer: r.first,
+                        other: r.second,
+                        relationship: Default::default(),
+                    })
+                })
+                .unwrap();
+        }
+        let mut h = build.load(&saved, 1).unwrap();
+        for (inventory, good) in [(first, game_cargo::TIMBER), (second, game_cargo::FOOD)] {
+            h.dispatch(game_cargo::Deposit {
+                inventory,
+                good,
+                quantity: 100,
+            })
+            .unwrap();
+        }
+        h.dispatch(game_relationships::SetRelationship {
+            observer: a,
+            other: b,
+            relationship: game_relationships::Relationship {
+                fear: 100,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        h.dispatch(game_exchange::Enable).unwrap();
+        h.dispatch(Meet(a, b)).unwrap();
+        assert_eq!(
+            h.get::<game_exchange::Exchange>().unwrap().completed,
+            u64::from(custom)
+        );
+        let held = h.get::<game_cargo::Cargo>().unwrap().0[&first].amount(game_cargo::FOOD);
+        assert_eq!(held, if custom { 8 } else { 0 });
+    }
+}

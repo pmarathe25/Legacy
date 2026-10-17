@@ -67,7 +67,11 @@ pub struct Objects {
     pub items: BTreeMap<String, Object>,
     pub stamps: Vec<Stamp>,
     #[serde(skip)]
-    ids: BTreeMap<GoodId, String>,
+    ids: rustc_hash::FxHashMap<GoodId, usize>,
+    #[serde(skip)]
+    indexed: Vec<Object>,
+    #[serde(skip)]
+    keys: rustc_hash::FxHashMap<String, GoodId>,
     #[serde(skip)]
     foods: Arc<BTreeMap<GoodId, Food>>,
     #[serde(skip)]
@@ -104,10 +108,15 @@ impl Resource for Objects {
         }
         require(
             self.ids.len() == self.items.len()
+                && self.indexed.len() == self.items.len()
+                && self.keys.len() == self.items.len()
                 && self.masses.len() == self.items.len()
                 && self.foods.len() == self.items.values().filter(|o| o.food.is_some()).count()
                 && self.items.iter().all(|(key, o)| {
-                    self.ids.get(&o.id) == Some(key)
+                    self.ids
+                        .get(&o.id)
+                        .is_some_and(|slot| self.indexed.get(*slot) == Some(o))
+                        && self.keys.get(key) == Some(&o.id)
                         && self.masses.get(&o.id) == Some(&o.mass)
                         && self.foods.get(&o.id) == o.food.as_ref()
                 }),
@@ -133,10 +142,17 @@ impl From<SavedObjects> for Objects {
 }
 impl Objects {
     fn rebuild(&mut self) {
+        self.indexed = self.items.values().cloned().collect();
         self.ids = self
+            .indexed
+            .iter()
+            .enumerate()
+            .map(|(slot, o)| (o.id, slot))
+            .collect();
+        self.keys = self
             .items
             .iter()
-            .map(|(key, o)| (o.id, key.clone()))
+            .map(|(key, o)| (key.clone(), o.id))
             .collect();
         self.foods = Arc::new(
             self.items
@@ -152,13 +168,13 @@ impl Objects {
     pub fn by_id(&self, id: GoodId) -> Result<&Object> {
         self.ids
             .get(&id)
-            .and_then(|key| self.items.get(key))
+            .map(|slot| &self.indexed[*slot])
             .ok_or_else(|| Error::InvalidConfiguration(format!("unknown object ID {}", id.0)))
     }
     pub fn resolve(&self, key: &str) -> Result<GoodId> {
-        self.items
+        self.keys
             .get(key)
-            .map(|o| o.id)
+            .copied()
             .ok_or_else(|| Error::InvalidConfiguration(format!("unknown object {key}")))
     }
     pub fn mass(&self, id: GoodId, quantity: u64) -> Result<u64> {

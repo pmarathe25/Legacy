@@ -2,6 +2,28 @@
 
 Run release benchmarks from the repository root. Each process checks its resulting records; timings alone do not constitute a pass.
 
+## Profile-guided history builds
+
+`python3 tools/performance/pgo.py --training target/history/training.json --output target/history/pgo-build`
+builds an instrumented history executable, runs the supplied workloads, merges their profiles, and builds an optimized executable at `target/history/pgo-build/game-history`. Install the compiler's matching profiler tools with `rustup component add llvm-tools-preview` first. The output directory must be new. Start without `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`.
+
+The training file contains ordinary history-tool arguments. Paths are relative to that file. Include varied populations and habitats; for example, a continuation of a checkpoint at day 18,250 and a new founding population:
+
+```json
+{
+  "runs": [
+    {"arguments": ["--resume", "source", "--days", "18615", "--sample-days", "365000", "--checkpoint-days", "365000", "--final-save", "false"]},
+    {"arguments": ["--seed", "7", "--content", "../../content", "--mod", "../../tools/history/profiles/warm-32", "--days", "1825", "--sample-days", "365000", "--checkpoint-days", "365000", "--final-save", "false"]}
+  ]
+}
+```
+
+Training runs write only to tool-managed subdirectories. Logs, profiles, and checkpoints remain under the selected output directory. Metadata records the compiler, source fingerprint, training arguments, profile hash, and executable hash. Source changes during training or compilation reject the build. Rebuild profiles after changing mechanics or representative content.
+
+Training timings are not benchmark results. Compare the frozen executable against an ordinary release build with [the history replay driver](../history/README.md), using longer continuations and workloads outside the training set. Require matching world, ledger, event, and individual hashes before using an optimizer in a continuing study. Gains depend on the workload and compiler; profile-guided compilation changes no simulation rules.
+
+`python3 -m unittest discover -s tools/performance/tests -p 'test_*.py'` checks training-plan paths, output ownership, and source fingerprints.
+
 ```sh
 python3 tools/performance/run.py
 cargo bench -p game-performance --bench ledger --locked --offline

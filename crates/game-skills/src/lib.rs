@@ -4,11 +4,13 @@ use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+mod credits;
+pub use credits::Credits;
 pub type Levels = Table<Arc<str>, u64>;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Skills {
     pub levels: Table<PersonId, Levels>,
-    pub credited: Table<u64, ()>,
+    pub credited: Credits,
 }
 impl Resource for Skills {
     const KEY: &'static str = "skills.practice";

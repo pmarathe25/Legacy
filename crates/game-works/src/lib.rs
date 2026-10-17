@@ -3,6 +3,8 @@ use game_core::*;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
+mod literature;
+pub use literature::{Composition, Genre, Present, Read, WorkView, view};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Work {
     pub creator: PersonId,
@@ -12,6 +14,10 @@ pub struct Work {
     pub activity: String,
     pub evidence: Vec<(String, game_knowledge::Fact)>,
     pub audience: Table<PersonId, i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub composition: Option<Composition>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    pub presented: Table<PersonId, ()>,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Works {
@@ -21,6 +27,27 @@ pub struct Works {
 }
 impl Resource for Works {
     const KEY: &'static str = "works.creations";
+    fn validate(&self) -> Result<()> {
+        require(
+            self.pieces.values().all(|w| {
+                !w.title.is_empty()
+                    && w.composition.as_ref().is_none_or(|c| {
+                        !c.sounds.is_empty()
+                            && c.gloss.len() == c.sounds.len()
+                            && c.sounds.iter().all(|s| {
+                                !s.is_empty()
+                                    && s.iter().all(|p| {
+                                        usize::from(*p) < game_communication::PHONEMES.len()
+                                    })
+                            })
+                            && c.line_ends.last() == Some(&c.sounds.len())
+                            && c.line_ends.windows(2).all(|p| p[0] < p[1])
+                            && (c.notes.is_empty() || c.notes.len() == c.sounds.len())
+                    })
+            }),
+            "invalid composition",
+        )
+    }
     fn allocated_ids(&self) -> Vec<u64> {
         self.pieces.keys().copied().collect()
     }
@@ -44,6 +71,7 @@ impl Event for Created {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("works", 1)?;
     b.resource::<Works>()?;
+    literature::register(b)?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Works>()?.enabled = true;
         Ok(())
@@ -80,7 +108,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         if evidence.is_empty() {
             return Ok(());
         }
-        let title = format!("{}: {}", activity.name, evidence[0].0);
+        let composition = literature::compose(tx, e.person, &activity, &evidence)?;
+        let title = composition
+            .as_ref()
+            .map(|c| game_communication::render(&c.sounds[0]))
+            .unwrap_or_else(|| format!("{}: {}", activity.name, evidence[0].0));
         let mut audience = Table::new();
         let peers: Vec<_> = tx
             .get::<game_social_life::SocialLife>()?
@@ -93,6 +125,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .copied()
             .collect();
         for p in peers {
+            if composition
+                .as_ref()
+                .is_some_and(|c| c.item.is_some() || !literature::understands(tx, e.person, p, c))
+            {
+                continue;
+            }
             let receptivity = game_vitality::disposition(tx, p, "contemplation");
             let honesty = tx
                 .get::<game_relationships::Social>()?
@@ -122,6 +160,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 activity: e.activity.clone(),
                 evidence,
                 audience,
+                composition,
+                presented: Table::new(),
             },
         );
         tx.edit::<Works>()?.next.insert(e.person, next);

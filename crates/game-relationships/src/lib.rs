@@ -4,12 +4,21 @@ use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+mod opinions;
+pub use opinions::{HearOpinion, Heard, Opinion, Regard, ReviseOpinion};
+fn zero(value: &i32) -> bool {
+    *value == 0
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Relationship {
     pub trust: i32,
     pub affection: i32,
     pub fear: i32,
     pub grievance: i32,
+    #[serde(default, skip_serializing_if = "zero")]
+    pub respect: i32,
+    #[serde(default, skip_serializing_if = "zero")]
+    pub admiration: i32,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Beliefs {
@@ -23,7 +32,9 @@ impl Relationship {
             (-100..=100).contains(&self.trust)
                 && (-100..=100).contains(&self.affection)
                 && (0..=100).contains(&self.fear)
-                && (0..=100).contains(&self.grievance),
+                && (0..=100).contains(&self.grievance)
+                && (-100..=100).contains(&self.respect)
+                && (0..=100).contains(&self.admiration),
             "invalid relationship",
         )
     }
@@ -74,10 +85,13 @@ pub struct Social {
     pub relationships: Table<PersonId, Table<PersonId, Relationship>>,
     pub beliefs: Table<PersonId, Beliefs>,
     pub values: Table<PersonId, Table<Arc<str>, i32>>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    pub heard: Heard,
 }
 impl Resource for Social {
     const KEY: &'static str = "relationships.social";
     fn validate(&self) -> Result<()> {
+        opinions::validate(&self.heard, &Heard::new())?;
         for (person, links) in &self.relationships {
             for (other, relation) in links {
                 require(person != other, "self relationship")?;
@@ -90,6 +104,7 @@ impl Resource for Social {
         Ok(())
     }
     fn validate_changes(&self, old: &Self) -> Result<()> {
+        opinions::validate(&self.heard, &old.heard)?;
         let empty_links = Table::new();
         for (person, links, previous) in self.relationships.changed_pairs(&old.relationships) {
             for (other, relation) in links.changed(previous.unwrap_or(&empty_links)) {
@@ -162,6 +177,7 @@ impl Request for DefineBeliefs {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("relationships", 1)?;
     b.resource::<Social>()?;
+    opinions::register(b)?;
     b.request::<SufferForce>(|tx, r| {
         require(
             r.observer != r.actor && r.harm > 0,
@@ -211,18 +227,24 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Converse>(|tx, r| {
         require(r.observer != r.other, "self conversation")?;
-        let rel = tx
-            .edit::<Social>()?
+        let previous = tx
+            .get::<Social>()?
             .relationships
-            .entry(r.observer)
-            .or_default()
-            .entry(r.other)
-            .or_default();
+            .get(&r.observer)
+            .and_then(|row| row.get(&r.other));
+        let mut rel = previous.cloned().unwrap_or_default();
         let warmth = r.warmth.clamp(-5, 5);
         rel.affection = rel.affection.saturating_add(warmth).clamp(-100, 100);
         rel.trust = rel.trust.saturating_add(warmth.signum()).clamp(-100, 100);
         if warmth < 0 {
             rel.grievance = (rel.grievance + 1).min(100);
+        }
+        if previous != Some(&rel) {
+            tx.edit::<Social>()?
+                .relationships
+                .entry(r.observer)
+                .or_default()
+                .insert(r.other, rel);
         }
         Ok(())
     })?;
@@ -253,17 +275,24 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<LearnValue>(|tx, r| {
         require(!r.concept.is_empty(), "value needs a concept")?;
-        let value = tx
-            .edit::<Social>()?
+        let previous = tx
+            .get::<Social>()?
             .values
-            .entry(r.person)
-            .or_default()
-            .entry(r.concept.into())
-            .or_default();
-        *value = value
+            .get(&r.person)
+            .and_then(|row| row.get(r.concept.as_str()))
+            .copied();
+        let value = previous
+            .unwrap_or(0)
             .saturating_add(r.outcome.clamp(-5, 5))
             .clamp(-100, 100);
-        Ok(*value)
+        if previous != Some(value) {
+            tx.edit::<Social>()?
+                .values
+                .entry(r.person)
+                .or_default()
+                .insert(r.concept.into(), value);
+        }
+        Ok(value)
     })
 }
 #[cfg(test)]

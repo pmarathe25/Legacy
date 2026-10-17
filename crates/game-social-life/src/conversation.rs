@@ -64,7 +64,6 @@ fn willing(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> bool {
         > body.hunger.min(10000) as i64 * 2 + body.fatigue.min(10000) as i64 * 3
 }
 fn share(tx: &mut Transaction<'_>, sender: PersonId, recipient: PersonId) -> Result<()> {
-    // Rotate through the speaker's memories without consulting the listener's private knowledge.
     let knowledge = tx.get::<game_knowledge::Knowledge>()?;
     let count = tx.get::<SocialLife>()?.people[&sender].encounters;
     let key = knowledge
@@ -78,21 +77,17 @@ fn share(tx: &mut Transaction<'_>, sender: PersonId, recipient: PersonId) -> Res
                 .map(|(key, _)| key.to_string())
         });
     if let Some(key) = key {
-        tx.call(game_knowledge::Tell {
+        let _ = tx.attempt(game_knowledge::Tell {
             sender,
             recipient,
             key,
-        })?;
+        });
     }
     Ok(())
 }
 fn warmth(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> i32 {
     let social = tx.get::<game_relationships::Social>().unwrap();
-    let own = social.beliefs.get(&person).cloned().unwrap_or_default();
-    let theirs = social.beliefs.get(&other).cloned().unwrap_or_default();
-    // Differences in expressed attitudes can grate; empathy moderates this person's response.
-    let difference = (i64::from(own.sharing) - i64::from(theirs.sharing)).abs()
-        + (i64::from(own.authority) - i64::from(theirs.authority)).abs();
+    let difference = social.apparent_difference(person, other, &["sharing", "authority"]);
     (2 + disposition(tx, person, "empathy") / 250 - difference.min(60) / 10).clamp(-5, 5) as i32
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
@@ -189,6 +184,12 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.request::<Finish>(|tx, r| {
         let now = tx.now();
         let retry_at = now.after(tx.get::<SocialLife>()?.rules.retry)?;
+        if game_communication::active(tx) {
+            tx.call(game_communication::Practice {
+                first: r.first,
+                second: r.second,
+            })?;
+        }
         for (person, other) in [(r.first, r.second), (r.second, r.first)] {
             game_physiology::capable(tx, person)?;
             let warmth = warmth(tx, person, other);

@@ -146,6 +146,9 @@ impl World {
                 life_limit: None,
                 maximum_health: None,
                 fatigue_fraction: 0,
+                hunger_fraction: 0,
+                recovery_fraction: 0,
+                metabolic_rates: Default::default(),
             },
             mind: Mind::default(),
             facts: std::array::from_fn(|i| Fact {

@@ -67,10 +67,12 @@ fn the_existing_executable_discovers_added_scenario_files() {
     let root = std::env::temp_dir().join(format!("legacy-cli-mod-{}", std::process::id()));
     std::fs::create_dir_all(root.join("scenarios")).unwrap();
     let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
-    let source = std::fs::read_to_string(base.join("scenarios/kernel-fixture.toml"))
-        .unwrap()
-        .replace("id = \"kernel-fixture\"", "id = \"new-start\"")
-        .replace("Kernel fixture", "New start");
+    let source = std::fs::read_to_string(
+        base.join("../tools/fixtures/content/scenarios/kernel-fixture.toml"),
+    )
+    .unwrap()
+    .replace("id = \"kernel-fixture\"", "id = \"new-start\"")
+    .replace("Kernel fixture", "New start");
     std::fs::write(root.join("scenarios/new-start.toml"), source).unwrap();
     let output = Process::new(env!("CARGO_BIN_EXE_game-cli"))
         .args([

@@ -483,14 +483,10 @@ fn default_history_develops_livelihoods_interests_and_unprescribed_social_arrang
     for (id, institution) in &institutions.groups {
         assert!(institution.name.ends_with("Hearth") || institution.name.ends_with("Company"));
         assert!(institution.offices.is_empty());
-        // Departures may retire every old access practice, while preserving the historical group.
+        // Recorded practices need not remain current permission: custodians can withdraw consent.
+        // Departures retire the departing person's old practices, preserving the historical group.
         for rule in &institution.rules {
             for person in &rule.users {
-                assert!(
-                    host.get::<game_property::Property>()
-                        .unwrap()
-                        .allowed(*person, rule.inventory)
-                );
                 assert_eq!(
                     host.get::<game_communities::Communities>().unwrap().members[person],
                     *id
@@ -544,5 +540,37 @@ fn history_uses_the_same_live_rules_with_zero_duration_and_worker_variations() {
             .get::<game_openings::Opening>()
             .unwrap()
             .definition
+    );
+}
+
+#[test]
+fn older_save_manifests_gain_only_empty_new_owners() {
+    let sim = game_assembly::Simulation::new("kernel-fixture", 7, 1).unwrap();
+    let mut old: serde_json::Value = serde_json::from_str(&sim.save().unwrap()).unwrap();
+    old["plugins"]
+        .as_object_mut()
+        .unwrap()
+        .remove("communication");
+    old["plugins"].as_object_mut().unwrap().remove("discourse");
+    old["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("communication.experience");
+    let loaded = game_assembly::Simulation::load(&old.to_string(), 4).unwrap();
+    assert_eq!(
+        loaded
+            .debug_host()
+            .get::<game_communication::Communication>()
+            .unwrap(),
+        &Default::default()
+    );
+    assert_eq!(loaded.observe().unwrap(), sim.observe().unwrap());
+    let save = loaded.save().unwrap();
+    assert_eq!(
+        game_assembly::Simulation::load(&save, 1)
+            .unwrap()
+            .save()
+            .unwrap(),
+        save
     );
 }

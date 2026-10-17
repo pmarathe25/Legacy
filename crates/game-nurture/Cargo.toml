@@ -1,0 +1,24 @@
+[package]
+name = "game-nurture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-communication.workspace = true
+game-nutrition.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-households.workspace = true
+game-provisioning.workspace = true
+game-characters.workspace = true
+game-physiology.workspace = true
+game-vitality.workspace = true
+game-traits.workspace = true
+game-relationships.workspace = true
+game-cargo.workspace = true
+game-objects.workspace = true
+game-property.workspace = true
+game-knowledge.workspace = true
+game-transport.workspace = true
+game-lineage.workspace = true
+serde.workspace = true

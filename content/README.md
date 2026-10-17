@@ -21,7 +21,7 @@ Legacy uses the second option. A feature's tests compose only its required crate
 | `livelihoods/` | Personal stock targets, retry intervals, trait affinities, and learned concepts | `game-livelihoods` |
 | `pastimes/` | Activities, consumed inputs, reusable possessions, time, interests, and skills | `game-pastimes` |
 | `workshop/` | Recipe inputs, output, quantities, duration, practiced skill | `game-workshop` |
-| `scenarios/` | Areas with optional climates, people with names/traits/beliefs/values, directed bonds, inventories, permissions, plots, deposits, institutions, optional encounters and reincarnation fixtures | `game-scenarios`, bound by `game-openings` |
+| `tools/fixtures/content/scenarios/` | Areas with optional climates, people with names/traits/beliefs/values, directed bonds, inventories, permissions, plots, deposits, institutions, optional encounters and reincarnation fixtures | `game-scenarios`, bound by `game-openings` |
 | `physiology/`, `characters/`, `health/`, `environment/`, `invocation/`, `social-life/` | Named rule profiles selected by scenarios | Respective feature crates |
 | `worldgen/` | Population, natural areas, biome resources, initial individual variation, naming fragments, and live-history duration | `game-worldgen`, run by `game-openings` |
 | `manifest.toml` | Default scenario selection | `game-scenarios` |
@@ -49,7 +49,7 @@ A new trait can weight `need`, `goal`, `value`, `effort`, or `risk`. Scenario pe
 
 Copy a scenario file, change its document ID, and edit its data to add a start. `fixture = false` makes it eligible for seeded `--scenario random` selection. Authored shipped starts remain noncanonical fixtures; the default `generated` start uses simulated history. `foraging-fixture` supplies an autonomous person with an empty carried container and a local edible patch; meals require real gathering and consumption. A group with `count > 1` creates keys such as `citizen-1`; permission selectors accept an exact key, a group key, or `"*"`.
 
-A scenario's `characters` key selects a profile such as `survival`. Its review and retry intervals, hunger and rest thresholds, interruptible action kinds, switching margin, gathering quantity, and travel effort can be changed in `characters/survival.toml` without rebuilding. Existing saves retain the resolved rules.
+A scenario's `characters` key selects a profile such as `default`. Its review and retry intervals, hunger and rest thresholds, interruptible action kinds, switching margin, gathering quantity, and travel effort can be changed in `characters/default.toml` without rebuilding. Existing saves retain the resolved rules.
 
 ## Generated starts and history
 
@@ -179,3 +179,7 @@ Food values are simulation units per portion: `nutrients`, `shelf_days`, and `ef
 `warmth`, `weatherproof`, `shelter-insulation`, `hearth-heat`, and `fuel-hours` tags compose clothing, built indoor areas, and finite fuel. Heavy coats can overheat their wearers. A cellar uses its outdoor annual mean climate, rather than gaining refrigeration from a magical tag. Room fires consume real wood or charcoal and eventually go out. Food storage, clothing, and shelter decisions still use the prototype decision scheduling described in the autonomy plan.
 
 No good is designated money. Local offers can propose unequal quantities; actors learn resale expectations from completed exchanges they personally experienced. Particular objects can also acquire sentimental identity and value. These identities refer to real cargo units, not extra stock or a permission that makes the object untouchable.
+
+The generated game uses `physiology/default.toml`, `characters/default.toml`, and `social-life/default.toml` for ordinary human-scale timing and needs. Experimental physical overlays belong under `tools/history/profiles/`.
+
+Accelerated physiology and decision profiles, authored test starts, and fixture invocation costs live in `tools/fixtures/content/`. Production content contains one normal rule profile per feature. `Store::fixtures()` or an explicit overlay opts into the developer pack.

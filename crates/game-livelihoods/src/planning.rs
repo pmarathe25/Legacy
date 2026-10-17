@@ -70,7 +70,7 @@ impl Search<'_> {
             if !trial.fits() {
                 continue;
             }
-            trial.cost = trial.cost.checked_add(5 * MINUTE.0)?;
+            trial.cost = trial.cost.checked_add(game_ecology::GATHERING_TIME.0)?;
             best = Some(trial);
             break;
         }
@@ -163,11 +163,19 @@ pub(super) fn choose(
         .get::<game_relationships::Social>()
         .ok()
         .and_then(|s| s.values.get(&person));
+    let objects = tx.get::<game_objects::Objects>()?;
+    let mut eligible = Vec::new();
+    for (index, goal) in rules.goals.iter().enumerate() {
+        let good = objects.resolve(&goal.object)?;
+        if totals.get(&good).copied().unwrap_or(0) < goal.quantity
+            && inventories.iter().any(|id| possible[id].contains(&good))
+        {
+            eligible.push((index, goal));
+        }
+    }
     let mut affinities = BTreeMap::new();
-    let mut goals: Vec<_> = rules
-        .goals
-        .iter()
-        .enumerate()
+    let mut goals: Vec<_> = eligible
+        .into_iter()
         .map(|(index, g)| {
             let affinity = *affinities
                 .entry(g.affinity.as_str())
@@ -183,7 +191,7 @@ pub(super) fn choose(
             (std::cmp::Reverse(score), index, g)
         })
         .collect();
-    goals.sort_by_key(|(score, index, _)| (*score, *index));
+    goals.sort_unstable_by_key(|(score, index, _)| (*score, *index));
     let intelligence = game_vitality::ability(tx, person, "intelligence");
     for (_, _, goal) in goals {
         let good = tx.get::<game_objects::Objects>()?.resolve(&goal.object)?;

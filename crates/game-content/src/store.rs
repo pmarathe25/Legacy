@@ -32,6 +32,14 @@ impl Store {
         };
         Self::new(root)
     }
+    /// Explicit developer fixtures extend production content without overriding its rules.
+    pub fn fixtures() -> Self {
+        let mut store = Self::standard();
+        store
+            .roots
+            .push(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tools/fixtures/content"));
+        store
+    }
     /// Later packs override matching paths; new filenames extend a namespace.
     pub fn overlay(&mut self, root: impl Into<PathBuf>) -> Result<(), Error> {
         if !self.files.is_empty() {
@@ -43,6 +51,16 @@ impl Store {
         Ok(())
     }
     pub fn scan(&self, namespace: &str) -> Result<Vec<String>, Error> {
+        let found = self.scan_optional(namespace)?;
+        if found.is_empty() {
+            return Err(Error::InvalidConfiguration(format!(
+                "no content in {namespace}"
+            )));
+        }
+        Ok(found)
+    }
+    /// Optional namespaces, such as authored starting scenarios, may be absent.
+    pub fn scan_optional(&self, namespace: &str) -> Result<Vec<String>, Error> {
         relative(namespace)?;
         let mut found = BTreeMap::new();
         for root in &self.roots {
@@ -63,11 +81,6 @@ impl Store {
                     found.insert(format!("{namespace}/{name}"), ());
                 }
             }
-        }
-        if found.is_empty() {
-            return Err(Error::InvalidConfiguration(format!(
-                "no content in {namespace}"
-            )));
         }
         Ok(found.into_keys().collect())
     }

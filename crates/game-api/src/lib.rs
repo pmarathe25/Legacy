@@ -11,6 +11,13 @@ pub enum Command {
         inventory: InventoryId,
     },
     Rest,
+    ReadWork {
+        work: u64,
+    },
+    PresentWork {
+        work: u64,
+        listener: PersonId,
+    },
     Observe {
         inventory: InventoryId,
     },
@@ -130,6 +137,10 @@ pub struct PlayerView {
     pub neighbors: Vec<game_social_life::Neighbor>,
     pub communities: Vec<game_communities::CommunityView>,
     pub pastimes: BTreeMap<String, u64>,
+    #[serde(default)]
+    pub lexicon: BTreeMap<String, Vec<game_communication::Association>>,
+    #[serde(default)]
+    pub works: Vec<game_works::WorkView>,
     pub events: Vec<PlayerEvent>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

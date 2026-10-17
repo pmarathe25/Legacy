@@ -1,5 +1,6 @@
 //! Local, voluntary care composes personal concern with the existing treatment owner.
 use game_core::*;
+pub use game_nurture::Assist;
 mod fostering;
 use game_sim::*;
 use game_storage::Table;
@@ -96,7 +97,14 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
         return Ok(false);
     };
     let empathy = game_vitality::disposition(tx, person, "empathy");
+    let altruism = game_vitality::disposition(tx, person, "altruism");
     let social = tx.get::<game_relationships::Social>()?;
+    let duty = social
+        .values
+        .get(&person)
+        .and_then(|v| v.get("care"))
+        .copied()
+        .unwrap_or(0);
     // Wounds are locally observable; other people's beliefs, needs, and private inventories are not read.
     let peers: Vec<_> = tx
         .get::<game_social_life::SocialLife>()?
@@ -136,7 +144,8 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
             let concern = if *p == person {
                 500 + (max - body.health).min(100) as i64 * 20
             } else {
-                empathy + i64::from(tie.affection) * 8 - i64::from(tie.grievance) * 8
+                empathy * altruism / 500 + i64::from(duty) * 8 + i64::from(tie.affection) * 8
+                    - i64::from(tie.grievance) * 8
                     + if tx.get::<Care>().unwrap().requests.get(p) == Some(&person) {
                         350
                     } else {
@@ -174,6 +183,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("care", 1)?;
     b.resource::<Care>()?;
+    game_nurture::register(b)?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Care>()?.enabled = true;
         Ok(())

@@ -92,6 +92,8 @@ impl Ledger {
                     | "households.formed"
                     | "households.fostered"
                     | "exchange.traded"
+                    | "discourse.spoken"
+                    | "communication.learned"
                     | "works.created"
                     | "institutions.membership-changed"
                     | "institutions.procedure-changed"
@@ -131,6 +133,15 @@ impl Ledger {
                 }
                 match event.kind.as_str() {
                     "cultivars.created" => significant = false,
+                    "discourse.spoken" => {
+                        significant = self.seen.insert(format!(
+                            "opinion:{}:{}:{}:{}",
+                            event.data["speaker"],
+                            event.data["concept"],
+                            event.data["stance"].as_i64().unwrap_or(0).div_euclid(25),
+                            event.data["coerced"]
+                        ));
+                    }
                     "botany.changed" => {
                         let patch = &event.data["patch"];
                         let empty = event.data["living"] == 0;
@@ -287,11 +298,7 @@ impl Ledger {
                         .cloned()
                         .unwrap_or_else(|| {
                             serde_json::to_value(event.data["person"].as_u64().and_then(|p| {
-                                h.get::<game_physiology::Bodies>()
-                                    .ok()?
-                                    .people
-                                    .get(&PersonId(p))
-                                    .copied()
+                                h.get::<game_physiology::Bodies>().ok()?.body(&PersonId(p))
                             }))
                             .unwrap()
                         })

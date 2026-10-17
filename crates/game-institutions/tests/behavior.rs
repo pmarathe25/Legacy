@@ -76,3 +76,58 @@ fn fixture_state_roundtrips_with_only_required_plugins() {
     let loaded = builder().load(&save, 2).unwrap();
     assert_eq!(save, loaded.save().unwrap());
 }
+
+#[test]
+fn a_recorded_practice_does_not_prevent_a_custodian_withdrawing_consent() {
+    let mut f = setup();
+    let institution = f
+        .host
+        .dispatch(Found(Institution {
+            name: "neighbors".into(),
+            jurisdiction: f.home,
+            members: [f.ruler, f.other].into(),
+            procedure: Procedure::Personal,
+            offices: Default::default(),
+            rules: vec![],
+        }))
+        .unwrap();
+    f.host
+        .dispatch(game_property::Permit {
+            issuer: f.ruler,
+            person: f.other,
+            inventory: f.store,
+            allow: true,
+        })
+        .unwrap();
+    let terms = AccessRule {
+        custodian: f.ruler,
+        inventory: f.store,
+        users: [f.other].into(),
+    };
+    f.host
+        .dispatch(RecordPractice {
+            institution,
+            terms: terms.clone(),
+        })
+        .unwrap();
+    f.host
+        .dispatch(game_property::Permit {
+            issuer: f.ruler,
+            person: f.other,
+            inventory: f.store,
+            allow: false,
+        })
+        .unwrap();
+    assert!(
+        !f.host
+            .get::<game_property::Property>()
+            .unwrap()
+            .allowed(f.other, f.store)
+    );
+    assert_eq!(
+        f.host.get::<Institutions>().unwrap().groups[&institution].rules,
+        vec![terms]
+    );
+    let save = f.host.save().unwrap();
+    assert_eq!(builder().load(&save, 2).unwrap().save().unwrap(), save);
+}

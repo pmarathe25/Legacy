@@ -5,7 +5,7 @@ use game_sim::*;
 use game_storage::Table;
 pub use motivation::Satisfaction;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::Arc};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Activity {
@@ -22,7 +22,7 @@ pub struct Activity {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pastimes {
     pub enabled: bool,
-    pub activities: BTreeMap<String, Activity>,
+    pub activities: Arc<BTreeMap<String, Activity>>,
     pub stamps: Vec<game_content::Stamp>,
     pub experiences: Table<PersonId, Table<String, u64>>,
     #[serde(default)]
@@ -38,6 +38,13 @@ struct Work {
 }
 impl Resource for Pastimes {
     const KEY: &'static str = "pastimes.interests";
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
+        if Arc::ptr_eq(&self.activities, &previous.activities) {
+            Ok(())
+        } else {
+            self.validate()
+        }
+    }
     fn validate(&self) -> Result<()> {
         require(
             self.activities.iter().all(|(k, a)| {
@@ -150,7 +157,7 @@ pub fn load(store: &mut game_content::Store, objects: &game_objects::Objects) ->
         }
     }
     Pastimes {
-        activities: activities.clone(),
+        activities: Arc::new(activities.clone()),
         ..Default::default()
     }
     .validate()?;
@@ -186,19 +193,18 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     {
         return Ok(());
     }
-    let mut options: Vec<_> = tx
-        .get::<Pastimes>()?
-        .activities
+    let activities = tx.get::<Pastimes>()?.activities.clone();
+    let mut options: Vec<_> = activities
         .iter()
         .enumerate()
         .map(|(i, (k, a))| {
             (
                 std::cmp::Reverse(motivation::score(tx, person, a, i)),
-                k.clone(),
+                k.as_str(),
             )
         })
         .collect();
-    options.sort();
+    options.sort_unstable();
     // Leisure draws only on the participant's own possessions, not everyone's shared stock.
     let inventories: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(person).collect();
     let best = options.first().map_or(i64::MIN, |(score, _)| score.0);
@@ -216,18 +222,14 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             continue;
         }
         for inventory in &inventories {
-            if available(
-                tx,
-                person,
-                *inventory,
-                &tx.get::<Pastimes>()?.activities[&activity],
-            ) && tx
-                .attempt(Pursue {
-                    person,
-                    activity: activity.clone(),
-                    inventory: *inventory,
-                })
-                .is_ok()
+            if available(tx, person, *inventory, &activities[activity])
+                && tx
+                    .attempt(Pursue {
+                        person,
+                        activity: activity.to_owned(),
+                        inventory: *inventory,
+                    })
+                    .is_ok()
             {
                 return Ok(());
             }
@@ -255,7 +257,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             }
         }
         let s = tx.edit::<Pastimes>()?;
-        s.activities = r.activities;
+        s.activities = Arc::new(r.activities);
         s.stamps = r.stamps;
         Ok(())
     })?;

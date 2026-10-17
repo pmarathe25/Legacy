@@ -4,6 +4,7 @@ use game_sim::*;
 use game_storage::{Records, Table};
 mod indexes;
 use serde::{Deserialize, Serialize};
+pub const GATHERING_TIME: SimDuration = SimDuration(5 * MINUTE.0);
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct Patch {
     pub area: AreaId,
@@ -117,6 +118,19 @@ impl Request for Gather {
     const KEY: &'static str = "ecology.gather";
     type Response = SimTime;
 }
+/// Collect up to a preferred reserve, accepting a smaller useful harvest.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct GatherUpTo {
+    pub person: PersonId,
+    pub patch: u64,
+    pub target: u64,
+    pub minimum: u64,
+    pub destination: InventoryId,
+}
+impl Request for GatherUpTo {
+    const KEY: &'static str = "ecology.gather-up-to";
+    type Response = u64;
+}
 #[derive(Clone, Serialize, Deserialize)]
 struct Finish {
     person: PersonId,
@@ -213,7 +227,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             inventory: r.destination,
             quantity: r.quantity,
         })?;
-        let until = tx.now().after(SimDuration(MINUTE.0 * 5))?;
+        let until = tx.now().after(GATHERING_TIME)?;
         tx.start_action(r.person, "gather", Some(until), Cancel { person: r.person })?;
         let job = tx.schedule(until, 10, Finish { person: r.person })?;
         let state = tx.edit::<Ecology>()?;
@@ -230,6 +244,45 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             },
         );
         Ok(until)
+    })?;
+    b.request::<GatherUpTo>(|tx, r| {
+        game_physiology::capable(tx, r.person)?;
+        require(
+            r.minimum > 0 && r.minimum <= r.target,
+            "invalid harvest bounds",
+        )?;
+        let patch = tx
+            .get::<Ecology>()?
+            .patches
+            .get(&r.patch)
+            .ok_or_else(|| Error::Missing("patch".into()))?;
+        require(
+            game_transport::area(tx.get()?, r.person)? == patch.area
+                && game_cargo::locality(tx, r.destination)? == patch.area,
+            "gathering is not local",
+        )?;
+        let mass = tx.get::<game_objects::Objects>()?.mass(patch.good, 1)?;
+        let held = &tx.get::<game_cargo::Cargo>()?.0[&r.destination];
+        let fits = held
+            .capacity
+            .saturating_sub(held.used()?)
+            .checked_div(mass)
+            .unwrap_or(r.target);
+        let quantity = r
+            .target
+            .min(tx.get::<Ecology>()?.available(r.patch)?)
+            .min(fits);
+        require(
+            quantity >= r.minimum,
+            "patch exhausted or no useful capacity",
+        )?;
+        tx.call(Gather {
+            person: r.person,
+            patch: r.patch,
+            quantity,
+            destination: r.destination,
+        })?;
+        Ok(quantity)
     })?;
     b.request::<Finish>(|tx, r| {
         let work = tx.get::<Ecology>()?.gathering[&r.person].clone();

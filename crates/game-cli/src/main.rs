@@ -50,7 +50,16 @@ fn run() -> Result<()> {
         }
         i += 2;
     }
-    let mut store = content.map_or_else(game_content::Store::standard, game_content::Store::new);
+    let mut store = content.map_or_else(
+        || {
+            if list || scenario.as_deref().is_some_and(|s| s != "generated") {
+                game_content::Store::fixtures()
+            } else {
+                game_content::Store::standard()
+            }
+        },
+        game_content::Store::new,
+    );
     for directory in mods {
         store.overlay(directory)?;
     }

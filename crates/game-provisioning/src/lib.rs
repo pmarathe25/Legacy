@@ -1,56 +1,16 @@
 //! Food acquisition templates use learned stock, patches, and roads.
 use game_food_memory::assessment as diet;
 mod reserves;
+mod scoring;
 use game_core::*;
+use game_food_actions::next_step;
+pub use game_food_actions::{FoodCare, Plan, TendFood};
 pub use game_food_memory::remembered_meal;
-use game_knowledge::{Facts, StoreLocation, known, location_key, patch_key, with_prefix};
+use game_knowledge::{Facts, StoreLocation, known, location_key, with_prefix};
 use game_sim::*;
 pub use reserves::{Enable, Reserves, Source, Support, plugin, reserve_plan};
+pub use scoring::FoodScores;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Plan {
-    Explore {
-        area: AreaId,
-    },
-    Meal {
-        inventory: InventoryId,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        good: Option<GoodId>,
-    },
-    Forage {
-        patch: u64,
-        inventory: InventoryId,
-        quantity: u64,
-        gathering: bool,
-    },
-}
-fn location(
-    tx: &Transaction<'_>,
-    person: PersonId,
-    facts: &Facts,
-    inventory: InventoryId,
-) -> Result<AreaId> {
-    let location: StoreLocation = known(facts, &location_key(inventory))
-        .ok_or_else(|| Error::Missing("known inventory location".into()))?;
-    if location.carrier == Some(person) {
-        game_transport::area(tx.get()?, person)
-    } else {
-        Ok(location.area)
-    }
-}
-fn travel(
-    tx: &Transaction<'_>,
-    person: PersonId,
-    facts: &Facts,
-    target: AreaId,
-) -> Result<(Option<AreaId>, SimDuration)> {
-    let location = tx
-        .get::<game_transport::Positions>()?
-        .0
-        .get(&person)
-        .ok_or_else(|| Error::Missing("position".into()))?;
-    next_step(tx, person, facts, location, target)
-}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opportunity {
     pub id: u64,
@@ -77,6 +37,21 @@ impl Opportunity {
     }
 }
 pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec<Opportunity>> {
+    options_for(tx, person, meals, false)
+}
+pub fn care_options(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    meals: u64,
+) -> Result<Vec<Opportunity>> {
+    options_for(tx, person, meals, true)
+}
+fn options_for(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    meals: u64,
+    partial: bool,
+) -> Result<Vec<Opportunity>> {
     require(meals > 0, "gather a positive number of meals")?;
     let _measurement = game_diagnostics::span("food options");
     let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) else {
@@ -117,7 +92,15 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
                 .map(|(n, g)| (*g, n as u64))
                 .collect();
             let stride = ranks.len() as u64;
-            for inventory in diet::sources(tx, person, stores) {
+            let mut sources = diet::sources(tx, person, stores);
+            if partial {
+                for own in stores.carried(person) {
+                    if !sources.iter().any(|s| s.id == own.id) {
+                        sources.push(own);
+                    }
+                }
+            }
+            for inventory in sources {
                 let Some(location) = &inventory.location else {
                     continue;
                 };
@@ -132,9 +115,14 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
                 let Some(travel) = duration(target) else {
                     continue;
                 };
-                for (good, appetite, value) in
-                    diet::store_foods(tx, person, facts, inventory.id, &mut dietary)
-                {
+                for (good, appetite, value) in diet::store_foods_partial(
+                    tx,
+                    person,
+                    facts,
+                    inventory.id,
+                    &mut dietary,
+                    partial,
+                ) {
                     let id = inventory
                         .id
                         .0
@@ -184,7 +172,11 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
                     continue;
                 };
                 let desired = food.portion.checked_mul(batch).ok_or(Error::Overflow)?;
-                let available = p.stock / food.portion * food.portion;
+                let available = if partial {
+                    p.stock
+                } else {
+                    p.stock / food.portion * food.portion
+                };
                 if available == 0 {
                     continue;
                 }
@@ -205,11 +197,19 @@ pub fn options(tx: &Transaction<'_>, person: PersonId, meals: u64) -> Result<Vec
                     } else {
                         l.capacity.saturating_sub(l.mass)
                     };
-                    let capacity = free
-                        .checked_div(portion_mass)
-                        .map_or(desired, |portions| portions.saturating_mul(food.portion));
+                    let capacity = if partial {
+                        free / tx
+                            .get::<game_objects::Objects>()
+                            .ok()?
+                            .mass(p.good, 1)
+                            .ok()?
+                    } else {
+                        free.checked_div(portion_mass)
+                            .map_or(desired, |portions| portions.saturating_mul(food.portion))
+                    };
                     let quantity = desired.min(available).min(capacity);
-                    (quantity >= food.portion).then_some((store.id, quantity))
+                    (quantity >= if partial { 1 } else { food.portion })
+                        .then_some((store.id, quantity))
                 };
                 let chosen = stores
                     .carried(person)
@@ -282,91 +282,18 @@ pub fn frontiers(facts: &Facts) -> Vec<AreaId> {
     areas.into_iter().collect()
 }
 pub fn step(tx: &mut Transaction<'_>, person: PersonId, plan: &mut Plan) -> Result<bool> {
-    let facts = tx
-        .get::<game_knowledge::Knowledge>()?
-        .0
-        .get(&person)
-        .ok_or_else(|| Error::Missing("personal knowledge".into()))?;
-    if let Plan::Explore { area } = *plan {
-        if let (Some(next), _) = travel(tx, person, facts, area)? {
-            tx.attempt(game_transport::Move {
-                person,
-                destination: next,
-            })?;
-            return Ok(false);
-        }
-        tx.call(game_knowledge::ObserveSurroundings { person })?;
-        return Ok(true);
+    let done = game_food_actions::step(tx, person, plan)?;
+    if done {
+        reserves::experience(tx, person, plan, true)?;
     }
-    let inventory = match *plan {
-        Plan::Meal { inventory, .. } | Plan::Forage { inventory, .. } => inventory,
-        Plan::Explore { .. } => unreachable!(),
-    };
-    let (target, chosen) = match *plan {
-        Plan::Meal { good, .. } => (location(tx, person, facts, inventory)?, good),
-        Plan::Forage { patch, .. } => {
-            let patch = known::<game_ecology::Patch>(facts, &patch_key(patch))
-                .ok_or_else(|| Error::Missing("known patch".into()))?;
-            (patch.area, Some(patch.good))
-        }
-        Plan::Explore { .. } => unreachable!(),
-    };
-    if let (Some(next), _) = travel(tx, person, facts, target)? {
-        tx.attempt(game_transport::Move {
-            person,
-            destination: next,
-        })?;
-        return Ok(false);
+    Ok(done)
+}
+pub fn acquire(tx: &mut Transaction<'_>, person: PersonId, plan: &mut Plan) -> Result<bool> {
+    let done = game_food_actions::acquire(tx, person, plan)?;
+    if done {
+        reserves::experience(tx, person, plan, true)?;
     }
-    if let Plan::Forage {
-        patch,
-        quantity,
-        gathering,
-        ..
-    } = plan
-        && !*gathering
-    {
-        let good = tx.get::<game_ecology::Ecology>()?.patches[patch].good;
-        let needed = tx.get::<game_objects::Objects>()?.mass(good, *quantity)?;
-        let held = &tx.get::<game_cargo::Cargo>()?.0[&inventory];
-        if held.capacity.saturating_sub(held.used()?) < needed
-            && tx.registered::<game_stockpiles::StoreSurplus>()
-        {
-            tx.attempt(game_stockpiles::StoreSurplus {
-                person,
-                inventory,
-                needed_mass: needed,
-            })?;
-        }
-        tx.attempt(game_ecology::Gather {
-            person,
-            patch: *patch,
-            quantity: *quantity,
-            destination: inventory,
-        })?;
-        *gathering = true;
-        return Ok(false);
-    }
-    if let Some(good) = chosen {
-        let quantity = tx
-            .get::<game_objects::Objects>()?
-            .by_id(good)?
-            .food
-            .as_ref()
-            .ok_or_else(|| Error::Rejected("chosen good is not food".into()))?
-            .portion;
-        tx.attempt(game_physiology::ConsumeEdible {
-            person,
-            inventory,
-            good,
-            quantity,
-        })?;
-    } else {
-        tx.attempt(game_physiology::Eat { person, inventory })?;
-    }
-    reserves::experience(tx, person, plan, true)?;
-    tx.call(game_knowledge::ObserveStore { person, inventory })?;
-    Ok(true)
+    Ok(done)
 }
 pub fn learn_failure(tx: &mut Transaction<'_>, person: PersonId, plan: &Plan) {
     let _ = reserves::experience(tx, person, plan, false);
@@ -380,54 +307,5 @@ pub fn learn_failure(tx: &mut Transaction<'_>, person: PersonId, plan: &Plan) {
     let _ = tx.attempt(game_knowledge::ObserveStore { person, inventory });
     if let Plan::Forage { patch, .. } = *plan {
         let _ = tx.attempt(game_knowledge::ObservePatch { person, patch });
-    }
-}
-/// Choose the next known road, including resuming an interrupted journey.
-fn next_step(
-    tx: &Transaction<'_>,
-    person: PersonId,
-    facts: &Facts,
-    location: &game_transport::Location,
-    target: AreaId,
-) -> Result<(Option<AreaId>, SimDuration)> {
-    use game_transport::Location;
-    match location {
-        Location::At(area) if *area == target => Ok((None, SimDuration(0))),
-        Location::At(area) => {
-            let route = game_knowledge::route(facts, *area, target)?;
-            Ok((
-                route.areas.get(1).copied(),
-                game_transport::travel_time(tx, person, route.duration),
-            ))
-        }
-        Location::Road {
-            from,
-            to,
-            elapsed,
-            duration,
-        } => [
-            (*from, elapsed.0),
-            (
-                *to,
-                duration
-                    .0
-                    .checked_sub(elapsed.0)
-                    .ok_or_else(|| Error::Rejected("invalid road progress".into()))?,
-            ),
-        ]
-        .into_iter()
-        .filter_map(|(area, offset)| {
-            let route = game_knowledge::route(facts, area, target).ok()?;
-            Some((
-                Some(area),
-                SimDuration(
-                    offset
-                        .checked_add(game_transport::travel_time(tx, person, route.duration).0)?,
-                ),
-            ))
-        })
-        .min_by_key(|(area, cost)| (cost.0, *area))
-        .ok_or_else(|| Error::Rejected("no known route from road".into())),
-        _ => Err(Error::Rejected("already travelling".into())),
     }
 }

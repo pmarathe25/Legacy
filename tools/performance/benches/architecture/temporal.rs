@@ -114,6 +114,9 @@ pub fn verify() {
             health: (x >> 35) % 101,
             maximum_health: None,
             fatigue_fraction: 0,
+            hunger_fraction: 0,
+            recovery_fraction: 0,
+            metabolic_rates: Default::default(),
             resting: x & 4 != 0,
             last: SimTime(last),
             life_limit: (x & 8 != 0).then_some(SimTime(last.saturating_add(x % 500))),
@@ -155,6 +158,9 @@ pub fn measure(n: usize) {
             life_limit: None,
             maximum_health: None,
             fatigue_fraction: 0,
+            hunger_fraction: 0,
+            recovery_fraction: 0,
+            metabolic_rates: Default::default(),
         })
         .collect();
     let at = SimTime(DAY.0);

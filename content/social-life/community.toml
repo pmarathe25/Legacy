@@ -1,9 +1,0 @@
-id = "social-life/community"
-version = 1
-[data]
-duration = 300000
-contact_interval = 1800000
-retry = 600000
-max_hunger = 30
-max_fatigue = 10
-candidates = 16

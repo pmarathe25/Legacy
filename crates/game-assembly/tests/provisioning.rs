@@ -62,7 +62,7 @@ fn editing_a_rule_profile_changes_new_decisions_and_existing_saves_keep_the_old_
     );
     let save = old.save().unwrap();
     pack.edit(
-        "characters/survival.toml",
+        "characters/fixture.toml",
         "rest_fatigue = 10",
         "rest_fatigue = 1000",
     );

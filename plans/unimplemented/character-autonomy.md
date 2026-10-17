@@ -1,6 +1,6 @@
 # Character autonomy audit and implementation plan
 
-**Status:** Deferred until the multi-generation experiments are assessed. Reviewed through 2026-10-17, including the extinction repairs. References use files and symbols rather than unstable line numbers. Current work remains subject to validation.
+**Status:** Partially implemented after the multi-generation experiments; common choice arbitration remains unimplemented. Reviewed through 2026-10-17. References use files and symbols rather than unstable line numbers.
 
 Characters should choose from perceived opportunities using their characteristics, needs, beliefs, memories, commitments, and expected consequences. Survival is one motive. Mistakes, recklessness, obsession, altruism, defiance, and unsuccessful societies are legitimate outcomes.
 
@@ -31,7 +31,7 @@ Reconsider when evidence changes. Replace urgent hunger's survival-only filter (
 
 Earlier scarcity runs exposed preferred batches being treated as physical minimums. Provisioning now permits smaller harvests; preserve quantity alternatives when comparing motives.
 
-Dependent care now serves local children before travel and compares claim costs, preferring personal supplies. It still uses common fixed weights rather than comparing care, source, and other motives (`crates/game-households/src/lib.rs`, `tend`).
+Food care now compares observed need, attachment, inherited altruism and empathy, learned concern, personal needs, commitment, travel, and harvest costs (`game-nurture`). A persisted intention can obtain finite food without self-consumption, carry it home, and offer partial servings. Distant need is predicted from remembered evidence; an absent beneficiary is not tracked remotely. The remaining common fixed weights and listener ordering still need the shared choice model.
 
 ### 2. Separate scheduling frequency from willingness
 
@@ -53,7 +53,11 @@ Pressure now permits anticipation from co-located visible build, backdown, and e
 
 Parenthood now separates reproductive intentions from household records. Both prospective parents weigh attachment, fear, grievance, learned kinship interest, current needs, stress, and remaining care for biological and foster children. Uniform empathy/patience eligibility, lifetime child allowances, and mandatory annual/three-year waits have been removed. Lifecycle models maturity and a coarse fertile window relative to inherited natural lifespan; partnerships remain possible beyond it. Local, personally motivated fostering and independent orphan enrollment repair missing care paths. Remaining work includes multiple relationship forms, distinct reproductive roles, recovery and fertility biology, separation, shared caregiving, and child assent. Fertility must not directly reward a favored personality.
 
-Continue genes → characteristics → behavior, with meaningful cognitive capabilities and tradeoffs. Newborn beliefs now begin neutral; learn culture through interactions. Avoid reading private counterpart beliefs as expressed attitudes (`crates/game-social-life/src/conversation.rs`, `warmth`). Existing developmental shortcuts also need replacement: general agency starts abruptly at age six (`game-households::tend`), and `game-physiology/src/eating.rs::Feed` chooses from the patient's private dietary experience. Model gradual agency and communicated preferences or caregiver estimates; these predate the extinction fixes.
+Continue genes → characteristics → behavior, with meaningful cognitive capabilities and tradeoffs. Newborn beliefs begin neutral. Metabolism and recovery now vary with inherited potential, development, aging, condition, stress, and environment; physiological forecasts and nutrient demand use the expressed rates.
+
+Directed respect and admiration now complement affection, trust, fear, and grievance. `game-discourse` composes personally motivated explanation, persuasion, reported testimony, deception, and threats. Listener judgment uses personal convictions, openness, independence, experience, and directed regard. Heard statements support disagreement and credibility judgments without reading another person's private beliefs. Coerced endorsement remains separate from private conviction and allegiance. These are bounded prototype choices, not the common arbitration model.
+
+`Feed` selects using caregiver evidence; recipients assess their own offered quantity, remembered effects, appetite, and current activity before accepting. Patient gratitude stays private; caregiver learning uses the caregiver's own assessment. Physical forced administration and treatment consent negotiation remain separate missing actions. General agency still starts abruptly at age six (`game-households::tend`); replace this shortcut with gradual agency and communicated preferences.
 
 ### 5. Give new environmental systems the same choice boundary
 

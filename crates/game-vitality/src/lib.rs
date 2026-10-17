@@ -75,18 +75,26 @@ impl Life {
         1000 - late * if mental { 2 } else { 4 } / 5
     }
 }
+pub fn expressed(
+    traits: Option<&game_traits::Traits>,
+    life: Option<&Life>,
+    person: PersonId,
+    key: &str,
+    at: SimTime,
+) -> u64 {
+    let raw = traits.map_or(1000, |t| t.ability(person, key));
+    life.map_or(raw, |life| life.ability(raw, key, at))
+}
 pub fn ability(tx: &Transaction<'_>, person: PersonId, key: &str) -> u64 {
-    let raw = tx
-        .get::<game_traits::Traits>()
-        .map_or(1000, |t| t.ability(person, key));
-    let Some(life) = tx
-        .get::<Vitality>()
-        .ok()
-        .and_then(|s| s.people.get(&person))
-    else {
-        return raw;
-    };
-    life.ability(raw, key, tx.now())
+    expressed(
+        tx.get::<game_traits::Traits>().ok(),
+        tx.get::<Vitality>()
+            .ok()
+            .and_then(|s| s.people.get(&person)),
+        person,
+        key,
+        tx.now(),
+    )
 }
 pub fn condition(tx: &Transaction<'_>, person: PersonId) -> Option<(u32, i32)> {
     Some(
@@ -99,7 +107,15 @@ pub fn condition(tx: &Transaction<'_>, person: PersonId) -> Option<(u32, i32)> {
 }
 impl Life {
     pub fn ability(&self, raw: u64, key: &str, at: SimTime) -> u64 {
-        let mental = ["intelligence", "learning", "foresight", "resilience"].contains(&key);
+        let mental = [
+            "intelligence",
+            "learning",
+            "foresight",
+            "resilience",
+            "interpretation",
+            "hearing",
+        ]
+        .contains(&key);
         let physical = [
             "strength",
             "speed",
@@ -109,6 +125,10 @@ impl Life {
             "robustness",
             "size",
             "constitution",
+            "metabolism",
+            "recovery",
+            "vocalization",
+            "gesturing",
         ]
         .contains(&key);
         if !mental && !physical {

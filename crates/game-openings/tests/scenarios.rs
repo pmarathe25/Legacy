@@ -68,9 +68,9 @@ fn builder() -> Builder {
 }
 #[test]
 fn fixtures_initialize_through_owner_requests_without_the_application() {
-    for scenario in scenarios(&mut Store::standard()).unwrap() {
+    for scenario in scenarios(&mut Store::fixtures()).unwrap() {
         let mut h = builder().build(3, 1).unwrap();
-        initialize(&mut h, &mut Store::standard(), &scenario.id, 3).unwrap();
+        initialize(&mut h, &mut Store::fixtures(), &scenario.id, 3).unwrap();
         let definition = h.get::<Opening>().unwrap().definition.as_ref().unwrap();
         let expected = definition.actors().len() + usize::from(definition.reincarnation.is_some());
         assert_eq!(
@@ -87,14 +87,14 @@ fn fixtures_initialize_through_owner_requests_without_the_application() {
 fn unsupported_scenarios_are_rejected_before_initialization() {
     let mut h = builder().build(3, 1).unwrap();
     let before = h.save().unwrap();
-    assert!(initialize(&mut h, &mut Store::standard(), "not-an-opening", 3).is_err());
+    assert!(initialize(&mut h, &mut Store::fixtures(), "not-an-opening", 3).is_err());
     assert_eq!(before, h.save().unwrap());
 }
 #[test]
 fn an_existing_opening_cannot_be_partially_reinitialized() {
     let mut h = builder().build(3, 1).unwrap();
-    initialize(&mut h, &mut Store::standard(), "kernel-fixture", 3).unwrap();
+    initialize(&mut h, &mut Store::fixtures(), "kernel-fixture", 3).unwrap();
     let before = h.save().unwrap();
-    assert!(initialize(&mut h, &mut Store::standard(), "kernel-fixture", 3).is_err());
+    assert!(initialize(&mut h, &mut Store::fixtures(), "kernel-fixture", 3).is_err());
     assert_eq!(before, h.save().unwrap());
 }

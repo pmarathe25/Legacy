@@ -12,6 +12,7 @@ fn builder() -> Builder {
     game_cargo::plugin(&mut b).unwrap();
     game_property::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
+    game_communication::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_institutions::plugin(&mut b).unwrap();
@@ -378,4 +379,119 @@ fn childhood_attitudes_develop_through_trusted_conversation_rather_than_birth() 
     );
     let saved = h.save().unwrap();
     assert_eq!(builder().load(&saved, 4).unwrap().save().unwrap(), saved);
+}
+
+#[test]
+fn repeated_homonyms_raise_confusion_cost_without_forbidding_a_tribute() {
+    let (mut h, area) = setup();
+    let mother = person(
+        &mut h,
+        area,
+        "Mariel",
+        &[("empathy", 900), ("creativity", 0)],
+    );
+    let father = person(&mut h, area, "Toren", &[]);
+    fond(&mut h, mother, father, 80);
+    meet(&mut h, mother, father);
+    let mut chosen = vec![];
+    for _ in 0..5 {
+        let child = h
+            .dispatch(game_lifecycle::Birth {
+                mother,
+                father,
+                caregiver: mother,
+                area,
+            })
+            .unwrap();
+        h.dispatch(NameChild { child }).unwrap();
+        chosen.push(h.get::<Names>().unwrap().identities[&child].given.clone());
+    }
+    assert_eq!(chosen[0], "Toren");
+    assert!(chosen.iter().skip(1).any(|n| n != "Toren"), "{chosen:?}");
+    assert!(
+        chosen
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
+            > 2,
+        "{chosen:?}"
+    );
+}
+
+#[test]
+fn silent_names_stay_private_but_a_naming_parent_knows_their_own_choice() {
+    let (mut h, area) = setup();
+    let speaker = person(&mut h, area, "Toren", &[]);
+    let listener = person(&mut h, area, "Mariel", &[]);
+    h.dispatch(LearnName {
+        listener,
+        person: speaker,
+    })
+    .unwrap();
+    h.dispatch(game_communication::Enable).unwrap();
+    h.dispatch(game_traits::Set {
+        person: speaker,
+        profile: [("vocalization".into(), 0), ("gesturing".into(), 0)].into(),
+    })
+    .unwrap();
+    h.dispatch(Change {
+        person: speaker,
+        name: "Secret".into(),
+    })
+    .unwrap();
+    assert_eq!(
+        h.get::<Names>().unwrap().heard[&listener][&speaker],
+        "Toren"
+    );
+    h.dispatch(game_traits::Set {
+        person: speaker,
+        profile: Default::default(),
+    })
+    .unwrap();
+    h.dispatch(game_traits::Set {
+        person: listener,
+        profile: [("hearing".into(), 0)].into(),
+    })
+    .unwrap();
+    h.dispatch(LearnName {
+        listener,
+        person: speaker,
+    })
+    .unwrap();
+    assert_eq!(
+        h.get::<Names>().unwrap().heard[&listener][&speaker],
+        "Toren"
+    );
+    h.dispatch(game_traits::Set {
+        person: listener,
+        profile: Default::default(),
+    })
+    .unwrap();
+    h.dispatch(LearnName {
+        listener,
+        person: speaker,
+    })
+    .unwrap();
+    assert_eq!(
+        h.get::<Names>().unwrap().heard[&listener][&speaker],
+        "Secret"
+    );
+    h.dispatch(game_traits::Set {
+        person: speaker,
+        profile: [("vocalization".into(), 0), ("gesturing".into(), 0)].into(),
+    })
+    .unwrap();
+    let child = h
+        .dispatch(game_lifecycle::Birth {
+            mother: speaker,
+            father: listener,
+            caregiver: speaker,
+            area,
+        })
+        .unwrap();
+    h.dispatch(NameChild { child }).unwrap();
+    assert_eq!(
+        h.get::<Names>().unwrap().heard[&speaker][&child],
+        h.get::<Names>().unwrap().identities[&child].given
+    );
 }

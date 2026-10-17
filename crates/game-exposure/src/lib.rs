@@ -58,6 +58,18 @@ impl Event for Changed {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("exposure", 1)?;
     b.resource::<Exposure>()?;
+    b.request::<game_physiology::MetabolicEnvironment>(|tx, r| {
+        let Some(thermal) = tx.get::<Exposure>()?.people.get(&r.person) else {
+            return Ok(Default::default());
+        };
+        let cold = (12 - thermal.equivalent).clamp(0, 100) as u64;
+        let heat = (thermal.equivalent - 30).clamp(0, 100) as u64;
+        let mut rates = game_physiology::Rates::default();
+        rates.energy += cold * 20;
+        rates.fatigue += (cold + heat) * 15;
+        rates.recovery = 1000u64.saturating_sub((cold + heat) * 15).max(250);
+        Ok(rates)
+    })?;
     b.request::<Enable>(|tx, _| {
         if !tx.get::<Exposure>()?.enabled {
             tx.edit::<Exposure>()?.enabled = true;

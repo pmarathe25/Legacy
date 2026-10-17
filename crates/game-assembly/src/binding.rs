@@ -44,6 +44,21 @@ fn route(
         ),
         Command::Eat { inventory } => value(tx, game_physiology::Eat { person, inventory }),
         Command::Rest => value(tx, game_physiology::Rest { person }),
+        Command::PresentWork { work, listener } => value(
+            tx,
+            game_works::Present {
+                holder: person,
+                listener,
+                work,
+            },
+        ),
+        Command::ReadWork { work } => value(
+            tx,
+            game_works::Read {
+                reader: person,
+                work,
+            },
+        ),
         Command::Observe { inventory } => {
             value(tx, game_knowledge::ObserveStore { person, inventory })
         }
@@ -246,6 +261,20 @@ pub fn observe(host: &Host) -> Result<PlayerView> {
             .copied()
             .collect(),
         borrowed_memories: game_invocation::memories(host)?,
+        lexicon: person
+            .and_then(|p| {
+                host.get::<game_communication::Communication>()
+                    .ok()?
+                    .lexicons
+                    .get(&p)
+            })
+            .map_or_else(Default::default, |r| {
+                r.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+            }),
+        works: person
+            .map(|p| game_works::view(host, p))
+            .transpose()?
+            .unwrap_or_default(),
         pastimes: person
             .and_then(|p| {
                 host.get::<game_pastimes::Pastimes>()

@@ -8,6 +8,8 @@ pub(super) struct Saved {
     next: Table<PersonId, SimTime>,
     dependents: Table<PersonId, PersonId>,
     review: Option<ScheduleId>,
+    #[serde(default)]
+    food_care: Table<PersonId, FoodCare>,
 }
 pub(super) fn build(
     dependents: &Table<PersonId, PersonId>,
@@ -29,6 +31,7 @@ impl From<Saved> for Households {
             next: s.next,
             dependents: s.dependents,
             review: s.review,
+            food_care: s.food_care,
         }
     }
 }

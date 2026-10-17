@@ -1,0 +1,22 @@
+id = "traits/communication"
+version = 1
+[data.traits.vocalization]
+name = "Vocal articulation potential"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.hearing]
+name = "Auditory perception"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.gesturing]
+name = "Expressive movement potential"
+minimum = 0
+maximum = 16000
+default = 1000
+[data.traits.interpretation]
+name = "Communication interpretation potential"
+minimum = 0
+maximum = 16000
+default = 1000

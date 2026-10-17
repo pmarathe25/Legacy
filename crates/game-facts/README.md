@@ -12,4 +12,6 @@ The shared decoder uses a typed payload when possible and borrows an existing JS
 
 Clones preserve independent evidence and immutable history. Tests cover shared payloads, changes of scene membership, explicit overrides, retained readers, ranges, duplicate scene keys, and exact logical serialization.
 
+Payload deltas carry a private version token. Metadata-only updates retain that token, allowing derived queries to skip unchanged payloads. The token is never serialized and cannot grant knowledge or suppress changes after restoring a different snapshot.
+
 Run `cargo test -p game-facts`.

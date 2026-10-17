@@ -58,6 +58,37 @@ fn overlays_override_paths_and_add_new_documents_in_stable_order() {
     assert_eq!(store.stamps().len(), 2);
     assert!(store.overlay(&base.0).is_err());
 }
+
+#[test]
+fn production_rules_and_accelerated_fixtures_are_explicitly_separate() {
+    let mut production = Store::standard();
+    assert!(production.scan_optional("scenarios").unwrap().is_empty());
+    assert!(
+        production
+            .load::<toml::Value>("physiology/fixture.toml")
+            .is_err()
+    );
+    let normal = production
+        .load::<toml::Value>("physiology/default.toml")
+        .unwrap();
+    assert_eq!(normal.data["tick"].as_integer(), Some(43_200_000));
+    let mut fixtures = Store::fixtures();
+    assert_eq!(
+        fixtures
+            .load::<toml::Value>("physiology/default.toml")
+            .unwrap(),
+        normal
+    );
+    assert_eq!(
+        fixtures
+            .load::<toml::Value>("physiology/fixture.toml")
+            .unwrap()
+            .data["tick"]
+            .as_integer(),
+        Some(60_000)
+    );
+    assert!(!fixtures.scan("scenarios").unwrap().is_empty());
+}
 #[test]
 fn a_store_freezes_loaded_documents_and_a_new_store_sees_edits() {
     let root = Temp::new();

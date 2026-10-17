@@ -29,6 +29,32 @@ fn patient(h: &mut game_sim::Host, p: PersonId, area: AreaId) -> PersonId {
     h.dispatch(Enable).unwrap();
     patient
 }
+
+#[test]
+fn inherited_altruism_varies_sacrifice_and_learned_duty_can_motivate_a_selfish_carer() {
+    for (altruism, duty, willing) in [(0, false, false), (1000, false, true), (0, true, true)] {
+        let (mut h, caregiver, pack, area) = setup();
+        patient(&mut h, caregiver, area);
+        deposit(&mut h, pack, "medicine", 3);
+        h.dispatch(game_traits::Set {
+            person: caregiver,
+            profile: [("empathy".into(), 1000), ("altruism".into(), altruism)].into(),
+        })
+        .unwrap();
+        if duty {
+            for _ in 0..20 {
+                h.dispatch(game_relationships::LearnValue {
+                    person: caregiver,
+                    concept: "care".into(),
+                    outcome: 5,
+                })
+                .unwrap();
+            }
+        }
+        assert_eq!(h.dispatch(Consider { person: caregiver }).unwrap(), willing);
+        assert_eq!(amount(&h, pack, "medicine"), if willing { 2 } else { 3 });
+    }
+}
 #[test]
 fn local_care_consumes_medicine_and_changes_the_patients_own_impression() {
     let (mut h, p, i, area) = setup();

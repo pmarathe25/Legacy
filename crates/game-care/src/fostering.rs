@@ -13,7 +13,14 @@ pub(super) fn consider(tx: &mut Transaction<'_>, person: PersonId, area: AreaId)
         return Ok(());
     }
     let empathy = game_vitality::disposition(tx, person, "empathy");
+    let altruism = game_vitality::disposition(tx, person, "altruism");
     let social = tx.get::<game_relationships::Social>()?;
+    let duty = social
+        .values
+        .get(&person)
+        .and_then(|v| v.get("care"))
+        .copied()
+        .unwrap_or(0);
     let existing = households.dependents_of(person).count() as i64;
     let children: Vec<_> = tx
         .get::<game_social_life::SocialLife>()?
@@ -30,7 +37,8 @@ pub(super) fn consider(tx: &mut Transaction<'_>, person: PersonId, area: AreaId)
                 return None;
             }
             let tie = social.relationships.get(&person).and_then(|r| r.get(child));
-            let concern = empathy
+            let concern = empathy * altruism / 500
+                + i64::from(duty) * 8
                 + tie.map_or(0, |r| {
                     i64::from(r.affection) * 8 - i64::from(r.grievance) * 8
                 });

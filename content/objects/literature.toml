@@ -1,0 +1,7 @@
+id = "objects/literature"
+version = 1
+[data.objects.bound-book]
+id = 650
+name = "Bound book"
+mass = 5
+tags = ["crafted", "writing", "book"]

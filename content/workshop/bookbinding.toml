@@ -1,0 +1,8 @@
+id = "workshop/bookbinding"
+version = 1
+[data.recipes.bind-book]
+inputs = { paper = 8, linen-thread = 1 }
+output = "bound-book"
+quantity = 1
+duration = 3600000
+skill = "writing"

@@ -1,6 +1,6 @@
 # game-physiology
 
-Owns hunger, fatigue, rest, injury, mortal death, and in-place immortal recovery. Pure numeric batches use a bounded CPU pool; costs and rates live in one rules record.
+Composes eating, feeding, and rest over bodily state owned by [game-soma](../game-soma/README.md). Pure numeric batches use a bounded CPU pool. Rules supply baseline rates; [game-metabolism](../game-metabolism/README.md) expresses individual rates through genetics, development, aging, condition, and environment.
 
 **Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-transport](../game-transport/README.md), [game-cargo](../game-cargo/README.md), [game-property](../game-property/README.md).
 
@@ -8,4 +8,6 @@ Owns hunger, fatigue, rest, injury, mortal death, and in-place immortal recovery
 
 **Verification:** Run `cargo test -p game-physiology`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
 
-Bodies use indexed dense rows and nested undo journals. Bulk ticks reuse a numeric backup buffer and run over physical rows; death effects are sorted by stable person ID. Rules and ticking state share the same rollback boundary.
+[game-soma](../game-soma/README.md) owns body storage and live-row advancement; [game-body](../game-body/README.md) owns numeric forecasts. Fractional hunger and recovery carry across ticks and save/load. Death effects are sorted by stable person ID. Rules and ticking state share the same rollback boundary.
+
+`ConsumeEdible` consumes a specific quantity when the actor is idle. `Serve` and `Feed` also require an idle caregiver and physical contact. Caregiver evidence selects the food; the recipient independently weighs hunger, appetite, remembered preference, dose, and current activity. Rejection preserves inventory and bodily state. These are voluntary food offers; forced administration requires a separate physical mechanic.

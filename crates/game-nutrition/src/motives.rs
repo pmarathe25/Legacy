@@ -15,16 +15,14 @@ pub fn appetite_for(tx: &Transaction<'_>, person: PersonId, good: GoodId) -> u64
         .needs
         .iter()
         .map(|(key, need)| {
-            let used = (u128::from(tx.now().0.saturating_sub(d.at.0)) * u128::from(*need) * 1000
-                / u128::from(DAY.0))
-            .min(u128::from(u64::MAX)) as u64;
+            let used = d.used(*need, tx.now());
             let balance = d
                 .reserves
                 .get(key)
                 .copied()
                 .unwrap_or(0)
                 .saturating_sub(used);
-            let shortage = 1000 - (balance / (need * 14)).min(1000);
+            let shortage = 1000 - (balance / d.target(*need, 14).max(1)).min(1000);
             shortage * learned.nutrients.get(key).copied().unwrap_or(0).min(*need) / need
         })
         .max()

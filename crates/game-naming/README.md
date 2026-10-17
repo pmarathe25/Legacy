@@ -7,3 +7,5 @@ Conversations can produce affectionate nicknames or a personally recognized titl
 `Reconsider` compares attachment to an existing identity with self-expression and nicknames actually heard from others. Affection, patience, ambition, creativity, and cognitive development influence the choice. A character may adopt a name, invent another, or retain their present identity. Autonomous conversations invoke reconsideration; the current player is excluded. Explicit self-renaming uses `game-names::Change`.
 
 Generated campaigns enable naming. Controlled fixtures retain their authored names unless they enable these choices. There is no independent naming timer or mandatory renaming age.
+
+Name suggestions compare personally familiar names and newly coined alternatives. Affection, respect, admiration, and empathy can motivate a tribute. Similarity and the importance and number of familiar near-matches raise confusion costs. Repetition remains possible without being a mandatory naming rule. With communication enabled, novel choices use familiar phonemes and contextual descriptors use the speaker's own words.

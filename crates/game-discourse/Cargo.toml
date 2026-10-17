@@ -1,0 +1,31 @@
+[package]
+name = "game-discourse"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-communication.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-traits.workspace = true
+game-vitality.workspace = true
+game-physiology.workspace = true
+game-transport.workspace = true
+game-relationships.workspace = true
+game-social-life.workspace = true
+game-lineage.workspace = true
+game-pressure.workspace = true
+game-nutrition.workspace = true
+game-health.workspace = true
+serde.workspace = true
+[dev-dependencies]
+game-communities.workspace = true
+game-institutions.workspace = true
+game-content.workspace = true
+game-land.workspace = true
+game-objects.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-conflict.workspace = true
+game-knowledge.workspace = true
+serde_json.workspace = true

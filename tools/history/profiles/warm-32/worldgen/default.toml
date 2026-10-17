@@ -3,11 +3,11 @@ version = 1
 [data]
 population = 32
 areas = 2
-# This initial history uses the live simulation and its current accelerated needs.
+# This initial history uses the live simulation and normal biological time.
 history = 172800000
-physiology = "campaign"
-characters = "campaign"
-social_life = "campaign"
+physiology = "default"
+characters = "default"
+social_life = "default"
 health = "basic"
 name_starts = ["Al", "Bran", "Cor", "Dar", "El", "Fen", "Gal", "Har", "Is", "Kel", "Lor", "Mer", "Nor", "Or", "Pen", "Rav", "Sel", "Tal", "Val", "Wen"]
 name_ends = ["a", "en", "in", "or", "eth", "an", "el", "is", "ar", "wen", "wyn", "ren", "as", "il", "on", "ith"]

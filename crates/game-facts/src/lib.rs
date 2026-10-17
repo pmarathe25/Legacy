@@ -117,6 +117,7 @@ pub struct Facts<V> {
     cold: Table<Arc<str>, Fact<V>>,
     local: Option<Observed<V>>,
     overrides: usize,
+    payload_version: Arc<()>,
 }
 impl<V> Default for Facts<V> {
     fn default() -> Self {
@@ -124,11 +125,18 @@ impl<V> Default for Facts<V> {
             cold: Table::new(),
             local: None,
             overrides: 0,
+            payload_version: Arc::new(()),
         }
     }
 }
 impl<V: Clone> Facts<V> {
     pub fn insert(&mut self, key: Arc<str>, fact: Fact<V>) -> Option<Fact<V>> {
+        if self
+            .get(&key)
+            .is_none_or(|old| !Arc::ptr_eq(old.value, &fact.value))
+        {
+            self.payload_version = Arc::new(());
+        }
         let local = self
             .local
             .as_ref()
@@ -141,6 +149,14 @@ impl<V: Clone> Facts<V> {
     }
     /// Refresh an entire unchanged scene by replacing only one personal stamp.
     pub fn observe(&mut self, scene: Arc<Scene<V>>, stamp: Stamp) {
+        if self
+            .local
+            .as_ref()
+            .is_none_or(|old| !Arc::ptr_eq(&old.scene, &scene))
+            || self.overrides > 0
+        {
+            self.payload_version = Arc::new(());
+        }
         let same = self
             .local
             .as_ref()
@@ -187,6 +203,9 @@ impl<V> Facts<V> {
         previous: &Self,
         mut visit: impl FnMut(&Arc<str>, Option<&Arc<V>>),
     ) {
+        if Arc::ptr_eq(&self.payload_version, &previous.payload_version) {
+            return;
+        }
         let mut keys: Vec<_> = self
             .cold
             .changed_pairs(&previous.cold)

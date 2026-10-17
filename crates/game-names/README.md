@@ -7,3 +7,5 @@ Owns stable personal identities, original given names, chosen-name history, name
 Social life owns the public name projection and emits registration and rename events. `NameFor` supplies observer-specific names to social observations, including old memories and private usage. Knowing someone's ID does not reveal their name. Saves validate identity history, heard names, and usage; invalid changes roll back atomically.
 
 Identities share immutable records and name-history entries across transaction checkpoints. Appends validate their new suffix when the retained prefix shares the original entries; replacements and loaded worlds receive full validation. Histories retain every recorded change and serialize as ordinary arrays.
+
+When communication is enabled, chosen names require understandable presentation before another person learns them. A silent rename can remain private, and deaf observers can retain an older name. The person choosing a child's name already knows their own choice and can present it on the child's behalf. Identity storage and personally heard names remain separate.

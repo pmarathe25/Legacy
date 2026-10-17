@@ -148,7 +148,7 @@ food = { portion = 3, relief = 80, shelf_days = 180, nutrients = { energy = 80, 
 id = 321
 name = "Moss paper"
 mass = 1
-tags = ["crafted", "writing"]
+tags = ["crafted", "writing", "paper"]
 
 [data.objects.berry-ink]
 id = 322

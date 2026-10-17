@@ -23,6 +23,11 @@ pub struct Learned {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Diet {
+    #[serde(
+        default = "normal_requirement",
+        skip_serializing_if = "is_normal_requirement"
+    )]
+    pub requirement_per_mille: u64,
     pub at: SimTime,
     pub reserves: BTreeMap<String, u64>,
     pub intake: BTreeMap<String, u64>,
@@ -32,6 +37,12 @@ pub struct Diet {
     pub learned: BTreeMap<GoodId, Learned>,
     pub meals: u64,
     pub alive: bool,
+}
+fn normal_requirement() -> u64 {
+    1000
+}
+fn is_normal_requirement(value: &u64) -> bool {
+    *value == 1000
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Status {
@@ -47,8 +58,20 @@ impl Default for Status {
     }
 }
 impl Diet {
+    pub fn target(&self, need: u64, days: u64) -> u64 {
+        (u128::from(need) * u128::from(days) * u128::from(self.requirement_per_mille) / 1000)
+            .min(u128::from(u64::MAX)) as u64
+    }
+    pub fn used(&self, need: u64, at: SimTime) -> u64 {
+        (u128::from(at.0.saturating_sub(self.at.0))
+            .saturating_mul(u128::from(need))
+            .saturating_mul(u128::from(self.requirement_per_mille))
+            / u128::from(DAY.0))
+        .min(u128::from(u64::MAX)) as u64
+    }
     pub fn new(needs: &BTreeMap<String, u64>, at: SimTime) -> Self {
         Self {
+            requirement_per_mille: 1000,
             at,
             reserves: needs.iter().map(|(k, n)| (k.clone(), n * 30_000)).collect(),
             intake: BTreeMap::new(),
@@ -63,9 +86,7 @@ impl Diet {
         needs
             .iter()
             .map(|(k, n)| {
-                let used = (u128::from(at.0.saturating_sub(self.at.0)) * u128::from(*n) * 1000
-                    / u128::from(DAY.0))
-                .min(u128::from(u64::MAX)) as u64;
+                let used = self.used(*n, at);
                 (
                     k.clone(),
                     self.reserves
@@ -81,17 +102,15 @@ impl Diet {
         let quality = needs
             .iter()
             .map(|(k, n)| {
-                let used = (u128::from(at.0.saturating_sub(self.at.0)) * u128::from(*n) * 1000
-                    / u128::from(DAY.0))
-                .min(u128::from(u64::MAX)) as u64;
+                let used = self.used(*n, at);
                 (self
                     .reserves
                     .get(k)
                     .copied()
                     .unwrap_or(0)
                     .saturating_sub(used)
-                    / (n * 14))
-                    .min(1000) as u32
+                    / self.target(*n, 14).max(1))
+                .min(1000) as u32
             })
             .min()
             .unwrap_or(1000);
@@ -125,13 +144,12 @@ impl Diet {
                 .unwrap_or(0)
                 .saturating_add(dose);
             let reserve = self.reserves.entry(key.clone()).or_default();
-            *reserve = reserve.saturating_add(dose).min(
-                needs
-                    .get(key)
-                    .copied()
-                    .unwrap_or(1000)
-                    .saturating_mul(60_000),
-            );
+            let cap = (u128::from(needs.get(key).copied().unwrap_or(1000))
+                * 60_000
+                * u128::from(self.requirement_per_mille)
+                / 1000)
+                .min(u128::from(u64::MAX)) as u64;
+            *reserve = reserve.saturating_add(dose).min(cap);
         }
         let scale = |n: i32| {
             (i128::from(n) * i128::from(q) / i128::from(food.portion))

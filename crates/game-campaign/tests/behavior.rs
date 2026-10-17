@@ -5,12 +5,14 @@ fn builder() -> Builder {
     let mut b = Builder::new();
     game_land::plugin(&mut b).unwrap();
     game_transport::plugin(&mut b).unwrap();
+    game_vitality::plugin(&mut b).unwrap();
     game_objects::plugin(&mut b).unwrap();
     game_traits::plugin(&mut b).unwrap();
     game_cargo::plugin(&mut b).unwrap();
     game_property::plugin(&mut b).unwrap();
     game_environment::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
+    game_communication::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
     game_skills::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
@@ -375,6 +377,14 @@ fn dependent_care_consumes_food_and_travels_with_the_caregiver() {
     let (mut h, area) = world();
     let (mother, inventory) = person(&mut h, area);
     let (father, _) = person(&mut h, area);
+    // This fixture chooses a caregiver willing to bear the food cost.
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&mother].clone();
+    profile.insert("altruism".into(), 1000);
+    h.dispatch(game_traits::Set {
+        person: mother,
+        profile,
+    })
+    .unwrap();
     h.dispatch(game_households::Enable).unwrap();
     h.dispatch(game_cargo::Deposit {
         inventory,
@@ -402,7 +412,7 @@ fn dependent_care_consumes_food_and_travels_with_the_caregiver() {
     );
     assert_eq!(
         h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(game_cargo::FOOD),
-        90
+        94
     );
     let other = h
         .dispatch(game_land::CreateArea {
@@ -442,7 +452,7 @@ fn local_children_are_fed_before_a_reunion_journey_to_an_older_remote_child() {
         ..Default::default()
     }))
     .unwrap();
-    let (mother, inventory) = person(&mut h, area);
+    let (mother, _) = person(&mut h, area);
     let (father, _) = person(&mut h, area);
     h.dispatch(game_households::Enable).unwrap();
     let older = h
@@ -455,6 +465,26 @@ fn local_children_are_fed_before_a_reunion_journey_to_an_older_remote_child() {
         .unwrap();
     let at = h.now().after(SimDuration(6 * 365 * DAY.0)).unwrap();
     while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    // A newly arrived foster parent has no accumulated needs from the clock-only setup.
+    h.dispatch(game_physiology::Damage {
+        person: mother,
+        amount: 1000,
+    })
+    .unwrap();
+    let (mother, inventory) = person(&mut h, area);
+    // This fixture chooses a caregiver willing to bear the food cost.
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&mother].clone();
+    profile.insert("altruism".into(), 1000);
+    h.dispatch(game_traits::Set {
+        person: mother,
+        profile,
+    })
+    .unwrap();
+    h.dispatch(game_households::Foster {
+        caregiver: mother,
+        child: older,
+    })
+    .unwrap();
     let away = h
         .dispatch(game_land::CreateArea {
             name: "Away".into(),
@@ -505,7 +535,7 @@ fn local_children_are_fed_before_a_reunion_journey_to_an_older_remote_child() {
         );
         assert_eq!(
             host.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(game_cargo::FOOD),
-            90
+            94
         );
         assert_eq!(host.get::<Actions>().unwrap().0[&mother].kind, "travel");
     }
@@ -710,7 +740,7 @@ fn a_local_adult_can_decline_or_accept_care_for_an_orphan_and_feed_them() {
     );
     h.dispatch(game_traits::Set {
         person: volunteer,
-        profile: BTreeMap::from([("empathy".into(), 1000)]),
+        profile: BTreeMap::from([("empathy".into(), 1000), ("altruism".into(), 1000)]),
     })
     .unwrap();
     h.dispatch(game_care::Consider { person: volunteer })
@@ -736,7 +766,7 @@ fn a_local_adult_can_decline_or_accept_care_for_an_orphan_and_feed_them() {
     );
     assert_eq!(
         h.get::<game_cargo::Cargo>().unwrap().0[&pack].amount(game_cargo::FOOD),
-        90
+        94
     );
     let save = h.save().unwrap();
     assert_eq!(builder().load(&save, 2).unwrap().save().unwrap(), save);
@@ -880,6 +910,8 @@ fn an_existing_partner_can_withdraw_and_later_restore_reproductive_consent() {
         observer: b,
         other: a,
         relationship: game_relationships::Relationship {
+            respect: 0,
+            admiration: 0,
             affection: 100,
             trust: 100,
             fear: 100,
@@ -1039,4 +1071,194 @@ fn routine_reunion_does_not_preempt_a_caregivers_committed_food_plan() {
         area
     );
     h.save().unwrap();
+}
+
+#[test]
+fn a_caregiver_accounts_for_harvest_time_when_food_is_already_carried() {
+    let (mut h, area) = world();
+    let (mother, inventory) = person(&mut h, area);
+    let (father, _) = person(&mut h, area);
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&mother].clone();
+    profile.insert("altruism".into(), 1000);
+    h.dispatch(game_traits::Set {
+        person: mother,
+        profile,
+    })
+    .unwrap();
+    h.dispatch(game_households::Enable).unwrap();
+    let child = h
+        .dispatch(game_lifecycle::Birth {
+            mother,
+            father,
+            caregiver: mother,
+            area,
+        })
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory,
+        good: game_cargo::FOOD,
+        quantity: 100,
+    })
+    .unwrap();
+    let patch = h
+        .dispatch(game_ecology::Create(game_ecology::Patch {
+            area,
+            good: game_cargo::FOOD,
+            stock: 100,
+            capacity: 100,
+            renew: 0,
+        }))
+        .unwrap();
+    h.dispatch(game_physiology::Start).unwrap();
+    let at = h.now().after(SimDuration(35 * MINUTE.0)).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    h.dispatch(game_households::Tend { person: mother })
+        .unwrap();
+    assert_eq!(
+        h.get::<game_physiology::Bodies>().unwrap().people[&child].hunger,
+        0
+    );
+    assert_eq!(
+        h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(game_cargo::FOOD),
+        94
+    );
+    assert_eq!(
+        h.get::<game_ecology::Ecology>().unwrap().patches[&patch].stock,
+        100
+    );
+    assert!(!h.get::<Actions>().unwrap().0.contains_key(&mother));
+}
+
+#[test]
+fn a_caregiver_can_harvest_less_than_a_portion_and_finish_delivery_after_reload() {
+    let (mut h, area) = world();
+    let (mother, inventory) = person(&mut h, area);
+    let (father, _) = person(&mut h, area);
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&mother].clone();
+    profile.insert("altruism".into(), 1000);
+    h.dispatch(game_traits::Set {
+        person: mother,
+        profile,
+    })
+    .unwrap();
+    h.dispatch(game_households::Enable).unwrap();
+    let child = h
+        .dispatch(game_lifecycle::Birth {
+            mother,
+            father,
+            caregiver: mother,
+            area,
+        })
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory,
+        good: game_cargo::FOOD,
+        quantity: 10,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Start).unwrap();
+    let at = h.now().after(SimDuration(35 * MINUTE.0)).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    h.dispatch(game_physiology::Eat {
+        person: mother,
+        inventory,
+    })
+    .unwrap();
+    let patch = h
+        .dispatch(game_ecology::Create(game_ecology::Patch {
+            area,
+            good: game_cargo::FOOD,
+            stock: 4,
+            capacity: 4,
+            renew: 0,
+        }))
+        .unwrap();
+    h.dispatch(game_households::Tend { person: mother })
+        .unwrap();
+    assert_eq!(h.get::<Actions>().unwrap().0[&mother].kind, "gather");
+    assert!(
+        h.get::<game_households::Households>()
+            .unwrap()
+            .food_care
+            .contains_key(&mother)
+    );
+    let finish = h.get::<Actions>().unwrap().0[&mother].until.unwrap();
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        while host.advance(finish, 128).unwrap().stop == Stop::Budget {}
+        assert_eq!(
+            host.get::<game_ecology::Ecology>().unwrap().patches[&patch].stock,
+            0
+        );
+        assert_eq!(
+            host.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(game_cargo::FOOD),
+            0
+        );
+        assert!(host.notices().any(|n| n.kind == "physiology.fed"
+            && n.data["patient"].as_u64() == Some(child.0)
+            && n.data["quantity"] == 4));
+        assert_eq!(
+            host.get::<game_physiology::Bodies>().unwrap().people[&child].hunger,
+            16
+        );
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn identical_care_perceptions_choose_the_same_serving_despite_hidden_hunger() {
+    let (mut h, area) = world();
+    let (mother, inventory) = person(&mut h, area);
+    let (father, _) = person(&mut h, area);
+    h.dispatch(game_traits::Set {
+        person: mother,
+        profile: [
+            ("empathy".into(), 1000),
+            ("altruism".into(), 1000),
+            ("intelligence".into(), 4000),
+        ]
+        .into(),
+    })
+    .unwrap();
+    h.dispatch(game_households::Enable).unwrap();
+    h.dispatch(game_communication::Enable).unwrap();
+    h.dispatch(game_vitality::Enable).unwrap();
+    let child = h
+        .dispatch(game_lifecycle::Birth {
+            mother,
+            father,
+            caregiver: mother,
+            area,
+        })
+        .unwrap();
+    h.dispatch(game_physiology::Express { person: child })
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory,
+        good: game_cargo::FOOD,
+        quantity: 100,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Start).unwrap();
+    let at = h.now().after(SimDuration(35 * MINUTE.0)).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    h.dispatch(game_physiology::Eat {
+        person: mother,
+        inventory,
+    })
+    .unwrap();
+    let save = h.save().unwrap();
+    let mut amounts = vec![];
+    for hunger in [35, 39] {
+        let mut variant: serde_json::Value = serde_json::from_str(&save).unwrap();
+        variant["resources"]["physiology.bodies"]["people"][child.0.to_string()]["hunger"] =
+            serde_json::json!(hunger);
+        let mut host = builder().load(&variant.to_string(), 4).unwrap();
+        host.dispatch(game_households::Tend { person: mother })
+            .unwrap();
+        amounts
+            .push(host.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(game_cargo::FOOD));
+    }
+    assert_eq!(amounts[0], amounts[1]);
+    assert!(amounts[0] < 90);
 }

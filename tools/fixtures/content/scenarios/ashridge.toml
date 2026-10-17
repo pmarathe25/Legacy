@@ -1,0 +1,460 @@
+id = "ashridge"
+version = 1
+[data]
+label = "Ashridge frontier fixture"
+fixture = true
+ruler = "ruler"
+physiology = "fixture"
+characters = "fixture"
+environment = "highland"
+health = "basic"
+social_life = "fixture"
+autonomy = true
+renewal = true
+
+[[data.areas]]
+key = "hall"
+name = "Ashridge Hall"
+
+[[data.areas]]
+key = "terraces"
+name = "Sheltered Terraces"
+climate = "river-valley"
+
+[[data.areas]]
+key = "wood"
+name = "Pine Hollow"
+
+[[data.areas]]
+key = "steppe"
+name = "Seregrass Plain"
+climate = "dry-steppe"
+
+[[data.areas]]
+key = "mine"
+name = "Redstone Cut"
+
+[[data.areas]]
+key = "spring"
+name = "Warmwater Spring"
+climate = "wetland"
+
+[[data.links]]
+from = "hall"
+to = "terraces"
+duration = 120000
+
+[[data.links]]
+from = "hall"
+to = "wood"
+duration = 180000
+
+[[data.links]]
+from = "hall"
+to = "steppe"
+duration = 240000
+
+[[data.links]]
+from = "hall"
+to = "mine"
+duration = 300000
+
+[[data.links]]
+from = "hall"
+to = "spring"
+duration = 360000
+
+[[data.links]]
+from = "wood"
+to = "mine"
+duration = 120000
+
+[[data.people]]
+key = "ruler"
+name = "The Wanderer"
+count = 1
+kind = "Mortal"
+area = "hall"
+
+[[data.people]]
+key = "guardian-1"
+name = "Aster"
+count = 1
+kind = "Guardian"
+area = "hall"
+
+[[data.people]]
+key = "guardian-2"
+name = "Cairn"
+count = 1
+kind = "Guardian"
+area = "hall"
+
+[[data.people]]
+key = "dara"
+name = "Dara Stone"
+count = 1
+kind = "Mortal"
+area = "hall"
+traits = { sociability = 850, empathy = 900, discipline = 150, patience = 900, risk-tolerance = 100 }
+beliefs = { sharing = 10, authority = -5, honesty = 9 }
+values = { fellowship = 60 }
+
+[[data.people]]
+key = "kest"
+name = "Kest Iron"
+count = 1
+kind = "Mortal"
+area = "hall"
+traits = { sociability = 200, empathy = 250, discipline = 800, patience = 250, risk-tolerance = 750 }
+beliefs = { sharing = -10, authority = 10, honesty = 3 }
+values = { independence = 85 }
+
+[[data.people]]
+key = "tovin"
+name = "Tovin Hearth"
+count = 1
+kind = "Mortal"
+area = "hall"
+traits = { sociability = 700, empathy = 800, discipline = 300, patience = 800, risk-tolerance = 200 }
+beliefs = { sharing = 8, authority = -2, honesty = 8 }
+values = { fellowship = 40 }
+
+[[data.people]]
+key = "risa"
+name = "Risa Pine"
+count = 1
+kind = "Mortal"
+area = "terraces"
+traits = { sociability = 350, empathy = 750, discipline = 650, patience = 750, risk-tolerance = 250 }
+beliefs = { sharing = 5, authority = 2, honesty = 8 }
+values = { independence = 40 }
+
+[[data.people]]
+key = "avon"
+name = "Avon Sedge"
+count = 1
+kind = "Mortal"
+area = "terraces"
+traits = { sociability = 800, empathy = 800, discipline = 200, patience = 800, risk-tolerance = 200 }
+beliefs = { sharing = 8, authority = -4, honesty = 6 }
+values = { fellowship = 35 }
+
+[[data.people]]
+key = "mahl"
+name = "Mahl Crow"
+count = 1
+kind = "Mortal"
+area = "wood"
+traits = { sociability = 100, empathy = 350, discipline = 900, patience = 350, risk-tolerance = 650 }
+beliefs = { sharing = -5, authority = -8, honesty = 1 }
+values = { independence = 90 }
+
+[[data.people]]
+key = "suri"
+name = "Suri Flint"
+count = 1
+kind = "Mortal"
+area = "wood"
+traits = { sociability = 650, empathy = 850, discipline = 350, patience = 850, risk-tolerance = 150 }
+beliefs = { sharing = 8, authority = -3, honesty = 9 }
+values = { fellowship = 40 }
+
+[[data.people]]
+key = "penn"
+name = "Penn Copper"
+count = 1
+kind = "Mortal"
+area = "mine"
+traits = { sociability = 450, empathy = 500, discipline = 550, patience = 500, risk-tolerance = 500 }
+beliefs = { sharing = 0, authority = 8, honesty = 5 }
+values = { independence = 65 }
+
+[[data.people]]
+key = "hera"
+name = "Hera Ember"
+count = 1
+kind = "Mortal"
+area = "mine"
+traits = { sociability = 750, empathy = 800, discipline = 250, patience = 800, risk-tolerance = 200 }
+beliefs = { sharing = 8, authority = -2, honesty = 8 }
+values = { fellowship = 45 }
+
+[[data.bonds]]
+observer = "dara"
+other = "tovin"
+relationship = { trust = 35, affection = 40, fear = 0, grievance = 0 }
+
+[[data.bonds]]
+observer = "tovin"
+other = "dara"
+relationship = { trust = 15, affection = 25, fear = 0, grievance = 0 }
+
+[[data.bonds]]
+observer = "dara"
+other = "kest"
+relationship = { trust = -25, affection = -20, fear = 10, grievance = 35 }
+
+[[data.bonds]]
+observer = "kest"
+other = "dara"
+relationship = { trust = -10, affection = -5, fear = 0, grievance = 20 }
+
+[[data.inventories]]
+key = "hall-store"
+area = "hall"
+capacity = 100000
+owner = "ruler"
+access = ["ruler", "guardian-1", "guardian-2", "dara", "kest", "tovin"]
+known_to = ["ruler", "guardian-1", "guardian-2", "dara", "kest", "tovin"]
+goods = { barley = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20, iron-ore = 30, clay = 30, reeds = 40, flax = 40, healing-herbs = 20, fish = 30, roots = 40, beans = 40, wild-berries = 30 }
+
+[[data.inventories]]
+key = "terraces-store"
+area = "terraces"
+capacity = 100000
+owner = "risa"
+access = ["risa", "avon"]
+known_to = ["risa", "avon"]
+goods = { barley = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20 }
+
+[[data.inventories]]
+key = "wood-store"
+area = "wood"
+capacity = 100000
+owner = "mahl"
+access = ["mahl", "suri"]
+known_to = ["mahl", "suri"]
+goods = { barley = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20 }
+
+[[data.inventories]]
+key = "mine-store"
+area = "mine"
+capacity = 100000
+owner = "penn"
+access = ["penn", "hera"]
+known_to = ["penn", "hera"]
+goods = { barley = 2500, timber = 100, medicine = 10, grain-seed = 50, root-seed = 30, bean-seed = 30, barley-seed = 40, rice-seed = 30, flax-seed = 30, herb-seed = 20, fruit-cuttings = 20 }
+
+[[data.inventories]]
+key = "ruler-pack"
+carried_by = "ruler"
+capacity = 250
+owner = "ruler"
+access = ["ruler"]
+known_to = ["ruler"]
+
+[[data.inventories]]
+key = "dara-pack"
+carried_by = "dara"
+capacity = 250
+owner = "dara"
+access = ["dara"]
+known_to = ["dara"]
+
+[[data.inventories]]
+key = "kest-pack"
+carried_by = "kest"
+capacity = 250
+owner = "kest"
+access = ["kest"]
+known_to = ["kest"]
+
+[[data.inventories]]
+key = "tovin-pack"
+carried_by = "tovin"
+capacity = 250
+owner = "tovin"
+access = ["tovin"]
+known_to = ["tovin"]
+
+[[data.inventories]]
+key = "risa-pack"
+carried_by = "risa"
+capacity = 250
+owner = "risa"
+access = ["risa"]
+known_to = ["risa"]
+
+[[data.inventories]]
+key = "avon-pack"
+carried_by = "avon"
+capacity = 250
+owner = "avon"
+access = ["avon"]
+known_to = ["avon"]
+
+[[data.inventories]]
+key = "mahl-pack"
+carried_by = "mahl"
+capacity = 250
+owner = "mahl"
+access = ["mahl"]
+known_to = ["mahl"]
+
+[[data.inventories]]
+key = "suri-pack"
+carried_by = "suri"
+capacity = 250
+owner = "suri"
+access = ["suri"]
+known_to = ["suri"]
+
+[[data.inventories]]
+key = "penn-pack"
+carried_by = "penn"
+capacity = 250
+owner = "penn"
+access = ["penn"]
+known_to = ["penn"]
+
+[[data.inventories]]
+key = "hera-pack"
+carried_by = "hera"
+capacity = 250
+owner = "hera"
+access = ["hera"]
+known_to = ["hera"]
+
+[[data.patches]]
+key = "resource-1"
+area = "hall"
+object = "roots"
+stock = 180
+capacity = 180
+renew = 15
+renewal_warmth = 0
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-2"
+area = "wood"
+object = "nuts"
+stock = 180
+capacity = 180
+renew = 15
+renewal_warmth = 3
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-3"
+area = "wood"
+object = "mushrooms"
+stock = 80
+capacity = 80
+renew = 12
+renewal_warmth = 4
+renewal_rain = 2
+
+[[data.patches]]
+key = "resource-4"
+area = "wood"
+object = "timber"
+stock = 500
+capacity = 500
+renew = 20
+renewal_warmth = 0
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-5"
+area = "steppe"
+object = "healing-herbs"
+stock = 100
+capacity = 100
+renew = 12
+renewal_warmth = 10
+renewal_rain = 2
+
+[[data.patches]]
+key = "resource-6"
+area = "mine"
+object = "stone"
+stock = 900
+capacity = 900
+renew = 0
+
+[[data.patches]]
+key = "resource-7"
+area = "mine"
+object = "iron-ore"
+stock = 600
+capacity = 600
+renew = 0
+
+[[data.patches]]
+key = "resource-8"
+area = "spring"
+object = "reeds"
+stock = 200
+capacity = 200
+renew = 25
+renewal_warmth = 5
+renewal_rain = 3
+
+[[data.patches]]
+key = "resource-9"
+area = "spring"
+object = "fish"
+stock = 160
+capacity = 160
+renew = 18
+renewal_warmth = 5
+renewal_rain = 1
+
+[[data.patches]]
+key = "resource-10"
+area = "spring"
+object = "clay"
+stock = 400
+capacity = 400
+renew = 0
+
+[[data.plots]]
+key = "roots-plot"
+area = "terraces"
+steward = "ruler"
+crop = "roots"
+
+[[data.plots]]
+key = "barley-plot"
+area = "terraces"
+steward = "ruler"
+crop = "barley"
+
+[[data.plots]]
+key = "beans-plot"
+area = "terraces"
+steward = "ruler"
+crop = "beans"
+
+[[data.plots]]
+key = "flax-plot"
+area = "terraces"
+steward = "ruler"
+crop = "flax"
+
+[[data.plots]]
+key = "herbs-plot"
+area = "terraces"
+steward = "ruler"
+crop = "herbs"
+
+[[data.plots]]
+key = "rice-plot"
+area = "spring"
+steward = "ruler"
+crop = "rice"
+
+[[data.plots]]
+key = "orchard-plot"
+area = "terraces"
+steward = "ruler"
+crop = "orchard"
+
+[[data.institutions]]
+key = "commons"
+name = "Ashridge Hall Council"
+area = "hall"
+members = ["ruler", "dara", "kest", "tovin"]
+offices = {}

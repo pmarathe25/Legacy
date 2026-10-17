@@ -1,5 +1,9 @@
 # game-relationships
 
+Directed respect and admiration are separate from affection, trust, fear, and grievance. `Regard` applies an observer's interpretation of personally experienced actions. `HearOpinion` stores an attributed expression with its intermediary, time, and visible coercion context; it does not assert the speaker's true private belief. `ReviseOpinion` gradually updates an existing social belief or a learned concept value.
+
+`apparent_difference` compares only the listener's own views and remembered expressions. Private counterpart beliefs are not a source of conversational knowledge. Heard testimony and regard retain ordinary transaction rollback and default cleanly when loading earlier saves.
+
 Directed trust, affection, fear and grievance; separate social beliefs and slowly learned concept values. Interpretation requires an explicit credible observation.
 
 Privileged `Initialize` and `SetRelationship` requests construct authored beliefs, values, and directed starting bonds. `Converse` applies a bounded personal impression supplied by the social-life owner, changing affection, trust, and grievance. `LearnValue` retains its bounded learning rate. Range checks apply to saved state and changed records; sharing, authority, and honesty remain separate beliefs.

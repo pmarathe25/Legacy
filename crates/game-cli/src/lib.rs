@@ -25,6 +25,8 @@ pub fn parse(line: &str) -> Result<Input> {
   ["eat",_]=>Ok(Input::Command(Command::Eat{inventory:InventoryId(number(1)?)})),["rest"]=>Ok(Input::Command(Command::Rest)),
   ["look"]=>Ok(Input::Command(Command::ObserveSurroundings)),
   ["observe-patch",_]=>Ok(Input::Command(Command::ObservePatch{patch:number(1)?})),
+  ["show-work",_,_]=>Ok(Input::Command(Command::PresentWork{work:number(1)?,listener:PersonId(number(2)?)})),
+  ["read-work",_]=>Ok(Input::Command(Command::ReadWork{work:number(1)?})),
   ["talk",_]=>Ok(Input::Command(Command::Talk{other:PersonId(number(1)?)})),
   ["craft",recipe,_]=>Ok(Input::Command(Command::Craft{recipe:(*recipe).into(),inventory:InventoryId(number(2)?)})),
   ["plant",crop,_]=>Ok(Input::Command(Command::Plant{crop:(*crop).into(),seed:InventoryId(number(2)?)})),
@@ -38,6 +40,6 @@ pub fn parse(line: &str) -> Result<Input> {
   ["consent",_,"no"]=>Ok(Input::Command(Command::Consent{step:number(1)? as usize,accept:false})),
   ["save",path]=>Ok(Input::Save((*path).into())),["load",path]=>Ok(Input::Load((*path).into())),
   ["command",..]=>Ok(Input::Command(serde_json::from_str(line.trim().strip_prefix("command").unwrap().trim()).map_err(|e|Error::Rejected(e.to_string()))?)),
-  _=>Err(Error::Rejected("use status, run <seconds>, move <area>, eat <inventory>, rest, observe <inventory>, look, observe-patch <patch>, tell <person> <fact-key>, talk <person>, craft <recipe> <inventory>, plant <crop> <inventory>, pursue <activity> <inventory>, sow <plot> <inventory>, harvest <plot> <inventory>, cancel, consent <step> yes|no, dismiss, command <JSON>, save <path>, load <path>, debug, quit".into())),
+  _=>Err(Error::Rejected("use status, run <seconds>, move <area>, eat <inventory>, rest, observe <inventory>, look, observe-patch <patch>, tell <person> <fact-key>, talk <person>, read-work <work>, show-work <work> <person>, craft <recipe> <inventory>, plant <crop> <inventory>, pursue <activity> <inventory>, sow <plot> <inventory>, harvest <plot> <inventory>, cancel, consent <step> yes|no, dismiss, command <JSON>, save <path>, load <path>, debug, quit".into())),
  }
 }

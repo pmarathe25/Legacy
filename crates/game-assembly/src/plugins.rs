@@ -14,6 +14,7 @@ pub fn builder() -> Result<Builder> {
     game_property::plugin(&mut b)?;
     game_environment::plugin(&mut b)?;
     game_physiology::plugin(&mut b)?;
+    game_communication::plugin(&mut b)?;
     game_knowledge::plugin(&mut b)?;
     game_skills::plugin(&mut b)?;
     game_ecology::plugin(&mut b)?;
@@ -62,10 +63,39 @@ pub fn builder() -> Result<Builder> {
     game_shelter::plugin(&mut b)?;
     game_exposure::plugin(&mut b)?;
     game_affiliation::plugin(&mut b)?;
+    game_discourse::plugin(&mut b)?;
     game_grievances::plugin(&mut b)?;
     game_campaign::plugin(&mut b)?;
     game_wellbeing::plugin(&mut b)?;
     game_openings::plugin(&mut b)?;
     crate::binding::register(&mut b)?;
     Ok(b)
+}
+
+/// Introduced owners have empty, inactive state in earlier worlds.
+pub fn load(saved: &str, workers: usize) -> Result<game_sim::Host> {
+    #[derive(serde::Deserialize)]
+    struct Header {
+        plugins: std::collections::BTreeMap<String, u32>,
+    }
+    let header: Header =
+        serde_json::from_str(saved).map_err(|e| game_core::Error::InvalidSave(e.to_string()))?;
+    if header.plugins.contains_key("communication") && header.plugins.contains_key("discourse") {
+        return builder()?.load(saved, workers);
+    }
+    let mut value: serde_json::Value =
+        serde_json::from_str(saved).map_err(|e| game_core::Error::InvalidSave(e.to_string()))?;
+    if !header.plugins.contains_key("communication") {
+        game_core::require(
+            value["resources"].get("communication.experience").is_none(),
+            "undeclared communication state",
+        )?;
+        value["plugins"]["communication"] = serde_json::json!(1);
+        value["resources"]["communication.experience"] =
+            serde_json::to_value(game_communication::Communication::default()).unwrap();
+    }
+    if !header.plugins.contains_key("discourse") {
+        value["plugins"]["discourse"] = serde_json::json!(1);
+    }
+    builder()?.load(&serde_json::to_string(&value).unwrap(), workers)
 }

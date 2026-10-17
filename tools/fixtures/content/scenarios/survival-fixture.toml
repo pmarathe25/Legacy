@@ -1,0 +1,84 @@
+id = "survival-fixture"
+version = 1
+[data]
+label = "Survival fixture"
+fixture = true
+ruler = "ruler"
+physiology = "fixture"
+characters = "fixture"
+environment = "temperate"
+health = "basic"
+autonomy = true
+renewal = true
+
+[[data.areas]]
+key = "village"
+name = "Village"
+[[data.areas]]
+key = "farm"
+name = "Farm"
+[[data.areas]]
+key = "forest"
+name = "Forest"
+[[data.links]]
+from = "village"
+to = "farm"
+duration = 120000
+[[data.links]]
+from = "village"
+to = "forest"
+duration = 180000
+[[data.people]]
+key = "ruler"
+count = 1
+kind = "Mortal"
+area = "village"
+[[data.people]]
+key = "guardian-1"
+count = 1
+kind = "Guardian"
+area = "village"
+[[data.people]]
+key = "guardian-2"
+count = 1
+kind = "Guardian"
+area = "village"
+[[data.people]]
+key = "citizen"
+count = 12
+kind = "Mortal"
+area = "village"
+[[data.inventories]]
+key = "store"
+area = "village"
+capacity = 1000000000
+owner = "ruler"
+access = ["*"]
+known_to = ["*"]
+goods = { grain-seed = 100, timber = 100, medicine = 10 }
+per_person = { grain = 1000 }
+[[data.inventories]]
+key = "pack"
+carried_by = "ruler"
+capacity = 1000
+owner = "ruler"
+access = ["ruler"]
+[[data.plots]]
+key = "plot"
+area = "village"
+steward = "ruler"
+crop = "grain"
+[[data.patches]]
+key = "patch"
+area = "forest"
+object = "grain"
+stock = 100
+capacity = 100
+renew = 10
+[[data.institutions]]
+key = "institution"
+name = "Fixture council"
+area = "village"
+members = ["ruler", "guardian-1", "guardian-2"]
+leader = "ruler"
+offices = { ruler = "ruler" }

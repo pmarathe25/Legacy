@@ -83,6 +83,14 @@ impl Request for Register {
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
+pub struct Abandon {
+    pub person: PersonId,
+}
+impl Request for Abandon {
+    const KEY: &'static str = "characters.abandon";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {
     const KEY: &'static str = "characters.start";
@@ -225,41 +233,17 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     } else {
         (value, 0)
     };
-    candidates.extend(options.iter().map(|o| {
-        let foraging = matches!(o.plan, Plan::Forage { .. });
-        let travel = o
-            .travel
-            .0
-            .div_ceil(MINUTE.0)
-            .saturating_mul(rules.travel_effort_per_minute);
-        let hunger = bodily_hunger.max(o.appetite).min((i64::MAX / 4) as u64);
-        Candidate {
-            id: o.id,
-            need: if foraging {
-                hunger as i64
-            } else {
-                (hunger as i64).saturating_mul(2)
-            },
-            goal: if foraging { 5 } else { 0 },
-            value: o
-                .value
-                .saturating_add(if foraging {
-                    i64::from(value) - i64::from(independence)
-                } else {
-                    0
-                })
-                .saturating_sub(if o.self_supplied {
-                    0
-                } else {
-                    i64::from(independence)
-                }),
-            effort: travel
-                .saturating_add(if foraging { rules.gathering_effort } else { 0 })
-                .min(i64::MAX as u64) as i64,
-            risk: o.risk.saturating_add(if foraging { risk } else { 0 }),
-            survival: true,
+    candidates.extend(
+        plans::FoodScores {
+            hunger: bodily_hunger,
+            value,
+            independence,
+            risk,
+            travel_per_minute: rules.travel_effort_per_minute,
+            gathering_effort: rules.gathering_effort,
         }
-    }));
+        .candidates(&options),
+    );
     candidates.retain(|c| {
         mind.retry_after
             .get(&c.id)
@@ -327,6 +311,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         )?;
         tx.edit::<Minds>()?.rules = r.0;
         Ok(())
+    })?;
+    b.request::<Abandon>(|tx, r| {
+        if let Some(mind) = tx.edit::<Minds>()?.people.get_mut(&r.person) {
+            mind.plan = None;
+        }
+        tx.cancel_action(r.person)
     })?;
     b.request::<Register>(|tx, r| {
         require(

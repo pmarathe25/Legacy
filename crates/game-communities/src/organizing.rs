@@ -36,11 +36,12 @@ fn cooperative(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> bool {
 fn loyal(tx: &Transaction<'_>, p: PersonId, leader: PersonId) -> bool {
     let r = relation(tx, p, leader);
     let b = belief(tx, p);
-    b.authority > 0
-        && r.affection >= 24
+    let attraction = r.affection + r.respect + r.admiration;
+    (b.authority > 0 || r.admiration >= 50 || r.respect >= 50)
+        && attraction >= 24
         && r.trust >= 8
         && r.grievance < 10
-        && i64::from(r.affection + r.trust + b.authority.clamp(0, 10) * 2)
+        && i64::from(attraction + r.trust + b.authority.clamp(0, 10) * 2)
             > game_pressure::disposition(tx, p, "ambition") / 20
 }
 fn allegiance(tx: &Transaction<'_>, p: PersonId, leader: PersonId) -> Result<Option<Attachment>> {
@@ -322,7 +323,11 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         organize(tx, e.first, e.second, false)
     })?;
     b.subscribe::<game_pressure::Submitted>("communities.submission", |tx, e| {
-        organize(tx, e.leader, e.subject, true)
+        if matches!(e.purpose, game_pressure::Purpose::Allegiance) {
+            organize(tx, e.leader, e.subject, true)
+        } else {
+            Ok(())
+        }
     })?;
     b.subscribe::<game_characters::IdleReview>("communities.ambition", |tx, e| {
         let protected = tx.get::<game_lineage::Lineage>()?.current;

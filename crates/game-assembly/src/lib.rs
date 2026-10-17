@@ -18,12 +18,12 @@ impl Simulation {
         Ok(Self { host })
     }
     pub fn new(scenario: &str, seed: u64, workers: usize) -> Result<Self> {
-        Self::with_content(
-            scenario,
-            seed,
-            workers,
-            &mut game_content::Store::standard(),
-        )
+        let mut store = if scenario == "generated" {
+            game_content::Store::standard()
+        } else {
+            game_content::Store::fixtures()
+        };
+        Self::with_content(scenario, seed, workers, &mut store)
     }
     pub fn with_content(
         scenario: &str,
@@ -37,7 +37,7 @@ impl Simulation {
     }
     pub fn load(save: &str, workers: usize) -> Result<Self> {
         Ok(Self {
-            host: plugins::builder()?.load(save, workers)?,
+            host: plugins::load(save, workers)?,
         })
     }
     pub fn save(&self) -> Result<String> {
@@ -67,7 +67,7 @@ impl Simulation {
     }
 }
 pub fn scenarios() -> Result<Vec<game_openings::Scenario>> {
-    game_openings::scenarios(&mut game_content::Store::standard())
+    game_openings::scenarios(&mut game_content::Store::fixtures())
 }
 pub fn scenarios_with_content(
     store: &mut game_content::Store,

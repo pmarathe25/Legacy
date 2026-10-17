@@ -14,10 +14,10 @@ impl Request for Express {
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.request::<Express>(|tx, r| {
-        if tx.registered::<game_nutrition::Register>() {
-            tx.call(game_nutrition::Register { person: r.person })?;
-        }
         if !tx.get::<game_vitality::Vitality>().is_ok_and(|s| s.enabled) {
+            if tx.registered::<game_nutrition::Register>() {
+                tx.call(game_nutrition::Register { person: r.person })?;
+            }
             return Ok(());
         }
         let body = tx.get::<Bodies>()?.people[&r.person];
@@ -43,6 +43,9 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             p.maximum_health = Some(cap.health);
             p.life_limit = cap.life_limit;
         }
+        if tx.registered::<game_nutrition::Register>() {
+            tx.call(game_nutrition::Register { person: r.person })?;
+        }
         Ok(())
     })
 }
@@ -53,7 +56,11 @@ pub(super) fn advance(
     p: PersonId,
     traits: Option<&game_traits::Traits>,
     vitality: Option<&game_vitality::Vitality>,
+    environment: game_body::Rates,
 ) -> Body {
+    if !body.alive {
+        return advance_body(body, rules, at);
+    }
     let Some((traits, life)) = traits.zip(vitality.and_then(|v| v.people.get(&p))) else {
         return advance_body(body, rules, at);
     };
@@ -70,23 +77,31 @@ pub(super) fn advance(
         body.maximum_health = Some(maximum);
         body.health = body.health.min(maximum);
     }
-    let endurance = life.ability(traits.ability(p, "endurance"), "endurance", at);
-    game_body::advance_scaled(
+    game_body::advance_rates(
         &body,
         rules,
         at,
-        1_000_000 / game_vitality::factor(endurance),
+        game_metabolism::rates(traits, life, p, at, environment),
     )
 }
 pub(super) fn condition(tx: &mut Transaction<'_>) -> Result<()> {
     if !tx.get::<game_vitality::Vitality>().is_ok_and(|v| v.enabled) {
         return Ok(());
     }
+    if tx.registered::<game_nutrition::SetDemand>() {
+        let demands: Vec<_> = tx
+            .get::<Bodies>()?
+            .living()
+            .filter(|(_, b)| b.kind == Kind::Mortal)
+            .map(|(person, b)| (*person, b.metabolic_rates.energy.max(1)))
+            .collect();
+        for (person, per_mille) in demands {
+            tx.call(game_nutrition::SetDemand { person, per_mille })?;
+        }
+    }
     let bodies = tx.get::<Bodies>()?;
     let rows = bodies
-        .people
-        .iter()
-        .filter(|(_, p)| p.alive)
+        .living()
         .map(|(id, p)| {
             let health =
                 (u128::from(p.health) * 1000 / u128::from(p.maximum(&bodies.rules))) as u32;

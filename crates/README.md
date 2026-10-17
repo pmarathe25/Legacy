@@ -103,3 +103,9 @@ All four subscribe to `game-characters::IdleReview` and depend on lower features
 `game-parenthood` owns voluntary reproductive intentions over household attachments, experienced condition, current caregiving demands, and lifecycle biology. It reads feature-owned state and asks lifecycle to conceive; it owns no target population.
 
 `game-utility` supplies pure candidate comparison and switching rules. `game-food-memory` projects personal inventory evidence and contextual food appraisal; provisioning owns physical acquisition plans and their execution.
+
+[game-food-actions](game-food-actions/README.md) executes the physical stages of provisioning plans. [game-nurture](game-nurture/README.md) composes voluntary food acquisition and delivery for dependents within the care owner; households persist its intentions. [game-metabolism](game-metabolism/README.md) derives bodily demand and recovery from expressed characteristics and the environment.
+
+[game-discourse](game-discourse/README.md) composes local advocacy, personal interpretation, cited testimony, and specific coercive endorsements as an explicitly composed plugin. Relationships persists heard expressions and directed regard; pressure owns escalation. Private conviction, public compliance, and allegiance remain distinct.
+
+[game-communication](game-communication/README.md) owns personally learned phonetic associations and perceived nonverbal cues. Knowledge and discourse ask it whether messages are understood; they retain ownership of facts and beliefs. Naming compares tribute and confusion, and works owns compositions and their physical texts. [The ownership review](../docs/design/feature-ownership.md) records these boundaries.

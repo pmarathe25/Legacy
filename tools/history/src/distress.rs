@@ -27,7 +27,7 @@ fn stock(h: &game_sim::Host, id: InventoryId) -> Result<Value> {
 fn intention(h: &game_sim::Host, person: PersonId) -> Result<Value> {
     let mind = h.get::<game_characters::Minds>()?.people.get(&person);
     Ok(
-        json!({"person":person,"body":h.get::<game_physiology::Bodies>()?.people.get(&person),
+        json!({"person":person,"body":h.get::<game_physiology::Bodies>()?.body(&person),
         "position":h.get::<game_transport::Positions>()?.0.get(&person),"mind":mind,
         "action":h.get::<game_sim::Actions>()?.0.get(&person),
         "carried":h.get::<game_cargo::Cargo>()?.carried(person).map(|id|stock(h,id)).collect::<Result<Vec<_>>>()?}),
@@ -131,7 +131,7 @@ mod tests {
             .debug_host_mut()
             .dispatch(game_physiology::Create {
                 kind: game_physiology::Kind::Mortal,
-                born: SimTime(epoch),
+                born: SimTime(epoch.saturating_sub(25 * 365 * DAY.0)),
             })
             .unwrap();
         sim.debug_host_mut()
@@ -140,8 +140,51 @@ mod tests {
         sim.debug_host_mut()
             .dispatch(game_heredity::Founder { person })
             .unwrap();
-        let target = SimTime(epoch + 3 * DAY.0);
-        while sim.advance(target, 128).unwrap().stop == game_sim::Stop::Budget {}
+        // Isolate urgent hunger from random inherited maintenance demand.
+        let mut profile = sim
+            .debug_host()
+            .get::<game_traits::Traits>()
+            .unwrap()
+            .people
+            .get(&person)
+            .cloned()
+            .unwrap_or_default();
+        for key in [
+            "metabolism",
+            "size",
+            "strength",
+            "constitution",
+            "recovery",
+            "robustness",
+        ] {
+            profile.insert(key.into(), 1000);
+        }
+        profile.insert("resilience".into(), 16000);
+        sim.debug_host_mut()
+            .dispatch(game_traits::Set { person, profile })
+            .unwrap();
+        let urgent = sim
+            .debug_host()
+            .get::<game_characters::Minds>()
+            .unwrap()
+            .rules
+            .urgent_hunger;
+        for day in 1..=10 {
+            let target = SimTime(epoch + day * DAY.0);
+            while sim.advance(target, 128).unwrap().stop == game_sim::Stop::Budget {}
+            let body = &sim
+                .debug_host()
+                .get::<game_physiology::Bodies>()
+                .unwrap()
+                .people[&person];
+            assert!(
+                body.alive,
+                "diagnostic subject died before reaching urgent hunger"
+            );
+            if body.hunger >= urgent {
+                break;
+            }
+        }
         let before = sim.save().unwrap();
         let mut watch = Watch::default();
         let mut output = vec![];

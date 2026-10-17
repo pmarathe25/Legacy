@@ -72,3 +72,15 @@ name = "Longevity"
 minimum = 250
 maximum = 3000
 default = 1000
+
+[data.traits.metabolism]
+name = "Basal metabolic rate"
+minimum = 250
+maximum = 4000
+default = 1000
+
+[data.traits.recovery]
+name = "Recovery potential"
+minimum = 0
+maximum = 16000
+default = 1000

@@ -6,11 +6,45 @@ use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Purpose {
+    #[default]
+    Allegiance,
+    Endorse {
+        concept: String,
+        stance: i32,
+    },
+}
+impl Purpose {
+    fn allegiance(&self) -> bool {
+        matches!(self, Self::Allegiance)
+    }
+    fn valid(&self) -> bool {
+        match self {
+            Self::Allegiance => true,
+            Self::Endorse { concept, stance } => {
+                !concept.trim().is_empty() && (-100..=100).contains(stance)
+            }
+        }
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Press {
+    pub leader: PersonId,
+    pub subject: PersonId,
+    pub purpose: Purpose,
+}
+impl Request for Press {
+    const KEY: &'static str = "pressure.press";
+    type Response = ();
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Demand {
     pub leader: PersonId,
     pub subject: PersonId,
     pub battle: u64,
+    #[serde(default, skip_serializing_if = "Purpose::allegiance")]
+    pub purpose: Purpose,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pressure {
@@ -32,6 +66,8 @@ impl Request for DemandSubmission {
 pub struct Submitted {
     pub leader: PersonId,
     pub subject: PersonId,
+    #[serde(default, skip_serializing_if = "Purpose::allegiance")]
+    pub purpose: Purpose,
 }
 impl Event for Submitted {
     const KEY: &'static str = "pressure.submitted";
@@ -77,9 +113,21 @@ fn clear(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     }
     Ok(())
 }
-fn yield_to(tx: &mut Transaction<'_>, leader: PersonId, subject: PersonId) -> Result<()> {
+fn yield_to(
+    tx: &mut Transaction<'_>,
+    leader: PersonId,
+    subject: PersonId,
+    purpose: Purpose,
+) -> Result<()> {
     clear(tx, subject)?;
-    tx.emit(Submitted { leader, subject }, vec![leader, subject])
+    tx.emit(
+        Submitted {
+            leader,
+            subject,
+            purpose,
+        },
+        vec![leader, subject],
+    )
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("pressure", 1)?;
@@ -89,6 +137,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         for (p, d) in &h.get::<Pressure>()?.active {
             require(
                 [d.leader, d.subject].contains(p)
+                    && d.purpose.valid()
                     && d.leader != d.subject
                     && [d.leader, d.subject].iter().all(|p| {
                         h.get::<Pressure>().unwrap().active.get(p) == Some(d)
@@ -113,6 +162,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     });
     b.request::<DemandSubmission>(|tx, r| {
+        tx.call(Press {
+            leader: r.leader,
+            subject: r.subject,
+            purpose: Purpose::Allegiance,
+        })
+    })?;
+    b.request::<Press>(|tx, r| {
+        require(r.purpose.valid(), "invalid demanded purpose")?;
         require(r.leader != r.subject, "self submission")?;
         let player = tx.get::<game_lineage::Lineage>()?.current;
         require(
@@ -128,8 +185,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             area == game_transport::area(tx.get()?, r.subject)?,
             "demand is not local",
         )?;
-        if afraid(tx, r.subject, r.leader)? {
-            return yield_to(tx, r.leader, r.subject);
+        if judgment::yielding(tx, r.subject, r.leader, &r.purpose)? {
+            return yield_to(tx, r.leader, r.subject, r.purpose);
         }
         if !judgment::escalate(tx, r.leader, r.subject)? {
             return tx.emit(
@@ -177,6 +234,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             leader: r.leader,
             subject: r.subject,
             battle,
+            purpose: r.purpose,
         };
         for p in [r.leader, r.subject] {
             tx.edit::<Pressure>()?.active.insert(p, demand.clone());
@@ -202,8 +260,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         {
             return clear(tx, e.target);
         }
-        if e.target == d.subject && afraid(tx, d.subject, d.leader)? {
-            yield_to(tx, d.leader, d.subject)
+        if e.target == d.subject && judgment::yielding(tx, d.subject, d.leader, &d.purpose)? {
+            yield_to(tx, d.leader, d.subject, d.purpose)
         } else if e.target == d.leader && afraid(tx, d.leader, d.subject)? {
             clear(tx, d.leader)
         } else {

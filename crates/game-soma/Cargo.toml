@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-storage.workspace = true
+game-metabolism.workspace = true
 game-diagnostics.workspace = true
 game-nutrition.workspace = true
 game-core.workspace = true
@@ -13,3 +15,6 @@ game-body.workspace = true
 game-vitality.workspace = true
 game-traits.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

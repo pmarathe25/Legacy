@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-discourse.workspace = true
+game-communication.workspace = true
 game-parenthood.workspace = true
 game-names.workspace = true
 game-naming.workspace = true

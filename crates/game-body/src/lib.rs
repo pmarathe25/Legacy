@@ -3,7 +3,9 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 mod compute;
 mod events;
-pub use compute::{advance_body, advance_scaled, hunger_threshold};
+pub use compute::{
+    advance_body, advance_rates, advance_scaled, hunger_threshold, hunger_threshold_scaled,
+};
 pub use events::{Damaged, Died, Rested};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
@@ -19,6 +21,12 @@ pub struct Body {
     pub fatigue: u64,
     #[serde(default, skip_serializing_if = "zero")]
     pub fatigue_fraction: u16,
+    #[serde(default, skip_serializing_if = "zero")]
+    pub hunger_fraction: u16,
+    #[serde(default, skip_serializing_if = "zero")]
+    pub recovery_fraction: u16,
+    #[serde(default, skip_serializing_if = "normal_rates")]
+    pub metabolic_rates: Rates,
     pub health: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maximum_health: Option<u64>,
@@ -28,6 +36,25 @@ pub struct Body {
 }
 fn zero(value: &u16) -> bool {
     *value == 0
+}
+/// Multipliers in thousandths of the authored adult baseline.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Rates {
+    pub energy: u64,
+    pub fatigue: u64,
+    pub recovery: u64,
+}
+impl Default for Rates {
+    fn default() -> Self {
+        Self {
+            energy: 1000,
+            fatigue: 1000,
+            recovery: 1000,
+        }
+    }
+}
+fn normal_rates(rates: &Rates) -> bool {
+    *rates == Rates::default()
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BodyView {

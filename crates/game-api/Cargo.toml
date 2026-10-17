@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-communication.workspace = true
+game-works.workspace = true
 game-communities.workspace = true
 game-social-life.workspace = true
 game-lineage.workspace = true

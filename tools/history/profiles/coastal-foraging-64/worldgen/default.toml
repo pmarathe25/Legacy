@@ -5,9 +5,9 @@ population = 64
 areas = 4
 # Only physical founding conditions differ; institutions and relationships are unscripted.
 history = 172800000
-physiology = "campaign"
-characters = "campaign"
-social_life = "campaign"
+physiology = "default"
+characters = "default"
+social_life = "default"
 health = "basic"
 name_starts = ["Al", "Bran", "Cor", "Dar", "El", "Fen", "Gal", "Har", "Is", "Kel", "Lor", "Mer", "Nor", "Or", "Pen", "Rav", "Sel", "Tal", "Val", "Wen"]
 name_ends = ["a", "en", "in", "or", "eth", "an", "el", "is", "ar", "wen", "wyn", "ren", "as", "il", "on", "ith"]

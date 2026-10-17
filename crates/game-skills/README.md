@@ -1,6 +1,6 @@
 # game-skills
 
-Diminishing skill practice and unique work attribution. Past-life mastery stays outside personal learned levels.
+Diminishing skill practice and unique work attribution. Attribution IDs use sparse offsets or dense bitmap pages, preserving exact membership and the legacy ordered map save format without retaining one tree row per completed interval. Past-life mastery stays outside personal learned levels.
 
 **Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md).
 

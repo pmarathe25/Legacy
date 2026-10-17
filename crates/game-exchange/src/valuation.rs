@@ -79,37 +79,34 @@ impl Offers {
         self.units.insert(good, quote);
         Ok(quote)
     }
-    pub(super) fn gain(
+    pub(super) fn accepts(&mut self, tx: &Transaction<'_>, r: &Trade) -> Result<bool> {
+        let (cost, attachment) = self.cost(tx, r.requested, r.requested_quantity)?;
+        let benefit = self.benefit(tx, r.offered, r.offered_quantity)?;
+        Ok(benefit - cost - attachment > 0)
+    }
+    pub(super) fn cost(
         &mut self,
         tx: &Transaction<'_>,
         give: GoodId,
-        give_q: u64,
-        get: GoodId,
-        get_q: u64,
-    ) -> Result<i64> {
-        let (held, giving) = self.quote(tx, give)?;
-        if held < give_q {
-            return Ok(i64::MIN);
+        q: u64,
+    ) -> Result<(i64, i64)> {
+        if let Some((cost, attachment)) = self.outgoing.get(&(give, q)) {
+            return Ok((*cost, *attachment));
         }
-        let (cost, attachment) = if let Some(cost) = self.outgoing.get(&(give, give_q)) {
-            *cost
-        } else {
-            let cost = (
-                utility(giving, held) - utility(giving, held - give_q),
-                game_sentiment::relinquishing(tx, self.person, self.inventory, give, give_q),
-            );
-            self.outgoing.insert((give, give_q), cost);
-            cost
-        };
-        let benefit = if let Some(benefit) = self.incoming.get(&(get, get_q)) {
-            *benefit
-        } else {
-            let (held, receiving) = self.quote(tx, get)?;
-            let after = held.checked_add(get_q).ok_or(Error::Overflow)?;
-            let benefit = utility(receiving, after) - utility(receiving, held);
-            self.incoming.insert((get, get_q), benefit);
-            benefit
-        };
-        Ok(benefit - cost - attachment)
+        let (held, giving) = self.quote(tx, give)?;
+        let cost = utility(giving, held) - utility(giving, held - q);
+        let attachment = game_sentiment::relinquishing(tx, self.person, self.inventory, give, q);
+        self.outgoing.insert((give, q), (cost, attachment));
+        Ok((cost, attachment))
+    }
+    pub(super) fn benefit(&mut self, tx: &Transaction<'_>, get: GoodId, q: u64) -> Result<i64> {
+        if let Some(benefit) = self.incoming.get(&(get, q)) {
+            return Ok(*benefit);
+        }
+        let (held, receiving) = self.quote(tx, get)?;
+        let after = held.checked_add(q).ok_or(Error::Overflow)?;
+        let benefit = utility(receiving, after) - utility(receiving, held);
+        self.incoming.insert((get, q), benefit);
+        Ok(benefit)
     }
 }

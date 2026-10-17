@@ -6,6 +6,13 @@ fn install(h: &mut game_sim::Host) {
     h.dispatch(load(&mut game_content::Store::standard(), h.get().unwrap()).unwrap())
         .unwrap();
 }
+fn install_selected(h: &mut game_sim::Host, keys: &[&str]) {
+    let mut definitions = load(&mut game_content::Store::standard(), h.get().unwrap()).unwrap();
+    definitions
+        .activities
+        .retain(|key, _| keys.contains(&key.as_str()));
+    h.dispatch(definitions).unwrap();
+}
 #[test]
 fn completed_activity_spends_supplies_and_builds_only_the_participants_interest() {
     let (mut h, p, i, area) = setup();
@@ -113,7 +120,7 @@ fn contested_use_is_possible_while_one_physical_action_is_required() {
 #[test]
 fn autonomous_leisure_considers_satisfaction_and_never_reserves_the_player() {
     let (mut h, p, i, _) = setup();
-    install(&mut h);
+    install_selected(&mut h, &["whittle"]);
     deposit(&mut h, i, "timber", 3);
     h.dispatch(Enable).unwrap();
     h.dispatch(Idle(p)).unwrap();
@@ -130,7 +137,7 @@ fn autonomous_leisure_considers_satisfaction_and_never_reserves_the_player() {
 #[test]
 fn different_dispositions_select_different_activities_from_the_same_possessions() {
     let (mut h, creative, i, area) = setup();
-    install(&mut h);
+    install_selected(&mut h, &["play-reed-pipe", "burn-incense"]);
     let reflective = person(&mut h, area);
     let j = h
         .dispatch(game_cargo::Create {

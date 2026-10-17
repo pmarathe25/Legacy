@@ -18,7 +18,12 @@ fn accepts(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> bool {
         .get::<game_relationships::Social>()
         .ok()
         .and_then(|s| s.relationships.get(&p)?.get(&other));
-    tie.is_some_and(|r| r.affection >= 20 && r.trust >= 5 && r.grievance < 15 && r.fear < 20)
+    tie.is_some_and(|r| {
+        r.affection + r.respect / 2 + r.admiration / 2 >= 20
+            && r.trust >= 5
+            && r.grievance < 15
+            && r.fear < 20
+    })
 }
 fn basis(
     tx: &Transaction<'_>,

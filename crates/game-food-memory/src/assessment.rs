@@ -37,6 +37,16 @@ pub fn store_foods(
     inventory: InventoryId,
     cache: &mut Cache,
 ) -> Vec<(GoodId, u64, i64)> {
+    store_foods_partial(tx, person, facts, inventory, cache, false)
+}
+pub fn store_foods_partial(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    facts: &Facts,
+    inventory: InventoryId,
+    cache: &mut Cache,
+    partial: bool,
+) -> Vec<(GoodId, u64, i64)> {
     let Some(stock) = known::<game_knowledge::Stock>(facts, &game_knowledge::store_key(inventory))
     else {
         return vec![];
@@ -49,7 +59,7 @@ pub fn store_foods(
                 .ok()?
                 .food_rules()
                 .get(good)?;
-            (*q >= f.portion).then(|| {
+            (*q >= if partial { 1 } else { f.portion }).then(|| {
                 let (appetite, value) = food(tx, person, *good, f, cache);
                 (*good, appetite, value)
             })

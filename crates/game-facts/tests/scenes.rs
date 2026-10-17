@@ -152,3 +152,60 @@ fn moves_membership_changes_overrides_and_wire_form_preserve_old_evidence() {
         .is_err()
     );
 }
+
+#[test]
+fn payload_deltas_match_a_full_scan_across_metadata_refreshes_and_branching() {
+    let mut facts = Facts::default();
+    let mut snapshots = vec![];
+    let scenes = [
+        scene(&["patch:1", "roads:1"], None),
+        scene(&["patch:2", "roads:2"], None),
+    ];
+    for i in 0..200 {
+        let previous = facts.clone();
+        match i % 5 {
+            0 | 1 => facts.observe(scenes[(i / 5) % 2].clone(), stamp(i as u64)),
+            2 => {
+                facts.insert("store:1".into(), fact("stock", i as u64));
+            }
+            3 => {
+                let mut refreshed = facts
+                    .get("store:1")
+                    .map(|f| f.to_owned())
+                    .unwrap_or_else(|| fact("stock", i as u64));
+                refreshed.revision += 1;
+                refreshed.confidence = 80;
+                facts.insert("store:1".into(), refreshed);
+            }
+            _ => {
+                facts.insert("roads:1".into(), fact("report", i as u64));
+            }
+        }
+        snapshots.push(previous);
+        if i % 13 == 0 {
+            facts = snapshots[i / 2].clone();
+        }
+        for old in &snapshots {
+            let mut actual = BTreeMap::new();
+            facts.changed_values(old, |k, v| {
+                actual.insert(k.clone(), v.cloned());
+            });
+            let keys: std::collections::BTreeSet<_> =
+                facts.keys().chain(old.keys()).cloned().collect();
+            let expected: BTreeMap<_, _> = keys
+                .into_iter()
+                .filter_map(|k| {
+                    let new = facts.get(&k).map(|f| f.value);
+                    let prior = old.get(&k).map(|f| f.value);
+                    let same = match (new, prior) {
+                        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                        (None, None) => true,
+                        _ => false,
+                    };
+                    (!same).then(|| (k, new.cloned()))
+                })
+                .collect();
+            assert_eq!(actual, expected);
+        }
+    }
+}

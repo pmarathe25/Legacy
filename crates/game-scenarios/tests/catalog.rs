@@ -2,7 +2,7 @@ use game_content::Store;
 use game_scenarios::*;
 #[test]
 fn scenario_discovery_and_symbol_validation_are_independent_of_the_application() {
-    let mut store = Store::standard();
+    let mut store = Store::fixtures();
     let scenarios = load(&mut store).unwrap();
     assert!(scenarios.contains_key("foraging-fixture"));
     let mut bad = scenarios["kernel-fixture"].data.clone();

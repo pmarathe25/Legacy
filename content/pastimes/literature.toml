@@ -1,0 +1,29 @@
+id = "pastimes/literature"
+version = 1
+[data.activities.compose-poem]
+name = "Compose a poem"
+inputs = { paper = 1, ink = 1 }
+requires = {}
+duration = 1800000
+satisfaction_span = 21600000
+affinity = "creativity"
+concept = "poetry"
+skill = "writing"
+[data.activities.write-book]
+name = "Write a book"
+inputs = { paper = 8, ink = 2 }
+requires = {}
+duration = 43200000
+satisfaction_span = 259200000
+affinity = "contemplation"
+concept = "chronicles"
+skill = "writing"
+[data.activities.compose-song]
+name = "Compose a song"
+inputs = {}
+requires = {}
+duration = 1800000
+satisfaction_span = 21600000
+affinity = "creativity"
+concept = "song"
+skill = "music"

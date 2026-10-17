@@ -32,6 +32,14 @@ fn fear(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> Result<i64> 
     Ok(remembered + (build.max(vulnerability) * foresight / 1000).min(100) as i64)
 }
 pub(super) fn afraid(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> Result<bool> {
+    yielding(tx, person, other, &Purpose::Allegiance)
+}
+pub(super) fn yielding(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    other: PersonId,
+    purpose: &Purpose,
+) -> Result<bool> {
     let r = relation(tx, person, other);
     let social = tx.get::<game_relationships::Social>()?;
     let independence = social
@@ -44,7 +52,17 @@ pub(super) fn afraid(tx: &Transaction<'_>, person: PersonId, other: PersonId) ->
         .beliefs
         .get(&person)
         .map_or(0, |b| b.authority.clamp(-10, 10));
-    let resistance = 20
+    let conviction = match purpose {
+        Purpose::Allegiance => 0,
+        Purpose::Endorse { concept, stance } => {
+            let difference = (i64::from(social.opinion(person, concept)) - i64::from(*stance))
+                .abs()
+                .min(200);
+            difference * disposition(tx, person, "conviction") / 2000
+        }
+    };
+    let resistance = conviction
+        + 20
         + disposition(tx, person, "risk-tolerance") / 20
         + i64::from(independence)
         + i64::from(r.grievance) / 2
