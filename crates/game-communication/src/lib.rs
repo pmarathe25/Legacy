@@ -1,12 +1,14 @@
 //! Personally learned sound–meaning associations and perceived nonverbal signals.
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
-mod signals;
+
 mod sounds;
-pub use signals::{Notice, Perception};
-pub use sounds::{Coin, Convey, Reception, Translation, WordFor, decode, phonetic, render};
+pub use game_signals::{Notice, Perception, Signalled, estimated_hunger};
+pub use sounds::{
+    Coin, Convey, Reception, Translation, WordFor, decode, illustrate, phonetic, render,
+};
 pub const PHONEMES: &[&str] = &[
     "a", "e", "i", "o", "u", "m", "n", "p", "t", "k", "s", "l", "r", "v", "h", "sh", "f", "b", "d",
     "g", "w", "y",
@@ -21,27 +23,32 @@ pub struct Association {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Communication {
     pub enabled: bool,
-    pub lexicons: Table<PersonId, Table<String, Vec<Association>>>,
-    pub perceptions: Table<PersonId, Table<PersonId, Perception>>,
+    pub lexicons: Table<PersonId, Records<String, Vec<Association>>>,
 }
 impl Resource for Communication {
     const KEY: &'static str = "communication.experience";
     fn validate(&self) -> Result<()> {
         for row in self.lexicons.values() {
-            validate_words(row)?;
+            validate_words(row.iter())?;
         }
         Ok(())
     }
     fn validate_changes(&self, old: &Self) -> Result<()> {
-        for (_, row) in self.lexicons.changed(&old.lexicons) {
-            validate_words(row)?;
+        for (_, row, previous) in self.lexicons.changed_pairs(&old.lexicons) {
+            if let Some(previous) = previous {
+                validate_words(row.changed(previous))?;
+            } else {
+                validate_words(row.iter())?;
+            }
         }
         Ok(())
     }
 }
-fn validate_words(row: &Table<String, Vec<Association>>) -> Result<()> {
+fn validate_words<'a>(
+    mut words: impl Iterator<Item = (&'a String, &'a Vec<Association>)>,
+) -> Result<()> {
     require(
-        row.iter().all(|(key, variants)| {
+        words.all(|(key, variants)| {
             !key.is_empty()
                 && key.len() <= 160
                 && !variants.is_empty()
@@ -86,14 +93,15 @@ pub fn active(tx: &Transaction<'_>) -> bool {
     tx.get::<Communication>().is_ok_and(|c| c.enabled)
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
+    game_signals::plugin(b)?;
     b.plugin("communication", 1)?;
     b.resource::<Communication>()?;
     b.request::<Enable>(|tx, _| {
+        tx.call(game_signals::Enable)?;
         tx.edit::<Communication>()?.enabled = true;
         Ok(())
     })?;
     sounds::register(b)?;
-    signals::register(b)?;
     b.request::<Practice>(|tx, r| {
         if !active(tx) {
             return Ok(());
@@ -166,4 +174,51 @@ pub fn understood(
         .interpretation
         .as_deref()
         == Some(concept))
+}
+
+/// Script and other instruction needs an understood language or an available visual model.
+pub fn instruction(
+    tx: &mut Transaction<'_>,
+    teacher: PersonId,
+    student: PersonId,
+    concept: &str,
+    model: bool,
+) -> Result<bool> {
+    local(tx, teacher, student)?;
+    if ability(tx, student, "interpretation") < 80 {
+        return Ok(false);
+    }
+    if model && ability(tx, teacher, "gesturing") >= 80 {
+        return Ok(true);
+    }
+    if ability(tx, teacher, "vocalization") < 80
+        || ability(tx, student, "hearing") < 80
+        || !game_vitality::can_converse(tx, teacher)
+    {
+        return Ok(false);
+    }
+    Ok(!active(tx) || understood(tx, teacher, student, concept, true)?)
+}
+
+/// Decode available meanings without granting a creator's private gloss.
+pub fn decode_many(
+    c: &Communication,
+    reader: PersonId,
+    sounds: &[Vec<u8>],
+    able: bool,
+) -> Vec<Translation> {
+    sounds
+        .iter()
+        .map(|w| {
+            if able {
+                decode(c, reader, w)
+            } else {
+                Translation {
+                    surface: render(w),
+                    meaning: None,
+                    confidence: 0,
+                }
+            }
+        })
+        .collect()
 }

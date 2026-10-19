@@ -100,7 +100,6 @@ impl<'de> Visitor<'de> for Memories<'_> {
         Ok(facts)
     }
 }
-
 impl<'de> Deserialize<'de> for Facts {
     fn deserialize<D: serde::Deserializer<'de>>(
         deserializer: D,

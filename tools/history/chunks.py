@@ -98,6 +98,7 @@ def run(plan_path):
             if shutil.disk_usage(output_root.parent if output_root.parent.exists() else root).free<2*1024**3: raise ValueError('less than 2GiB free before starting a chunk')
             output.mkdir(parents=True,exist_ok=True);write_json(output/'owner.json',owner);stop=output/'stop-request';stop.unlink(missing_ok=True)
             args=[str(executable),'--days',str(end),'--generations',str(target),'--sample-days','365','--checkpoint-days',str(chunk),'--journal','notable','--final-save','false','--stop-file',str(stop),'--output',str(output)]
+            if plan.get('continue_after_extinction',False): args+=['--continue-after-extinction','true']
             if row.get('checkpoint'): args+=['--resume',row['checkpoint']]
             else:
                 args+=['--seed',str(job['seed'])]
@@ -121,8 +122,8 @@ def run(plan_path):
             except Exception as error:
                 row['state']='archive verification failed; checkpoint retained';row['error']=str(error);publish(artifacts,state)
                 raise
-            final=summary['final'];row.update(days=summary['days'],depth=final['generations'],births=final['births'],mortals=final['mortals'],chunks=index,cursor=cursor,checkpoint=str(output.resolve()),verified_depth=final['generations'])
-            row['state']='extinct' if summary['extinct'] else 'target reached' if summary['reached_generations'] else 'censored' if summary['stopped'] else 'horizon reached' if row['days']>=days else 'chunk verified'
+            final=summary['final'];row.update(extinct=summary['extinct'],days=summary['days'],depth=final['generations'],births=final['births'],mortals=final['mortals'],chunks=index,cursor=cursor,checkpoint=str(output.resolve()),verified_depth=final['generations'])
+            row['state']='extinct' if summary['extinct'] and not plan.get('continue_after_extinction',False) else 'target reached' if summary['reached_generations'] else 'censored' if summary['stopped'] else 'horizon reached' if row['days']>=days else 'chunk verified'
             state['verified_target']|=row['depth']>=target
             publish(artifacts,state)
             prune(output)

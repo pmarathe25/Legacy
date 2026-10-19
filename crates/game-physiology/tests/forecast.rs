@@ -13,6 +13,7 @@ fn hunger_forecasts_match_tick_evolution_including_saturation_and_clock_limits()
         fatigue_fraction: 0,
         hunger_fraction: 0,
         recovery_fraction: 0,
+        healing_fraction: 0,
         metabolic_rates: Default::default(),
         resting: false,
         last: SimTime(7),

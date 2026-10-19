@@ -1,5 +1,6 @@
 //! Prepared batches continue curing or fermenting after the worker leaves.
 use game_core::*;
+mod exposure;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
@@ -11,6 +12,14 @@ pub struct Lot {
     pub output: GoodId,
     pub minimum: i32,
     pub maximum: i32,
+    #[serde(default)]
+    pub conditions: Option<exposure::Conditions>,
+    #[serde(default)]
+    pub checked: SimTime,
+    #[serde(default)]
+    pub elapsed: u64,
+    #[serde(default)]
+    pub unsuitable: u64,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Maturation {
@@ -46,7 +55,8 @@ pub struct Matured {
 impl Event for Matured {
     const KEY: &'static str = "maturation.matured";
 }
-fn put(tx: &mut Transaction<'_>, inventory: InventoryId, good: GoodId, lot: Lot) -> Result<()> {
+fn put(tx: &mut Transaction<'_>, inventory: InventoryId, good: GoodId, mut lot: Lot) -> Result<()> {
+    exposure::begin(tx, inventory, &mut lot)?;
     if !tx.get::<Maturation>()?.due.contains_key(&lot.ready) {
         tx.schedule(lot.ready, 6, Ripen)?;
     }
@@ -110,6 +120,10 @@ fn fresh(
             output,
             minimum,
             maximum,
+            conditions: None,
+            checked: tx.now(),
+            elapsed: 0,
+            unsuitable: 0,
         },
     )
 }
@@ -119,6 +133,7 @@ fn take(
     good: GoodId,
     quantity: u64,
 ) -> Result<Vec<Lot>> {
+    exposure::refresh(tx, inventory)?;
     let s = tx.edit::<Maturation>()?;
     let mut left = quantity;
     let mut taken = vec![];
@@ -153,6 +168,7 @@ fn take(
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("maturation", 1)?;
     b.resource::<Maturation>()?;
+    exposure::register(b)?;
     b.request::<Enable>(|tx, _| {
         if tx.get::<Maturation>()?.enabled {
             return Ok(());
@@ -207,6 +223,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             tx.schedule(now, 6, Ripen)?;
         }
         for (inventory, input) in selected {
+            exposure::refresh(tx, inventory)?;
             let lots: Vec<_> = tx
                 .get::<Maturation>()?
                 .lots
@@ -218,33 +235,35 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 .cloned()
                 .collect();
             for lot in lots {
-                let temperature = game_food_storage::temperature(tx, inventory)?;
-                let usable = (lot.minimum..=lot.maximum).contains(&temperature);
+                let usable = if lot.elapsed == 0 {
+                    lot.quantity
+                } else {
+                    (u128::from(lot.quantity)
+                        * u128::from(lot.elapsed.saturating_sub(lot.unsuitable))
+                        / u128::from(lot.elapsed)) as u64
+                };
                 tx.call(game_cargo::Consume {
                     inventory,
                     good: input,
                     quantity: lot.quantity,
                 })?;
-                if usable {
+                if usable > 0 {
                     tx.call(game_cargo::Deposit {
                         inventory,
                         good: lot.output,
-                        quantity: lot.quantity,
+                        quantity: usable,
                     })?;
                 }
                 let s = tx.edit::<Maturation>()?;
-                if usable {
-                    s.finished = s.finished.saturating_add(lot.quantity);
-                } else {
-                    s.failed = s.failed.saturating_add(lot.quantity);
-                }
+                s.finished = s.finished.saturating_add(usable);
+                s.failed = s.failed.saturating_add(lot.quantity - usable);
                 tx.emit(
                     Matured {
                         inventory,
                         input,
                         output: lot.output,
-                        quantity: if usable { lot.quantity } else { 0 },
-                        lost: if usable { 0 } else { lot.quantity },
+                        quantity: usable,
+                        lost: lot.quantity - usable,
                     },
                     vec![],
                 )?;

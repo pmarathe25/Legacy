@@ -1,5 +1,10 @@
 id = "traits/personality"
 version = 1
+[data.traits.compassion]
+name = "Compassion"
+minimum = 0
+maximum = 1000
+default = 500
 [data.traits.discipline]
 name = "Discipline"
 minimum = 0

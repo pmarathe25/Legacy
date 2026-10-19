@@ -137,18 +137,33 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         let budget =
             (1 + game_vitality::ability(tx, r.person, "intelligence") / 250).min(64) as usize;
         let knowledge = s.observed.get(&r.person);
+        let patience = game_vitality::disposition(tx, r.person, "patience");
+        let openness = game_vitality::disposition(tx, r.person, "openness");
+        let foresight = game_vitality::ability(tx, r.person, "foresight").min(16000) as i64;
+        let trials = s.trials.get(&r.person);
         let best = rows
             .iter()
             .enumerate()
             .take(budget)
             .max_by_key(|(index, lot)| {
-                let score = knowledge
-                    .and_then(|k| {
-                        k.get(&lot.strain.id)
-                            .or_else(|| lot.strain.mother.and_then(|m| k.get(&m)))
-                    })
-                    .copied()
-                    .unwrap_or(1);
+                let inherited = lot.strain.mother.unwrap_or(lot.strain.id);
+                let trial =
+                    trials.and_then(|t| t.get(&lot.strain.id).or_else(|| t.get(&inherited)));
+                let experienced = knowledge
+                    .and_then(|k| k.get(&lot.strain.id).or_else(|| k.get(&inherited)))
+                    .copied();
+                let performance = trial.map_or(experienced.unwrap_or(1), |t| t.mean);
+                let reliability = trial.map_or(0, |t| {
+                    ((t.count - t.failures) * 100 / t.count.max(1)) as i64
+                });
+                let familiarity = if experienced.is_some() {
+                    patience / 10
+                } else {
+                    openness / 5
+                };
+                let score = performance.saturating_mul(20)
+                    + reliability.saturating_mul(foresight / 100)
+                    + familiarity;
                 (score, std::cmp::Reverse(*index))
             })
             .map(|(index, _)| index)

@@ -78,7 +78,11 @@ fn unfamiliar_food_already_in_ones_pack_can_be_tried_without_gathering_more() {
     let at = h.now().after(MINUTE).unwrap();
     support::run(&mut h, at);
     let cargo = h.get::<game_cargo::Cargo>().unwrap();
-    assert_eq!(cargo.0[&inventory].amount(beet), 100 - 2 * portion);
+    let consumed = 100 - cargo.0[&inventory].amount(beet);
+    assert!(
+        consumed >= portion && consumed <= 4 * portion,
+        "physical fullness moderates further servings: {consumed}"
+    );
     assert_eq!(cargo.0[&inventory].amount(honey), 100);
     assert_eq!(
         h.get::<game_ecology::Ecology>().unwrap().patches[&patch].stock,

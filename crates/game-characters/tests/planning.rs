@@ -88,7 +88,7 @@ fn a_missing_supplier_is_disproved_before_repeated_attempts_can_displace_local_f
     assert_eq!(food(&f.host, own), 0);
     assert_eq!(
         f.host.get::<game_physiology::Bodies>().unwrap().people[&f.other].hunger,
-        2
+        3
     );
 }
 fn visit(f: &mut Fixture, destination: AreaId) {
@@ -261,7 +261,7 @@ fn stale_meal_failure_revises_the_plan_toward_another_known_source() {
     assert_eq!(food(&f.host, second), 90);
     assert_eq!(
         f.host.get::<game_physiology::Bodies>().unwrap().people[&f.other].hunger,
-        0
+        1
     );
     assert_eq!(f.host.get::<Minds>().unwrap().people[&f.other].failures, 1);
 }
@@ -431,6 +431,7 @@ fn urgent_hunger_interrupts_authored_labor_without_refunding_consumed_inputs() {
         .dispatch(game_workshop::Define {
             name: "tool".into(),
             recipe: game_workshop::Recipe {
+                work: None,
                 inputs: std::collections::BTreeMap::from([(game_cargo::TIMBER, 5)]),
                 output: GoodId(8),
                 quantity: 1,

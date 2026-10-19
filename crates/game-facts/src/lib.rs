@@ -118,6 +118,7 @@ pub struct Facts<V> {
     local: Option<Observed<V>>,
     overrides: usize,
     payload_version: Arc<()>,
+    namespaces: Table<u8, Arc<()>>,
 }
 impl<V> Default for Facts<V> {
     fn default() -> Self {
@@ -126,6 +127,7 @@ impl<V> Default for Facts<V> {
             local: None,
             overrides: 0,
             payload_version: Arc::new(()),
+            namespaces: Table::new(),
         }
     }
 }
@@ -136,6 +138,7 @@ impl<V: Clone> Facts<V> {
             .is_none_or(|old| !Arc::ptr_eq(old.value, &fact.value))
         {
             self.payload_version = Arc::new(());
+            self.touch(1u64 << namespace(&key));
         }
         let local = self
             .local
@@ -156,6 +159,12 @@ impl<V: Clone> Facts<V> {
             || self.overrides > 0
         {
             self.payload_version = Arc::new(());
+            let mask = scene
+                .keys
+                .iter()
+                .chain(self.local.iter().flat_map(|o| o.scene.keys.iter()))
+                .fold(0, |mask, key| mask | (1u64 << namespace(key)));
+            self.touch(mask);
         }
         let same = self
             .local
@@ -191,7 +200,29 @@ impl<V: Clone> Facts<V> {
             }
     }
 }
+fn namespace(key: &str) -> u8 {
+    (key.bytes()
+        .take_while(|b| *b != b':')
+        .fold(0u64, |n, b| n.wrapping_mul(31).wrapping_add(u64::from(b)))
+        % 64) as u8
+}
 impl<V> Facts<V> {
+    fn touch(&mut self, mut mask: u64) {
+        while mask != 0 {
+            let slot = mask.trailing_zeros() as u8;
+            self.namespaces.insert(slot, Arc::new(()));
+            mask &= mask - 1;
+        }
+    }
+    /// Hash collisions conservatively invalidate additional namespaces.
+    pub fn same_namespace(&self, old: &Self, prefix: &str) -> bool {
+        let slot = namespace(prefix);
+        match (self.namespaces.get(&slot), old.namespaces.get(&slot)) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
     pub fn valid_at(&self, at: SimTime, revision: u64) -> bool {
         self.values()
             .all(|f| f.observed <= at && f.revision <= revision)
@@ -365,4 +396,9 @@ impl<V: PartialEq> PartialEq<Fact<V>> for FactRef<'_, V> {
             && self.revision == other.revision
             && self.confidence == other.confidence
     }
+}
+
+/// Compare logical payloads even when an owner retains a typed form beside opaque saved JSON.
+pub fn same_value<V: Eq + Serialize>(a: &V, b: &V) -> bool {
+    a == b || matches!((serde_json::to_value(a), serde_json::to_value(b)), (Ok(a), Ok(b)) if a == b)
 }

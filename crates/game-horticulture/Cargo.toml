@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-knowledge.workspace = true
+game-nutrition.workspace = true
+game-relationships.workspace = true
+game-choice.workspace = true
 game-diagnostics.workspace = true
 game-vitality.workspace = true
 game-stockpiles.workspace = true

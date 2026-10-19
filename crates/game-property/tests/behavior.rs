@@ -1,10 +1,20 @@
 mod support;
+use game_core::*;
 use game_property::*;
 use support::*;
 
 #[test]
 fn permission_is_explicit_and_theft_is_not_globally_known() {
     let mut f = setup();
+    for person in [f.ruler, f.guardian] {
+        f.host
+            .dispatch(game_transport::Move {
+                person,
+                destination: f.away,
+            })
+            .unwrap();
+    }
+    run(&mut f.host, SimTime(2 * MINUTE.0));
     let dest = f
         .host
         .dispatch(game_cargo::Create {

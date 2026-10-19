@@ -114,3 +114,81 @@ fn accumulated_childhood_conditions_do_not_depend_on_review_frequency() {
         daily.get::<Vitality>().unwrap()
     );
 }
+
+#[test]
+fn attention_and_compassion_have_inherited_baselines_and_acquired_expression() {
+    let mut h = setup();
+    let person = PersonId(1);
+    h.dispatch(game_traits::Set {
+        person,
+        profile: [("attention".into(), 8000), ("compassion".into(), 900)].into(),
+    })
+    .unwrap();
+    let infant = h.query(Assess { person }).unwrap().unwrap();
+    h.advance(SimTime(24 * YEAR), 1).unwrap();
+    let adult = h.query(Assess { person }).unwrap().unwrap();
+    assert!(infant.current_traits["attention"] < adult.current_traits["attention"]);
+    h.dispatch(Experience {
+        person,
+        stress: 900,
+        satisfaction: -100,
+    })
+    .unwrap();
+    let distressed = h.query(Assess { person }).unwrap().unwrap();
+    assert!(distressed.current_traits["attention"] < adult.current_traits["attention"]);
+    assert_eq!(
+        h.get::<game_traits::Traits>()
+            .unwrap()
+            .ability(person, "attention"),
+        8000
+    );
+}
+
+#[test]
+fn cached_expression_tracks_time_potential_condition_and_independent_worlds() {
+    let h = setup();
+    let mut traits = h.get::<game_traits::Traits>().unwrap().clone();
+    let original = h.get::<Vitality>().unwrap().people[&PersonId(1)];
+    let keys = [
+        "attention",
+        "intelligence",
+        "speed",
+        "strength",
+        "hearing",
+        "metabolism",
+        "recovery",
+        "custom",
+    ];
+    for raw in [0, 1, 1000, 16000] {
+        for person in [PersonId(1), PersonId(129), PersonId(1)] {
+            traits.people.insert(
+                person,
+                keys.iter()
+                    .filter(|k| **k != "custom")
+                    .map(|k| ((*k).to_string(), raw))
+                    .collect(),
+            );
+            for age in [0, DAY.0, 6 * YEAR, 24 * YEAR, 70 * YEAR] {
+                for variant in 0..4 {
+                    let mut life = original;
+                    match variant {
+                        0 => {}
+                        1 => life.physical = 100,
+                        2 => {
+                            life.stress = 900;
+                            life.upbringing.deprivation = 18 * YEAR * 700;
+                        }
+                        _ => life.span = None,
+                    }
+                    for key in keys {
+                        let expected = life.ability(traits.ability(person, key), key, SimTime(age));
+                        assert_eq!(
+                            expressed(Some(&traits), Some(&life), person, key, SimTime(age)),
+                            expected
+                        );
+                    }
+                }
+            }
+        }
+    }
+}

@@ -1,15 +1,33 @@
 # game-communication
 
-Owns a person's sound–meaning associations and their interpretations of nonverbal cues. There is no initial dictionary, designated language, inherited vocabulary, or global consensus. The physical phoneme palette is a set of possibilities; particular vocabularies use subsets of it.
+Procedural vocabularies, sound–meaning associations, physical demonstration grounding, and nonverbal cue interpretation.
 
-`Convey` tries a personally preferred form, or coins one. A local demonstration can ground a visible person, place, or physically shown good. A speaker can explain a new concept through already shared words. Successful exposure reinforces personal associations; alternatives can coexist and different communities can prefer different forms. `Practice` composes bounded local experiments during ordinary conversations. `WordFor` and `Coin` let other owners use learned words or familiar phonemes without inventing a second language system.
+**Why it matters:** Language in Legacy is not a shared global string table. Characters coin words from a physical phoneme palette, ground meanings through local demonstration, and bridge unfamiliar dialects through practice and gesture.
 
-Vocalization, hearing, gesturing, interpretation, learning, and intelligence affect communication through traits and vitality. Simple cries and gestures precede speech. Zero capability can prevent a channel entirely. A deaf person can understand a visible demonstration without learning its sound. Meanings are acquired through experience and are not encoded in genes.
+## Responsibilities
 
-`Notice` records only local evidence. Cries can be ambiguous; interpretation can fail or mistake tiredness for hunger. A caregiver who personally observed feeding can anticipate food needs from elapsed time and foresight, including when the beneficiary cannot signal. The estimate is coarse and may be wrong. It reveals neither exact hunger nor a distant person's current state. Nurture can use these impressions while retaining voluntary concern and physical delivery costs.
+- **Personal Vocabularies:** Tracks each person's sound–meaning associations with heard form, source, strength, and observation timestamp.
+- **Expression & Coining (`Convey`, `Coin`, `WordFor`):** Selects a speaker's preferred word or coins a new phoneme sequence, grounding unfamiliar concepts via visible demonstrations or shared words.
+- **Conversational Learning (`Practice`):** Runs bounded local vocabulary experiments during social contact so communities organically converge on shared dialects.
+- **Capability & Nonverbal Channels (`Notice`):** Scales speech, hearing, gesture, and interpretation by traits and vitality (`game-traits`, `game-vitality`), and re-exports nonverbal cue handling from `game-signals`.
 
-Associations retain the heard form, source, strength, and observation time. `communication.learned` records new associations for compact historical analysis. `decode` consults only its reader's vocabulary; unknown forms remain untranslated. The `Reception` and `understood` results are internal information-effect boundaries, not knowledge supplied to a speaker's decision policy.
+## Boundaries
 
-This is a procedural language model with simple explanations and composition. It does not model human grammar, acoustic waveforms, or a phonetic writing system's invention. Generated person names use phonemes; place labels still use authored geographic fragments.
+- **No Pre-Built Dictionary:** Starts with no universal language, inherited vocabulary, or genetic word meanings.
+- **No Written Scripts:** Does not manage physical pages, ink, or glyph proficiency (owned by `game-literacy`).
 
-Run `cargo test -p game-communication`. Tests cover local learning, transmission, unfamiliar vocabularies, explanations, gesture, deafness, absent capabilities, infant cues, anticipation, corruption rejection, and save/load across workers.
+## How It Works
+
+- **Sensory & Cognitive Gating:** Checks vocalization, hearing, and gesturing capabilities before transmitting a message. Deaf characters can learn concepts from visible demonstrations without acquiring acoustic forms.
+- **Reader-Side Decoding:** `decode` translates forms strictly through the listener's own vocabulary table, leaving unfamiliar words untranslated while reinforcing successful matches.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers vocabulary tables, learning logs (`communication.learned`), and `Convey` / `Practice` / `Notice` handlers in `game-assembly`.
+- **Requests & Events:** Exposes `Convey`, `Practice`, `Notice`, `WordFor`, `Coin`, and `decode` APIs.
+- **Callers:** Used by `game-testimony`, `game-inquiry`, `game-social-life`, `game-discourse`, `game-naming`, `game-literacy`, `game-nurture`, and `game-agreements`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-transport`, `game-physiology`, `game-vitality`, `game-traits`, `game-knowledge`, `game-signals`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-communication`) verify word coining, demonstration grounding, dialect divergence, deafness/gesture fallback, infant cues, and multi-worker save/load.

@@ -57,7 +57,24 @@ def input_digests(runs):
     return {str(path): digest(path) for path in sorted(paths)}
 
 
-def build(root, plan_path, output):
+def prepare_output(output, restart):
+    if not restart:
+        output.mkdir(parents=True, exist_ok=False)
+        return None
+    if output.is_symlink() or not (output/'metadata.json').is_file():
+        raise ValueError('restart requires a tool-owned build directory')
+    previous = json.loads((output/'metadata.json').read_text())
+    required = {'compiler', 'target', 'source_sha256', 'training_inputs', 'training'}
+    if (not required.issubset(previous) or 'binary_sha256' in previous
+            or not (output/'raw').is_dir() or (output/'raw').is_symlink()
+            or any((output/'raw').iterdir()) or (output/'merged.profdata').exists()
+            or (output/'game-history').exists()
+            or any(output.glob('train-*'))):
+        raise ValueError('only interrupted compilation without training data can be restarted')
+    return previous
+
+
+def build(root, plan_path, output, restart=False, target_cpu=None):
     plan = json.loads(plan_path.read_text())
     runs = training_runs(plan, plan_path.parent)
     if os.environ.get('RUSTFLAGS') or os.environ.get('CARGO_ENCODED_RUSTFLAGS'):
@@ -71,11 +88,15 @@ def build(root, plan_path, output):
         raise ValueError('install the matching tool with rustup component add llvm-tools-preview')
     original = source_digest(root)
     inputs = input_digests(runs)
-    output.mkdir(parents=True, exist_ok=False)
+    previous = prepare_output(output, restart)
     raw = output/'raw'
-    raw.mkdir()
+    raw.mkdir(exist_ok=restart)
     report = {'compiler': compiler, 'target': target, 'source_sha256': original,
-              'training': runs, 'training_inputs': inputs, 'training_plan_sha256': digest(plan_path)}
+              'training': runs, 'training_inputs': inputs, 'training_plan_sha256': digest(plan_path),
+              'target_cpu': target_cpu or 'portable default',
+              'profile_overrides': {k:v for k,v in os.environ.items() if k.startswith('CARGO_PROFILE_RELEASE_')}}
+    if previous is not None:
+        report['restarted_compilation'] = previous
     (output/'metadata.json').write_text(json.dumps(report, indent=2)+'\n')
 
     def run(command, log, flags=None, profile=None):
@@ -92,7 +113,7 @@ def build(root, plan_path, output):
 
     def compile_to(directory, flag, log):
         run(['cargo', 'build', '--locked', '--release', '--target', target,
-             '--target-dir', str(directory), '-p', 'game-history'], log, flag)
+             '--target-dir', str(directory), '-p', 'game-history'], log, '\x1f'.join([flag] + (['-Ctarget-cpu='+target_cpu] if target_cpu else [])))
         return directory/target/'release/game-history'
 
     instrumented = compile_to(output/'generate', '-Cprofile-generate='+str(raw), 'generate.log')
@@ -119,5 +140,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--training', type=Path, required=True)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--restart-build', action='store_true', help='reuse caches from interrupted compilation before training')
+    parser.add_argument('--target-cpu', help='optional compiler CPU target; native is specific to this machine')
     args = parser.parse_args()
-    build(Path(__file__).resolve().parents[2], args.training.resolve(), args.output.resolve())
+    build(Path(__file__).resolve().parents[2], args.training.resolve(), args.output.resolve(), args.restart_build, args.target_cpu)

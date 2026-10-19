@@ -4,6 +4,7 @@ use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
+mod calendar;
 mod conditions;
 pub use conditions::{Conditions, Refresh};
 pub fn temperature_factor(degrees: i32) -> u32 {
@@ -28,6 +29,10 @@ pub struct Preservation {
     pub spoiled: u64,
     #[serde(default)]
     pub rates: Table<InventoryId, u32>,
+    #[serde(default)]
+    timers: Table<SimTime, ScheduleId>,
+    #[serde(default)]
+    indexed: bool,
 }
 impl Resource for Preservation {
     const KEY: &'static str = "preservation.batches";
@@ -57,10 +62,9 @@ fn shelf(tx: &Transaction<'_>, good: GoodId) -> Result<Option<u64>> {
     Ok(tx.get::<game_objects::Objects>()?.by_id(good)?.shelf_days())
 }
 fn put(tx: &mut Transaction<'_>, inventory: InventoryId, good: GoodId, batch: Batch) -> Result<()> {
+    calendar::ensure(tx)?;
     let at = batch.expires;
-    if !tx.get::<Preservation>()?.due.contains_key(&at) {
-        tx.schedule(at, 5, Expire)?;
-    }
+    calendar::wake(tx, at)?;
     let s = tx.edit::<Preservation>()?;
     let lots = s
         .batches
@@ -79,6 +83,7 @@ fn take(
     good: GoodId,
     quantity: u64,
 ) -> Result<Vec<Batch>> {
+    calendar::ensure(tx)?;
     let mut remaining = quantity;
     let mut result = vec![];
     let s = tx.edit::<Preservation>()?;
@@ -100,6 +105,16 @@ fn take(
         }
     }
     require(remaining == 0, "untracked food")?;
+    let retired: BTreeSet<_> = result
+        .iter()
+        .map(|b| b.expires)
+        .filter(|at| {
+            s.batches
+                .get(&inventory)
+                .and_then(|rows| rows.get(&good))
+                .is_none_or(|lots| lots.iter().all(|lot| lot.expires != *at))
+        })
+        .collect();
     if s.batches
         .get(&inventory)
         .and_then(|rows| rows.get(&good))
@@ -109,6 +124,9 @@ fn take(
         if s.batches[&inventory].is_empty() {
             s.batches.remove(&inventory);
         }
+    }
+    for at in retired {
+        calendar::remove(tx, inventory, good, at)?;
     }
     Ok(result)
 }
@@ -193,7 +211,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Expire>(|tx, _| {
         let _measurement = game_diagnostics::span("food expiry");
+        calendar::ensure(tx)?;
         let at = tx.now();
+        if let Some(id) = tx.edit::<Preservation>()?.timers.remove(&at) {
+            tx.unschedule(id);
+        }
         let mut targets = tx
             .edit::<Preservation>()?
             .due
@@ -202,7 +224,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let batch: Vec<_> = (0..128).filter_map(|_| targets.pop_first()).collect();
         if !targets.is_empty() {
             tx.edit::<Preservation>()?.due.insert(at, targets);
-            tx.schedule(at, 5, Expire)?;
+            calendar::wake(tx, at)?;
         }
         for (inventory, good) in batch {
             let amount = tx

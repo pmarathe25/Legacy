@@ -209,7 +209,13 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             && game_vitality::can_converse(tx, r.speaker);
         let gesturing = ability(tx, r.speaker, "gesturing") >= 80
             && ability(tx, r.listener, "interpretation") >= 80;
-        let demonstrated = r.demonstrate && gesturing && visible(tx, r.speaker, area, &r.concept);
+        let demonstrated = r.demonstrate
+            && gesturing
+            && (visible(tx, r.speaker, area, &r.concept)
+                || r.explanation.len() >= 2
+                    && r.explanation
+                        .iter()
+                        .all(|k| visible(tx, r.speaker, area, k)));
         let hearing = ability(tx, r.listener, "hearing") >= 80;
         let comprehension = ability(tx, r.listener, "interpretation") >= 80;
         let explained = can_speak
@@ -259,4 +265,35 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             demonstrated,
         })
     })
+}
+
+/// A visual explanation needs concrete local referents already distinguished by the teacher.
+pub fn illustrate(
+    tx: &mut Transaction<'_>,
+    speaker: PersonId,
+    listener: PersonId,
+    concept: &str,
+) -> Result<bool> {
+    let area = local(tx, speaker, listener)?;
+    let explanation = tx
+        .get::<Communication>()?
+        .lexicons
+        .get(&speaker)
+        .into_iter()
+        .flat_map(|r| r.keys())
+        .filter(|k| visible(tx, speaker, area, k))
+        .take(2)
+        .cloned()
+        .collect();
+    Ok(tx
+        .call(Convey {
+            speaker,
+            listener,
+            concept: concept.into(),
+            demonstrate: true,
+            explanation,
+        })?
+        .interpretation
+        .as_deref()
+        == Some(concept))
 }

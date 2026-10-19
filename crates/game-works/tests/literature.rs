@@ -13,11 +13,14 @@ fn builder() -> Builder {
     game_communication::plugin(&mut b).unwrap();
     game_skills::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_social_life::plugin(&mut b).unwrap();
     game_pastimes::plugin(&mut b).unwrap();
     game_items::plugin(&mut b).unwrap();
     plugin(&mut b).unwrap();
+    game_inquiry::plugin(&mut b).unwrap();
+    game_observations::plugin(&mut b).unwrap();
     b
 }
 fn setup() -> (Host, PersonId, PersonId, InventoryId) {
@@ -53,7 +56,7 @@ fn setup() -> (Host, PersonId, PersonId, InventoryId) {
     let creator = people[0];
     h.dispatch(game_traits::Set {
         person: creator,
-        profile: [("creativity".into(), 900)].into(),
+        profile: [("creativity".into(), 900), ("intelligence".into(), 4000)].into(),
     })
     .unwrap();
     let inventory = h
@@ -101,6 +104,24 @@ fn create(activity: &str) -> (Host, PersonId, PersonId, InventoryId, u64) {
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
     let id = *h.get::<Works>().unwrap().pieces.keys().next().unwrap();
     (h, author, reader, inventory, id)
+}
+fn learn_script(h: &mut Host, teacher: PersonId, student: PersonId, work: u64) {
+    let script = h.get::<Works>().unwrap().pieces[&work]
+        .composition
+        .as_ref()
+        .unwrap()
+        .script
+        .unwrap();
+    for _ in 0..2 {
+        assert!(
+            h.dispatch(game_literacy::Teach {
+                teacher,
+                student,
+                script
+            })
+            .unwrap()
+        );
+    }
 }
 #[test]
 fn poems_books_and_music_use_the_creators_language_and_ordinary_materials_and_time() {
@@ -164,6 +185,7 @@ fn a_text_does_not_teach_unknown_meanings_and_follows_its_physical_item() {
         explanation: vec![],
     })
     .unwrap();
+    learn_script(&mut h, author, reader, id);
     let partly = h.dispatch(Read { reader, work: id }).unwrap();
     assert!(partly.iter().any(|w| w.meaning.as_ref() == Some(&concept)));
     assert!(partly.iter().any(|w| w.meaning.is_none()));
@@ -226,13 +248,16 @@ fn known_words_require_a_working_channel_and_writing_remains_readable_to_a_deaf_
             })
             .unwrap();
         }
-        let until = h
-            .dispatch(game_pastimes::Pursue {
-                person: author,
-                inventory,
-                activity: "compose-song".into(),
-            })
-            .unwrap();
+        let pursuit = h.dispatch(game_pastimes::Pursue {
+            person: author,
+            inventory,
+            activity: "compose-song".into(),
+        });
+        if !speaker_can_speak {
+            assert!(pursuit.is_err());
+            continue;
+        }
+        let until = pursuit.unwrap();
         while h.advance(until, 128).unwrap().stop == Stop::Budget {}
         assert!(
             !h.get::<Works>()
@@ -260,6 +285,7 @@ fn known_words_require_a_working_channel_and_writing_remains_readable_to_a_deaf_
         explanation: vec![],
     })
     .unwrap();
+    learn_script(&mut h, author, reader, id);
     h.dispatch(game_traits::Set {
         person: reader,
         profile: [("hearing".into(), 0)].into(),
@@ -288,4 +314,364 @@ fn known_words_require_a_working_channel_and_writing_remains_readable_to_a_deaf_
             .iter()
             .all(|w| w.meaning.is_none())
     );
+}
+
+fn teach(h: &mut Host, speaker: PersonId, listener: PersonId, concept: &str) {
+    h.dispatch(game_communication::Convey {
+        speaker,
+        listener,
+        concept: concept.into(),
+        demonstrate: true,
+        explanation: vec![],
+    })
+    .unwrap();
+}
+fn talk(h: &mut Host, first: PersonId, second: PersonId) {
+    let end = h
+        .dispatch(game_social_life::Talk {
+            person: first,
+            other: second,
+        })
+        .unwrap();
+    while h.advance(end, 128).unwrap().stop == Stop::Budget {}
+}
+fn newcomer(h: &mut Host, area: AreaId) -> PersonId {
+    let p = h
+        .dispatch(game_physiology::Create {
+            kind: game_physiology::Kind::Mortal,
+            born: h.now(),
+        })
+        .unwrap();
+    h.dispatch(game_transport::Place { person: p, area })
+        .unwrap();
+    h.dispatch(game_social_life::Register {
+        person: p,
+        name: "Later listener".into(),
+    })
+    .unwrap();
+    p
+}
+#[test]
+fn a_song_can_outlive_its_creator_through_personal_retelling_and_replay() {
+    let (mut h, author, reader, _, id) = create("compose-song");
+    assert!(
+        h.get::<Works>().unwrap().pieces[&id].audience.is_empty(),
+        "being nearby does not grant an experience"
+    );
+    let concept = format!("person:{}", author.0);
+    teach(&mut h, author, reader, &concept);
+    talk(&mut h, author, reader);
+    assert!(
+        h.get::<Works>().unwrap().pieces[&id]
+            .audience
+            .contains_key(&reader)
+    );
+    let area = game_transport::area(h.get().unwrap(), reader).unwrap();
+    let third = newcomer(&mut h, area);
+    teach(&mut h, author, third, &concept);
+    assert!(
+        h.dispatch(Read {
+            reader: third,
+            work: id
+        })
+        .is_err()
+    );
+    h.dispatch(game_physiology::Damage {
+        person: author,
+        amount: 100,
+    })
+    .unwrap();
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        talk(host, reader, third);
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+    assert!(
+        h.get::<Works>().unwrap().pieces[&id]
+            .audience
+            .contains_key(&third)
+    );
+    let text = h
+        .dispatch(Read {
+            reader: third,
+            work: id,
+        })
+        .unwrap();
+    assert!(text.iter().any(|w| w.meaning.as_ref() == Some(&concept)));
+    assert!(
+        text.iter().any(|w| w.meaning.is_none()),
+        "retelling cannot disclose private intended meanings"
+    );
+    assert!(h.notices().any(|e| e.kind == "works.shared"
+        && e.data["speaker"] == reader.0
+        && e.data["listener"] == third.0));
+}
+#[test]
+fn a_listener_can_decline_culture_or_be_interested_because_of_personal_regard() {
+    let (mut h, author, reader, _, id) = create("compose-song");
+    teach(&mut h, author, reader, &format!("person:{}", author.0));
+    h.dispatch(game_traits::Set {
+        person: reader,
+        profile: [("contemplation".into(), 0)].into(),
+    })
+    .unwrap();
+    talk(&mut h, author, reader);
+    assert!(
+        !h.get::<Works>().unwrap().pieces[&id]
+            .audience
+            .contains_key(&reader)
+    );
+    h.dispatch(game_relationships::SetRelationship {
+        observer: reader,
+        other: author,
+        relationship: game_relationships::Relationship {
+            respect: 100,
+            admiration: 100,
+            ..Default::default()
+        },
+    })
+    .unwrap();
+    talk(&mut h, author, reader);
+    assert!(
+        h.get::<Works>().unwrap().pieces[&id]
+            .audience
+            .contains_key(&reader)
+    );
+}
+#[test]
+fn retelling_cannot_bypass_absent_speech_or_hearing_even_with_a_familiar_word() {
+    for (person_key, key) in [
+        (true, "vocalization"),
+        (false, "hearing"),
+        (false, "interpretation"),
+    ] {
+        let (mut h, author, reader, _, id) = create("compose-song");
+        teach(&mut h, author, reader, &format!("person:{}", author.0));
+        h.dispatch(game_traits::Set {
+            person: if person_key { author } else { reader },
+            profile: [(key.into(), 0), ("creativity".into(), 900)].into(),
+        })
+        .unwrap();
+        talk(&mut h, author, reader);
+        assert!(
+            !h.get::<Works>().unwrap().pieces[&id]
+                .audience
+                .contains_key(&reader)
+        );
+    }
+}
+#[test]
+fn conversations_can_show_a_real_book_without_teaching_its_private_gloss() {
+    let (mut h, author, reader, inventory, id) = create("write-book");
+    assert!(view(&h, reader).unwrap().is_empty());
+    talk(&mut h, author, reader);
+    assert!(
+        h.get::<Works>().unwrap().pieces[&id]
+            .presented
+            .contains_key(&reader)
+    );
+    assert!(
+        h.dispatch(Read { reader, work: id })
+            .unwrap()
+            .iter()
+            .any(|w| w.meaning.is_none())
+    );
+    let area = game_transport::area(h.get().unwrap(), author).unwrap();
+    let third = newcomer(&mut h, area);
+    let good = h
+        .get::<game_objects::Objects>()
+        .unwrap()
+        .resolve("bound-book")
+        .unwrap();
+    h.dispatch(game_cargo::Consume {
+        inventory,
+        good,
+        quantity: 1,
+    })
+    .unwrap();
+    talk(&mut h, author, third);
+    assert!(
+        !h.get::<Works>().unwrap().pieces[&id]
+            .presented
+            .contains_key(&third)
+    );
+    assert!(
+        h.dispatch(Read {
+            reader: third,
+            work: id
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn paid_writing_creates_each_copy_without_an_annual_or_creativity_gate() {
+    let (mut h, author, _, inventory) = setup();
+    h.dispatch(game_traits::Set {
+        person: author,
+        profile: [("creativity".into(), 0)].into(),
+    })
+    .unwrap();
+    for _ in 0..2 {
+        let end = h
+            .dispatch(game_pastimes::Pursue {
+                person: author,
+                inventory,
+                activity: "write-book".into(),
+            })
+            .unwrap();
+        while h.advance(end, 128).unwrap().stop == Stop::Budget {}
+    }
+    let works = h.get::<Works>().unwrap();
+    assert_eq!(works.pieces.len(), 2);
+    let items: std::collections::BTreeSet<_> = works
+        .pieces
+        .values()
+        .map(|w| w.composition.as_ref().unwrap().item.unwrap())
+        .collect();
+    assert_eq!(items.len(), 2);
+    assert_eq!(
+        h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(
+            h.get::<game_objects::Objects>()
+                .unwrap()
+                .resolve("paper")
+                .unwrap()
+        ),
+        4
+    );
+    builder().load(&h.save().unwrap(), 4).unwrap();
+}
+#[test]
+fn repeating_a_song_reuses_its_record_and_another_composition_can_follow_immediately() {
+    let (mut h, author, _, inventory, _) = create("compose-song");
+    for activity in ["compose-song", "compose-poem"] {
+        let end = h
+            .dispatch(game_pastimes::Pursue {
+                person: author,
+                inventory,
+                activity: activity.into(),
+            })
+            .unwrap();
+        while h.advance(end, 128).unwrap().stop == Stop::Budget {}
+    }
+    assert_eq!(h.get::<Works>().unwrap().pieces.len(), 2);
+    assert_eq!(
+        h.get::<game_pastimes::Pastimes>().unwrap().experiences[&author]["compose-song"],
+        2
+    );
+    assert!(h.get::<Works>().unwrap().next.is_empty());
+}
+
+#[test]
+fn a_care_manual_preserves_understood_lessons_after_its_author_dies() {
+    let (mut h, author, reader, inventory) = setup();
+    let claim = game_reasoning::Claim {
+        subject: "child-care".into(),
+        factor: "dose".into(),
+        outcome: "relief".into(),
+        effect: 100,
+        context: Default::default(),
+        comparisons: 4,
+        complexity: 1,
+        confidence: 80,
+    };
+    let key = claim.key();
+    h.dispatch(game_knowledge::Conclude {
+        person: author,
+        key: key.clone(),
+        value: serde_json::to_value(&claim).unwrap(),
+        confidence: 80,
+    })
+    .unwrap();
+    let end = h
+        .dispatch(game_pastimes::Pursue {
+            person: author,
+            activity: "write-book".into(),
+            inventory,
+        })
+        .unwrap();
+    while h.advance(end, 128).unwrap().stop == Stop::Budget {}
+    let id = *h.get::<Works>().unwrap().pieces.keys().next().unwrap();
+    assert!(
+        h.get::<Works>().unwrap().pieces[&id]
+            .evidence
+            .iter()
+            .any(|(k, _)| k == &key)
+    );
+    h.dispatch(Present {
+        holder: author,
+        listener: reader,
+        work: id,
+    })
+    .unwrap();
+    learn_script(&mut h, author, reader, id);
+    let gloss = h.get::<Works>().unwrap().pieces[&id]
+        .composition
+        .as_ref()
+        .unwrap()
+        .gloss
+        .clone();
+    let explanation = vec![
+        format!("person:{}", author.0),
+        format!("person:{}", reader.0),
+    ];
+    for meaning in &explanation {
+        teach(&mut h, author, reader, meaning);
+    }
+    for meaning in gloss {
+        let received = h
+            .dispatch(game_communication::Convey {
+                speaker: author,
+                listener: reader,
+                concept: meaning.clone(),
+                demonstrate: true,
+                explanation: explanation.clone(),
+            })
+            .unwrap();
+        assert_eq!(received.interpretation.as_deref(), Some(meaning.as_str()));
+    }
+    assert!(
+        h.get::<game_knowledge::Knowledge>()
+            .unwrap()
+            .0
+            .get(&reader)
+            .is_none_or(|f| !f.contains_key(&key))
+    );
+    let reader_pack = h
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(reader),
+            capacity: 1000,
+        })
+        .unwrap();
+    let item = h.get::<Works>().unwrap().pieces[&id]
+        .composition
+        .as_ref()
+        .unwrap()
+        .item
+        .unwrap();
+    h.dispatch(game_items::Move {
+        person: author,
+        item,
+        destination: reader_pack,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Damage {
+        person: author,
+        amount: 100,
+    })
+    .unwrap();
+    assert!(!h.get::<game_physiology::Bodies>().unwrap().people[&author].alive);
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        let words = host.dispatch(Read { reader, work: id }).unwrap();
+        assert!(
+            words
+                .iter()
+                .any(|w| w.meaning.as_deref() == Some(key.as_str())),
+            "decoded words: {words:?}"
+        );
+        assert!(host.get::<game_knowledge::Knowledge>().unwrap().0[&reader].contains_key(&key));
+        assert!(host.get::<game_skills::Skills>().unwrap().levels[&reader]["child-care"] > 0);
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }

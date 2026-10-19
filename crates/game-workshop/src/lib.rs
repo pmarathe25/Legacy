@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Recipe {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<game_mechanics::Task>,
     pub inputs: BTreeMap<GoodId, u64>,
     pub output: GoodId,
     pub quantity: u64,
@@ -113,6 +115,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Craft>(|tx, r| {
+        require(
+            game_vitality::can_manipulate(tx, r.person),
+            "cannot yet manipulate crafting supplies",
+        )?;
         game_physiology::capable(tx, r.person)?;
         tx.call(game_property::Use {
             actor: r.person,
@@ -129,6 +135,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get(&r.recipe)
             .cloned()
             .ok_or_else(|| Error::Missing("recipe".into()))?;
+        let duration = if let Some(task) = &recipe.work {
+            require(
+                tx.registered::<game_mechanics::PrepareLabor>(),
+                "physical work needs its simulation owner",
+            )?;
+            tx.call(game_mechanics::PrepareLabor {
+                person: r.person,
+                label: r.recipe.clone(),
+                task: task.clone(),
+                baseline: recipe.duration,
+            })?
+        } else {
+            recipe.duration
+        };
         let species = tx
             .get::<game_cultivars::Cultivars>()
             .ok()
@@ -152,7 +172,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             inventory: r.inventory,
             quantity: recipe.quantity,
         })?;
-        let until = tx.now().after(recipe.duration)?;
+        let until = tx.now().after(duration)?;
         tx.start_action(r.person, "craft", Some(until), Cancel { person: r.person })?;
         let job = tx.schedule(until, 10, Complete { person: r.person })?;
         tx.edit::<Workshop>()?.work.insert(
@@ -175,6 +195,16 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         {
             tx.cancel_action(r.person)?;
             return Ok(());
+        }
+        if w.recipe.work.is_some() && !tx.call(game_mechanics::FinishLabor { person: r.person })? {
+            tx.cancel_action(r.person)?;
+            return tx.emit(
+                Stalled {
+                    person: r.person,
+                    recipe: w.recipe.skill,
+                },
+                vec![r.person],
+            );
         }
         if let Some(strain) = w.strain.clone() {
             tx.call(game_cultivars::Expect {
@@ -233,8 +263,18 @@ impl Workshop {
                     && r.quantity > 0
                     && !r.skill.is_empty()
                     && r.inputs.values().all(|q| *q > 0)
+                    && r.work.as_ref().is_none_or(|w| w.force > 0 && w.travel > 0)
             }),
             "invalid recipe",
         )
     }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Stalled {
+    pub person: PersonId,
+    pub recipe: String,
+}
+impl Event for Stalled {
+    const KEY: &'static str = "workshop.stalled";
 }

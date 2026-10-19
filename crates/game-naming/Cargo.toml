@@ -20,6 +20,7 @@ game-conflict.workspace = true
 game-institutions.workspace = true
 serde.workspace = true
 [dev-dependencies]
+game-testimony.workspace = true
 game-wellbeing.workspace = true
 game-knowledge.workspace = true
 game-land.workspace = true

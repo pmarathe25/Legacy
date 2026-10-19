@@ -1,3 +1,4 @@
+use game_companionship::SeekCompany;
 use game_core::*;
 use game_sim::*;
 use game_social_life::*;
@@ -14,8 +15,10 @@ fn builder() -> Builder {
     game_skills::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     plugin(&mut b).unwrap();
+    game_companionship::plugin(&mut b).unwrap();
     b.plugin("test", 1).unwrap();
     b.request::<CancelPerson>(|tx, r| tx.cancel_action(r.0))
         .unwrap();

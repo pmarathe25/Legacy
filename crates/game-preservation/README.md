@@ -1,5 +1,28 @@
 # game-preservation
 
-Edible goods occupy FIFO batches with expiration times. The `shelf-days:N` object tag selects shelf life; untagged food defaults to thirty days. Transfers retain original expiration, including moves into caches. Workshop transformations consume old inputs and create newly made outputs with the output's shelf life.
+Tracks food quantities by expiry date and removes spoiled stock through
+`game-cargo`. Transfers retain remaining shelf life. Storage conditions rescale
+that remaining life without making old food fresh.
 
-Cargo publishes typed stock changes after physical accounting. This owner tracks batches and schedules expiration by shared date buckets. Spoilage consumes real cargo; failed transfers restore quantities and ages together. Save validation checks tracked food against every edible inventory quantity. `Enable` starts tracking existing food.
+`Preservation` owns the batch ledger and expiry calendar. Each live date has one
+scheduled callback shared by its inventory/good targets. Consuming or moving the
+last matching batch removes that target; an empty date cancels its callback.
+Temperature refreshes replace the previous appointments. Expiration processes at
+most 128 targets per transaction and schedules the remainder at the same time.
+
+Earlier saves rebuild the calendar from their actual batches on the first food
+operation. The owner cancels its previous expiry callbacks and schedules only
+those still needed. Rebuilding preserves quantities and expiry times. Callback
+allocation changes can affect later identifiers, so historical studies label the
+migration as a model change.
+
+Public requests are `Enable`, `Refresh`, and the optional `Conditions` provider;
+`Spoiled` reports removed stock. Food definitions come from `game-objects`.
+`game-food-storage` supplies storage and temperature effects, while
+`game-maturation` owns fermentation and curing. Preservation changes inventories
+only through cargo requests.
+
+`cargo test -p game-preservation` covers consumption, shared dates, transfers,
+changing conditions, failed transactions, legacy calendars, and save/load across
+worker counts. Composed maturation and campaign tests cover physical storage
+and aging during transport.

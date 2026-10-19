@@ -1,0 +1,22 @@
+[package]
+name = "game-invention"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-property.workspace=true
+game-relationships.workspace=true
+game-inquiry.workspace = true
+game-reasoning.workspace = true
+game-knowledge.workspace = true
+game-physiology.workspace = true
+serde_json.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-physics.workspace = true
+game-mechanics.workspace = true
+game-vitality.workspace = true
+game-choice.workspace = true
+game-cargo.workspace = true
+game-transport.workspace = true
+serde.workspace = true

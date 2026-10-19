@@ -6,10 +6,7 @@ use game_sim::*;
 use game_storage::Table;
 pub use genome::{Expression, Genome, Strain};
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-};
+use std::{collections::VecDeque, sync::Arc};
 pub use stocks::representative;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Lot {
@@ -23,6 +20,8 @@ pub struct Cultivars {
     pub goods: Table<GoodId, GoodId>,
     pub stocks: Table<InventoryId, Table<GoodId, VecDeque<Lot>>>,
     pub observed: Table<PersonId, Table<u64, i64>>,
+    #[serde(default)]
+    pub trials: Table<PersonId, Table<u64, Trial>>,
     #[serde(skip)]
     incoming: Table<(InventoryId, GoodId), Vec<Lot>>,
 }
@@ -31,6 +30,12 @@ impl Resource for Cultivars {
     fn validate(&self) -> Result<()> {
         require(self.incoming.is_empty(), "unfulfilled plant provenance")
     }
+}
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Trial {
+    pub count: u64,
+    pub failures: u64,
+    pub mean: i64,
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Define {
@@ -210,6 +215,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let score = (u128::from(r.yield_units) * u128::from(DAY.0) * 1000
             / u128::from(r.duration.0.max(1)))
         .min(i64::MAX as u128) as i64;
+        let trial = tx
+            .edit::<Cultivars>()?
+            .trials
+            .entry(r.person)
+            .or_default()
+            .entry(r.strain)
+            .or_default();
+        trial.count = trial.count.saturating_add(1);
+        trial.failures = trial.failures.saturating_add(u64::from(r.yield_units == 0));
+        trial.mean = trial
+            .mean
+            .saturating_add((score - trial.mean) / trial.count.min(i64::MAX as u64) as i64);
         tx.edit::<Cultivars>()?
             .observed
             .entry(r.person)

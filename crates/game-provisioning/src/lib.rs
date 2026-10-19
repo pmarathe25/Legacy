@@ -6,11 +6,44 @@ use game_core::*;
 use game_food_actions::next_step;
 pub use game_food_actions::{FoodCare, Plan, TendFood};
 pub use game_food_memory::remembered_meal;
-use game_knowledge::{Facts, StoreLocation, known, location_key, with_prefix};
+use game_knowledge::{Facts, with_prefix};
 use game_sim::*;
-pub use reserves::{Enable, Reserves, Source, Support, plugin, reserve_plan};
-pub use scoring::FoodScores;
+pub use reserves::{Enable, Reserves, Source, Support, reserve_plan};
+pub use scoring::{FoodScores, hunger_pressure};
 use serde::{Deserialize, Serialize};
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Advance {
+    pub person: PersonId,
+    pub plan: Plan,
+}
+impl Request for Advance {
+    const KEY: &'static str = "provisioning.advance";
+    type Response = (bool, Option<Plan>);
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Step(Advance);
+impl Request for Step {
+    const KEY: &'static str = "characters.food-step";
+    type Response = (Plan, bool);
+}
+pub fn plugin(b: &mut Builder) -> Result<()> {
+    reserves::plugin(b)?;
+    b.request::<Step>(|tx, Step(mut r)| {
+        let done = step(tx, r.person, &mut r.plan)?;
+        Ok((r.plan, done))
+    })?;
+    b.request::<Advance>(|tx, r| {
+        let result = tx.attempt(Step(r.clone()));
+        game_diagnostics::failure(&result);
+        if result.is_err() {
+            learn_failure(tx, r.person, &r.plan);
+        }
+        Ok((
+            result.is_ok(),
+            result.ok().and_then(|(plan, done)| (!done).then_some(plan)),
+        ))
+    })
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opportunity {
     pub id: u64,
@@ -54,6 +87,9 @@ fn options_for(
 ) -> Result<Vec<Opportunity>> {
     require(meals > 0, "gather a positive number of meals")?;
     let _measurement = game_diagnostics::span("food options");
+    if !game_vitality::can_manipulate(tx, person) {
+        return Ok(vec![]);
+    }
     let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) else {
         return Ok(vec![]);
     };
@@ -75,6 +111,9 @@ fn options_for(
                 if matches!(position, game_transport::Location::At(here) if *here == target) {
                     return Some(SimDuration(0));
                 }
+                if !game_vitality::can_walk(tx, person) {
+                    return None;
+                }
                 *costs.entry(target).or_insert_with(|| {
                     next_step(tx, person, facts, position, target)
                         .ok()
@@ -84,13 +123,7 @@ fn options_for(
             let can_cache = tx.registered::<game_stockpiles::StoreSurplus>();
             let mut options = vec![];
             let mut dietary = diet::Cache::new();
-            let ranks: std::collections::BTreeMap<_, _> = tx
-                .get::<game_objects::Objects>()?
-                .food_rules()
-                .keys()
-                .enumerate()
-                .map(|(n, g)| (*g, n as u64))
-                .collect();
+            let ranks = tx.get::<game_objects::Objects>()?.food_ranks();
             let stride = ranks.len() as u64;
             let mut sources = diet::sources(tx, person, stores);
             if partial {
@@ -115,14 +148,14 @@ fn options_for(
                 let Some(travel) = duration(target) else {
                     continue;
                 };
-                for (good, appetite, value) in diet::store_foods_partial(
-                    tx,
-                    person,
-                    facts,
-                    inventory.id,
-                    &mut dietary,
-                    partial,
-                ) {
+                let Some(stock) = inventory.stock.as_ref() else {
+                    continue;
+                };
+                let self_supplied = diet::self_supplied(tx, person, inventory.id, location.carrier);
+                let risk = claims.cost(inventory.id);
+                for (good, appetite, value) in
+                    diet::stock_foods(tx, person, stock, &mut dietary, partial)
+                {
                     let id = inventory
                         .id
                         .0
@@ -138,13 +171,8 @@ fn options_for(
                         appetite,
                         value,
                         travel,
-                        self_supplied: diet::self_supplied(
-                            tx,
-                            person,
-                            inventory.id,
-                            location.carrier,
-                        ),
-                        risk: claims.cost(inventory.id),
+                        self_supplied,
+                        risk,
                         plan: Plan::Meal {
                             inventory: inventory.id,
                             good: Some(good),
@@ -153,14 +181,14 @@ fn options_for(
                 }
             }
             let batch = reserves::batch(tx, person, meals);
-            for (key, _) in with_prefix(facts, "patch:") {
+            for (key, fact) in with_prefix(facts, "patch:") {
                 let Some(patch) = key
                     .strip_prefix("patch:")
                     .and_then(|id| id.parse::<u64>().ok())
                 else {
                     continue;
                 };
-                let Some(p) = known::<game_ecology::Patch>(facts, key) else {
+                let Some(p) = fact.value.decode::<game_ecology::Patch>() else {
                     continue;
                 };
                 let Some(food) = tx
@@ -209,19 +237,17 @@ fn options_for(
                     };
                     let quantity = desired.min(available).min(capacity);
                     (quantity >= if partial { 1 } else { food.portion })
-                        .then_some((store.id, quantity))
+                        .then_some((store.id, quantity, l.carrier))
                 };
                 let chosen = stores
                     .carried(person)
                     .filter_map(fits)
-                    .min_by_key(|(id, _)| *id)
-                    .or_else(|| stores.all().filter_map(fits).min_by_key(|(id, _)| *id));
-                let Some((inventory, quantity)) = chosen else {
+                    .min_by_key(|(id, ..)| *id)
+                    .or_else(|| stores.all().filter_map(fits).min_by_key(|(id, ..)| *id));
+                let Some((inventory, quantity, carrier)) = chosen else {
                     continue;
                 };
                 let (appetite, value) = diet::food(tx, person, p.good, food, &mut dietary);
-                let carrier =
-                    known::<StoreLocation>(facts, &location_key(inventory)).and_then(|l| l.carrier);
                 options.push(Opportunity {
                     appetite,
                     value,
@@ -263,6 +289,9 @@ fn options_for(
                     }
                 }
             }
+            options.retain(|o| {
+                !matches!(o.plan, Plan::Forage { .. }) || game_vitality::can_walk(tx, person)
+            });
             Ok(options)
         },
     )

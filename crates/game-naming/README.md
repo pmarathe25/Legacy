@@ -1,11 +1,32 @@
 # game-naming
 
-Composes personal naming choices through `game-names`, without owning another identity store. Parents may honor someone they know and care about, or combine sounds from names they have actually heard. Founder names provide initial sounds. Descendants receive no numeric-ID name or imposed surname convention.
+Autonomous child naming tributes, phoneme recombination, conversational nicknames/epithets, and identity reconsideration.
 
-Conversations can produce affectionate nicknames or a personally recognized title drawn from an actual institution's office name. Successful treatment, witnessed creative works, and surviving a person's violence can inspire personal epithets. These interpretations are local and depend on the observer's disposition; they do not impose universal reputations or political legitimacy.
+**Why it matters:** Instead of assigning static random strings or numeric suffixes, characters name children after loved ones, recombine familiar spoken sounds, coin epithets from witnessed deeds, and occasionally adopt a nickname that fits who they have become.
 
-`Reconsider` compares attachment to an existing identity with self-expression and nicknames actually heard from others. Affection, patience, ambition, creativity, and cognitive development influence the choice. A character may adopt a name, invent another, or retain their present identity. Autonomous conversations invoke reconsideration; the current player is excluded. Explicit self-renaming uses `game-names::Change`.
+## Responsibilities
 
-Generated campaigns enable naming. Controlled fixtures retain their authored names unless they enable these choices. There is no independent naming timer or mandatory renaming age.
+- **Child Name Selection:** Supplies `game-names::SuggestChild` by honoring admired/loved acquaintances or recombining phoneme sequences from names the parent has actually heard.
+- **Nicknames, Titles & Epithets:** Generates affectionate nicknames during conversations, personal titles from recognized institutional offices (`game-institutions`), and epithets inspired by medical care (`game-care`), creative works (`game-works`), or survived violence (`game-conflict`).
+- **Identity Reconsideration (`Reconsider`):** Weighs attachment to a character's current name (and the relationships backing those who offered it) against self-expression and heard nicknames.
 
-Name suggestions compare personally familiar names and newly coined alternatives. Affection, respect, admiration, and empathy can motivate a tribute. Similarity and the importance and number of familiar near-matches raise confusion costs. Repetition remains possible without being a mandatory naming rule. With communication enabled, novel choices use familiar phonemes and contextual descriptors use the speaker's own words.
+## Boundaries
+
+- **No Separate Identity Store:** Stores all resulting names, histories, and forms of address in `game-names`.
+- **Player Autonomy Preserved:** Excludes the active player character from autonomous self-renaming (`Reconsider`).
+
+## How It Works
+
+- **Confusion & Tribute Scoring:** Candidate child names balance tribute motivation (affection, respect, admiration, empathy) against a confusion penalty that rises when many important local acquaintances already share similar-sounding names.
+- **Patience-Buffered Stability:** In `Reconsider`, adopting a new name must overcome both the relationship support of those who gave the current name and a patience-scaled switching margin, keeping identities stable unless relationships or experiences shift markedly.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers `SuggestChild` hooks, `Reconsider` handlers, and event listeners for care, works, institutions, and conflict in `game-assembly`.
+- **Requests & Events:** Handles `Reconsider` and naming triggers; dispatches `game-names::Change` and `game-names::Label` requests.
+- **Callers:** Invoked by `game-names`, `game-social-life`, and campaign/scenario setups.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-transport`, `game-physiology`, `game-traits`, `game-communication`, `game-relationships`, `game-social-life`, `game-names`, `game-care`, `game-works`, `game-institutions`, `game-conflict`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-naming`) cover tribute naming, phoneme recombination, confusion avoidance, epithet generation from deeds, and identity reconsideration stability.

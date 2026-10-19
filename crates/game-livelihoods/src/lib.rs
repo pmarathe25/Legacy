@@ -114,6 +114,15 @@ impl Request for Enable {
 pub struct Consider {
     pub person: PersonId,
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct Pursue {
+    person: PersonId,
+    plan: Plan,
+}
+impl Request for Pursue {
+    const KEY: &'static str = "livelihoods.pursue";
+    type Response = game_choice::Outcome;
+}
 impl Request for Consider {
     const KEY: &'static str = "livelihoods.consider";
     type Response = bool;
@@ -129,46 +138,39 @@ pub fn load(store: &mut game_content::Store, objects: &game_objects::Objects) ->
         rules: doc.data,
     })
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Supply {
+    pub person: PersonId,
+    pub goal: Goal,
+}
+impl Request for Supply {
+    const KEY: &'static str = "livelihoods.supply";
+    type Response = game_choice::Outcome;
+}
+fn goals<'a>(tx: &'a Transaction<'_>) -> Result<&'a [Goal]> {
+    Ok(&tx
+        .get::<Livelihoods>()?
+        .rules
+        .as_ref()
+        .ok_or_else(|| Error::Missing("livelihood goals".into()))?
+        .goals)
+}
 fn inventories(tx: &Transaction<'_>, person: PersonId) -> Result<Vec<InventoryId>> {
     let area = game_transport::area(tx.get()?, person)?;
-    let cargo = tx.get::<game_cargo::Cargo>()?;
-    let positions = tx.get::<game_transport::Positions>()?;
-    let property = tx.get::<game_property::Property>()?;
-    let facts = tx.get::<game_knowledge::Knowledge>()?.0.get(&person);
-    let known = facts
-        .map(|facts| {
-            game_food_memory::with_stores(
-                person,
-                facts,
-                tx.get::<game_objects::Objects>().unwrap(),
-                |s| s.all().map(|s| s.id).collect::<Vec<_>>(),
-            )
-        })
-        .unwrap_or_default();
-    let mut rows: Vec<_> = known
-        .into_iter()
-        .filter(|id| {
-            cargo
-                .0
-                .get(id)
-                .is_some_and(|i| i.area(positions) == Some(area))
-        })
-        .filter(|id| {
-            let held = matches!(cargo.0[id].custody,game_cargo::Custody::Carried(p) if p==person);
-            held || property.allowed(person, *id)
-                || property.claims.get(id).is_none_or(|claims| {
-                    claims.is_empty() || claims.iter().any(|c| c.claimant == person)
-                })
-        })
-        .collect();
-    rows.sort_by_key(|id| {
-        (
-            !matches!(cargo.0[id].custody,
-        game_cargo::Custody::Carried(p) if p == person),
-            *id,
-        )
+    let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) else {
+        return Ok(vec![]);
+    };
+    let mut rows = game_food_memory::with_stores(person, facts, tx.get()?, |s| {
+        s.all()
+            .filter_map(|s| {
+                let l = s.location.as_ref()?;
+                (l.carrier == Some(person) || l.area == area)
+                    .then_some((l.carrier != Some(person), s.id))
+            })
+            .collect::<Vec<_>>()
     });
-    Ok(rows)
+    rows.sort_unstable();
+    Ok(rows.into_iter().map(|(_, id)| id).collect())
 }
 fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     if !tx.get::<Livelihoods>()?.enabled
@@ -257,7 +259,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
         .now()
         .after(tx.get::<Livelihoods>()?.rules.as_ref().unwrap().interval)?;
     tx.edit::<Livelihoods>()?.retry_at.insert(person, next);
-    let Some(plan) = planning::choose(tx, person, &stocks)? else {
+    let Some(plan) = planning::choose(tx, person, &stocks, goals(tx)?)? else {
         return Ok(false);
     };
     tx.edit::<Livelihoods>()?.plans.insert(person, plan);
@@ -266,6 +268,14 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("livelihoods", 1)?;
     b.resource::<Livelihoods>()?;
+    b.request::<Pursue>(|tx, r| {
+        tx.edit::<Livelihoods>()?.plans.insert(r.person, r.plan);
+        Ok(if consider(tx, r.person)? {
+            game_choice::Outcome::Performed
+        } else {
+            game_choice::Outcome::Reconsider
+        })
+    })?;
     b.request::<Install>(|tx, r| {
         r.rules.validate()?;
         require(
@@ -294,8 +304,114 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.edit::<Livelihoods>()?.enabled = true;
         Ok(())
     })?;
+    b.request::<Supply>(|tx, r| {
+        let good = tx.get::<game_objects::Objects>()?.resolve(&r.goal.object)?;
+        if tx
+            .get::<Livelihoods>()?
+            .plans
+            .get(&r.person)
+            .is_none_or(|p| p.goal != good)
+        {
+            let held = inventories(tx, r.person)?;
+            let Some(plan) = planning::choose(tx, r.person, &held, std::slice::from_ref(&r.goal))?
+            else {
+                return game_search::find(tx, r.person, good, r.goal.quantity);
+            };
+            tx.edit::<Livelihoods>()?.plans.insert(r.person, plan);
+        }
+        consider(tx, r.person).map(Into::into)
+    })?;
     b.request::<Consider>(|tx, r| consider(tx, r.person))?;
-    b.subscribe::<game_characters::IdleReview>("livelihoods.work", |tx, e| {
+    game_choice::provider(b, "livelihoods.work", |tx, e| {
+        if game_choice::collecting(tx, e.person) {
+            if !tx.get::<Livelihoods>()?.enabled
+                || game_transport::area(tx.get()?, e.person).is_err()
+            {
+                return Ok(());
+            }
+            let held = inventories(tx, e.person)?;
+            let plan = tx.get::<Livelihoods>()?.plans.get(&e.person).cloned();
+            let plan = match plan {
+                Some(plan) => Some(plan),
+                None => planning::choose(tx, e.person, &held, goals(tx)?)?,
+            };
+            if let Some(plan) = plan {
+                let goal = tx
+                    .get::<Livelihoods>()?
+                    .rules
+                    .as_ref()
+                    .unwrap()
+                    .goals
+                    .iter()
+                    .find(|g| {
+                        tx.get::<game_objects::Objects>()
+                            .unwrap()
+                            .resolve(&g.object)
+                            == Ok(plan.goal)
+                    });
+                let desire = goal.map_or(0, |g| {
+                    i64::from(g.priority) / 2
+                        + game_vitality::disposition(tx, e.person, &g.affinity) / 20
+                });
+                let interest = tx
+                    .get::<game_relationships::Social>()?
+                    .values
+                    .get(&e.person)
+                    .and_then(|v| v.get(plan.concept.as_str()))
+                    .copied()
+                    .unwrap_or(0);
+                let effort = plan
+                    .steps
+                    .iter()
+                    .map(|step| match step {
+                        planning::Step::Gather { .. } => 5,
+                        planning::Step::Craft { recipe } => {
+                            let recipe =
+                                &tx.get::<game_workshop::Workshop>().unwrap().recipes[recipe];
+                            let practice = tx
+                                .get::<game_skills::Skills>()
+                                .ok()
+                                .and_then(|s| s.levels.get(&e.person)?.get(recipe.skill.as_str()))
+                                .copied()
+                                .unwrap_or(0);
+                            tx.get::<game_knowledge::Knowledge>()
+                                .ok()
+                                .and_then(|k| k.0.get(&e.person))
+                                .and_then(|f| {
+                                    game_knowledge::forecast(
+                                        f,
+                                        &format!("craft:{}", recipe.output.0),
+                                        "work-time",
+                                        &[(
+                                            "practice".into(),
+                                            practice.min(i64::MAX as u64) as i64 / 10 * 10,
+                                        )]
+                                        .into(),
+                                    )
+                                })
+                                .map_or(recipe.duration.0 / MINUTE.0, |p| p.value.max(1) as u64)
+                        }
+                    })
+                    .sum::<u64>();
+                game_choice::offer(
+                    tx,
+                    e.person,
+                    format!("work:{}", plan.goal.0),
+                    game_choice::motive(
+                        0,
+                        desire,
+                        i64::from(interest) * 2,
+                        (effort / 10).min(10000) as i64,
+                        0,
+                    ),
+                    Pursue {
+                        person: e.person,
+                        plan,
+                    },
+                )?;
+            }
+            return Ok(());
+        }
         tx.call(Consider { person: e.person })?;
         Ok(())
     })?;

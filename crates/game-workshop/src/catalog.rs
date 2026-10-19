@@ -4,6 +4,8 @@ use game_objects::Objects;
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Spec {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    work: Option<game_mechanics::Task>,
     inputs: BTreeMap<String, u64>,
     output: String,
     quantity: u64,
@@ -37,6 +39,7 @@ pub fn load(store: &mut Store, objects: &Objects) -> Result<InstallRecipes> {
                 .map(|(key, q)| Ok((objects.resolve(&key)?, q)))
                 .collect::<Result<_>>()?;
             let recipe = Recipe {
+                work: r.work,
                 inputs,
                 output: objects.resolve(&r.output)?,
                 quantity: r.quantity,

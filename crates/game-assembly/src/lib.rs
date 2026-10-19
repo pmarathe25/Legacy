@@ -36,9 +36,14 @@ impl Simulation {
         Ok(Self { host })
     }
     pub fn load(save: &str, workers: usize) -> Result<Self> {
-        Ok(Self {
-            host: plugins::load(save, workers)?,
-        })
+        plugins::load(save, workers).map(|host| Self { host })
+    }
+    /// Read a checkpoint without retaining its complete JSON text; older manifests still migrate.
+    pub fn load_from(
+        source: &mut (impl std::io::Read + std::io::Seek),
+        workers: usize,
+    ) -> Result<Self> {
+        plugins::load_from(source, workers).map(|host| Self { host })
     }
     pub fn save(&self) -> Result<String> {
         self.host.save()

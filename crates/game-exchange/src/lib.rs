@@ -5,12 +5,15 @@ use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+pub use valuation::{accept_promise, credit_trust, marginal};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Exchange {
     pub enabled: bool,
     pub next: Table<PersonId, SimTime>,
     pub completed: u64,
     pub aid_requests: u64,
+    #[serde(default)]
+    pub failures: Table<PersonId, Table<PersonId, u32>>,
 }
 impl Resource for Exchange {
     const KEY: &'static str = "exchange.encounters";
@@ -68,34 +71,42 @@ fn willing(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> Result<bool> {
         .relationships
         .get(&p)
         .and_then(|r| r.get(&other));
+    let regard = tie.map_or(0, |r| {
+        i64::from(r.trust + r.affection / 2 - r.grievance - r.fear)
+    });
+    let patience = game_vitality::disposition(tx, p, "patience");
+    let openness = game_vitality::disposition(tx, p, "openness");
+    let occupied = tx.get::<Actions>()?.0.contains_key(&p);
     Ok(Some(p) != tx.get::<game_lineage::Lineage>()?.current
         && game_physiology::capable(tx, p).is_ok()
-        && tie.is_none_or(|r| r.fear < 30 && r.grievance < 20))
+        && regard + (patience + openness) / 20 > if occupied { 80 } else { 10 })
 }
 fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
-    if !tx.get::<Exchange>()?.enabled
-        || tx
-            .get::<Exchange>()?
-            .next
-            .get(&a)
-            .is_some_and(|at| *at > tx.now())
-    {
+    if !tx.get::<Exchange>()?.enabled {
         return Ok(());
     }
-    let next = tx.now().after(DAY)?;
-    let _measurement = game_diagnostics::span("barter encounters");
-    tx.edit::<Exchange>()?.next.insert(a, next);
+    let now = tx.now();
+    tx.edit::<Exchange>()?.next.insert(a, now);
     let (Some(first), Some(second)) = (pack(tx, a), pack(tx, b)) else {
         return Ok(());
     };
     // Bounded, voluntary disclosure. Neither party sees undisclosed stocks or beliefs.
-    let offers = |id| {
-        tx.get::<game_cargo::Cargo>().unwrap().0[&id]
+    let offers = |p, id| {
+        let attention =
+            (2 + game_vitality::ability(tx, p, "intelligence") / 250).clamp(2, 64) as usize;
+        let goods: Vec<_> = tx.get::<game_cargo::Cargo>().unwrap().0[&id]
             .goods
             .iter()
             .filter(|(_, q)| **q > 0)
-            .take(8)
-            .map(|(g, q)| (*g, (*q).min(64)))
+            .collect();
+        let start = random(tx.seed(), p.0, tx.now().0 / MINUTE.0) as usize % goods.len().max(1);
+        goods
+            .iter()
+            .cycle()
+            .skip(start)
+            .take(goods.len().min(attention))
+            .filter(|(g, _)| game_sentiment::relinquishing(tx, p, id, **g, 1) < 100)
+            .map(|(g, q)| (**g, (**q).min(64)))
             .collect::<Vec<_>>()
     };
     let custom_checks = tx.has_before::<Trade>();
@@ -105,8 +116,8 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
     {
         return Ok(());
     }
-    let first_offers = offers(first);
-    let second_offers = offers(second);
+    let first_offers = offers(a, first);
+    let second_offers = offers(b, second);
     let budget = (game_vitality::ability(tx, a, "intelligence") / 125).clamp(1, 64) as usize;
     let mut proposals = vec![];
     let mut values = valuation::Offers::new(a, first);
@@ -165,14 +176,37 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
             continue;
         }
         if tx.attempt(r).is_ok() {
+            tx.edit::<Exchange>()?
+                .failures
+                .entry(a)
+                .or_default()
+                .remove(&b);
             return Ok(());
         }
     }
+    let n = tx
+        .edit::<Exchange>()?
+        .failures
+        .entry(a)
+        .or_default()
+        .entry(b)
+        .or_default();
+    *n = n.saturating_add(1).min(100);
     Ok(())
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Negotiate {
+    person: PersonId,
+    other: PersonId,
+}
+impl Request for Negotiate {
+    const KEY: &'static str = "exchange.negotiate";
+    type Response = ();
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("exchange", 1)?;
     b.resource::<Exchange>()?;
+    b.request::<Negotiate>(|tx, r| encounter(tx, r.person, r.other))?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Exchange>()?.enabled = true;
         Ok(())
@@ -290,16 +324,17 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(agreement)
     })?;
     b.subscribe::<game_social_life::Encounter>("exchange.offers", |tx, e| {
-        encounter(tx, e.first, e.second)
+        if tx.get::<game_characters::Minds>().is_ok_and(|m| m.running) {
+            tx.notify(game_choice::Changed { person: e.first })?;
+            tx.notify(game_choice::Changed { person: e.second })
+        } else {
+            encounter(tx, e.first, e.second)
+        }
     })?;
-    b.subscribe::<game_characters::IdleReview>("a.exchange.seek-aid", |tx, e| {
+    game_choice::provider(b, "exchange.opportunities", |tx, e| {
         if !tx.get::<Exchange>()?.enabled
             || Some(e.person) == tx.get::<game_lineage::Lineage>()?.current
         {
-            return Ok(());
-        }
-        let bodies = tx.get::<game_physiology::Bodies>()?;
-        if bodies.people[&e.person].health >= game_physiology::maximum_health(bodies, e.person) {
             return Ok(());
         }
         let Ok(area) = game_transport::area(tx.get()?, e.person) else {
@@ -310,22 +345,43 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .residents
             .get(&area)
             .into_iter()
-            .flat_map(|r| r.keys())
-            .filter(|p| **p != e.person)
-            .take(8)
-            .copied()
+            .flat_map(|r| {
+                r.scan_after(Some(&e.person))
+                    .chain(r.iter())
+                    .take(r.len().min(16))
+            })
+            .map(|(p, _)| *p)
+            .filter(|p| *p != e.person)
             .collect();
-        for caregiver in peers {
-            if tx
-                .attempt(game_care::RequestAid {
-                    patient: e.person,
-                    caregiver,
-                })
-                .is_ok_and(|ok| ok)
-            {
-                tx.edit::<Exchange>()?.aid_requests += 1;
-                break;
-            }
+        let own = &tx.get::<game_physiology::Bodies>()?.people[&e.person];
+        let hunger = own.hunger.min(200) as i64;
+        for other in peers {
+            let recent = tx.get::<Exchange>()?.next.get(&e.person).map_or(0, |at| {
+                30i64.saturating_sub((tx.now().0.saturating_sub(at.0) / MINUTE.0).min(30) as i64)
+            });
+            let failures = tx
+                .get::<Exchange>()?
+                .failures
+                .get(&e.person)
+                .and_then(|r| r.get(&other))
+                .copied()
+                .unwrap_or(0);
+            let value = 20 + hunger / 4 + game_vitality::disposition(tx, e.person, "openness") / 50;
+            game_choice::offer(
+                tx,
+                e.person,
+                format!("exchange:{}", other.0),
+                game_choice::motive(0, 0, value, 5 + recent + i64::from(failures) * 10, 0),
+                game_choice::Undertake {
+                    person: e.person,
+                    kind: "negotiate".into(),
+                    duration: SimDuration(5 * MINUTE.0),
+                    request: Pending::new(Negotiate {
+                        person: e.person,
+                        other,
+                    })?,
+                },
+            )?;
         }
         Ok(())
     })?;

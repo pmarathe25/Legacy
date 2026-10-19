@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-testimony.workspace = true
 game-communication.workspace = true
 game-vitality.workspace = true
 game-core.workspace = true
@@ -15,10 +16,11 @@ game-physiology.workspace = true
 game-transport.workspace = true
 game-knowledge.workspace = true
 game-relationships.workspace = true
-game-traits.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-traits.workspace = true
+game-companionship.workspace=true
 game-land.workspace = true
 game-cargo.workspace = true
 game-property.workspace = true

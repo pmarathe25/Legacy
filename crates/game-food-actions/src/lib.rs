@@ -271,6 +271,9 @@ impl Request for TendFood {
 }
 impl FoodCare {
     pub fn valid_for(&self, caregiver: PersonId) -> bool {
-        caregiver != self.beneficiary && self.observed_need > 0 && self.plan.inventory().is_some()
+        caregiver != self.beneficiary
+            && self.observed_need > 0
+            && (self.plan.inventory().is_some()
+                || matches!(self.plan, Plan::Explore { .. }) && !self.returning)
     }
 }

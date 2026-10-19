@@ -1,13 +1,32 @@
 # game-openings
 
-Binds generated starts and optional, explicitly labeled fixtures through feature-owned requests. `generated` reads `game-worldgen` settings, installs only physical and individual initial conditions, enables communities, care, horticulture, livelihoods, pastimes, and wayfaring, and runs live history before assigning player control. The saved opening records the seed, settings, initial definition, source stamps, and actual handoff time. Authored scenarios retain their explicit initial arrangements. No complete campaign is implied.
+`game-openings` initializes a `game_sim::Host` from either a generated world or an authored scenario fixture and runs pre-control history warmup.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-land](../game-land/README.md), [game-transport](../game-transport/README.md), [game-cargo](../game-cargo/README.md), [game-property](../game-property/README.md), [game-environment](../game-environment/README.md), [game-physiology](../game-physiology/README.md), [game-knowledge](../game-knowledge/README.md), [game-skills](../game-skills/README.md), [game-ecology](../game-ecology/README.md), [game-agriculture](../game-agriculture/README.md), [game-workshop](../game-workshop/README.md), [game-health](../game-health/README.md), [game-relationships](../game-relationships/README.md), [game-agreements](../game-agreements/README.md), [game-institutions](../game-institutions/README.md), [game-justice](../game-justice/README.md), [game-lifecycle](../game-lifecycle/README.md), [game-lineage](../game-lineage/README.md), [game-guardians](../game-guardians/README.md), [game-invocation](../game-invocation/README.md), [game-characters](../game-characters/README.md), [game-logistics](../game-logistics/README.md), [game-projects](../game-projects/README.md), [game-realm](../game-realm/README.md), [game-conflict](../game-conflict/README.md), [game-confinement](../game-confinement/README.md), [game-missions](../game-missions/README.md), [game-armies](../game-armies/README.md).
+**Why it matters:** Bridges declarative scenario definitions (`game-scenarios`, `game-worldgen`) and live simulation state by dispatching feature-owned creation requests in a deterministic sequence and recording provenance in saves.
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+## Responsibilities
 
-**Verification:** Run `cargo test -p game-openings`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+- **Opening resource (`Opening`):** Persists the scenario ID, seed, content fingerprints, resolved `game_scenarios::Definition`, symbolic-to-runtime ID map (`Binding`), and player handoff timestamp under `openings.state`.
+- **World installation (`initialize`, `seed_world`):** Loads [`game-scenario-assets`](../game-scenario-assets/README.md), creates areas, roads, inventories, items, patches, plots, people, traits, relationships, agreements, institutions, and guardians via each owner's typed requests.
+- **Live history warmup:** For `generated` starts, enables [`game-campaign`](../game-campaign/README.md) autonomy, advances the host for the configured warmup duration with all mortals autonomous, and then assigns a surviving mortal as the initial player ruler.
 
-**Content:** [Store format and extension guide](../../content/README.md). Definitions are read from files at startup and resolved snapshots survive save/load. The schema and validation live in this crate.
+## Boundaries
 
-`seed_world` constructs the same physical generated start at day zero without a protected player or warmup. `Simulation::uncontrolled` exposes this research path through assembly; [the history runner](../../tools/history/README.md) uses it for full-cohort experiments.
+- **Startup orchestration only:** Mutates only `openings.state` directly; all entity creation goes through the owning feature crates' requests.
+- **Uncontrolled research path (`seed_world`):** Constructs the generated world at day 0 without warmup or player ruler assignment for [`tools/history`](../../tools/history/README.md) cohort studies.
+
+## How It Works
+
+- **Symbolic binding resolution:** Maps symbolic scenario keys (areas, people, inventories, plots, agreements, institutions) to allocated `game-core` IDs so cross-references wire up cleanly.
+- **Unprotected warmup:** During generated history warmup, no character is immortalized or shielded; if a candidate dies, player selection chooses from actual survivors at handoff time.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`openings`, resource `openings.state`) and exposes `initialize`, `seed_world`, `scenarios`, and `default_scenario`.
+- **Requests & Events:** Handles internal opening state setup and dispatches creation/configuration requests across all initialized feature owners.
+- **Callers:** Called by [`game-assembly`](../game-assembly/README.md) during `Simulation::new`, `Simulation::with_content`, and `Simulation::uncontrolled`.
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-content`](../game-content/README.md), [`game-scenarios`](../game-scenarios/README.md), [`game-scenario-assets`](../game-scenario-assets/README.md), [`game-worldgen`](../game-worldgen/README.md), [`game-campaign`](../game-campaign/README.md), and initialized feature crates.
+- **Testing:** `cargo test -p game-openings` verifies fixture initialization, generated warmup handoff, symbolic binding, and save/load persistence.

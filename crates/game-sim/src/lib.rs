@@ -8,17 +8,15 @@ mod transaction;
 use game_core::*;
 pub use registry::{Builder, Checkpoint, Event, Request, Resource};
 use registry::{Registry, Stored};
+use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-// Keys come only from compiled Rust types; external keys retain ordered maps.
-use rustc_hash::FxHashMap as HashMap;
 use std::{
     any::TypeId,
     collections::{BTreeMap, VecDeque},
     sync::Arc,
 };
 pub use transaction::Transaction;
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope {
     pub key: String,
@@ -41,6 +39,9 @@ pub struct Notice {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Action {
+    /// Each start receives a distinct identity, including same-time restarts.
+    #[serde(default)]
+    pub id: u64,
     pub owner: Arc<str>,
     pub kind: String,
     pub until: Option<SimTime>,
@@ -58,20 +59,20 @@ impl Event for ActionFinished {
 pub struct Actions(pub Packed<PersonId, Action>);
 impl Resource for Actions {
     const KEY: &'static str = "world.actions";
+    fn allocated_ids(&self) -> Vec<u64> {
+        self.0
+            .values()
+            .filter_map(|a| (a.id > 0).then_some(a.id))
+            .collect()
+    }
     fn checkpoint(&mut self) -> Checkpoint {
         Box::new(self.0.begin())
     }
     fn restore(&mut self, c: Checkpoint) {
-        self.0.rollback(
-            *c.downcast::<game_packed::Mark>()
-                .expect("action checkpoint"),
-        );
+        self.0.rollback(*c.downcast().expect("action checkpoint"));
     }
     fn commit(&mut self, c: Checkpoint) {
-        self.0.commit(
-            *c.downcast::<game_packed::Mark>()
-                .expect("action checkpoint"),
-        );
+        self.0.commit(*c.downcast().expect("action checkpoint"));
     }
     fn validate_checkpoint(&self, _: &dyn std::any::Any) -> Result<()> {
         Ok(())
@@ -135,10 +136,7 @@ impl Host {
         self.pool.current_num_threads()
     }
     pub fn get<T: Resource>(&self) -> Result<&T> {
-        self.data
-            .get(&TypeId::of::<T>())
-            .and_then(|s| s.downcast_ref())
-            .ok_or_else(|| Error::Missing(T::KEY.into()))
+        registry::read(&self.data)
     }
     /// Recent notices: at least 1024 or the latest complete transaction.
     /// Collect after each commit when every event must be retained externally.
@@ -195,7 +193,6 @@ impl Host {
             .get(request.key())
             .copied()
             .unwrap_or(1);
-
         let request_key = self
             .registry
             .decoders

@@ -1,11 +1,31 @@
 # game-ecology
 
-Timed gathering reserves finite stock, consumes one canonical action, produces physical goods, and credits learning. Cancellation releases reservations; renewal is explicitly scheduled.
+`game-ecology` owns gatherable wild resource patches, finite stock reservations, climate-gated daily renewal, and timed gathering labor.
 
-`SetRenewal` optionally attaches minimum warmth and rain to a patch. The existing daily renewal job consults its area's `game-environment` climate and skips dormant patches without changing stock or existing reservations. Patches without a rule keep unconditional renewal; a zero renewal amount leaves a finite deposit. Rules persist independently of observed patch facts, so hidden stock is still learned through observations and reports.
+**Why it matters:** Raw materials and wild foods come from finite local patches that must be physically gathered over time, reserved against concurrent gatherers, and renewed only when seasonal weather permits.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-cargo](../game-cargo/README.md), [game-transport](../game-transport/README.md), [game-physiology](../game-physiology/README.md), [game-skills](../game-skills/README.md).
+## Responsibilities
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+- **Resource patches (`Ecology`):** Tracks each patch's area, `GoodId`, current stock, capacity, active reservations, daily renewal rate, and optional warmth/rain renewal thresholds (`ecology.patches`).
+- **Timed gathering (`Gather`):** Reserves patch stock and destination container space (`game-cargo`), occupies the actor's canonical action slot, mints the gathered goods on completion, and credits gathering skill (`game-skills`).
+- **Seasonal renewal:** Runs a scheduled daily renewal pass that replenishes renewable patches up to capacity when local `game-environment` warmth and rain meet authored thresholds.
 
-**Verification:** Run `cargo test -p game-ecology`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+## Boundaries
+
+- **Bulk patch stock vs. living stands:** Manages patch stock quantities, reservations, and timed gathering; [`game-botany`](../game-botany/README.md) layers representative diploid plant stands and seed banks over edible patches when enabled.
+
+## How It Works
+
+- **Dual reservation safety:** Starting `Gather` reserves both the patch's remaining stock and the destination inventory's mass capacity; cancelling the action releases both reservations without minting goods.
+- **Finite deposits:** Patches with `renew = 0` never replenish, modeling exhaustible mineral and stone veins.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`ecology`, resource `ecology.patches`).
+- **Requests & Events:** Handles `CreatePatch`, `SetRenewal`, `Gather`, and internal completion/renewal callbacks; emits `Gathered`.
+- **Callers:** Bound to `Command::Gather` in `game-assembly`, and called by [`game-food-actions`](../game-food-actions/README.md), [`game-livelihoods`](../game-livelihoods/README.md), and [`game-botany`](../game-botany/README.md).
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-sim`](../game-sim/README.md), [`game-objects`](../game-objects/README.md), [`game-cultivars`](../game-cultivars/README.md), [`game-environment`](../game-environment/README.md), [`game-cargo`](../game-cargo/README.md), [`game-transport`](../game-transport/README.md), [`game-physiology`](../game-physiology/README.md), [`game-skills`](../game-skills/README.md).
+- **Testing:** `cargo test -p game-ecology` verifies stock/space reservations, cancellation rollback, climate-gated renewal, skill practice, and save validation.

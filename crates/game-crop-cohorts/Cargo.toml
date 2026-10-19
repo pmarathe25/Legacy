@@ -1,0 +1,13 @@
+[package]
+name="game-crop-cohorts"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+[dependencies]
+game-objects.workspace=true
+game-environment.workspace=true
+game-core.workspace=true
+game-sim.workspace=true
+game-crops.workspace=true
+game-cultivars.workspace=true
+serde.workspace=true

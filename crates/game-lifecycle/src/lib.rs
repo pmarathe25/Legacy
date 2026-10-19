@@ -24,6 +24,8 @@ pub struct Population {
     pub pregnancies: Table<u64, Pregnancy>,
     pub gestation: SimDuration,
     pub adult_age: SimDuration,
+    #[serde(default)]
+    pub recovery: Table<PersonId, SimTime>,
 }
 impl Default for Population {
     fn default() -> Self {
@@ -32,6 +34,7 @@ impl Default for Population {
             pregnancies: Table::new(),
             gestation: SimDuration(DAY.0 * 270),
             adult_age: SimDuration(DAY.0 * 365 * 18),
+            recovery: Table::new(),
         }
     }
 }
@@ -64,6 +67,34 @@ pub fn fertile(body: &game_physiology::Body, adult_age: SimDuration, at: SimTime
         && body
             .life_limit
             .is_some_and(|end| age < end.0.saturating_sub(body.born.0) / 3 * 2)
+}
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Gestational,
+    Gamete,
+}
+/// Missing phenotypes in legacy/isolated worlds retain their previous physical possibilities.
+pub fn reproductive(tx: &Transaction<'_>, person: PersonId, role: Role) -> Result<bool> {
+    let population = tx.get::<Population>()?;
+    let body = &tx.get::<game_physiology::Bodies>()?.people[&person];
+    if !fertile(body, population.adult_age, tx.now())
+        || population
+            .recovery
+            .get(&person)
+            .is_some_and(|at| *at > tx.now())
+    {
+        return Ok(false);
+    }
+    let traits = tx.get::<game_traits::Traits>().ok();
+    Ok(traits
+        .filter(|t| t.definitions.contains_key("reproductive_role"))
+        .is_none_or(|t| {
+            let phenotype = t.ability(person, "reproductive_role");
+            match role {
+                Role::Gestational => phenotype <= 1000,
+                Role::Gamete => phenotype >= 1000,
+            }
+        }))
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conceive {
@@ -147,6 +178,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 genes: inherited,
             },
         );
+        let recovery = game_vitality::ability(tx, r.mother, "recovery").max(100);
+        let until = tx
+            .now()
+            .after(SimDuration((42 * DAY.0).saturating_mul(1000) / recovery))?;
+        tx.edit::<Population>()?.recovery.insert(r.mother, until);
         tx.emit(
             Born {
                 person,
@@ -159,6 +195,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Conceive>(|tx, r| {
         require(r.mother != r.father, "parents must differ")?;
+        require(
+            reproductive(tx, r.mother, Role::Gestational)?
+                && reproductive(tx, r.father, Role::Gamete)?,
+            "incompatible reproductive capacities or incomplete recovery",
+        )?;
         for person in [r.mother, r.father] {
             game_physiology::capable(tx, person)?;
             let body = &tx.get::<game_physiology::Bodies>()?.people[&person];

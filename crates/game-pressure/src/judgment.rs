@@ -12,7 +12,7 @@ fn relation(
 }
 /// Anticipation uses only co-located visible build, one's own condition and foresight,
 /// and personally experienced fear. It does not inspect another person's genes or strength.
-fn fear(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> Result<i64> {
+pub(super) fn fear(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> Result<i64> {
     let remembered = i64::from(relation(tx, person, other).fear);
     if game_transport::area(tx.get()?, person)
         .ok()
@@ -29,7 +29,24 @@ fn fear(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> Result<i64> 
     let vulnerability = wounds * ratio.min(100) / 100;
     let build = (ratio.saturating_sub(100) / 2).min(100);
     let foresight = (600 + game_vitality::ability(tx, person, "foresight") / 2).min(2000);
-    Ok(remembered + (build.max(vulnerability) * foresight / 1000).min(100) as i64)
+    let learned = tx
+        .get::<game_knowledge::Knowledge>()
+        .ok()
+        .and_then(|k| k.0.get(&person))
+        .and_then(|facts| {
+            game_knowledge::forecast(
+                facts,
+                &format!("danger:{}", other.0),
+                "harm",
+                &[
+                    ("relative-build".into(), ratio.min(10000) as i64),
+                    ("wounds".into(), wounds as i64),
+                ]
+                .into(),
+            )
+        })
+        .map_or(0, |p| p.value.clamp(0, 100));
+    Ok(remembered + learned + (build.max(vulnerability) * foresight / 1000).min(100) as i64)
 }
 pub(super) fn afraid(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> Result<bool> {
     yielding(tx, person, other, &Purpose::Allegiance)
@@ -40,6 +57,14 @@ pub(super) fn yielding(
     other: PersonId,
     purpose: &Purpose,
 ) -> Result<bool> {
+    Ok(submission(tx, person, other, purpose)? >= 0)
+}
+pub(super) fn submission(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    other: PersonId,
+    purpose: &Purpose,
+) -> Result<i64> {
     let r = relation(tx, person, other);
     let social = tx.get::<game_relationships::Social>()?;
     let independence = social
@@ -68,7 +93,7 @@ pub(super) fn yielding(
         + i64::from(r.grievance) / 2
         + (disposition(tx, person, "aggression") - 500) / 20
         - i64::from(authority);
-    Ok(fear(tx, person, other)? >= resistance.max(10))
+    Ok(fear(tx, person, other)? - resistance.max(10))
 }
 pub(super) fn escalate(tx: &Transaction<'_>, leader: PersonId, subject: PersonId) -> Result<bool> {
     let r = relation(tx, leader, subject);
@@ -87,6 +112,8 @@ pub(super) fn escape(
     tx: &Transaction<'_>,
     person: PersonId,
     other: PersonId,
+    purpose: &Purpose,
+    alternative: i64,
 ) -> Result<Option<AreaId>> {
     let area = game_transport::area(tx.get()?, person)?;
     let roads = tx
@@ -104,6 +131,9 @@ pub(super) fn escape(
         / 250
         + game_vitality::ability(tx, person, "foresight").min(16000) as i64 / 50;
     let cost = 50
+        + alternative
+            .max(submission(tx, person, other, purpose)?)
+            .max(0)
         + disposition(tx, person, "aggression") / 10
         + i64::from(relation(tx, person, other).grievance);
     Ok(roads

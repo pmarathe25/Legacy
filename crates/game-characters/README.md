@@ -1,23 +1,44 @@
 # game-characters
 
-Owns individual decisions, survival-plan commitment, failed-option cooldowns, and urgent hunger interruption of configured actions. Candidate scores use traits, learned values, needs, and known travel costs. The current ruler acts autonomously only while player control is unavailable.
+Individual mind scheduling, survival-plan commitment, urgent hunger preemption, and idle activity reviews.
 
-Food plans come from [game-provisioning](../game-provisioning/README.md). Their progress and the last decision are saved in each mind; actual travel and gathering use the common action record. Death removes the mind. Failed food attempts refresh locally observable facts and allow another plan on the next review.
+**Why it matters:** Characters need a coherent mind loop that prioritizes urgent survival, commits to multi-step plans without thrashing, and delegates open time to care, work, or companionship.
 
-When food and rest needs are satisfied, enrolled people can ask [game-social-life](../game-social-life/README.md) for local company. That owner handles willingness, companion selection, contact history, and conversation actions. The mind records the social intention for inspection. NPC searches exclude the current player from implicit consent. Social actions can be interrupted by urgent hunger through the same authored policy as work.
+## Responsibilities
 
-Scenarios select a `characters` profile from [content/characters](../../content/characters). The owning [schema](src/rules.rs) controls review intervals, retry intervals, need thresholds, utility weights for time and gathering, switching margins, and action kinds that urgent hunger can interrupt. Existing food acquisition stays committed; interrupted work keeps the cancellation consequences defined by its owner. Configuration freezes before minds are created.
+- **Mind Lifecycle & Deadlines:** Owns per-character mind records, indexed wake-up deadlines, failed-option cooldowns, and death cleanup.
+- **Survival Commitment & Preemption:** Commits to food acquisition plans from `game-provisioning`, resumes plans across travel/gathering steps, and interrupts lower-priority work or rest when urgent hunger thresholds hit.
+- **Idle Activity Dispatch (`IdleReview`):** Emits `IdleReview` notifications when survival needs are satisfied so upper owners (care, horticulture, livelihoods, pastimes, social life) can propose activities without creating a second scheduler.
+- **Ruler Autonomy:** Steps in to control the current ruler only while explicit player control is absent.
 
-Run `cargo test -p game-characters`. Tests cover plan continuation, stale-stock alternatives, blocked routes, partial travel, gathering, urgent hunger, learned values, and save/load with different workers, using only required feature plugins.
+## Boundaries
 
-Reviews process at most 128 due people per committed request, in stable person order. Idle minds retain their authored observation and decision cadence. Active minds use a compact ordered set; sleeping minds use an indexed deadline queue. Busy minds sleep until the action deadline or a hunger interruption threshold supplied by physiology. Completion and cancellation send an internal signal. An existing food intention or unmet food/rest need prompts reconsideration immediately; otherwise the mind wakes on the authored grid. This prevents short unrelated journeys from repeatedly displacing food decisions. Cursor state prevents periodic reviews from reviewing an earlier actor twice at the same clock time. Save/load restores these deadlines.
+- **No Direct Food Search:** Delegates food candidate evaluation and route scoring to `game-provisioning`.
+- **No Social Matching:** Delegates companion selection and conversation execution to `game-social-life`.
+- **No Hidden World Access:** Evaluates choices solely from the character's own carried supplies and personal beliefs (`game-knowledge`).
 
-Candidate inputs are 56-byte numeric records. Trait weights use five numeric channels and visit only recorded deviations from authored defaults. Decision explanations are built after selection. New mechanics that invalidate a physiological forecast must also invalidate the corresponding mind's deadline; ordinary progress does not require waking every actor.
+## How It Works
 
-Minds use indexed dense rows. Checkpoints journal changed people and snapshot the small rules/schedule metadata. Physical row slots never determine review order.
+- **Batched Deadline Reviews:** Processes at most 128 due minds per committed step in deterministic person order. Sleeping minds wait in an indexed deadline queue until their action finishes or physiology forecasts an urgent hunger threshold.
+- **56-Byte Candidate Scoring:** Evaluates candidate actions against five trait-weighted numeric channels, authored switching margins, and learned food values (`game-food-memory`).
+- **Personal Attention:** Expressed attention extends routine reconsideration horizons; hunger and fatigue shorten them. Feeding, injury, arrivals, completed actions, and new evidence can wake a character immediately. This does not forbid activities or impose a leisure cooldown.
+- **Immediate Reconsideration:** Wakes a character immediately when an active food intention or unmet survival need remains after eating or finishing a travel leg, avoiding artificial review-interval delays.
 
-An internal `IdleReview` notification lets upper owners consider care, organizing, horticulture, production, and leisure before ordinary company. Each checks the common action record; the first accepted action occupies it. Owner-specific cooldowns leave opportunities for other activities. Any action they start uses the existing action clock and is recorded in the mind’s last intention. This adds no second autonomy scheduler or dependency from characters back to communities.
+## Game Integration
 
-Chosen food plans resume when travel or gathering finishes, independently of the ordinary review clock. This continues an existing intention rather than starting additional periodic clocks. Urgent needs can interrupt unrelated rest or conversation even while a food intention exists. Reviews inspect the character’s own carried supplies; other inventories remain subject to personal evidence. Independence measures reliance on another person’s provisions, so eating one’s own stored food does not encourage gathering still more.
+- **Plugin / Entry Point:** `Plugin` loads rules from `content/characters/*.toml` and registers mind storage, review clocks, and action completion listeners in `game-assembly`.
+- **Requests & Events:** Handles mind enrollment, review ticks, and action interruptions; emits `IdleReview` notifications and dispatches travel/gather/eat requests.
+- **Callers:** Coordinates with `game-physiology`, `game-provisioning`, `game-food-actions`, `game-social-life`, `game-choice`, and upper-level activity plugins.
 
-Feeding also prompts reconsideration when needs remain. One portion does not impose a review-length wait on a still-hungry character. Each further choice uses the updated needs, experienced food effects, and available supplies.
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-ecology`, `game-physiology`, `game-vitality`, `game-nutrition`, `game-traits`, `game-knowledge`, `game-food-memory`, `game-provisioning`, `game-social-life`, `game-utility`, `game-choice`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-characters`) cover plan continuation, stale-stock recovery, blocked routes, urgent hunger interruption, learned values, and multi-worker save/load consistency.
+
+Recent failures increase the perceived cost of the specific option; they do not
+remove it from consideration. Expressed learning and risk tolerance affect that
+cost, and a strong motive can justify an immediate retry. Unrelated notifications
+retain the evidence; successful progress revises it. The legacy `retry_after`
+save field bounds fading failure memory rather than imposing an action cooldown.
+Attention uses a minute-based horizon bounded by urgent hunger forecasts and the
+authored review cadence, including coarse history profiles.

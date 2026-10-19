@@ -4,7 +4,7 @@ use game_sim::*;
 use serde::{Deserialize, Serialize};
 /// A prospective parent's own attachment, interests, condition, and current care burden.
 /// Independent adult children do not consume a lifetime reproductive allowance.
-fn child(tx: &Transaction<'_>, person: PersonId, partner: PersonId) -> Result<bool> {
+fn child(tx: &Transaction<'_>, person: PersonId, partner: PersonId) -> Result<i64> {
     let bodies = tx.get::<game_physiology::Bodies>()?;
     let body = &bodies.people[&person];
     if tx
@@ -13,10 +13,15 @@ fn child(tx: &Transaction<'_>, person: PersonId, partner: PersonId) -> Result<bo
         .values()
         .any(|p| p.mother == person || p.father == person)
     {
-        return Ok(false);
+        return Ok(i64::MIN / 4);
     }
     let social = tx.get::<game_relationships::Social>()?;
-    let tie = &social.relationships[&person][&partner];
+    let tie = social
+        .relationships
+        .get(&person)
+        .and_then(|r| r.get(&partner))
+        .cloned()
+        .unwrap_or_default();
     let interest = social
         .values
         .get(&person)
@@ -56,7 +61,7 @@ fn child(tx: &Transaction<'_>, person: PersonId, partner: PersonId) -> Result<bo
         + body.fatigue.min(1000) as i64
         + i64::from(stress) / 8
         + burden.min(i64::MAX as u64) as i64;
-    Ok(motive > cost)
+    Ok(motive - cost)
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -73,39 +78,99 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     {
         return Ok(false);
     }
-    let Some(partner) = tx.get::<Households>()?.partners.get(&person).copied() else {
+    let partner = tx
+        .get::<Households>()?
+        .partners
+        .get(&person)
+        .copied()
+        .or_else(|| {
+            tx.get::<game_family_life::Bonds>()
+                .ok()?
+                .partners
+                .get(&person)?
+                .iter()
+                .find(|(_, k)| **k == game_family_life::Kind::CoParent)
+                .map(|(p, _)| *p)
+        });
+    let Some(partner) = partner else {
         return Ok(false);
     };
-    if person > partner || Some(partner) == tx.get::<game_lineage::Lineage>()?.current {
-        return Ok(false);
-    }
-    let population = tx.get::<game_lifecycle::Population>()?;
-    let bodies = tx.get::<game_physiology::Bodies>()?;
-    if ![person, partner]
-        .iter()
-        .all(|p| game_lifecycle::fertile(&bodies.people[p], population.adult_age, tx.now()))
-        || !child(tx, person, partner)?
-        || !child(tx, partner, person)?
+    if Some(partner) == tx.get::<game_lineage::Lineage>()?.current
+        || child(tx, person, partner)? <= 0
+        || child(tx, partner, person)? <= 0
     {
         return Ok(false);
     }
-    Ok(tx
-        .attempt(game_lifecycle::Conceive {
-            mother: person,
-            father: partner,
-            caregiver: person,
-        })
-        .is_ok())
+    // Each physical role is tested separately, independently of ID ordering or affection.
+    for (mother, father) in [(person, partner), (partner, person)] {
+        if game_lifecycle::reproductive(tx, mother, game_lifecycle::Role::Gestational)?
+            && game_lifecycle::reproductive(tx, father, game_lifecycle::Role::Gamete)?
+        {
+            return Ok(tx
+                .attempt(game_lifecycle::Conceive {
+                    mother,
+                    father,
+                    caregiver: person,
+                })
+                .is_ok());
+        }
+    }
+    Ok(false)
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("parenthood", 1)?;
     b.request::<Consider>(|tx, r| consider(tx, r.person))?;
     b.subscribe::<game_households::Formed>("parenthood.intentions", |tx, e| {
-        consider(tx, e.first.min(e.second))?;
+        if tx.get::<game_characters::Minds>()?.running {
+            for person in [e.first, e.second] {
+                tx.notify(game_choice::Changed { person })?;
+            }
+        } else {
+            consider(tx, e.first.min(e.second))?;
+        }
         Ok(())
     })?;
-    b.subscribe::<game_characters::IdleReview>("a.parenthood.consider", |tx, e| {
-        consider(tx, e.person)?;
+    game_choice::provider(b, "a.parenthood.consider", |tx, e| {
+        if game_choice::collecting(tx, e.person) {
+            if !tx.get::<Households>()?.enabled {
+                return Ok(());
+            }
+            let partner = tx
+                .get::<Households>()?
+                .partners
+                .get(&e.person)
+                .copied()
+                .or_else(|| {
+                    tx.get::<game_family_life::Bonds>()
+                        .ok()?
+                        .partners
+                        .get(&e.person)?
+                        .iter()
+                        .find(|(_, k)| **k == game_family_life::Kind::CoParent)
+                        .map(|(p, _)| *p)
+                });
+            if let Some(partner) = partner {
+                let pop = tx.get::<game_lifecycle::Population>()?;
+                let body = &tx.get::<game_physiology::Bodies>()?.people[&e.person];
+                if game_lifecycle::fertile(body, pop.adult_age, tx.now()) {
+                    let value = child(tx, e.person, partner)? / 4;
+                    game_choice::offer(
+                        tx,
+                        e.person,
+                        format!("parenthood:{}", partner.0),
+                        game_choice::motive(0, 0, value, 5, 0),
+                        game_choice::Undertake {
+                            person: e.person,
+                            kind: "parenthood".into(),
+                            duration: HOUR,
+                            request: Pending::new(Consider { person: e.person })?,
+                        },
+                    )?;
+                }
+            }
+        } else {
+            consider(tx, e.person)?;
+        }
         Ok(())
     })?;
     Ok(())

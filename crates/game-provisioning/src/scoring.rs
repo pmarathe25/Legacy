@@ -51,3 +51,9 @@ impl FoodScores {
         })
     }
 }
+
+/// Hunger can grow more urgent without forbidding competing motives.
+pub fn hunger_pressure(hunger: u64, meal: u64, urgent: u64) -> i64 {
+    let hunger = hunger.min(10000) as i64;
+    (hunger * 2 + hunger * hunger / urgent.max(1) as i64 - meal as i64).max(0)
+}

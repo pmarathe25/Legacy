@@ -117,7 +117,7 @@ fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             support(tx, person)?;
             continue;
         }
-        if tx.now().0.saturating_sub(body.born.0) >= 6 * 365 * DAY.0 {
+        if game_physiology::capable(tx, child).is_ok() {
             if game_transport::area(tx.get()?, child).is_err() {
                 continue;
             }
@@ -131,11 +131,6 @@ fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
                     mind: Default::default(),
                 })?;
             }
-            if tx.now().0.saturating_sub(body.born.0) >= 18 * 365 * DAY.0 {
-                tx.edit::<Households>()?.assign(child, None);
-                support(tx, person)?;
-                continue;
-            }
         }
         if game_physiology::capable(tx, person).is_err() {
             continue;
@@ -147,46 +142,17 @@ fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
             continue;
         }
         tx.edit::<Households>()?.nursery.insert(child, area);
-        if body.fatigue > tx.get::<game_characters::Minds>()?.rules.rest_fatigue
-            && !tx.get::<Actions>()?.0.contains_key(&child)
-            && !tx
-                .get::<game_characters::Minds>()?
-                .people
-                .contains_key(&child)
-        {
-            let _ = tx.attempt(game_physiology::Rest { person: child });
-        }
     }
     if tx.registered::<TendFood>() {
-        tx.call(TendFood { caregiver: person })?;
-    }
-    if !tx.get::<Actions>()?.0.contains_key(&person)
-        && !tx.get::<Households>()?.food_care.contains_key(&person)
-        && tx
-            .get::<game_characters::Minds>()?
-            .people
-            .get(&person)
-            .is_none_or(|m| m.plan.is_none())
-        && let Ok(area) = game_transport::area(tx.get()?, person)
-    {
-        let targets: Vec<_> = tx
-            .get::<Households>()?
-            .dependents_of(person)
-            .filter_map(|child| tx.get::<Households>().ok()?.nursery.get(&child).copied())
-            .filter(|a| *a != area)
-            .collect();
-        for target in targets {
-            if let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person)
-                && let Ok(route) = game_knowledge::route(facts, area, target)
-                && let Some(next) = route.areas.get(1)
-            {
-                let _ = tx.attempt(game_transport::Move {
-                    person,
-                    destination: *next,
-                });
-                break;
-            }
+        if tx.get::<game_characters::Minds>()?.running
+            && tx
+                .get::<game_characters::Minds>()?
+                .people
+                .contains_key(&person)
+        {
+            return tx.notify(game_choice::Changed { person });
         }
+        tx.call(TendFood { caregiver: person })?;
     }
     Ok(())
 }
@@ -226,9 +192,44 @@ pub struct Fostered {
 impl Event for Fostered {
     const KEY: &'static str = "households.fostered";
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Separate {
+    pub person: PersonId,
+    pub other: PersonId,
+}
+impl Request for Separate {
+    const KEY: &'static str = "households.separate";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Independent {
+    pub person: PersonId,
+}
+impl Request for Independent {
+    const KEY: &'static str = "households.independent";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("households", 1)?;
     b.resource::<Households>()?;
+    b.request::<Separate>(|tx, r| {
+        if tx.get::<Households>()?.partners.get(&r.person) == Some(&r.other) {
+            tx.edit::<Households>()?.partners.remove(&r.person);
+            tx.edit::<Households>()?.partners.remove(&r.other);
+        }
+        Ok(())
+    })?;
+    b.request::<Independent>(|tx, r| {
+        game_physiology::capable(tx, r.person)?;
+        require(
+            game_vitality::can_walk(tx, r.person),
+            "cannot travel independently",
+        )?;
+        if let Some(old) = tx.edit::<Households>()?.assign(r.person, None) {
+            support(tx, old)?;
+        }
+        Ok(())
+    })?;
     b.request::<RememberFoodCare>(|tx, r| {
         if let Some(intent) = &r.intent {
             require(
@@ -243,9 +244,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             if !continuing {
                 game_physiology::capable(tx, r.caregiver)?;
                 require(
-                    game_transport::area(tx.get()?, r.caregiver)?
-                        == game_transport::area(tx.get()?, intent.beneficiary)?,
-                    "care need was not observed locally",
+                    game_transport::area(tx.get()?, r.caregiver)
+                        .ok()
+                        .is_some_and(|area| {
+                            game_transport::area(tx.get().unwrap(), intent.beneficiary).ok()
+                                == Some(area)
+                        })
+                        || tx
+                            .get::<game_signals::Signals>()
+                            .ok()
+                            .and_then(|s| s.perceptions.get(&r.caregiver)?.get(&intent.beneficiary))
+                            .is_some_and(|p| p.area == Some(intent.home) && p.food.is_some()),
+                    "care need has no personally observed location",
                 )?;
             }
         }
@@ -360,7 +370,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(true)
     })?;
     b.subscribe::<game_social_life::Encounter>("households.affection", |tx, e| {
-        if tx.get::<Households>()?.enabled
+        if !tx.get::<game_characters::Minds>()?.running
+            && tx.get::<Households>()?.enabled
             && ![Some(e.first), Some(e.second)]
                 .contains(&tx.get::<game_lineage::Lineage>()?.current)
         {
@@ -371,8 +382,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
-    b.subscribe::<game_characters::IdleReview>("a.households.care", |tx, e| {
-        if tx.get::<Households>()?.enabled
+    game_choice::provider(b, "a.households.care", |tx, e| {
+        if !game_choice::collecting(tx, e.person)
+            && tx.get::<Households>()?.enabled
             && Some(e.person) != tx.get::<game_lineage::Lineage>()?.current
         {
             tend(tx, e.person)?;
@@ -391,54 +403,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             s.children.entry(p).or_default().push(e.person);
         }
         support(tx, f.caregiver)?;
-        let t = tx.get::<game_traits::Traits>()?;
-        let capacity =
-            (500 + t.ability(e.person, "size") + t.ability(e.person, "strength") / 2).max(1200);
-        let inventory = tx.call(game_cargo::Create {
-            custody: game_cargo::Custody::Carried(e.person),
-            capacity,
-        })?;
-        tx.call(game_property::ClaimInventory {
-            claimant: e.person,
-            inventory,
-            recognized_by: std::collections::BTreeSet::from([e.person]),
-        })?;
-        tx.call(game_property::Permit {
-            issuer: e.person,
-            person: e.person,
-            inventory,
-            allow: true,
-        })?;
-        tx.call(game_knowledge::ObserveStore {
-            person: e.person,
-            inventory,
-        })?;
-        if tx.registered::<game_names::NameChild>() {
-            tx.call(game_names::NameChild { child: e.person })?;
-        } else {
-            let name = tx
-                .get::<game_social_life::SocialLife>()?
-                .people
-                .get(&f.caregiver)
-                .map_or("Kin", |p| p.name.as_str())
-                .to_owned();
-            tx.call(game_social_life::Register {
-                person: e.person,
-                name,
-            })?;
-        }
-        tx.call(game_relationships::Initialize {
-            person: e.person,
-            beliefs: Default::default(),
-            values: Default::default(),
-        })?;
-        for p in [f.mother, f.father] {
-            tx.call(game_relationships::Converse {
-                observer: p,
-                other: e.person,
-                warmth: 10,
-            })?;
-        }
         Ok(())
     })?;
     b.subscribe::<game_transport::Arrived>("households.locations", |tx, e| {
@@ -452,42 +416,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         for child in children {
             if game_transport::area(tx.get()?, child).ok() == Some(e.area) {
                 tx.edit::<Households>()?.nursery.insert(child, e.area);
-            }
-        }
-        Ok(())
-    })?;
-    b.subscribe::<game_transport::Departed>("households.carry", |tx, r| {
-        let children: Vec<_> = tx
-            .get::<Households>()?
-            .wards
-            .get(&r.person)
-            .into_iter()
-            .flat_map(|s| s.keys().copied())
-            .collect();
-        for child in children {
-            if tx
-                .get::<game_characters::Minds>()?
-                .people
-                .contains_key(&child)
-            {
-                continue;
-            }
-            if tx
-                .get::<Actions>()?
-                .0
-                .get(&child)
-                .is_some_and(|a| a.kind == "socialize" || a.kind == "rest")
-            {
-                tx.cancel_action(child)?;
-            }
-            if game_physiology::capable(tx, child).is_ok()
-                && !tx.get::<Actions>()?.0.contains_key(&child)
-            {
-                let _ = tx.attempt(game_transport::Carry {
-                    carrier: r.person,
-                    passenger: child,
-                    destination: r.destination,
-                });
             }
         }
         Ok(())

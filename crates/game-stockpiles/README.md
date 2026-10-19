@@ -1,11 +1,31 @@
 # game-stockpiles
 
-**Purpose:** A person can set surplus possessions in a finite, owned ground cache to make room in a carried container. Goods remain physical, local, and accounted for.
+`game-stockpiles` lets characters offload surplus carried goods into finite, personally owned ground caches in their current area.
 
-`StoreSurplus { person, inventory, needed_mass }` works only on the capable person's own permitted carried inventory. It moves enough mass to fit the requested load, preferring nonfood supplies with high total mass. It retains eight meals of each edible type. A cache holds four times the source container's capacity, and the owner creates at most one per area. Failed access, insufficient movable goods, or a full cache rolls back the request. More space is never invented by discarding goods or allocating another cache.
+**Why it matters:** Autonomous foragers and cultivators have limited carried pack capacity; creating a local ground cache frees room for harvests or raw materials while keeping every item physical, local, and subject to property rules.
 
-Cargo owns creation and transfers; property owns the personal claim; knowledge records both observed inventories. `Stockpiles` owns only the cache index and stored-mass total. `Stored` reports committed movement. Save validation checks physical locality and the recorded custodian's claim.
+## Responsibilities
 
-Autonomous horticulture requests room before a harvest; provisioning can request room before gathering food. Direct player actions retain explicit control over possessions. Ground caches require no building or magical container item. They are area-bound piles with finite capacity, rather than portable inventory upgrades. Shared stores, cache theft decisions, spoilage, and construction-based storage improvements remain separate mechanics.
+- **Cache index (`Stockpiles`):** Tracks each person's area-bound ground cache `InventoryId` (at most one per person per area) and cached stored mass (`stockpiles.caches`).
+- **Surplus offloading (`StoreSurplus`):** Transfers heavy non-food goods (and surplus food beyond an 8-meal personal reserve per edible type) from a carried pack into the actor's local ground cache to free `needed_mass`.
 
-Run `cargo test -p game-stockpiles` for quantity conservation, ownership, capacity, rollback, observation, and save/load checks.
+## Boundaries
+
+- **Composer over cargo & property:** Delegates physical container creation and transfers to [`game-cargo`](../game-cargo/README.md), ownership claims to [`game-property`](../game-property/README.md), and inventory memory updates to [`game-knowledge`](../game-knowledge/README.md).
+- **Finite capacity:** Each ground cache holds at most $4\times$ the source carried container's capacity; it never destroys goods or spawns unlimited caches when full.
+
+## How It Works
+
+- **Priority eviction:** Sorts carried items to offload non-edible materials with the largest total mass first, preserving essential carried rations.
+- **Atomic rollback:** If the cache is full or lacks enough movable surplus to free `needed_mass`, the entire `StoreSurplus` request rolls back cleanly.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`stockpiles`, resource `stockpiles.caches`).
+- **Requests & Events:** Handles `StoreSurplus`; emits `Stored`.
+- **Callers:** Invoked by [`game-provisioning`](../game-provisioning/README.md), [`game-food-actions`](../game-food-actions/README.md), and [`game-horticulture`](../game-horticulture/README.md) when carried containers fill up.
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-cargo`](../game-cargo/README.md), [`game-property`](../game-property/README.md), [`game-transport`](../game-transport/README.md), [`game-physiology`](../game-physiology/README.md), [`game-objects`](../game-objects/README.md), [`game-knowledge`](../game-knowledge/README.md).
+- **Testing:** `cargo test -p game-stockpiles` verifies meal retention, capacity limits, ownership claims, knowledge updates, and rollback on full caches.

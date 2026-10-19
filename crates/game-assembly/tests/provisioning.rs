@@ -6,6 +6,23 @@ use support::Pack;
 fn run(s: &mut Simulation, at: SimTime) {
     while s.advance(at, 128).unwrap().stop == game_sim::Stop::Budget {}
 }
+fn await_gather(s: &mut Simulation, person: PersonId) -> SimTime {
+    for _ in 0..360 {
+        let at = s.debug_host().now().after(MINUTE).unwrap();
+        run(s, at);
+        if s.debug_host()
+            .get::<game_ecology::Ecology>()
+            .unwrap()
+            .gathering
+            .contains_key(&person)
+        {
+            return s.debug_host().get::<game_sim::Actions>().unwrap().0[&person]
+                .until
+                .unwrap();
+        }
+    }
+    panic!("authored forager did not choose to gather within six hours");
+}
 #[test]
 fn an_authored_forager_survives_from_real_patch_output_across_saving() {
     let mut original = Simulation::new("foraging-fixture", 73, 1).unwrap();
@@ -17,14 +34,16 @@ fn an_authored_forager_survives_from_real_patch_output_across_saving() {
     let forager = PersonId(names["forager"]);
     let pack = InventoryId(names["foraging-pack"]);
     let patch = names["food-patch"];
-    run(&mut original, SimTime(73 * MINUTE.0));
-    assert_eq!(
-        original.debug_host().get::<game_sim::Actions>().unwrap().0[&forager].kind,
-        "gather"
-    );
+    await_gather(&mut original, forager);
+    let split = original.debug_host().now().0;
     let mut loaded = Simulation::load(&original.save().unwrap(), 4).unwrap();
     run(&mut original, SimTime(DAY.0 * 2));
-    for time in [74 * MINUTE.0, 90 * MINUTE.0 + 13, DAY.0, DAY.0 * 2] {
+    for time in [
+        split + MINUTE.0,
+        split + 17 * MINUTE.0 + 13,
+        DAY.0,
+        DAY.0 * 2,
+    ] {
         run(&mut loaded, SimTime(time));
     }
     assert_eq!(original.save().unwrap(), loaded.save().unwrap());
@@ -205,7 +224,7 @@ food={portion=2,relief=80}
     let forager = PersonId(names["forager"]);
     let container = InventoryId(names["foraging-pack"]);
     let patch = names["food-patch"];
-    run(&mut sim, SimTime(73 * MINUTE.0));
+    let finish = await_gather(&mut sim, forager);
     assert_eq!(
         sim.debug_host()
             .get::<game_ecology::Ecology>()
@@ -221,7 +240,7 @@ food={portion=2,relief=80}
             .sum::<u64>(),
         100
     );
-    run(&mut sim, SimTime(76 * MINUTE.0));
+    run(&mut sim, finish);
     assert_eq!(
         sim.debug_host()
             .get::<game_ecology::Ecology>()

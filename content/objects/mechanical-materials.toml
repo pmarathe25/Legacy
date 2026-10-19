@@ -1,0 +1,12 @@
+id = "objects/mechanical-materials"
+version = 1
+[data.objects.fiberboard]
+id = 9401
+name = "Pressed fiberboard"
+mass = 1
+tags = ["crafted", "construction", "mechanical-material"]
+[data.objects.laminated-beam]
+id = 9402
+name = "Laminated beam"
+mass = 2
+tags = ["crafted", "construction", "mechanical-material"]

@@ -116,3 +116,71 @@ fn changing_profiles_recompiles_weights_and_loading_reconstructs_them() {
         );
     }
 }
+
+#[test]
+fn numeric_characteristics_follow_profiles_defaults_loading_and_direct_revisions() {
+    let mut data = Traits::default();
+    for (key, minimum, maximum, default) in [
+        ("intelligence", 0, 16000, 1000),
+        ("longevity", 250, 3000, 1000),
+        ("temperament", -100, 100, 0),
+    ] {
+        data.definitions.insert(
+            key.into(),
+            Trait {
+                name: key.into(),
+                minimum,
+                maximum,
+                default,
+                founder_spread: 65535,
+                weights: BTreeMap::new(),
+            },
+        );
+    }
+    let mut b = Builder::new();
+    plugin(&mut b).unwrap();
+    let mut h = b.build(1, 1).unwrap();
+    h.dispatch(Install(data)).unwrap();
+    for value in [0, 1000, 8000, 16000] {
+        h.dispatch(Set {
+            person: PersonId(1),
+            profile: [("intelligence".into(), value)].into(),
+        })
+        .unwrap();
+        for p in [PersonId(1), PersonId(2)] {
+            let traits = h.get::<Traits>().unwrap();
+            for (key, definition) in &traits.definitions {
+                let raw = traits
+                    .people
+                    .get(&p)
+                    .and_then(|r| r.get(key))
+                    .copied()
+                    .unwrap_or(definition.default);
+                assert_eq!(traits.ability(p, key), raw.max(0) as u64);
+                assert_eq!(
+                    traits.disposition(p, key),
+                    (i64::from(raw) - i64::from(definition.minimum)) * 1000
+                        / (i64::from(definition.maximum) - i64::from(definition.minimum))
+                );
+            }
+            assert_eq!(traits.ability(p, "unknown"), 1000);
+            assert_eq!(traits.disposition(p, "unknown"), 500);
+        }
+    }
+    let save = h.save().unwrap();
+    let mut b = Builder::new();
+    plugin(&mut b).unwrap();
+    let loaded = b.load(&save, 4).unwrap();
+    assert_eq!(loaded.save().unwrap(), save);
+    let mut direct = loaded.get::<Traits>().unwrap().clone();
+    direct
+        .people
+        .get_mut(&PersonId(1))
+        .unwrap()
+        .insert("intelligence".into(), 4000);
+    assert_eq!(direct.ability(PersonId(1), "intelligence"), 4000);
+    direct.definitions.get_mut("intelligence").unwrap().maximum = 8000;
+    assert_eq!(direct.disposition(PersonId(1), "intelligence"), 500);
+    direct.people.remove(&PersonId(1));
+    assert_eq!(direct.ability(PersonId(1), "intelligence"), 1000);
+}

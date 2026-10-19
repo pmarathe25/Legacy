@@ -1,9 +1,33 @@
 # game-households
 
-Local adults form partnerships only when both express sufficient affection and trust. Fear and grievance prevent consent. Parent–child and sibling partnerships are excluded. Partnerships remain possible beyond reproductive age. Parenthood weighs voluntary reproductive intentions; lifecycle owns biological eligibility, real gestation, and births.
+Adult partnerships, dependent caregiver records, fostering (`Foster`), and household care reviews.
 
-Newborns receive a real empty pack, a caregiver, and a name chosen through the naming owner when installed. Feeding consumes real local food through physiology. Caregivers consider encountered supplies and the personal consequences of contested use. Dependent demand informs their provisioning intentions. A bounded half-day care review lets feeding and rest be considered while the caregiver has other work; young dependents are carried on the caregiver's actual journey, including stops and resumed travel. Conversations and rest can be interrupted for dependent transport. The caregiver remembers where the child was last seen and can attempt a real journey to reunite. At six years, children enroll in ordinary autonomy with their current developmental capabilities; caregiver support continues until eighteen. Enrollment runs even when the recorded caregiver is dead. Autonomous children are not automatically carried away from their own activities. Bereavement can transfer care to the surviving partner. Otherwise the care owner can motivate a willing local adult to foster the dependent. The `Foster` request validates actual need and locality, updates care and food-demand indexes, and emits `Fostered`. The legacy `next` field is retained for checkpoint decoding and no longer forbids reproductive choices. Household `Form` and `Tend` requests also support explicit action.
+**Why it matters:** Children cannot survive alone, and adults form enduring domestic bonds. `game-households` manages consenting adult partnerships, assigns caregivers to newborns, and coordinates fostering when a parent dies.
 
-Children begin without a copied parental ideology. Wellbeing can interpret trusted conversations as gradual social learning. Vitality owns physical growth, cognitive development, and formative conditions; genes retain potential rather than prescribing choices. A shared physiology profile still supplies needs, and age-specific diets, pregnancy costs, and protective intervention in conflicts remain extensions.
+## Responsibilities
 
-Care considers local dependents before distant ones. Starting a reunion journey therefore cannot repeatedly prevent feeding younger children who are already beside the caregiver. Chosen food intentions still keep routine reunion trips from preempting their action.
+- **Consenting Partnerships (`Form`):** Forms partnerships between co-located adults when both express sufficient affection and trust without fear or grievance (`game-relationships`), excluding parent–child and sibling pairs.
+- **Caregiver Records & Fostering (`Tend`, `Foster`):** Tracks primary caregivers for dependents, transfers care to a surviving partner on bereavement, and validates local `Foster` requests when willing adults adopt orphaned children.
+- **Dependent Transport & Reunion:** Coordinates carrying young dependents on a caregiver's journeys (`game-transport`) and remembers where a separated child was last seen so caregivers can travel to reunite.
+- **Autonomy Enrollment:** Enrolls children into ordinary decision autonomy at age six (`game-characters`) while continuing caregiver provisioning support until age eighteen.
+
+## Boundaries
+
+- **No Biological Gestation:** Biological eligibility, pregnancy, and birth events are owned by `game-lifecycle` and `game-parenthood`.
+- **No Copied Ideology:** Children start with a blank slate of beliefs rather than inheriting their parents' opinions.
+
+## How It Works
+
+- **Local-First Care Priority:** Care reviews prioritize feeding and tending dependents already present with the caregiver before initiating reunion journeys for distant dependents, preventing travel loops from starving local infants.
+- **Event & Demand Sync:** Updates care and food-demand indices when children are born, fostered, or reach adulthood, emitting `Fostered` events for observers.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers household partnership tables, caregiver assignments, and `Form` / `Tend` / `Foster` handlers in `game-assembly`.
+- **Requests & Events:** Exposes `Form`, `Tend`, and `Foster` requests; emits partnership and `Fostered` events.
+- **Callers:** Used by `game-family-life`, `game-parenthood`, `game-nurture`, `game-care`, and `game-provisioning`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-vitality`, `game-lifecycle`, `game-parenthood`, `game-nurture`, `game-care`, `game-relationships`, `game-social-life`, `game-names`, `game-characters`, `game-provisioning`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-households`) cover partnership consent, incest exclusion, newborn initialization, dependent carrying, bereavement transfer, and fostering.

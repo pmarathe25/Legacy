@@ -1,19 +1,34 @@
 # game-packed
 
-Dense component rows use stable numeric IDs, direct indexed reads, and nested undo journals. Gameplay and validation remain in the owning feature. The crate has no feature or application dependencies.
+`game-packed` provides dense stable-ID component arrays with paged numeric indexes, nested row-undo journals, and parallel bulk update support.
 
-`begin`, `commit`, and `rollback` delimit strictly nested savepoints. A row is backed up once per savepoint. Successful nested work retains its undo until the outer transaction commits. Insertions, compacting removals, and bulk updates restore both values and ID indexes. `erase` avoids cloning a removed value solely to return it.
+**Why it matters:** Hot simulation components (positions, bodies, minds, property) are read and mutated thousands of times per tick; in-place row mutation with undo journaling avoids tree-cloning overhead while preserving full transactional rollback.
 
-`update` runs independent numeric work over physical rows using the caller's bounded Rayon pool. A bulk savepoint keeps an old row buffer; the default reuses that buffer after commit. `changed_since` and `changed_pairs_since` let the owner validate touched rows before committing.
+## Responsibilities
 
-Physical slots are private. `iter`, `keys`, and serialization use stable numeric ID order. `rows` exposes physical traversal only for independent work; collect and sort IDs before applying ordered effects. Loading rebuilds the index and rejects duplicate IDs.
+- **Dense component storage (`Packed<K, V>`):** Stores values in contiguous physical rows while indexing them by stable `u64`-mapped game IDs.
+- **Nested undo journals:** Supports `begin`, `commit`, and `rollback` savepoints that record at most one backup per row per scope.
+- **Paged ID index:** Groups IDs into 256-entry pages that adapt between compact sorted pairs (when sparse) and direct slot lookups (when dense), with optional `hash-index` and `compact` feature flags.
+- **Bulk parallel updates:** Exposes `update` to process independent physical rows across a bounded Rayon pool and `changed_since` / `changed_pairs_since` for incremental validation.
 
-The default index groups IDs into 256-entry pages. Sparse pages store sorted pairs; occupied pages use direct slots. Hysteresis avoids repeated conversion during churn. Storage scales with occupied pages, including IDs near `u64::MAX`; it never allocates by the maximum ID. A `Key` must map uniquely and in order to a number.
+## Boundaries
 
-The `hash-index` feature substitutes a per-row hash index plus ordered keys. It is useful for comparing extremely sparse ID distributions. The `compact` feature uses smaller capacity increments and releases bulk undo buffers. These policies affect layout only; saves and gameplay are identical. See the [measured tradeoffs](../../tools/performance/ARCHITECTURE.md).
+- **Container only:** Owns physical row layout, index maintenance, and undo logs; owning feature crates define component fields and validation rules.
+- **Deterministic external order:** Physical row slots are private to prevent swap-remove order from leaking into gameplay; public iteration and serialization always follow sorted ID order.
 
-Cloning shares an immutable data revision and starts an empty journal. A retained reader stays unchanged, including across removal, rollback, and loading. The first subsequent write copies the complete shared row/index revision. Without retained readers, writes mutate unique rows in place. Thus frequent complete-world snapshots can trade away much of the benefit; ordinary borrowed reads and small public observation DTOs do not create those snapshots.
+## How It Works
 
-Hosted resources must implement the transaction checkpoint hooks: capture a journal mark and non-row metadata, validate changes, restore both on failure, and commit the mark on success. The generic host's default resource checkpoint clones the resource; that remains correct for a packed resource but forces full copy-on-write and loses the fast path. Storage commit/restore hooks must perform infallible housekeeping and must not run gameplay.
+- **In-place mutation with journal marks:** When no external reader holds a snapshot clone, writes mutate rows in place and push old values to the active savepoint journal.
+- **Nested savepoint retention:** Inner `attempt` commits merge their undo records into the outer transaction scope so a later outer failure still restores the initial state.
+- **Lazy copy-on-write on shared readers:** Cloning shares the underlying data revision; only the first write while a reader clone is alive copies the row/index buffers.
 
-Run `cargo test -p game-packed` and `cargo test -p game-packed --features hash-index,compact`. Differential tests cover nested successful/failed scopes, physical compaction, bulk worker panics, gappy IDs, retained readers, and wire equality with an ordered reference.
+## Game Integration
+
+- **Plugin / Entry Point:** Pure library crate; hosted resources wire `Packed` into `game-sim::Resource` checkpoint hooks (`checkpoint`, `commit`, `restore`, `validate_changed`).
+- **Requests & Events:** None.
+- **Callers:** Used by [`game-sim`](../game-sim/README.md), [`game-soma`](../game-soma/README.md), [`game-characters`](../game-characters/README.md), [`game-transport`](../game-transport/README.md), [`game-property`](../game-property/README.md), and [`game-knowledge`](../game-knowledge/README.md).
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md).
+- **Testing:** `cargo test -p game-packed` (and `--features hash-index,compact`) verifies nested rollbacks, compaction, sparse/gappy IDs, worker panics, and wire equivalence.

@@ -1,17 +1,33 @@
 # game-relationships
 
-Directed respect and admiration are separate from affection, trust, fear, and grievance. `Regard` applies an observer's interpretation of personally experienced actions. `HearOpinion` stores an attributed expression with its intermediary, time, and visible coercion context; it does not assert the speaker's true private belief. `ReviseOpinion` gradually updates an existing social belief or a learned concept value.
+Directed interpersonal bonds (affection, trust, fear, grievance, respect, admiration), social beliefs, and attributed opinions.
 
-`apparent_difference` compares only the listener's own views and remembered expressions. Private counterpart beliefs are not a source of conversational knowledge. Heard testimony and regard retain ordinary transaction rollback and default cleanly when loading earlier saves.
+**Why it matters:** Cooperation, trade, care, and conflict depend on how individuals view one another. Separating affection, trust, fear, grievance, and respect—while tracking heard opinions separately from private beliefs—creates nuanced social dynamics.
 
-Directed trust, affection, fear and grievance; separate social beliefs and slowly learned concept values. Interpretation requires an explicit credible observation.
+## Responsibilities
 
-Privileged `Initialize` and `SetRelationship` requests construct authored beliefs, values, and directed starting bonds. `Converse` applies a bounded personal impression supplied by the social-life owner, changing affection, trust, and grievance. `LearnValue` retains its bounded learning rate. Range checks apply to saved state and changed records; sharing, authority, and honesty remain separate beliefs.
+- **Directed Interpersonal Bonds:** Tracks per-dyad affection, trust, fear, grievance, respect, and admiration (`Regard`, `Converse`, `SufferForce`).
+- **Social Beliefs & Concept Values:** Stores personal norms (such as attitudes toward sharing, authority, and honesty) and slowly learned concept values (`ReviseOpinion`, `LearnValue`).
+- **Attributed Opinions (`HearOpinion`):** Records what a speaker was heard expressing—along with intermediary, timestamp, and visible coercion context—without exposing the speaker's hidden private beliefs.
+- **Apparent Difference Queries:** Computes `apparent_difference` strictly from the listener's own views and remembered expressions.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md).
+## Boundaries
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+- **No Telepathic Belief Access:** Never leaks a counterpart's unexpressed private norms during social evaluation.
+- **No Conversation Scheduling:** Does not schedule social encounters or choose conversation partners (owned by `game-social-life` and `game-companionship`).
 
-**Verification:** Run `cargo test -p game-relationships`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+## How It Works
 
-`SufferForce` records direct bodily harm as fear, distrust, and grievance. It grants no affection or political legitimacy. The conflict/pressure path supplies actual witnessed hits; a rumor or unrelated injury does not identify an aggressor.
+- **Experience-Driven Updates:** `Converse` applies bounded affection, trust, and grievance shifts from social encounters; `Regard` updates respect and admiration from witnessed competence or generosity; `SufferForce` records direct witnessed violence as fear, distrust, and grievance without granting legitimacy.
+- **Validated Bounded Storage:** Enforces numeric bounds on all bond channels and rolls back cleanly across simulation checkpoints.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers directed relationship tables, opinion records, and mutation handlers in `game-assembly`.
+- **Requests & Events:** Exposes `Initialize`, `SetRelationship`, `Converse`, `Regard`, `SufferForce`, `HearOpinion`, `ReviseOpinion`, `LearnValue`, and bond/opinion query views.
+- **Callers:** Queried and updated by `game-social-life`, `game-companionship`, `game-discourse`, `game-nurture`, `game-care`, `game-livelihoods`, `game-exchange`, `game-credit`, `game-agreements`, `game-conflict`, and `game-pressure`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-relationships`) verify directed bond updates, attributed opinion provenance, coercion context, force grievances, and rollback/save consistency.

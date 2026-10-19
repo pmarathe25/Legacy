@@ -1,5 +1,7 @@
 //! A refused demand can lead to real conflict; fear does not imply loyalty.
 use game_core::*;
+mod allies;
+pub use allies::Aid;
 mod judgment;
 mod retreat;
 use game_sim::*;
@@ -133,6 +135,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("pressure", 1)?;
     b.resource::<Pressure>()?;
     retreat::register(b)?;
+    allies::register(b)?;
     b.validate_save(|h| {
         for (p, d) in &h.get::<Pressure>()?.active {
             require(
@@ -171,6 +174,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Press>(|tx, r| {
         require(r.purpose.valid(), "invalid demanded purpose")?;
         require(r.leader != r.subject, "self submission")?;
+        require(
+            game_vitality::can_manipulate(tx, r.leader)
+                && game_vitality::can_converse(tx, r.leader)
+                && game_vitality::can_converse(tx, r.subject),
+            "demand requires deliberate force and communication",
+        )?;
         let player = tx.get::<game_lineage::Lineage>()?.current;
         require(
             ![Some(r.leader), Some(r.subject)].contains(&player),
@@ -185,7 +194,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             area == game_transport::area(tx.get()?, r.subject)?,
             "demand is not local",
         )?;
-        if judgment::yielding(tx, r.subject, r.leader, &r.purpose)? {
+        let (support, friends) = allies::expected(tx, r.subject, r.leader)?;
+        if retreat::consider_for(tx, r.subject, r.leader, &r.purpose, support)? {
+            return Ok(());
+        }
+        if judgment::submission(tx, r.subject, r.leader, &r.purpose)? >= support.max(0) {
             return yield_to(tx, r.leader, r.subject, r.purpose);
         }
         if !judgment::escalate(tx, r.leader, r.subject)? {
@@ -197,11 +210,19 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 vec![r.leader, r.subject],
             );
         }
-        if retreat::consider(tx, r.subject, r.leader)? {
-            return Ok(());
-        }
+        let helpers = if support > 0 {
+            allies::recruit(tx, r.subject, r.leader, friends)?
+        } else {
+            vec![]
+        };
         let fighters = [(r.leader, 1, 10), (r.subject, 2, 20)]
             .into_iter()
+            .chain(
+                helpers
+                    .into_iter()
+                    .enumerate()
+                    .map(|(n, p)| (p, 2, 30 + n as i64 * 10)),
+            )
             .map(|(p, team, x)| {
                 (
                     p,

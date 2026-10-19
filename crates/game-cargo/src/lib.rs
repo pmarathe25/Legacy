@@ -179,6 +179,14 @@ impl Request for DepositReserved {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("cargo", 1)?;
     b.resource::<Cargo>()?;
+    b.request::<game_transport::CarriedMass>(|tx, r| {
+        tx.get::<Cargo>()?
+            .carried(r.person)
+            .try_fold(0u64, |sum, id| {
+                sum.checked_add(tx.get::<Cargo>().unwrap().0[&id].mass)
+                    .ok_or(Error::Overflow)
+            })
+    })?;
     b.validate_save(|h| {
         for inventory in h.get::<Cargo>()?.0.values() {
             let mass = inventory.goods.iter().try_fold(0u64, |sum, (good, q)| {

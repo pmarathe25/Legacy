@@ -13,6 +13,7 @@ fn builder() -> Builder {
     game_physiology::plugin(&mut b).unwrap();
     game_environment::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     game_equipment::plugin(&mut b).unwrap();
     game_shelter::plugin(&mut b).unwrap();

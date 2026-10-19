@@ -20,7 +20,6 @@ fn main(@builtin(global_invocation_id) global: vec3<u32>) {
     let choices = u32(input[1]);
     let rows = people * choices;
     let current = input[2u + 7u * rows + p];
-    let urgent = input[2u + 7u * rows + people + p] != 0lu;
     var have = false;
     var have_current = false;
     var best_id = 0xfffffffffffffffflu;
@@ -34,14 +33,13 @@ fn main(@builtin(global_invocation_id) global: vec3<u32>) {
         let value = bitcast<i64>(input[2u + 3u * rows + r]);
         let effort = bitcast<i64>(input[2u + 4u * rows + r]);
         let risk = bitcast<i64>(input[2u + 5u * rows + r]);
-        let survival = input[2u + 6u * rows + r] != 0lu;
         let score = sub_sat(sub_sat(add_sat(add_sat(need, goal), value), effort), risk);
         if id == current { have_current = true; current_score = score; }
-        if (!urgent || survival) && (!have || score > best_score || (score == best_score && id < best_id)) {
+        if !have || score > best_score || (score == best_score && id < best_id) {
             have = true; best_id = id; best_score = score;
         }
     }
-    if have && !urgent && have_current && best_score <= add_sat(current_score, 5li) {
+    if have && have_current && best_score <= add_sat(current_score, 5li) {
         best_id = current; best_score = current_score;
     }
     output[u32(p)] = vec2<u64>(best_id, bitcast<u64>(best_score));

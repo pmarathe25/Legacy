@@ -2,6 +2,7 @@ use game_core::*;
 use game_workshop::*;
 fn recipe(input: GoodId, output: GoodId) -> Recipe {
     Recipe {
+        work: None,
         inputs: [(input, 1)].into(),
         output,
         quantity: 1,

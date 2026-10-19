@@ -38,24 +38,24 @@ pub fn choose(
     candidates: &[Candidate],
     current: Option<u64>,
     margin: i64,
-    urgent: bool,
+    _urgent: bool,
 ) -> Option<Decision> {
-    let viable = |c: &&Candidate| !urgent || c.survival;
     let best = candidates
         .iter()
-        .filter(viable)
         .max_by_key(|c| (c.score(), std::cmp::Reverse(c.id)))?;
-    let chosen = if !urgent {
-        candidates
-            .iter()
-            .find(|c| Some(c.id) == current && best.score() <= c.score().saturating_add(margin))
-            .unwrap_or(best)
-    } else {
-        best
-    };
+    let chosen = candidates
+        .iter()
+        .find(|c| Some(c.id) == current && best.score() <= c.score().saturating_add(margin))
+        .unwrap_or(best);
     Some(Decision {
         id: chosen.id,
         score: chosen.score(),
         reasons: vec![],
     })
+}
+
+/// Recent failure is a perceived cost, rather than a prohibition on another attempt.
+pub fn failure_cost(remaining: u64, span: u64, learning: u64, caution: i64) -> i64 {
+    let scale = i128::from(100 + learning.min(16000) / 10) * i128::from(caution.clamp(0, 2000));
+    (scale * i128::from(remaining.min(span)) / i128::from(span.max(1)) / 1000) as i64
 }

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-choice.workspace = true
 game-pressure.workspace = true
 game-traits.workspace = true
 game-characters.workspace = true
@@ -23,6 +24,7 @@ game-lineage.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-testimony.workspace = true
 game-conflict.workspace = true
 game-land.workspace = true
 game-objects.workspace = true

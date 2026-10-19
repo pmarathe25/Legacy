@@ -1,6 +1,6 @@
 use game_characters::*;
 #[test]
-fn urgent_survival_beats_ambition_and_commitment_avoids_oscillation() {
+fn urgency_does_not_veto_other_motives_and_commitment_avoids_oscillation() {
     let a = Candidate {
         id: 1,
         need: 20,
@@ -19,7 +19,7 @@ fn urgent_survival_beats_ambition_and_commitment_avoids_oscillation() {
         risk: 0,
         survival: false,
     };
-    assert_eq!(choose(&[a, b], None, 5, true).unwrap().id, 1);
+    assert_eq!(choose(&[a, b], None, 5, true).unwrap().id, 2);
     let mut better = a;
     better.id = 2;
     better.goal = 4;

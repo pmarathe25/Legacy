@@ -1,11 +1,31 @@
 # game-wayfaring
 
-**Purpose:** Voluntary journeys connect independent places through real travel, local experiences, and remembered roads.
+`game-wayfaring` drives voluntary exploration journeys along remembered roads and tracks each character's visit history across areas.
 
-`Enable` activates `Consider` on the existing characters idle-review signal. Idle people with risk tolerance at least 650/1000 can choose a frontier from remembered roads. A frontier's outgoing surroundings remain unknown. After frontiers are exhausted, a person can revisit a known place not visited in seven days. Trips respect a two-day cooldown and leave four hours at the destination before attempting a return home. The current player and people with a committed livelihood plan receive no new implicit trip.
+**Why it matters:** Without voluntary travel, autonomous characters stay in their birth area until local food runs out; wayfaring connects settlements through physical road trips, layovers, and newly observed surroundings.
 
-Road traversal uses transport's common action and time. Each arrival observes only local surroundings. First actual visits record `Visited` and strengthen the traveler's personal value for discovery. People can gather, work, converse, or give care during the layover; ordinary survival can delay a trip. A stored trip is an intention, not a guarantee of arrival or safe return. Death clears active intentions while retaining historical visits.
+## Responsibilities
 
-This owner invents no destination resources or global map. It depends on the provisioning owner's frontier query and knowledge's routes. It does not assign merchants or transmit knowledge to everyone automatically. Conversations carry personal reports through the existing social system. Permanent migration, escorts, passenger groups, trade orders, and risk assessment from witnessed danger remain further work.
+- **Journeys & visit history (`Wayfaring`):** Stores active outbound/return trip intentions, 4-hour destination layover deadlines, per-area last-visit timestamps, and travel cooldowns (`wayfaring.state`).
+- **Frontier & revisit selection:** Chooses unexplored frontier areas (known roads whose destination surroundings have never been observed) or revisits familiar areas not seen in 7 days for characters with sufficient risk tolerance.
+- **Discovery learning:** Emits `Visited` on first arrival at a new area and strengthens the traveler's personal concept value for discovery via `game-relationships`.
 
-Run `cargo test -p game-wayfaring` for physical visits, return timing, personal knowledge, disposition, player control, death, and save/load checks.
+## Boundaries
+
+- **Voluntary exploration vs. survival foraging:** Owns curiosity and visit-driven trips; urgent survival searches when local food fails belong to [`game-provisioning`](../game-provisioning/README.md), and physical road movement belongs to [`game-transport`](../game-transport/README.md).
+
+## How It Works
+
+- **Layover & return cycle:** Upon arriving at a destination, the traveler observes local surroundings (`game-knowledge`) and remains free for 4 hours to gather, converse, or trade before scheduling the return trip home.
+- **Non-interference with urgent needs:** Respects a 2-day cooldown between trips, excludes the controlled player and actors with active livelihood plans, and yields immediately if hunger or fatigue intervenes.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`wayfaring`, resource `wayfaring.state`).
+- **Requests & Events:** Handles `Enable` and `Step`; registers with [`game-choice`](../game-choice/README.md); subscribes to `game_transport::Arrived` and `game_physiology::Died`; emits `Visited`.
+- **Callers:** Enabled by [`game-campaign`](../game-campaign/README.md) and [`game-openings`](../game-openings/README.md).
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-choice`](../game-choice/README.md), [`game-diagnostics`](../game-diagnostics/README.md), [`game-vitality`](../game-vitality/README.md), [`game-ecology`](../game-ecology/README.md), [`game-transport`](../game-transport/README.md), [`game-physiology`](../game-physiology/README.md), [`game-characters`](../game-characters/README.md), [`game-knowledge`](../game-knowledge/README.md), [`game-provisioning`](../game-provisioning/README.md), [`game-livelihoods`](../game-livelihoods/README.md), [`game-relationships`](../game-relationships/README.md), [`game-traits`](../game-traits/README.md), [`game-lineage`](../game-lineage/README.md).
+- **Testing:** `cargo test -p game-wayfaring` verifies frontier selection, layover timing, return trips, discovery value updates, and save/load state.

@@ -1,11 +1,33 @@
 # game-pastimes
 
-**Purpose:** Characters develop personal interests through timed activities with physical supplies. The [catalog](../../content/pastimes/daily.toml) includes music, writing, drawing, weaving, decorative work, tea, reflection, and clothing care.
+Leisure activities, material supply consumption, skill practice, and interest reinforcement.
 
-`Pursue { person, activity, inventory }` requires local permitted supplies and the person's common action slot. `inputs` are consumed at the beginning; `requires` remain reusable possessions. Completion checks locality, continuing permission, and possession of required goods. A successful experience records a private participation count, practices the authored skill, and slowly strengthens the participant's value for the activity's concept. This can influence future leisure and livelihood goals. Cancellation spends the already used inputs and awards no experience or skill.
+**Why it matters:** Human life is more than bare subsistence. When survival needs are met, characters pursue music, writing, drawing, weaving, tea, and reflection—shaping their skills, tastes, and future material goals.
 
-`Install` resolves content and freezes definitions before `Enable`. Generated history enables autonomous leisure. `IdleReview` ranks activities by the participant's traits, interests, and stable individual variation, then uses their carried possessions. Recent satisfaction reduces an activity's personal utility; it never forbids repetition. Interests, traits, experience, and desire for company affect the decision. Explicit player actions use the same request; automatic decisions exclude the current player. Normal player observations include only that player's completed pastime counts.
+## Responsibilities
 
-Each activity is an individual experience. Music does not automatically influence everyone nearby, reflection prescribes no religion, and reading does not fabricate historical facts. Reusable instruments need to remain available through completion; the owner does not reserve them exclusively.
+- **Activity Catalog:** Loads data-driven leisure activities from `content/pastimes/daily.toml` with required tools (`requires`), consumed supplies (`inputs`), durations, and associated skills/concepts.
+- **Timed Execution (`Pursue`):** Consumes `inputs` at start, occupies the actor's action slot, and verifies continued locality, permission (`game-property`), and possession of reusable `requires` instruments on completion.
+- **Experience & Value Reinforcement:** Increments personal participation counts, awards practice to `game-skills`, and strengthens the participant's concept value (`game-relationships`) so pastimes influence future leisure and `game-livelihoods` stock goals.
+- **Autonomous Selection:** Proposes leisure activities during `game-characters::IdleReview` weighted by traits, learned interests, individual variation, and recent satisfaction decay.
 
-**Verification:** `cargo test -p game-pastimes` covers physical inputs, permissions, one-action exclusion, cancellation, missing instruments, personal learning, individual satisfaction and immediate voluntary repetition, player control, and save/load.
+## Boundaries
+
+- **Individual Experience Only:** Playing music or reflecting is a personal experience; it does not automatically broadcast mood buffs or invent distinct cultural artifacts (owned by `game-works`).
+- **Player Autonomy Preserved:** Excludes the active player from automatic leisure selection while exposing `Pursue` for explicit player commands.
+
+## How It Works
+
+- **Start Consumption, End Validation:** Consumes expendable inputs immediately when `Pursue` begins. If the activity is cancelled or a required instrument disappears before completion, inputs remain spent and no skill or satisfaction is awarded.
+- **Diminishing Immediate Repetition:** Recent completion lowers an activity's immediate utility to encourage variety without strictly forbidding voluntary repetition.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` loads pastime definitions (`Install` / `Enable`) and registers `Pursue` handlers and `IdleReview` hooks in `game-assembly`.
+- **Requests & Events:** Exposes `Pursue`, `Install`, and `Enable`; emits pastime completion events consumed by `game-works`.
+- **Callers:** Driven by `game-characters::IdleReview`, `game-choice`, and explicit player commands.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-skills`, `game-traits`, `game-relationships`, `game-characters`, `game-choice`, `game-utility`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-pastimes`) verify supply consumption, permission checks, cancellation penalties, skill/value learning, satisfaction decay, and save/load consistency.

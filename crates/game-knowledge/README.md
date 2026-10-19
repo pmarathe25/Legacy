@@ -1,23 +1,33 @@
 # game-knowledge
 
-Owns per-person facts with source, observation time, and confidence. Views return recorded beliefs, including stale information. Inspection is an action; passive queries never teach facts.
+Per-person belief tables, active local inspection, stale-stock disproof, and belief-based route planning.
 
-`ObserveStore` records stock, location, capacity, and mass. `ObserveSurroundings` learns local roads and exposed resource patches, and discovers accessible local containers not previously inspected. Refreshing remembered inventory stock requires `ObserveStore`. `ObservePatch` cannot inspect a distant resource.
+**Why it matters:** Characters act on what they personally remember or have been told—not global truth. Storing individual facts with provenance and staleness makes exploration, scouting, and communication genuinely meaningful.
 
-Searching a previously observed store at its remembered location can disprove its presence. `ObserveStore` then records `{"absent_from": area}` under the stock key, rather than inventing its new location or contents. Food projections exclude the absent container as both a supplier and a gathering destination. Finding it again restores ordinary stock and location evidence. Uninformed remote inspection still fails, and another observer's beliefs remain unchanged.
+## Responsibilities
 
-`Tell` requires both people at the same place and passes only the selected fact. `Report` is the lower-level delayed-delivery operation used by communication systems and fixtures. Neither operation also transfers unrelated knowledge. Reports retain the original observation time and commit order, with reduced confidence. A delayed report cannot replace newer evidence recorded at the same clock time.
+- **Personal Fact Tables:** Stores per-person facts with source, observation timestamp, confidence, and revision across namespace-indexed tables.
+- **Active Inspection Actions:** Executes `ObserveSurroundings` (local roads, exposed patches, and accessible containers), `ObserveStore` (container stock, capacity, and mass), and `ObservePatch` (local resource state).
+- **Absence Recording:** Records `{"absent_from": area}` when a remembered store is missing from its expected location so planning stops targeting vanished supplies.
+- **Belief-Based Routing & Forecasting:** Builds travel routes (`route`) strictly from remembered roads and projects outcomes (`forecast`) under changed conditions using learned claims.
 
-`route` constructs routes from recorded roads, including known endpoints not yet visited. Routing looks up only reached areas in these recorded snapshots; it does not reconstruct or copy the whole known graph for each query. Actual transport validates each road separately. Newly closed roads remain believed open until observation or communication supplies the change.
+## Boundaries
 
-Run `cargo test -p game-knowledge`. Tests cover local discovery, stale stock, report delivery, spoken locality, and unknown intermediate roads without the application.
+- **No Passive Omniscience:** Read queries return only recorded personal beliefs; passive inspection never teaches new facts.
+- **No Spoken Delivery Rules:** Delegates contact validation and testimony comprehension to `game-testimony` and `game-communication`.
 
-Road, patch, stock, and location payloads are typed numeric snapshots in memory. JSON stays at serialization boundaries; unknown schemas retain their JSON data. Facts share immutable payloads across observers while keeping individual source, time, confidence, and revision. A source change replaces the cached payload; existing beliefs and delayed reports retain their previous snapshot.
+## How It Works
 
-Personal fact tables support namespace ranges so planning avoids unrelated memories. Streaming load restores shared keys and payloads, including past-life memories. The permission owner indexes accessible inventories and ecology indexes patches by area, so local discovery avoids world-wide scans.
+- **Shared Immutable Scenes:** Shares immutable road and exposed-patch snapshots across local observers via `game-facts` while maintaining separate per-person evidence timestamps. Moving to a new area freezes prior scene evidence into cold history.
+- **Versioned Discovery Caches:** Tracks weak permission-version tokens per person to skip redundant container discovery scans until property access changes.
 
-Repeated observation updates provenance in place when the immutable payload still matches. Once all permitted containers are known, each personal fact table retains a weak permission-version token and skips container discovery until access changes. Unknown distant containers remain pending, so their arrival can still be discovered. Replacing it with a fresh personal fact table clears this derived cache; loading reconstructs it on the next inspection. Roads and patches keep their authored observation cadence, and remembered stock stays stale until deliberate inspection.
+## Game Integration
 
-Visible roads and exposed patches share immutable scenes through `game-facts`. Each person keeps an independent evidence stamp; stock and container inspection remain personal and can become stale. Moving freezes earlier scene evidence into cold history. Explicit inspections and reports override local entries until the next observation. Registered per-patch hooks retain the ordinary request path and its rollback behavior.
+- **Plugin / Entry Point:** `Plugin` registers personal fact storage, scene caches, and observation request handlers in `game-assembly`.
+- **Requests & Events:** Handles `Initialize`, `ObserveSurroundings`, `ObserveStore`, and `ObservePatch`; exposes belief queries, `route`, and `forecast`.
+- **Callers:** Queried by almost all decision and planning crates (`game-provisioning`, `game-livelihoods`, `game-characters`, `game-inquiry`, `game-testimony`, `game-exchange`, `game-conflict`, etc.).
 
-Scene caches track weak versions of their world sources and are rebuilt after loading. They never expose distant patches or other people's inventories. `Initialize` supplies privileged starting facts without replacing existing personal knowledge.
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-facts`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-ecology`, `game-physiology`, `game-reasoning`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-knowledge`) cover local discovery, stale stock disproof, report delivery, spoken locality, and routing across partially known road networks.

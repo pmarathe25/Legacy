@@ -1,7 +1,31 @@
 # game-nutrition
 
-Records actual food intake, nutrient reserves, experienced foods, and substance dependence. Nutrient values use authored simulation units per portion. These values are game balancing data, not medical estimates. Physiology validates and consumes the food, then applies the returned health, mood, and alertness effects through bodily and condition owners.
+`game-nutrition` tracks each person's dietary nutrient reserves, personally experienced food effects, and substance tolerance or dependence.
 
-Dietary reserves deplete with elapsed time; deficiencies reduce physical condition. Food choice weighs satiation, experienced nutritional benefits, individual values, known effects, and cravings. Dependence and tolerance grow through actual consumption and ease during abstinence. Withdrawal can cause distress and fatigue. No food or substance forces a character to choose it.
+**Why it matters:** People need a balanced diet rather than a single calorie source, and they learn which foods nourish, sicken, or create cravings only after personally tasting them.
 
-`appetite_for` estimates the relief a previously experienced food can provide for current deficiencies or dependence. Its motive is bounded by the nutrients in a portion. General dietary discomfort remains distinct from an actionable opportunity: an energy-only food cannot promise to fix a protein deficiency.
+## Responsibilities
+
+- **Dietary state (`Nutrition`):** Stores per-person nutrient balances, experienced food records, and substance dependence/withdrawal state (`nutrition.state`).
+- **Intake & depletion (`Digest`):** Updates nutrient reserves when food is eaten, decays reserves over elapsed time according to metabolic demand, and returns health, mood, and alertness deltas.
+- **Contextual appetite (`appetite_for`):** Scores how well a previously experienced food addresses current nutrient deficiencies or cravings.
+
+## Boundaries
+
+- **Dietary memory & balance:** Tracks nutrient reserves and learned food experience; [`game-physiology`](../game-physiology/README.md) executes the physical eating action and [`game-food-memory`](../game-food-memory/README.md) combines `appetite_for` with remembered inventory stocks.
+
+## How It Works
+
+- **Experience-gated appraisal:** Before a character eats a `GoodId` for the first time, its specific nutrient profile and side effects are unknown to their decision policy; tasting it records a personal experience entry.
+- **Bounded nutrient motive:** `appetite_for` caps a food's deficiency-relief score by the actual nutrients present in a portion, so an energy-only food never promises to cure a protein deficiency.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`nutrition`, resource `nutrition.state`).
+- **Requests & Events:** Handles `Enable` and `Digest`; subscribes to `game_physiology::Died`.
+- **Callers:** Called by [`game-physiology`](../game-physiology/README.md) on food consumption and queried by [`game-food-memory`](../game-food-memory/README.md), [`game-characters`](../game-characters/README.md), and [`game-nurture`](../game-nurture/README.md).
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-objects`](../game-objects/README.md), [`game-metabolism`](../game-metabolism/README.md), [`game-vitality`](../game-vitality/README.md), [`game-traits`](../game-traits/README.md).
+- **Testing:** `cargo test -p game-nutrition` verifies nutrient depletion, deficiency penalties, first-taste learning, dependence/withdrawal, and `appetite_for` bounds.

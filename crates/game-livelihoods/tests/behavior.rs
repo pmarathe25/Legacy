@@ -63,6 +63,42 @@ fn a_person_gathers_and_crafts_a_chain_using_actual_time_and_supplies() {
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
+
+#[test]
+fn writing_supplies_can_be_planned_from_warm_region_resources_without_nettles() {
+    let (mut h, p, i, area) = setup();
+    for object in ["bamboo", "fresh-water"] {
+        let good = good(&h, object);
+        h.dispatch(game_ecology::Create(game_ecology::Patch {
+            area,
+            good,
+            stock: 40,
+            capacity: 40,
+            renew: 0,
+        }))
+        .unwrap();
+    }
+    enable(&mut h, p, i, "paper", 16);
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        for _ in 0..12 {
+            host.dispatch(Consider { person: p }).unwrap();
+            let to = host.now().0 + 3 * HOUR.0;
+            run(host, to);
+            if amount(host, i, "paper") >= 16 {
+                break;
+            }
+        }
+        assert_eq!(amount(host, i, "paper"), 16);
+        assert_eq!(amount(host, i, "bamboo"), 0);
+        assert_eq!(amount(host, i, "fresh-water"), 0);
+        assert!(
+            host.now().0 >= 4 * HOUR.0,
+            "paper takes real labor and supplies"
+        );
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+}
 #[test]
 fn cancellation_loses_paid_inputs_without_awarding_achievement() {
     let (mut h, p, i, _) = setup();
@@ -139,6 +175,7 @@ fn cyclic_recipes_do_not_create_free_inputs_or_unbounded_plans() {
     h.dispatch(game_workshop::Define {
         name: "impossible".into(),
         recipe: game_workshop::Recipe {
+            work: None,
             inputs: [(game_cargo::FOOD, 1)].into(),
             output: game_cargo::TIMBER,
             quantity: 1,
@@ -150,6 +187,7 @@ fn cyclic_recipes_do_not_create_free_inputs_or_unbounded_plans() {
     h.dispatch(game_workshop::Define {
         name: "cycle".into(),
         recipe: game_workshop::Recipe {
+            work: None,
             inputs: [(game_cargo::TIMBER, 1)].into(),
             output: game_cargo::FOOD,
             quantity: 1,
@@ -236,6 +274,7 @@ fn greater_expressed_intelligence_enables_a_longer_physical_production_plan() {
         h.dispatch(game_workshop::Define {
             name: format!("ability-chain-{index}"),
             recipe: game_workshop::Recipe {
+                work: None,
                 inputs: [(previous, 1)].into(),
                 output,
                 quantity: 1,
@@ -304,6 +343,7 @@ fn a_branched_plan_longer_than_32_actions_can_finish_after_reload() {
             h.dispatch(game_workshop::Define {
                 name: format!("branch-{branch}-{index}"),
                 recipe: game_workshop::Recipe {
+                    work: None,
                     inputs: [(input, 1)].into(),
                     output: *output,
                     quantity: 1,
@@ -319,6 +359,7 @@ fn a_branched_plan_longer_than_32_actions_can_finish_after_reload() {
     h.dispatch(game_workshop::Define {
         name: "finish".into(),
         recipe: game_workshop::Recipe {
+            work: None,
             inputs: ends.into_iter().map(|g| (g, 1)).collect(),
             output: goal,
             quantity: 1,
@@ -363,6 +404,51 @@ fn a_branched_plan_longer_than_32_actions_can_finish_after_reload() {
             assert!(actions <= 50);
         }
         assert!(actions > 32);
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+}
+#[test]
+fn an_immediate_need_can_request_supplies_outside_authored_stock_goals() {
+    let (mut h, p, pack, area) = setup();
+    let herb = good(&h, "healing-herbs");
+    h.dispatch(game_ecology::Create(game_ecology::Patch {
+        area,
+        good: herb,
+        stock: 100,
+        capacity: 100,
+        renew: 0,
+    }))
+    .unwrap();
+    deposit(&mut h, pack, "cloth", 1);
+    enable(&mut h, p, pack, "timber", 1);
+    let goal = Goal {
+        object: "medicine".into(),
+        quantity: 2,
+        priority: 100,
+        affinity: "altruism".into(),
+        concept: "care".into(),
+    };
+    assert_eq!(
+        h.dispatch(Supply {
+            person: p,
+            goal: goal.clone()
+        })
+        .unwrap(),
+        game_choice::Outcome::Performed
+    );
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        run(host, 10 * MINUTE.0);
+        host.dispatch(Supply {
+            person: p,
+            goal: goal.clone(),
+        })
+        .unwrap();
+        run(host, 40 * MINUTE.0);
+        assert_eq!(
+            host.get::<game_cargo::Cargo>().unwrap().0[&pack].amount(game_cargo::MEDICINE),
+            2
+        );
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }

@@ -91,6 +91,45 @@ impl Request for Configure {
     const KEY: &'static str = "health.configure";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ForceTreat(pub Treat);
+impl Request for ForceTreat {
+    const KEY: &'static str = "health.force-treat";
+    type Response = SimTime;
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Begin {
+    treatment: Treat,
+    forced: bool,
+}
+impl Request for Begin {
+    const KEY: &'static str = "health.begin";
+    type Response = SimTime;
+}
+fn accepts(tx: &Transaction<'_>, r: &Treat) -> bool {
+    if r.caregiver == r.patient {
+        return true;
+    }
+    let bodies = tx.get::<game_physiology::Bodies>().unwrap();
+    let Some(b) = bodies.people.get(&r.patient) else {
+        return false;
+    };
+    let need = b.maximum(&bodies.rules).saturating_sub(b.health).min(100) as i64;
+    let regard = tx
+        .get::<game_relationships::Social>()
+        .ok()
+        .and_then(|s| s.relationships.get(&r.patient)?.get(&r.caregiver))
+        .map_or(0, |r| {
+            i64::from(r.trust + r.affection / 2 - r.grievance - r.fear)
+        });
+    let interruption = if tx.get::<Actions>().unwrap().0.contains_key(&r.patient) {
+        20
+    } else {
+        0
+    };
+    need * 3 + regard
+        > interruption + game_vitality::disposition(tx, r.patient, "risk-tolerance") / 50
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("health", 1)?;
     b.resource::<TreatmentRules>()?;
@@ -100,7 +139,36 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Treat>(|tx, r| {
+        tx.call(Begin {
+            treatment: r,
+            forced: false,
+        })
+    })?;
+    b.request::<ForceTreat>(|tx, r| {
+        tx.call(Begin {
+            treatment: r.0,
+            forced: true,
+        })
+    })?;
+    b.request::<Begin>(|tx, request| {
+        let r = request.treatment;
+        if request.forced {
+            require(
+                tx.registered::<game_physiology::Restrained>()
+                    && tx.call(game_physiology::Restrained {
+                        actor: r.caregiver,
+                        patient: r.patient,
+                    })?,
+                "forced treatment needs physical restraint",
+            )?;
+        } else {
+            require(accepts(tx, &r), "patient declines treatment")?;
+        }
         game_physiology::capable(tx, r.caregiver)?;
+        require(
+            game_vitality::can_manipulate(tx, r.caregiver),
+            "treatment exceeds motor capacity",
+        )?;
         require(
             tx.get::<game_physiology::Bodies>()?
                 .people

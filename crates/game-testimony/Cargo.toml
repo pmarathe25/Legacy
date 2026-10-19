@@ -1,0 +1,13 @@
+[package]
+name="game-testimony"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+[dependencies]
+game-choice.workspace=true
+game-core.workspace=true
+game-sim.workspace=true
+game-knowledge.workspace=true
+game-transport.workspace=true
+game-communication.workspace=true
+serde.workspace=true

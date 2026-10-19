@@ -88,6 +88,16 @@ pub struct Social {
     #[serde(default, skip_serializing_if = "Table::is_empty")]
     pub heard: Heard,
 }
+impl Social {
+    pub fn regard(&self, observer: PersonId, other: PersonId) -> i64 {
+        self.relationships
+            .get(&observer)
+            .and_then(|r| r.get(&other))
+            .map_or(0, |r| {
+                i64::from(r.affection + r.respect + r.admiration - r.grievance)
+            })
+    }
+}
 impl Resource for Social {
     const KEY: &'static str = "relationships.social";
     fn validate(&self) -> Result<()> {
@@ -174,9 +184,33 @@ impl Request for DefineBeliefs {
     const KEY: &'static str = "relationships.define";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Reconcile {
+    pub observer: PersonId,
+    pub other: PersonId,
+    pub amount: u32,
+}
+impl Request for Reconcile {
+    const KEY: &'static str = "relationships.reconcile";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("relationships", 1)?;
     b.resource::<Social>()?;
+    b.request::<Reconcile>(|tx, r| {
+        if let Some(tie) = tx
+            .edit::<Social>()?
+            .relationships
+            .get_mut(&r.observer)
+            .and_then(|row| row.get_mut(&r.other))
+        {
+            tie.grievance = tie
+                .grievance
+                .saturating_sub(r.amount.min(100) as i32)
+                .max(0);
+        }
+        Ok(())
+    })?;
     opinions::register(b)?;
     b.request::<SufferForce>(|tx, r| {
         require(

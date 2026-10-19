@@ -1,19 +1,31 @@
 # game-provisioning
 
-Food acquisition templates turn known sources into executable plans: travel to a meal, or travel to a resource patch, gather into a container, and eat the output. Opportunities use the person's recorded stock, locations, capacity, patches, and roads. They never inspect distant actual stock or the global route graph.
+`game-provisioning` evaluates a character's remembered food stores, wild patches, containers, and routes to construct candidate meal and foraging plans.
 
-`options` uses [game-food-memory](../game-food-memory/README.md) to index remembered edible stores and carried containers, and reads the known patch namespace. The derived index follows immutable payload changes instead of rescanning unchanged historical inventories. `next_step` chooses a known road endpoint, including interrupted travel. `step` performs the next physical action through the owning feature's request; `learn_failure` records only local evidence. Own carried containers follow the carrier, and interrupted travel resumes from the actual road position. Output appears only when gathering completes. Eating consumes the object's authored portion.
+**Why it matters:** Hungry characters must turn incomplete personal memories—such as a distant berry patch, a carried basket, and a known road—into concrete, multi-step survival plans without consulting omniscient world state.
 
-Each query reuses routes to the same destination across stores and patches. Being at the destination requires no graph search. Route results use one immutable personal fact view and expire with the query; cached store projections are rebuilt after changed evidence, rollback, or different food rules.
+## Responsibilities
 
-Plans are serializable values owned by their caller, such as a character's mind. This crate creates no second action table or inventory ledger. [game-characters](../game-characters/README.md) chooses plans, applies motivation, and controls when they advance.
+- **Candidate generation (`options`):** Queries [`game-food-memory`](../game-food-memory/README.md) and remembered patch/road facts (`game-knowledge`) to propose ready meals (`Meal`), gathering trips (`Forage`), reserve stockpiling, or frontier searches when all known food sources fail.
+- **Specific food targeting:** Identifies the exact `GoodId` to eat or gather so dietary deficiencies (`game-nutrition`) and unfamiliar-food trials are honored on execution.
+- **Step & failure facade (`step`, `acquire`, `learn_failure`):** Delegates physical execution stages to [`game-food-actions`](../game-food-actions/README.md) and refreshes local observations when a remembered store or patch turns out to be empty or blocked.
 
-Run `cargo test -p game-provisioning`. Independent tests compose the physical features and knowledge without characters or the application.
+## Boundaries
 
-When no remembered meal or usable food patch remains, options can include searching a frontier reached by remembered roads. This reveals no distant food: the traveler must arrive and observe before planning a meal there. A forage action can ask the optional stockpiles owner to free carried capacity through actual local storage. Features that omit that plugin retain ordinary capacity refusal.
+- **Stateless planning facade:** Creates serializable `Plan` values stored in the caller (`game-characters` or `game-households`) and owns no independent action clock or inventory ledger.
 
-Food opportunities carry actor-specific dietary motives derived from remembered stock and experienced meals. A deficiency motivates foods believed to supply the missing nutrient; it does not make every edible source equally useful. Unfamiliar sources may warrant a trial when a diet is unsatisfying, without revealing their chemistry. Reserve gathering compares remembered travel cost and personal dietary value instead of always breaking equal-distance ties by source identity.
+## How It Works
 
-Repeated foods across remembered stores share one actor-specific appraisal within an immutable planning query. The temporary cache is discarded before execution; neither observations nor dietary values are shared between characters or retained across changed state.
+- **Query-local route & appraisal caching:** Reuses shortest-path lookups (`game-knowledge`) and per-food dietary appraisals across all stores in an area within a single immutable planning call, discarding the temporary cache before any mutation.
+- **Frontier fallback:** Only when no remembered edible stock or usable patch exists does `options` propose walking a remembered road toward an unobserved frontier area.
 
-Meal opportunities identify a particular food, and execution consumes that food. Foraging likewise consumes its selected produce after gathering. Other carried foods cannot silently replace an intended experiment and leave the selected food perpetually unfamiliar. Older inventory-only meal plans still decode and use the former generic meal selector. Meal candidate identifiers combine inventory identity with a catalogue-local food slot; foraging identifiers retain their separate parity.
+## Game Integration
+
+- **Plugin / Entry Point:** Pure planning library (`Plan`, `Opportunity`, `options`, `step`, `acquire`, `learn_failure`); registers no `game-sim` plugin.
+- **Requests & Events:** Dispatches physical actions via [`game-food-actions`](../game-food-actions/README.md).
+- **Callers:** Used by [`game-characters`](../game-characters/README.md) for self-feeding and by [`game-nurture`](../game-nurture/README.md) / [`game-households`](../game-households/README.md) for dependent care.
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-utility`](../game-utility/README.md), [`game-food-memory`](../game-food-memory/README.md), [`game-food-actions`](../game-food-actions/README.md), [`game-vitality`](../game-vitality/README.md), [`game-relationships`](../game-relationships/README.md), [`game-traits`](../game-traits/README.md), [`game-property`](../game-property/README.md), [`game-stockpiles`](../game-stockpiles/README.md), [`game-objects`](../game-objects/README.md), [`game-knowledge`](../game-knowledge/README.md), [`game-land`](../game-land/README.md), [`game-cargo`](../game-cargo/README.md), [`game-transport`](../game-transport/README.md), [`game-physiology`](../game-physiology/README.md), [`game-ecology`](../game-ecology/README.md), [`game-diagnostics`](../game-diagnostics/README.md).
+- **Testing:** `cargo test -p game-provisioning` verifies multi-hop meal/foraging plans, stale-stock recovery, dietary preference weighting, and frontier fallback.

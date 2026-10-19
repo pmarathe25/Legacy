@@ -14,10 +14,13 @@ use std::{
 pub struct Store {
     pub id: InventoryId,
     pub location: Option<StoreLocation>,
+    pub stock: Option<game_knowledge::Stock>,
+    canonical_meal: bool,
 }
 #[derive(Default)]
 pub struct Stores {
     all: BTreeMap<Arc<str>, Arc<Store>>,
+    indexed: BTreeMap<InventoryId, Arc<Store>>,
     keys: BTreeMap<InventoryId, BTreeSet<Arc<str>>>,
     meals: BTreeMap<Arc<str>, Arc<Store>>,
     carried: BTreeMap<PersonId, BTreeMap<Arc<str>, Arc<Store>>>,
@@ -26,11 +29,17 @@ impl Stores {
     pub fn all(&self) -> impl Iterator<Item = &Store> {
         self.all.values().map(Arc::as_ref)
     }
+    pub fn get(&self, id: InventoryId) -> Option<&Store> {
+        self.indexed.get(&id).map(Arc::as_ref)
+    }
     pub fn meals(&self) -> impl Iterator<Item = &Store> {
         self.meals.values().map(Arc::as_ref)
     }
     pub fn meal(&self, id: InventoryId) -> Option<&Store> {
-        self.meals.get(store_key(id).as_str()).map(Arc::as_ref)
+        self.indexed
+            .get(&id)
+            .filter(|s| s.canonical_meal)
+            .map(Arc::as_ref)
     }
     /// A deterministic recall window, drawn only from this person's remembered stores.
     pub fn meals_from(&self, cue: u64) -> impl Iterator<Item = &Store> {
@@ -109,6 +118,7 @@ impl Stores {
             }
         }
         for id in ids {
+            self.indexed.remove(&id);
             let keys: Vec<_> = self.keys.get(&id).into_iter().flatten().cloned().collect();
             let absent = facts.get(&store_key(id)).is_some_and(|f| {
                 matches!(f.value.as_ref(), game_knowledge::FactValue::Other(v)
@@ -121,15 +131,20 @@ impl Stores {
             };
             // Noncanonical stock aliases use the canonical stock's evidence, as
             // acquisition always did; an alias alone cannot invent a meal.
-            let meal = facts
-                .get(&store_key(id))
-                .is_some_and(|f| remembered_meal(objects, f.value));
+            let stock = known::<game_knowledge::Stock>(facts, &store_key(id));
+            let meal = stock.as_ref().is_some_and(|s| objects.has_meal(s));
+            let canonical_meal = meal && keys.iter().any(|k| k.as_ref() == store_key(id));
+            let store = Arc::new(Store {
+                id,
+                location: location.clone(),
+                stock,
+                canonical_meal,
+            });
+            if !keys.is_empty() {
+                self.indexed.insert(id, store.clone());
+            }
             for key in keys {
                 self.remove(&key);
-                let store = Arc::new(Store {
-                    id,
-                    location: location.clone(),
-                });
                 if meal {
                     self.meals.insert(key.clone(), store.clone());
                 }
@@ -139,7 +154,7 @@ impl Stores {
                         .or_default()
                         .insert(key.clone(), store.clone());
                 }
-                self.all.insert(key, store);
+                self.all.insert(key, store.clone());
             }
         }
     }
@@ -190,13 +205,17 @@ pub fn with_stores<T>(
             ..Default::default()
         };
     }
-    let mut changed = vec![];
-    facts.changed_values(&entry.facts, |key, _| {
-        if key.starts_with("store:") || key.starts_with("store-location:") {
-            changed.push(key.clone());
-        }
-    });
-    entry.stores.refresh(facts, objects, changed);
+    if !facts.same_namespace(&entry.facts, "store")
+        || !facts.same_namespace(&entry.facts, "store-location")
+    {
+        let mut changed = vec![];
+        facts.changed_values(&entry.facts, |key, _| {
+            if key.starts_with("store:") || key.starts_with("store-location:") {
+                changed.push(key.clone());
+            }
+        });
+        entry.stores.refresh(facts, objects, changed);
+    }
     entry.facts = facts.clone();
     let result = query(&entry.stores);
     CACHE.with(|slot| {

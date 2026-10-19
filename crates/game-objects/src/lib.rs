@@ -76,6 +76,8 @@ pub struct Objects {
     foods: Arc<BTreeMap<GoodId, Food>>,
     #[serde(skip)]
     masses: BTreeMap<GoodId, u64>,
+    #[serde(skip)]
+    food_ranks: BTreeMap<GoodId, u64>,
 }
 impl Resource for Objects {
     const KEY: &'static str = "objects.catalog";
@@ -112,6 +114,12 @@ impl Resource for Objects {
                 && self.keys.len() == self.items.len()
                 && self.masses.len() == self.items.len()
                 && self.foods.len() == self.items.values().filter(|o| o.food.is_some()).count()
+                && self
+                    .food_ranks
+                    .iter()
+                    .enumerate()
+                    .all(|(i, (g, rank))| self.foods.contains_key(g) && *rank == i as u64)
+                && self.food_ranks.len() == self.foods.len()
                 && self.items.iter().all(|(key, o)| {
                     self.ids
                         .get(&o.id)
@@ -161,6 +169,15 @@ impl Objects {
                 .collect(),
         );
         self.masses = self.items.values().map(|o| (o.id, o.mass)).collect();
+        self.food_ranks = self
+            .foods
+            .keys()
+            .enumerate()
+            .map(|(i, good)| (*good, i as u64))
+            .collect();
+    }
+    pub fn food_ranks(&self) -> &BTreeMap<GoodId, u64> {
+        &self.food_ranks
     }
     pub fn food_rules(&self) -> &Arc<BTreeMap<GoodId, Food>> {
         &self.foods

@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-scenario-assets.workspace=true
+game-fauna.workspace=true
 game-grievances.workspace=true
 game-campaign.workspace = true
 game-heredity.workspace = true
@@ -63,6 +65,9 @@ game-missions.workspace = true
 game-armies.workspace = true
 
 [dev-dependencies]
+game-mechanics.workspace = true
+game-testimony.workspace = true
+game-family-life.workspace = true
 game-vitality.workspace = true
 game-nutrition.workspace = true
 game-cultivars.workspace = true

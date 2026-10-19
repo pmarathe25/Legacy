@@ -1,3 +1,4 @@
+use game_testimony::{Report, Tell};
 mod support;
 use game_core::*;
 use game_knowledge::*;
@@ -525,4 +526,52 @@ fn numeric_payloads_and_opaque_sources_keep_canonical_wire_order_across_loading(
     let loaded: Facts = serde_json::from_str(&encoded).unwrap();
     assert_eq!(facts, loaded);
     assert_eq!(serde_json::to_string(&loaded).unwrap(), encoded);
+}
+
+#[test]
+fn compiled_empirical_facts_preserve_extensions_uncertainty_and_wire_values() {
+    use std::sync::Arc;
+    let claim = serde_json::json!({"subject":"stone", "factor":"height", "outcome":"speed",
+        "complexity":2,"context":{"wind":3},"effect":100,"confidence":25,"comparisons":2});
+    let measurement = serde_json::json!({"subject":"stone","context":{"height":4,"wind":3},
+        "outcome":"speed","value":7,"trial":0});
+    let mut facts = Facts::default();
+    for (key, value) in [
+        ("theory:stone:test", claim.clone()),
+        ("measured:stone:speed", measurement),
+        ("theory:stone:extended", {
+            let mut extended = claim;
+            extended["extension"] = serde_json::json!(true);
+            extended
+        }),
+    ] {
+        facts.insert(
+            key.into(),
+            Fact {
+                value: Arc::new(value.into()),
+                source: PersonId(1),
+                observed: SimTime(0),
+                revision: 0,
+                confidence: 15,
+            },
+        );
+    }
+    assert!(matches!(
+        facts.get("theory:stone:test").unwrap().value.as_ref(),
+        FactValue::Theory(_)
+    ));
+    assert!(matches!(
+        facts.get("measured:stone:speed").unwrap().value.as_ref(),
+        FactValue::Measurement(_)
+    ));
+    assert!(matches!(
+        facts.get("theory:stone:extended").unwrap().value.as_ref(),
+        FactValue::Other(_)
+    ));
+    let encoded = serde_json::to_string(&facts).unwrap();
+    let loaded: Facts = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(loaded, facts);
+    assert_eq!(serde_json::to_string(&loaded).unwrap(), encoded);
+    let prediction = forecast(&loaded, "stone", "speed", &[("height".into(), 8)].into()).unwrap();
+    assert_eq!(prediction.confidence, 15);
 }

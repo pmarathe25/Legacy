@@ -1,5 +1,5 @@
 //! Bind validated, declarative content to feature-owned construction requests.
-mod assets;
+use game_scenario_assets as assets;
 mod build;
 mod history;
 pub use game_content::Store;

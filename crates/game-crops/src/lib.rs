@@ -230,6 +230,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
 }
 
 impl Crop {
+    pub fn suitable(&self, s: &game_environment::Season) -> bool {
+        s.warmth >= self.minimum_warmth
+            && self.maximum_warmth.is_none_or(|v| s.warmth <= v)
+            && s.rain >= self.minimum_rain
+            && self.maximum_rain.is_none_or(|v| s.rain <= v)
+    }
+}
+impl Crop {
     pub fn regrowth_at(
         &self,
         now: SimTime,

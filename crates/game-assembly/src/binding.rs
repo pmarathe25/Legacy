@@ -68,7 +68,7 @@ fn route(
         }
         Command::Tell { recipient, key } => value(
             tx,
-            game_knowledge::Tell {
+            game_testimony::Tell {
                 sender: person,
                 recipient,
                 key,
@@ -293,7 +293,34 @@ pub fn observe(host: &Host) -> Result<PlayerView> {
             .transpose()?
             .unwrap_or_default(),
         neighbors: person
-            .map(|p| game_social_life::neighbors(host, p))
+            .map(|p| {
+                game_social_life::neighbors(host, p).map(|peers| {
+                    peers
+                        .into_iter()
+                        .map(|other| game_api::Neighbor {
+                            person: other,
+                            name: host
+                                .query(game_social_life::NameFor {
+                                    observer: p,
+                                    person: other,
+                                    fallback: host
+                                        .get::<game_social_life::SocialLife>()
+                                        .unwrap()
+                                        .people[&other]
+                                        .name
+                                        .clone(),
+                                })
+                                .unwrap(),
+                            action: host
+                                .get::<game_sim::Actions>()
+                                .unwrap()
+                                .0
+                                .get(&other)
+                                .map(|a| a.kind.clone()),
+                        })
+                        .collect()
+                })
+            })
             .transpose()?
             .unwrap_or_default(),
         events: host

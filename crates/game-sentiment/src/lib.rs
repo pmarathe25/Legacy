@@ -1,11 +1,15 @@
 //! Personal, experienced attachments, independent of ownership and exchange value.
 use game_core::*;
+mod animals;
+mod choices;
+pub use choices::{Gift, Locate, Recall, TellMemory};
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum Target {
     Object(u64),
+    Animal(u64),
     Person(PersonId),
     Plot(PlotId),
     WildPlant { patch: u64, plant: u64 },
@@ -14,6 +18,7 @@ impl Target {
     pub fn key(&self) -> String {
         match self {
             Self::Object(id) => format!("object:{id}"),
+            Self::Animal(id) => format!("animal:{id}"),
             Self::Person(p) => format!("person:{}", p.0),
             Self::Plot(p) => format!("plot:{}", p.0),
             Self::WildPlant { patch, plant } => format!("plant:{patch}:{plant}"),
@@ -32,6 +37,10 @@ pub struct Memory {
 pub struct Sentiment {
     pub people: Table<PersonId, Table<String, Memory>>,
     pub witnessed_losses: u64,
+    #[serde(default)]
+    pub recalled: Table<PersonId, SimTime>,
+    #[serde(default)]
+    pub locations: Table<PersonId, Table<u64, InventoryId>>,
 }
 impl Resource for Sentiment {
     const KEY: &'static str = "sentiment.attachments";
@@ -96,6 +105,11 @@ impl Event for Lost {
 fn local(tx: &Transaction<'_>, person: PersonId, target: &Target) -> Result<()> {
     let area = game_transport::area(tx.get()?, person)?;
     let at = match target {
+        Target::Animal(id) => tx
+            .get::<game_fauna::Fauna>()?
+            .animals
+            .get(id)
+            .map(|a| a.area),
         Target::Object(id) => tx
             .get::<game_items::Items>()?
             .objects
@@ -155,8 +169,11 @@ pub fn relinquishing(
         .sum()
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
+    game_fauna::plugin(b)?;
     b.plugin("sentiment", 1)?;
     b.resource::<Sentiment>()?;
+    choices::register(b)?;
+    animals::register(b)?;
     b.request::<Experience>(|tx, r| {
         require(
             !r.reason.trim().is_empty()
@@ -165,6 +182,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             "invalid sentimental experience",
         )?;
         local(tx, r.person, &r.target)?;
+        if let Target::Object(item) = r.target
+            && let Some(inventory) = tx.get::<game_items::Items>()?.objects[&item].inventory
+        {
+            tx.edit::<Sentiment>()?
+                .locations
+                .entry(r.person)
+                .or_default()
+                .insert(item, inventory);
+        }
         let at = tx.now();
         let key = r.target.key();
         let m = tx
@@ -232,6 +258,28 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.subscribe::<game_items::Moved>("sentiment.receiving-and-loss", |tx, e| {
         if let Some(to) = e.to {
+            let observers = if let Ok(area) = game_cargo::locality(tx, e.from)
+                && tx.registered::<game_property::Observers>()
+            {
+                tx.call(game_property::Observers { area })?
+            } else {
+                vec![]
+            };
+            let key = Target::Object(e.item).key();
+            for person in observers {
+                if tx
+                    .get::<Sentiment>()?
+                    .people
+                    .get(&person)
+                    .is_some_and(|r| r.contains_key(&key))
+                {
+                    tx.edit::<Sentiment>()?
+                        .locations
+                        .entry(person)
+                        .or_default()
+                        .insert(e.item, to);
+                }
+            }
             if let game_cargo::Custody::Carried(receiver) =
                 tx.get::<game_cargo::Cargo>()?.0[&to].custody
                 && let game_cargo::Custody::Carried(sender) =

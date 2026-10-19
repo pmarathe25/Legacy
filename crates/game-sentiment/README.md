@@ -1,7 +1,34 @@
 # game-sentiment
 
-Personal experience can attach positive or negative value to a particular object, person, cultivated plot, or representative wild plant. Attachment is independent of legal claims, genes, market demand, and current possession. Memories survive transfer, death of a subject, and destruction. A later experience can strengthen or reverse them.
+Personal emotional attachments to specific objects, people, cultivated plots, and wild plant stands.
 
-Making durable crafted goods and tending plants create personal memories. Receiving a recognized object has a response shaped by the recipient's relationship with its sender. Witnessed destruction of a valued object causes distress through vitality. Unwitnessed remote destruction does not send a mental notification. Exchange accounts for the identities actually relinquished, so a valued keepsake can be retained while an identical plain unit is traded. No sentimental prohibition prevents physical consumption, theft, transfer, or destruction.
+**Why it matters:** A crafted tool, a gift from a friend, or a tended garden plot is not interchangeable with an anonymous commodity. `game-sentiment` gives characters personal keepsakes and hated objects that affect trade, gifting, and grief.
 
-The physical world currently models fish and shellfish as resources, not individual animals. A future animal owner can supply identity/contact and experience events through this boundary; there are no invented animal individuals here. Wild plants are bounded representative stands rather than an identity for every leaf or fruit. Recovery searches, memorial rituals, gift intentions, and inherited heirloom knowledge remain decision-layer extensions.
+## Responsibilities
+
+- **Subject Attachment Ledger:** Stores positive and negative sentimental values per person toward individual durable items (`game-items`), people, cultivated plots (`game-horticulture`), and representative wild plant stands (`game-botany`).
+- **Experience-Driven Formation:** Creates or updates attachments when characters craft durable goods (`game-workshop`), tend plants, or receive recognizable gifts (`game-relationships`).
+- **Witnessed Loss Distress:** Applies psychological distress via `game-vitality` when a character personally witnesses the destruction of a cherished object.
+- **Identity-Aware Valuation:** Supplies per-item sentimental adjustments to `game-exchange` so traders keep treasured keepsakes while trading away plain duplicates.
+
+## Boundaries
+
+- **No Physical Lock:** Sentimental value never magically blocks theft, consumption, transfer, or destruction—it only changes how characters value and react to those events.
+- **No Unwitnessed Telepathy:** Remote destruction of a keepsake out of sight does not trigger immediate mental distress.
+- **No Choice Policy:** Autonomous gift-giving, keepsake recovery, and storytelling choices live in `game-attachments`.
+
+## How It Works
+
+- **Persistent Subject Memories:** Sentimental records survive item transfer, loss of possession, and even the death or destruction of the subject, allowing later experiences to strengthen or reverse the memory.
+- **Sender-Weighted Gifts:** Receiving a recognized individual item scales its initial sentimental value by the recipient's directed relationship with the giver.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers sentiment tables and experience listeners in `game-assembly`.
+- **Requests & Events:** Exposes sentiment query and mutation hooks; listens to crafting, horticulture, transfer, and destruction events.
+- **Callers:** Queried by `game-attachments`, `game-exchange`, and `game-wellbeing`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-objects`, `game-cargo`, `game-items`, `game-transport`, `game-physiology`, `game-vitality`, `game-relationships`, `game-workshop`, `game-botany`, `game-horticulture`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-sentiment`) cover crafting attachments, gift reactions, witnessed vs. unwitnessed destruction, and keepsake retention during trade.

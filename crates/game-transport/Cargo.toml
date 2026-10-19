@@ -14,6 +14,7 @@ game-land.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-signals.workspace=true
 game-objects.workspace = true
 game-cargo.workspace = true
 game-property.workspace = true

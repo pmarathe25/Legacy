@@ -1,0 +1,24 @@
+[package]
+name="game-scenario-assets"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+[dependencies]
+game-mechanics.workspace = true
+game-core.workspace=true
+game-sim.workspace=true
+game-content.workspace=true
+game-scenarios.workspace=true
+game-objects.workspace=true
+game-fauna.workspace=true
+game-traits.workspace=true
+game-agriculture.workspace=true
+game-workshop.workspace=true
+game-physiology.workspace=true
+game-characters.workspace=true
+game-environment.workspace=true
+game-health.workspace=true
+game-invocation.workspace=true
+game-social-life.workspace=true
+game-livelihoods.workspace=true
+game-pastimes.workspace=true

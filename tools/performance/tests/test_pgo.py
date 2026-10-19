@@ -39,6 +39,25 @@ class TrainingTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             pgo.training_runs({'runs': []}, Path('/tmp'))
 
+    def test_restart_reuses_only_interrupted_compilation_before_training(self):
+        import json
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary)/'build'
+            self.assertIsNone(pgo.prepare_output(output, False))
+            marker = output/'unrelated.txt'; marker.write_text('keep')
+            with self.assertRaises(ValueError): pgo.prepare_output(output, True)
+            previous = {'compiler':'rustc', 'target':'host', 'source_sha256':'old',
+                        'training_inputs':{}, 'training':[]}
+            (output/'metadata.json').write_text(json.dumps(previous))
+            (output/'raw').mkdir()
+            self.assertEqual(pgo.prepare_output(output, True), previous)
+            (output/'raw/profile.profraw').write_bytes(b'training evidence')
+            with self.assertRaises(ValueError): pgo.prepare_output(output, True)
+            (output/'raw/profile.profraw').unlink()
+            (output/'game-history').write_bytes(b'frozen executable')
+            with self.assertRaises(ValueError): pgo.prepare_output(output, True)
+            self.assertEqual(marker.read_text(), 'keep')
+
     def test_source_fingerprint_covers_code_and_content_but_excludes_logs(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

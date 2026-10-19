@@ -1,0 +1,29 @@
+[package]
+name = "game-search"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-information.workspace = true
+game-ecology.workspace = true
+game-choice.workspace = true
+game-social-life.workspace = true
+game-relationships.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-knowledge.workspace = true
+game-signals.workspace = true
+game-transport.workspace = true
+game-land.workspace = true
+serde.workspace = true
+game-physiology.workspace = true
+game-vitality.workspace = true
+[dev-dependencies]
+game-objects.workspace = true
+game-traits.workspace = true
+game-communication.workspace = true
+game-testimony.workspace = true
+game-content.workspace = true

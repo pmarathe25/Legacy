@@ -285,7 +285,7 @@ tags = ["material"]
 
 [data.objects.paper]
 id = 180
-name = "Rag paper"
+name = "Paper"
 mass = 1
 tags = ["material", "writing", "paper"]
 

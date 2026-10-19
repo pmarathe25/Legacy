@@ -51,6 +51,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         if !tx.get::<Preservation>()?.enabled {
             return Ok(());
         }
+        calendar::ensure(tx)?;
         let to = rate(tx, r.inventory)?;
         let from = tx
             .get::<Preservation>()?
@@ -69,6 +70,11 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .batches
             .remove(&r.inventory)
             .unwrap_or_default();
+        for (good, rows) in &lots {
+            for lot in rows {
+                calendar::remove(tx, r.inventory, *good, lot.expires)?;
+            }
+        }
         for (good, rows) in &lots {
             for lot in rows {
                 let batch = Batch {

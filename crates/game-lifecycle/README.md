@@ -1,11 +1,31 @@
 # game-lifecycle
 
-Actual scheduled pregnancies and births with stable identities, inherited traits, caregivers, and physical placement. Adulthood and a coarse reproductive window are biological constraints: the window ends at two thirds of the body’s expressed natural lifespan, so inherited longevity changes reproductive aging. Partnership and desire remain separate from fertility. A pregnancy due during travel remains pending until the mother next settles at an area; travel cannot silently erase it. Birth on a road is not yet modeled.
+`game-lifecycle` manages biological conception, scheduled gestation, childbirth, newborn identity allocation, and initial caregiver placement.
 
-Mortal death leaves possessions at their physical location; it does not settle estate claims.
+**Why it matters:** Multigenerational history requires every new person to be born from actual parents after a real gestation period in a physical location, never spawned out of thin air to maintain population numbers.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-physiology](../game-physiology/README.md), [game-transport](../game-transport/README.md), [game-cargo](../game-cargo/README.md), [game-genetics](../game-genetics/README.md).
+## Responsibilities
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+- **Lifecycle records (`Lifecycle`):** Stores each person's birth time, biological parents, simple genetic alleles, caregiver assignment, and active pregnancies (`lifecycle.state`).
+- **Conception & gestation (`Conceive`):** Verifies that both parents are alive, mature, co-located, and within their fertile window (the first two-thirds of expressed natural lifespan), then schedules a timed birth.
+- **Childbirth (`Deliver`):** Allocates a new `PersonId`, spawns the infant's body (`game-physiology`) and location (`game-transport`) at the mother's area, assigns the mother as initial caregiver, and emits `Born`.
 
-**Verification:** Run `cargo test -p game-lifecycle`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+## Boundaries
+
+- **Biological mechanics vs. reproductive choice:** Enforces maturity, fertility windows, and gestation timers; [`game-parenthood`](../game-parenthood/README.md) decides when consenting partners choose to conceive, and [`game-heredity`](../game-heredity/README.md) expresses full trait genotypes on `Born`.
+
+## How It Works
+
+- **Travel-safe delivery:** If a pregnancy reaches full term while the mother is in transit on a road, delivery remains pending and triggers as soon as she arrives at an area (`game_transport::Arrived`).
+- **Physical estate neutrality:** Mortal death clears active pregnancies and leaves physical possessions in place without automatically transferring property claims.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`lifecycle`, resource `lifecycle.state`).
+- **Requests & Events:** Handles `Register`, `Conceive`, `AssignCaregiver`; subscribes to `game_transport::Arrived` and `game_physiology::Died`; emits `Born`.
+- **Callers:** Invoked by [`game-parenthood`](../game-parenthood/README.md) and [`game-openings`](../game-openings/README.md); `Born` is subscribed to by `game-heredity`, `game-lineage`, `game-households`, and `game-names`.
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-sim`](../game-sim/README.md), [`game-physiology`](../game-physiology/README.md), [`game-transport`](../game-transport/README.md), [`game-cargo`](../game-cargo/README.md), [`game-genetics`](../game-genetics/README.md).
+- **Testing:** `cargo test -p game-lifecycle` verifies fertility windows, gestation scheduling, deferred birth during travel, and parental lineage recording.

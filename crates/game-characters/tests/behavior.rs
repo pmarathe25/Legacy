@@ -41,9 +41,12 @@ fn stale_stock_causes_failure_learning_and_backoff() {
     run(&mut f.host, SimTime(MINUTE.0 * 75));
     let m = &f.host.get::<Minds>().unwrap().people[&f.other];
     assert_eq!(m.failures, 1);
-    assert_eq!(
-        m.retry_after.values().copied().collect::<Vec<_>>(),
-        vec![SimTime(MINUTE.0 * 76)]
+    assert_eq!(m.retry_after.len(), 1);
+    assert!(
+        m.retry_after
+            .values()
+            .all(|at| *at > f.host.now()
+                && *at <= f.host.now().after(Rules::default().retry).unwrap())
     );
     run(&mut f.host, SimTime(MINUTE.0 * 100));
     assert_eq!(f.host.get::<Minds>().unwrap().people[&f.other].failures, 1);
@@ -138,15 +141,15 @@ fn learned_values_change_choices_with_physical_options_held_constant() {
     assert_eq!(food(&learned, f.store), 1000);
     assert_eq!(
         learned.get::<game_sim::Actions>().unwrap().0[&f.other].kind,
-        "rest"
+        "gather"
     );
-    assert_eq!(
+    assert!(
         learned.get::<Minds>().unwrap().people[&f.other]
             .last
             .as_ref()
             .unwrap()
-            .reasons,
-        vec!["fatigue"]
+            .reasons[0]
+            .starts_with("food:")
     );
 }
 

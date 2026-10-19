@@ -144,6 +144,7 @@ fn batched_physiology_matches_individual_ticks_across_boundaries_and_saturation(
             fatigue_fraction: 0,
             hunger_fraction: 0,
             recovery_fraction: 0,
+            healing_fraction: 0,
             metabolic_rates: Default::default(),
             resting: draw(11) % 2 == 0,
             last: SimTime(3),

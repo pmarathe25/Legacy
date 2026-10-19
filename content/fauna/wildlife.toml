@@ -1,0 +1,38 @@
+id = "fauna/wildlife"
+version = 1
+[data.species.rabbit]
+name = "Rabbit"
+body_mass = 100
+speed = 1800
+maturity_days = 180
+lifespan_days = 1460
+gestation_days = 30
+intake = 1
+minimum_warmth = -5
+maximum_warmth = 30
+meat = "raw-meat"
+yield_units = 20
+[data.species.goat]
+name = "Wild goat"
+body_mass = 800
+speed = 900
+maturity_days = 365
+lifespan_days = 3650
+gestation_days = 150
+intake = 3
+minimum_warmth = -10
+maximum_warmth = 35
+meat = "raw-meat"
+yield_units = 70
+[data.species.deer]
+name = "Deer"
+body_mass = 2000
+speed = 2200
+maturity_days = 730
+lifespan_days = 5110
+gestation_days = 210
+intake = 4
+minimum_warmth = -15
+maximum_warmth = 28
+meat = "raw-meat"
+yield_units = 120

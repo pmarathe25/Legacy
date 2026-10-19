@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-relationships.workspace = true
+game-vitality.workspace = true
 game-content.workspace = true
 game-objects.workspace = true
 

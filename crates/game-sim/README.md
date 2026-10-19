@@ -1,23 +1,47 @@
 # game-sim
 
-One generic transactional host: typed resources, due requests, stable event order, command deduplication, bounded advancement, and validated saves. Hot feature resources use `game-packed` row journals; cold resources retain `game-storage` snapshots. Nested and pending typed requests invoke their registered owner directly; saves and public commands use JSON envelopes. Errors and worker panics discard staged writes, IDs, notices, and jobs.
+`game-sim` is the single generic transactional simulation host that manages typed resources, scheduled requests, event delivery, canonical actor actions, and validated save files.
 
-During a writable request the transaction owns the resource map. Reads use one type index; owners edit unique resources directly after taking a lazy checkpoint. The map is restored to the host before returning either success or failure. Queries borrow committed resources and reject mutation.
+**Why it matters:** Centralizing scheduling, atomic transactions, nested rollback, and owner-checked resource access in one kernel guarantees determinism and prevents feature crates from mutating each other's state.
 
-Nested `attempt` scopes checkpoint only resources they edit. Cold resources default to independent clones with persistent table roots. Hot owners capture a row-journal mark plus their small metadata, retain successful inner undo until the outer commit, and restore all active scopes after a request/validation error or worker panic. Storage hooks perform infallible bookkeeping; gameplay stays in registered requests and subscribers.
+## Responsibilities
 
-Staged jobs, cancellations, and notices use append-only vectors with length checkpoints. Cancelling staged work records its vector index. Resource owners use registry-local numbers, with names retained in saves. Logical serialization, batching, and due work retain stable order.
+- **Plugin & resource registry (`Builder`, `Host`):** Registers named plugins, typed `Resource` state, `Request` handlers, `Event` / `notify` subscribers, and action cancellation hooks.
+- **Transactional execution (`Transaction`):** Executes every request or batched phase atomically, enforcing that only a resource's declaring plugin may call `tx.edit::<R>()`.
+- **Single simulation clock & scheduler:** Orders due scheduled jobs by `(SimTime, priority, JobId)`, supports bounded `Builder::batch<R>(limit)` phases (up to 128 adjacent requests), and deduplicates public commands by sequence number.
+- **Canonical action table (`Actions`):** Ensures each `PersonId` performs at most one timed action at a time, routing interruptions through the owning feature's cancellation request and waking listeners on completion.
+- **Save & load validation:** Serializes resources, pending typed requests, action clocks, notices, and command logs into validated JSON saves.
 
-`Builder::batch<R>(limit)` lets an owner group adjacent due requests of the same type, time, and priority into an atomic phase of at most 128 requests. New earlier work closes that phase before the next captured request. Cancellation retains queue order. Public commands remain individual transactions; commit revisions count phases. Physiology opts wake-ups into this batching.
+## Boundaries
 
-`notify` delivers internal lifecycle signals through the same owner-checked subscribers as events, without adding a player notice. Request hooks and event subscribers borrow typed payloads directly. Internal delivery performs no JSON conversion or subscriber-vector allocation. Published notices serialize once; saves retain their logical JSON representation. Finishing or cancelling an action wakes interested decision owners; rejected subscriber work rolls back the enclosing phase.
+- **Zero gameplay rules:** Knows nothing about food, combat, or institutions; depends only on `game-core`, `game-storage`, and `game-packed`.
+- **Single execution path:** There is no alternate or approximate simulation kernel—both live play and background history runs execute through `Host`.
 
-Scheduled requests and cancellation requests retain immutable typed payloads behind a shared interface; invocation clones their values and uses the same owner-checked executor. Requests implement `Clone` and must not share mutable gameplay data. Live and loaded requests must have the same meaning; derived caches cannot change their effects. Construction validates JSON serialization without retaining a JSON tree. Loading borrows raw request JSON into each registered decoder, binds every pending payload, and rejects unknown or malformed requests before exposing the host.
+## How It Works
 
-Owners validate changed records against a checkpoint; save construction and loading still validate complete resources. Job cancellation uses an ID index. Save loading borrows resource JSON from its input; pending payloads use compact raw JSON while waiting to bind. There are no feature dependencies or alternate kernels.
+- **Lazy checkpoints & nested `attempt`:** Writable transactions checkpoint a resource only when first edited. Cold resources clone persistent `game-storage` roots; hot resources capture a `game-packed` row-journal mark. Errors or worker panics restore all active scopes and discard staged jobs, IDs, and notices.
+- **Zero-allocation internal dispatch:** Scheduled `Pending` jobs and internal `notify` signals invoke registered handlers with borrowed typed payloads directly, converting to JSON only at save/client boundaries.
+- **Incremental validation:** After a phase, edited resources run `validate_changed` against their checkpoint; save construction and loading validate complete resources and bind all pending request payloads before exposing the host.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-storage](../game-storage/README.md), [game-packed](../game-packed/README.md).
+## Game Integration
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+- **Plugin / Entry Point:** Core host library (`Builder`, `Host`, `Transaction`, `Resource`, `Request`, `Event`, `Pending`).
+- **Requests & Events:** Built-in `Actions` resource (`sim.actions`) and `ActionFinished` / `ActionCancelled` lifecycle notifications.
+- **Callers:** Every hosted feature crate registers via `plugin(&mut Builder)`; [`game-assembly`](../game-assembly/README.md) constructs and drives `Host`.
 
-**Verification:** Run `cargo test -p game-sim`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-packed`](../game-packed/README.md).
+- **Testing:** `cargo test -p game-sim` verifies owner-checked writes, nested `attempt` rollback, batched phases, action cancellation, worker panic recovery, and save/load round-trips.
+
+`Builder::load_from` reads raw resource JSON before decoding registered owners, without constructing a whole JSON value tree. The string API borrows resource slices. Both paths validate the complete restored world and bind pending requests before exposing the host.
+
+`Pending::immediate` provides the same typed call path as `Transaction::call` for
+work consumed within the current transaction. Retained work must pass through
+`Pending::new`; scheduling validates nested payloads before committing. Invalid
+nested requests still roll back allocations and state. This avoids serializing
+discarded temporary offers.
+
+A request owner can retire its callbacks with
+`Transaction::cancel_scheduled::<R>()`. Cancellation includes work staged in the
+current transaction, rolls back on failure, and preserves other request types.

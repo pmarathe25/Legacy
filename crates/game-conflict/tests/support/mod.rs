@@ -117,6 +117,7 @@ pub fn food(host: &Host, inventory: InventoryId) -> u64 {
 pub fn builder() -> Builder {
     let mut b = Builder::new();
     game_land::plugin(&mut b).unwrap();
+    game_vitality::plugin(&mut b).unwrap();
     game_transport::plugin(&mut b).unwrap();
     game_objects::plugin(&mut b).unwrap();
     game_cargo::plugin(&mut b).unwrap();

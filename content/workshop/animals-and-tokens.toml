@@ -1,0 +1,26 @@
+id = "workshop/animals-and-tokens"
+version = 1
+[data.recipes.roast-meat]
+inputs = { raw-meat = 10, timber = 1 }
+output = "roast-meat"
+quantity = 8
+duration = 1800000
+skill = "cooking"
+[data.recipes.hammer-copper-blanks]
+inputs = { copper = 2 }
+output = "copper-blank"
+quantity = 6
+duration = 3600000
+skill = "metalworking"
+[data.recipes.hammer-bronze-blanks]
+inputs = { bronze = 2 }
+output = "bronze-blank"
+quantity = 6
+duration = 3600000
+skill = "metalworking"
+[data.recipes.build-barrier-frame]
+inputs = { timber = 30, rope = 10 }
+output = "barrier-frame"
+quantity = 1
+duration = 14400000
+skill = "carpentry"

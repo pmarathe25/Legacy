@@ -1,6 +1,7 @@
 id = "pastimes/literature"
 version = 1
 [data.activities.compose-poem]
+abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Compose a poem"
 inputs = { paper = 1, ink = 1 }
 requires = {}
@@ -10,6 +11,7 @@ affinity = "creativity"
 concept = "poetry"
 skill = "writing"
 [data.activities.write-book]
+abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Write a book"
 inputs = { paper = 8, ink = 2 }
 requires = {}
@@ -19,6 +21,7 @@ affinity = "contemplation"
 concept = "chronicles"
 skill = "writing"
 [data.activities.compose-song]
+abilities = { intelligence = 150, interpretation = 200, vocalization = 160 }
 name = "Compose a song"
 inputs = {}
 requires = {}

@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-search.workspace = true
+game-skills.workspace=true
+game-craft-planning.workspace = true
+game-choice.workspace = true
 game-vitality.workspace = true
 game-food-memory.workspace=true
 game-diagnostics.workspace=true
@@ -27,5 +31,6 @@ game-lineage.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-testimony.workspace = true
 game-land.workspace = true
 game-skills.workspace = true

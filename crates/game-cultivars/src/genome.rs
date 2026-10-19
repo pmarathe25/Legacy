@@ -1,5 +1,5 @@
 use super::*;
-pub type Genome = BTreeMap<String, game_genetics::Alleles>;
+pub type Genome = game_genetics::Genome;
 pub const LOCI: [&str; 7] = [
     "yield", "growth", "cold", "heat", "drought", "wet", "lifespan",
 ];
@@ -10,6 +10,7 @@ pub struct Strain {
     pub mother: Option<u64>,
     pub father: Option<u64>,
     pub generation: u32,
+    #[serde(deserialize_with = "game_genetics::deserialize_genome")]
     pub genome: Arc<Genome>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +94,7 @@ pub(super) fn make(tx: &mut Transaction<'_>, r: Make) -> Result<Strain> {
                     (random(seed, id, 1) % 65536) as u16,
                 ])
             };
-            (key.to_string(), alleles)
+            ((*key).into(), alleles)
         })
         .collect();
     let strain = Strain {

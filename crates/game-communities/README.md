@@ -1,15 +1,39 @@
 # game-communities
 
-Owns individual organizing decisions after encounters and during existing character idle reviews. A group does not start with a prescribed voting system. Each person's beliefs, accumulated experience, ambitions, and directed relationships affect the rights they will recognize and the supplies they will make available.
+Emergent group organizing, informal supply sharing, learned preference for voting or leadership, and coercive submission.
 
-Ordinary friends can share their own supplies without ballots or a joint decision procedure (`Personal`). Successful cooperation can teach people who value sharing and dislike concentrated authority to value `shared-decisions`. When both prefer joint control they can adopt a voting procedure. Support for the procedure does not automatically approve every later proposal. People who admire and trust someone may instead recognize that person's decisions if the prospective leader wants responsibility. A physically threatened person can comply out of fear while distrusting and resenting the aggressor. `Attachment` records these personal responses separately; it does not select a world government type.
+**Why it matters:** Communities shouldn't spawn with a preset government type. Friends start by sharing supplies informally, learn to value joint ballots or admired leaders from experience, or comply under physical threat while harboring private resentment.
 
-The proposing character names the group from a familiar person's name. `game-institutions` owns membership, arrangements, individual decisions, ballots, and recorded practices. `game-property` owns the actual permissions. Informal sharing and personal allegiance enact permission grants directly and record the resulting practice; they do not manufacture votes. Coercive submission is supplied by `game-pressure` after real threats or combat. No goods are created, and following a leader need not cause reciprocal sharing by that leader.
+## Responsibilities
 
-Generated-world behavior is enabled by `Enable`. Ambitious, aggressive, risk-tolerant individuals can attempt demands against nearby available people through the existing idle review, with bounded search and a cooldown. Conflict, injury, resistance, and death use the ordinary conflict and physiology owners. Player responses are excluded from implicit grants and submission. An idle follower can withdraw access after losing loyalty or escaping immediate pressure. `CanCommit` also checks current willingness before an institutional decision commits that person's supplies: a title alone does not compel them.
+- **Organizing Decisions:** Evaluates group formation and governance choices after social encounters and during `game-characters::IdleReview`.
+- **Personal Attachment Modes (`Attachment`):** Tracks each member's private reason for participating—informal friendship (`Personal`), learned preference for joint ballots (`shared-decisions`), trust in an admired leader, or fear-driven compliance after `game-pressure`.
+- **Practical Authority Gating (`CanCommit`):** Implements `game-institutions::CanCommit` so a leader's decree or group ballot only commits a custodian's supplies if that custodian still willingly follows or fears the authority.
+- **Authority Withdrawal:** Allows idle followers who lose loyalty or escape immediate coercion to withdraw their granted `game-property` permissions.
 
-Membership, individual attachments, locality indexes, and cooldowns persist. Local observations expose the public procedure and membership, plus only the observer's own attachment. Another person's fear or loyalty is private. Saving checks attachment references and indexes against institutions.
+## Boundaries
 
-Groups still have two initial members. Expansion, merger, full political succession, and a larger space of invented procedures remain future work. Informal cooperation, voting, leadership, and coercion are executable primitives rather than an exhaustive list of societies.
+- **No Preset Government Tree:** Does not pick a global "government type" for a settlement; governance is the sum of recorded `game-institutions` procedures and private member attachments.
+- **Player Autonomy Preserved:** Excludes the active player from implicit permission grants and automatic submission.
 
-Run `cargo test -p game-communities`. Tests cover informal sharing, learned adoption of voting and dissent, admired leadership, withdrawal of practical authority, force-driven compliance, resistance, private observations, and continued save/load. Dependencies point toward characters, pressure, institutions, relationships, traits, property, cargo, knowledge, lineage, physiology, transport, storage, the host, and core values.
+## How It Works
+
+- **Experience-Driven Governance:** Successful informal sharing teaches egalitarian peers to value `shared-decisions` and propose `Vote` procedures in `game-institutions`. Conversely, ambitious and aggressive characters can demand submission via `game-pressure`, producing fearful compliance without affection or genuine loyalty.
+- **Observer-Relative Privacy:** Local observations reveal an institution's public procedure and membership list, plus only the observer's own private `Attachment`—never another member's hidden fear or loyalty.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers community attachment tables, `CanCommit` handlers, and `IdleReview` / encounter organizing hooks in `game-assembly`.
+- **Requests & Events:** Handles `Enable`, organizing requests, and `CanCommit`; dispatches `game-institutions`, `game-property`, and `game-pressure` requests.
+- **Callers:** Coordinates with `game-characters`, `game-institutions`, `game-affiliation`, `game-pressure`, and `game-property`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-traits`, `game-knowledge`, `game-relationships`, `game-lineage`, `game-institutions`, `game-pressure`, `game-characters`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-communities`) cover informal sharing, learned ballot adoption, admired leadership, withdrawal of authority, coerced compliance, and private observation boundaries.
+
+`Cooperate` succeeds when an agreement, permission, procedure, or attachment
+actually changed. An unrealized request or an already fulfilled pact supplies
+failure feedback to the chooser, which can weigh other goals and retry when
+worthwhile. Revoked permissions and changed beliefs can make renegotiation
+useful again. No care duty, mandatory cooperation, or retry ban is introduced.

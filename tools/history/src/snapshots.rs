@@ -55,6 +55,13 @@ pub(super) fn snapshot(h: &Host, ledger: &Ledger) -> Result<Value> {
         })
         .collect();
     let social = h.get::<game_relationships::Social>()?;
+    let works = h.get::<game_works::Works>()?;
+    let cultural_reach = json!({
+        "oral_memories": works.pieces.values().map(|w| w.audience.len()).sum::<usize>(),
+        "text_presentations": works.pieces.values().map(|w| w.presented.len()).sum::<usize>(),
+        "widest_audience": works.pieces.values().map(|w| w.audience.len()).max().unwrap_or(0),
+        "works_with_audience": works.pieces.values().filter(|w| !w.audience.is_empty() || !w.presented.is_empty()).count(),
+    });
     Ok(
         json!({"day":h.now().0.saturating_sub(ledger.epoch)/DAY.0,"time":h.now(),"alive":alive.len(),"mortals":alive.iter().filter(|(_,b)|b.kind==game_physiology::Kind::Mortal).count(),"injured":alive.iter().filter(|(_,b)|b.health<b.maximum(&bodies.rules)).count(),"hungry":alive.iter().filter(|(_,b)|b.hunger>=bodies.rules.deprivation).count(),"actions":actions,
         "goals":h.get::<game_livelihoods::Livelihoods>()?.achieved.values().sum::<u64>(),"work_failures":h.get::<game_livelihoods::Livelihoods>()?.failures.values().sum::<u64>(),"plots":plots,"ripe_plots":ripe,"pastimes":leisure,"care":h.get::<game_care::Care>()?.treated.values().sum::<u64>(),"pregnancies":h.get::<game_lifecycle::Population>()?.pregnancies.len(),"births":h.get::<game_lifecycle::Population>()?.families.len(),
@@ -64,7 +71,7 @@ pub(super) fn snapshot(h: &Host, ledger: &Ledger) -> Result<Value> {
         "wild_plants":h.get::<game_botany::Botany>()?.stands.iter().map(|(id,s)| json!({"patch":id,"living":s.plants.len(),"seeds":s.seedbank.iter().map(|l|l.quantity).sum::<u64>(),"generation":s.plants.iter().map(|p|p.strain.generation).max().unwrap_or(0),"mean_cold":s.plants.iter().map(|p|i64::from(p.expression.cold)).sum::<i64>()/s.plants.len().max(1) as i64})).collect::<Vec<_>>(),
         "plant_births":h.get::<game_botany::Botany>()?.births,"plant_deaths":h.get::<game_botany::Botany>()?.deaths,
         "shelters":h.get::<game_shelter::Shelters>()?.rooms.len(),"fuel_used":h.get::<game_shelter::Shelters>()?.fuel_used,"food_stores":h.get::<game_food_storage::Stores>()?.sites.len(),
-        "trade":h.get::<game_exchange::Exchange>()?.completed,"works":h.get::<game_works::Works>()?.pieces.len(),"spoiled":h.get::<game_preservation::Preservation>()?.spoiled,
+        "trade":h.get::<game_exchange::Exchange>()?.completed,"works":works.pieces.len(),"cultural_reach":cultural_reach,"spoiled":h.get::<game_preservation::Preservation>()?.spoiled,
         "near_full_inventories":cargo.0.values().filter(|i|i.capacity.saturating_sub(i.mass+i.reserved_mass)<32).count(),"stock":stocks,"areas":areas,"groups":groups,"known_areas":known_areas,"affectionate_ties":social.relationships.values().flat_map(|r|r.values()).filter(|r|r.affection>=30).count(),"fearful_ties":social.relationships.values().flat_map(|r|r.values()).filter(|r|r.fear>=40).count(),"ledger":ledger.value()}),
     )
 }

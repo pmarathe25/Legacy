@@ -25,6 +25,8 @@ pub struct Body {
     pub hunger_fraction: u16,
     #[serde(default, skip_serializing_if = "zero")]
     pub recovery_fraction: u16,
+    #[serde(default, skip_serializing_if = "zero_healing")]
+    pub healing_fraction: u64,
     #[serde(default, skip_serializing_if = "normal_rates")]
     pub metabolic_rates: Rates,
     pub health: u64,
@@ -35,6 +37,9 @@ pub struct Body {
     pub life_limit: Option<SimTime>,
 }
 fn zero(value: &u16) -> bool {
+    *value == 0
+}
+fn zero_healing(value: &u64) -> bool {
     *value == 0
 }
 /// Multipliers in thousandths of the authored adult baseline.
@@ -78,6 +83,34 @@ impl From<&Body> for BodyView {
     }
 }
 impl Body {
+    pub fn validate(&self, rules: &Rules) -> Result<()> {
+        require(
+            self.health <= self.maximum(rules)
+                && self.fatigue_fraction < 1000
+                && self.hunger_fraction < 1000
+                && self.recovery_fraction < 1000
+                && self.healing_fraction < DAY.0 * 1000
+                && (self.kind == Kind::Mortal || self.alive),
+            "invalid body",
+        )
+    }
+    pub fn exert(&mut self, energy: u64, fatigue: u64, endurance: u64) {
+        let efficiency = 500 + 500000 / endurance.max(1);
+        if self.kind == Kind::Mortal {
+            let gain = u128::from(energy) * u128::from(efficiency) / 1000
+                + u128::from(self.hunger_fraction);
+            self.hunger = self
+                .hunger
+                .saturating_add((gain / 1000).min(u128::from(u64::MAX)) as u64);
+            self.hunger_fraction = (gain % 1000) as u16;
+        }
+        let gain = u128::from(fatigue) * 1000 / u128::from(endurance.max(1))
+            + u128::from(self.fatigue_fraction);
+        self.fatigue = self
+            .fatigue
+            .saturating_add((gain / 1000).min(u128::from(u64::MAX)) as u64);
+        self.fatigue_fraction = (gain % 1000) as u16;
+    }
     pub fn maximum(&self, rules: &Rules) -> u64 {
         self.maximum_health.unwrap_or(rules.max_health)
     }
@@ -116,6 +149,9 @@ pub struct Rules {
     pub deprivation: u64,
     pub harm_per_tick: u64,
     pub guardian_recovery: u64,
+    /// Mortal recovery during nourished rest, in health points per biological day.
+    #[serde(default)]
+    pub natural_recovery: u64,
 
     pub max_health: u64,
 }
@@ -130,8 +166,21 @@ impl Default for Rules {
             deprivation: 120,
             harm_per_tick: 1,
             guardian_recovery: 2,
+            natural_recovery: 0,
 
             max_health: 100,
         }
     }
+}
+
+/// Explicit activity costs in thousandths of hunger and fatigue units.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Exert {
+    pub person: PersonId,
+    pub energy: u64,
+    pub fatigue: u64,
+}
+impl game_sim::Request for Exert {
+    const KEY: &'static str = "physiology.exert";
+    type Response = ();
 }

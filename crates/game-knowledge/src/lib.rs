@@ -1,5 +1,5 @@
 //! Character-local facts and delayed reports. Queries never teach facts.
-pub use game_facts::with_prefix;
+pub use game_facts::{same_value, with_prefix};
 use game_storage::{Records, Table};
 use std::sync::Arc;
 mod persistence;
@@ -126,37 +126,6 @@ impl Request for ObserveStore {
     const KEY: &'static str = "knowledge.observe_store";
     type Response = ();
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Report {
-    pub sender: PersonId,
-    pub recipient: PersonId,
-    pub key: String,
-    pub delay: SimDuration,
-}
-impl Request for Report {
-    const KEY: &'static str = "knowledge.report";
-    type Response = SimTime;
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Tell {
-    pub sender: PersonId,
-    pub recipient: PersonId,
-    pub key: String,
-}
-impl Request for Tell {
-    const KEY: &'static str = "knowledge.tell";
-    type Response = SimTime;
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Deliver {
-    recipient: PersonId,
-    key: String,
-    fact: Fact,
-}
-impl Request for Deliver {
-    const KEY: &'static str = "knowledge.deliver";
-    type Response = ();
-}
 pub fn store_key(id: InventoryId) -> String {
     format!("store:{}", id.0)
 }
@@ -168,9 +137,61 @@ pub fn view(host: &Host, person: PersonId) -> Result<Facts> {
         .cloned()
         .unwrap_or_default())
 }
+/// A receiver-owned entry point for interpreted observations, inference and readable records.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Receive {
+    pub person: PersonId,
+    pub key: String,
+    pub fact: Fact,
+}
+impl Request for Receive {
+    const KEY: &'static str = "knowledge.receive";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Conclude {
+    pub person: PersonId,
+    pub key: String,
+    pub value: serde_json::Value,
+    pub confidence: u8,
+}
+impl Request for Conclude {
+    const KEY: &'static str = "knowledge.conclude";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("knowledge", 1)?;
     b.resource::<Knowledge>()?;
+    b.request::<Receive>(|tx, r| {
+        require(
+            !r.key.is_empty()
+                && r.key.len() <= 160
+                && r.fact.confidence <= 100
+                && r.fact.observed <= tx.now()
+                && r.fact.revision <= tx.revision_after(),
+            "invalid learned claim",
+        )?;
+        let facts = tx.edit::<Knowledge>()?.0.entry(r.person).or_default();
+        if facts.get(r.key.as_str()).is_none_or(|old| {
+            (old.observed, old.confidence) <= (r.fact.observed, r.fact.confidence)
+        }) {
+            facts.insert(r.key.into(), r.fact);
+        }
+        Ok(())
+    })?;
+    b.request::<Conclude>(|tx, r| {
+        tx.call(Receive {
+            person: r.person,
+            key: r.key,
+            fact: Fact {
+                value: Arc::new(FactValue::Other(r.value)),
+                source: r.person,
+                observed: tx.now(),
+                revision: tx.revision_after(),
+                confidence: r.confidence,
+            },
+        })
+    })?;
     b.request::<Initialize>(|tx, r| {
         require(
             !tx.get::<Knowledge>()?.0.contains_key(&r.person),
@@ -234,55 +255,27 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         )?;
         Ok(())
     })?;
-    b.request::<Tell>(|tx, r| {
-        require(
-            game_transport::area(tx.get()?, r.sender)?
-                == game_transport::area(tx.get()?, r.recipient)?,
-            "recipient is elsewhere",
-        )?;
-        if game_communication::active(tx) {
-            require(
-                game_communication::understood(tx, r.sender, r.recipient, &r.key, true)?,
-                "report was not understood",
-            )?;
-        }
-        tx.call(Report {
-            sender: r.sender,
-            recipient: r.recipient,
-            key: r.key,
-            delay: SimDuration(0),
+    Ok(())
+}
+
+/// Forecast from personally remembered measurements and theories; no world-state query.
+pub fn forecast(
+    facts: &Facts,
+    subject: &str,
+    outcome: &str,
+    changes: &std::collections::BTreeMap<String, i64>,
+) -> Option<game_reasoning::Prediction> {
+    let fact = facts.get(&format!("measured:{subject}:{outcome}"))?;
+    let baseline: game_reasoning::Observation = fact.value.decode()?;
+    let claims = with_prefix(facts, &format!("theory:{subject}:"))
+        .take(128)
+        .filter_map(|(_, f)| {
+            let mut c: game_reasoning::Claim = f.value.decode()?;
+            c.confidence = c.confidence.min(f.confidence);
+            Some(c)
         })
-    })?;
-    b.request::<Report>(|tx, r| {
-        let mut fact = tx
-            .get::<Knowledge>()?
-            .0
-            .get(&r.sender)
-            .and_then(|m| m.get(r.key.as_str()))
-            .map(|f| f.to_owned())
-            .ok_or_else(|| Error::Rejected("sender does not know this fact".into()))?;
-        fact.source = r.sender;
-        fact.confidence = fact.confidence.min(90);
-        let at = tx.now().after(r.delay)?;
-        tx.schedule(
-            at,
-            30,
-            Deliver {
-                recipient: r.recipient,
-                key: r.key,
-                fact,
-            },
-        )?;
-        Ok(at)
-    })?;
-    b.request::<Deliver>(|tx, r| {
-        let facts = tx.edit::<Knowledge>()?.0.entry(r.recipient).or_default();
-        if facts.get(r.key.as_str()).is_none_or(|old| {
-            (old.observed, old.revision, old.confidence)
-                < (r.fact.observed, r.fact.revision, r.fact.confidence)
-        }) {
-            facts.insert(r.key.into(), r.fact);
-        }
-        Ok(())
-    })
+        .collect::<Vec<_>>();
+    let mut prediction = game_reasoning::predict(&claims, &baseline, changes)?;
+    prediction.confidence = prediction.confidence.min(fact.confidence);
+    Some(prediction)
 }

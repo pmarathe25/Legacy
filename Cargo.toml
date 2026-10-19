@@ -8,6 +8,32 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-information = { path = "crates/game-information" }
+game-search = { path = "crates/game-search" }
+game-physics = { path = "crates/game-physics" }
+game-invention = { path = "crates/game-invention" }
+game-mechanics = { path = "crates/game-mechanics" }
+game-save-compat = { path = "crates/game-save-compat" }
+game-food-inquiry = { path = "crates/game-food-inquiry" }
+game-companionship = { path = "crates/game-companionship" }
+game-digestion = { path = "crates/game-digestion" }
+game-animal-species = { path = "crates/game-animal-species" }
+game-scenario-assets = { path = "crates/game-scenario-assets" }
+game-attachments = { path = "crates/game-attachments" }
+game-fauna = { path = "crates/game-fauna" }
+game-credit = { path = "crates/game-credit" }
+game-poetics = { path = "crates/game-poetics" }
+game-testimony = { path = "crates/game-testimony" }
+game-observations = { path = "crates/game-observations" }
+game-reasoning = { path = "crates/game-reasoning" }
+game-literacy = { path = "crates/game-literacy" }
+game-inquiry = { path = "crates/game-inquiry" }
+game-crop-cohorts = { path = "crates/game-crop-cohorts" }
+game-family-life = { path = "crates/game-family-life" }
+game-signals = { path = "crates/game-signals" }
+game-comfort = { path = "crates/game-comfort" }
+game-craft-planning = { path = "crates/game-craft-planning" }
+game-choice = { path = "crates/game-choice" }
 game-communication = { path = "crates/game-communication" }
 game-discourse = { path = "crates/game-discourse" }
 game-nurture = { path = "crates/game-nurture" }
@@ -113,6 +139,8 @@ debug = 1
 incremental = false
 
 [profile.test]
+# Whole-world checks exercise ordinary simulation time.
+opt-level = 1
 debug = 1
 incremental = false
 

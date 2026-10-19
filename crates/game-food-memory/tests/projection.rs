@@ -150,3 +150,34 @@ fn evicting_inactive_character_indexes_does_not_delete_their_evidence() {
     assert_eq!(view(PersonId(1), &original, &objects).1, vec![4]);
     assert!(original.contains_key("store:4"));
 }
+
+#[test]
+fn numeric_stock_views_follow_personal_evidence_across_independent_forks() {
+    let objects = game_objects::standard().unwrap();
+    let grain = objects.resolve("grain").unwrap();
+    let mut original = Facts::default();
+    insert(
+        &mut original,
+        "store:4",
+        FactValue::Stock([(grain, 10)].into()),
+    );
+    let mut a = original.clone();
+    let mut b = original.clone();
+    insert(&mut a, "store:4", FactValue::Stock([(grain, 20)].into()));
+    insert(&mut b, "store:4", FactValue::Stock([(grain, 30)].into()));
+    for (facts, amount) in [(&original, 10), (&a, 20), (&b, 30), (&original, 10)] {
+        game_food_memory::with_stores(PersonId(1), facts, &objects, |s| {
+            assert_eq!(
+                s.get(InventoryId(4)).unwrap().stock.as_ref().unwrap()[&grain],
+                amount
+            );
+        });
+    }
+    let loaded: Facts = serde_json::from_str(&serde_json::to_string(&a).unwrap()).unwrap();
+    game_food_memory::with_stores(PersonId(1), &loaded, &objects, |s| {
+        assert_eq!(
+            s.get(InventoryId(4)).unwrap().stock.as_ref().unwrap()[&grain],
+            20
+        );
+    });
+}

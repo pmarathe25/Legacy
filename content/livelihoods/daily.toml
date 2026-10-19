@@ -375,6 +375,20 @@ affinity = "contemplation"
 concept = "writing"
 
 [[data.goals]]
+object = "paper"
+quantity = 16
+priority = 45
+affinity = "creativity"
+concept = "poetry"
+
+[[data.goals]]
+object = "ink"
+quantity = 4
+priority = 45
+affinity = "contemplation"
+concept = "writing"
+
+[[data.goals]]
 object = "bronze-bell"
 quantity = 1
 priority = 45
@@ -814,6 +828,20 @@ quantity = 24
 priority = 35
 affinity = "foresight"
 concept = "preservation"
+
+[[data.goals]]
+object = "fiberboard"
+quantity = 6
+priority = 20
+affinity = "creativity"
+concept = "carpentry"
+
+[[data.goals]]
+object = "laminated-beam"
+quantity = 2
+priority = 20
+affinity = "foresight"
+concept = "construction"
 
 [[data.goals]]
 object = "fermenting-rice-mash"

@@ -1,11 +1,38 @@
 # game-works
 
-Owns distinct cultural works, including their creator, place, time, activity, actual personal evidence, and local interpretations. Completed creative pastimes supply the ordinary time and material costs. An existing annual record interval bounds accumulation; replacing it with common motive arbitration remains in the autonomy plan.
+Procedural cultural compositions (poems, songs, books), physical manuscript creation, and oral or written circulation.
 
-With communication enabled, works contain phonetic tokens drawn from the creator's own vocabulary, intended glosses preserved at composition time, and line boundaries. Poems use repetition; songs add note sequences; writing with sufficient paper can create a book. These are procedural compositions, rather than fluent human prose or synthesized audio. Authored `compose-poem`, `compose-song`, and `write-book` activities provide different costs and interests.
+**Why it matters:** Creative pastimes can leave lasting cultural artifacts behind. Characters compose poems, songs, and books in their own spoken vocabularies, inscribe them onto physical pages, and retell or read them across generations.
 
-Writing can turn consumed paper into a real cargo page or book with an item identity. Its identity follows transfer and destruction through the items owner. A blank bound book from the workshop carries no text until a distinct work is associated with it. If output cannot be carried, the creator retains a composition record without a readable physical copy.
+## Responsibilities
 
-`Present` exposes a carried text to a local listener. `Read` requires a text in hand, an exposed ground text, an actual presentation, or personal experience of an oral work. Guessing a hidden carried text's ID grants no access. Visible ground texts can still be read despite a contested claim; property use records the consequences. It returns translations from the reader's own learned associations, never the creator's private gloss. Unknown words stay unknown. `view` exposes accessible works and personal recollections, including line boundaries and music notes. The player API includes these views and `ReadWork`; the CLI accepts `read-work <id>` and `show-work <id> <person>`. Reading alone does not teach unexplained meanings. Absent interpretation leaves words untranslated; deafness does not prevent reading visible writing. New oral audiences require an available delivery and comprehension channel.
+- **Work Composition:** Turns completed creative `game-pastimes` (`compose-poem`, `compose-song`, `write-book`) into distinct cultural work records capturing creator, place, time, phonetic tokens (`game-communication`), intended glosses, line structure (`game-poetics`), and musical notes.
+- **Physical Manuscripts:** Converts consumed paper into tracked `game-items` pages or bound books in `game-cargo` whose identity persists across transfers and destruction.
+- **Oral & Written Sharing (`Present`, `Shared`):** Allows participants in completed `game-social-life` conversations to perform a remembered oral work or present an accessible text (evaluating up to eight known works per encounter).
+- **Reader-Relative Decoding (`Read`):** Decodes a read or heard work strictly through the audience's own learned vocabulary (`game-communication`), leaving unfamiliar words untranslated rather than leaking the author's private gloss.
 
-Run `cargo test -p game-works` for actual composition costs and durations, poems/books/music, decoding, physical destruction, and continuation after save/load.
+## Boundaries
+
+- **No Automatic Broadcast:** Merely finishing a poem or song does not grant nearby bystanders an audience record or opinion without an actual conversation or presentation.
+- **Pure Phrasing Delegated:** Delegates structural line, meter, and genre formatting to `game-poetics`.
+
+## How It Works
+
+- **Repertoire Indexing:** Maintains a derived per-person repertoire index (rebuilt on load) so conversations quickly select from up to eight personally known works without scanning global archives.
+- **Posthumous Survival:** Because listeners learn the phonetic tokens of an oral work and books persist as physical `game-items`, works continue circulating long after their creator dies.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers work archives, repertoire indices, pastime completion hooks, and `Present` / `Read` handlers in `game-assembly`.
+- **Requests & Events:** Exposes `Present`, `Read`, and `view` queries (bound to CLI `read-work` and `show-work`); emits `Shared` cultural transmission events used by `game-naming`.
+- **Callers:** Triggered by `game-pastimes` and `game-social-life`; queried by `game-naming`, `game-api`, and `game-cli`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-items`, `game-property`, `game-transport`, `game-physiology`, `game-vitality`, `game-traits`, `game-communication`, `game-knowledge`, `game-relationships`, `game-social-life`, `game-pastimes`, `game-poetics`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-works`) cover composition costs, poems/songs/books, reader-specific decoding, manuscript destruction, posthumous retelling, and save/load consistency.
+
+Works can preserve personally known theories and memories. Reading or hearing
+understood meanings transmits their retained evidence through `game-testimony`;
+untranslated tokens grant no facts. A physical care manual can therefore teach
+future caregivers after its author dies, subject to language and comprehension.

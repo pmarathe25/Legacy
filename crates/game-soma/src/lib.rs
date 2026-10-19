@@ -238,6 +238,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 fatigue_fraction: 0,
                 hunger_fraction: 0,
                 recovery_fraction: 0,
+                healing_fraction: 0,
                 metabolic_rates: Default::default(),
                 resting: false,
                 last: now,
@@ -251,6 +252,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let p = body_mut(tx, r.person)?;
         require(p.alive, "cannot revive the dead")?;
         p.health = p.health.saturating_add(r.amount).min(max);
+        Ok(())
+    })?;
+    b.request::<game_body::Exert>(|tx, r| {
+        let endurance = game_vitality::factor(game_vitality::ability(tx, r.person, "endurance"));
+        body_mut(tx, r.person)?.exert(r.energy, r.fatigue, endurance);
         Ok(())
     })?;
     b.request::<Strain>(|tx, r| {
@@ -375,14 +381,7 @@ impl Bodies {
             "invalid physiology rates",
         )?;
         for p in rows {
-            require(
-                p.health <= p.maximum(&self.rules)
-                    && p.fatigue_fraction < 1000
-                    && p.hunger_fraction < 1000
-                    && p.recovery_fraction < 1000
-                    && (p.kind == Kind::Mortal || p.alive),
-                "invalid body",
-            )?;
+            p.validate(&self.rules)?;
         }
         Ok(())
     }

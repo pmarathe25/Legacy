@@ -5,7 +5,7 @@ Run release benchmarks from the repository root. Each process checks its resulti
 ## Profile-guided history builds
 
 `python3 tools/performance/pgo.py --training target/history/training.json --output target/history/pgo-build`
-builds an instrumented history executable, runs the supplied workloads, merges their profiles, and builds an optimized executable at `target/history/pgo-build/game-history`. Install the compiler's matching profiler tools with `rustup component add llvm-tools-preview` first. The output directory must be new. Start without `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`.
+builds an instrumented history executable, runs the supplied workloads, merges their profiles, and builds an optimized executable at `target/history/pgo-build/game-history`. Install the compiler's matching profiler tools with `rustup component add llvm-tools-preview` first. The output directory must be new. `--restart-build` reuses compiler caches from an interrupted compilation before any training data exists; trained or completed output requires a new directory. Start without `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`.
 
 The training file contains ordinary history-tool arguments. Paths are relative to that file. Include varied populations and habitats; for example, a continuation of a checkpoint at day 18,250 and a new founding population:
 
@@ -128,3 +128,13 @@ See the compute tool for measured arithmetic, packing, GPU transfers, resident d
 The [architecture experiments](ARCHITECTURE.md) compare persistent hot tables with packed columns and row-level undo, exact analytical physiology, and compact typed pending messages. They retain stable IDs and test rollback, structural changes, retained readers, and continued execution after a checkpoint. Typed requests, dense hot components with journals, and shared observation scenes now run in production. Earlier kernel ratios are historical comparisons. Analytical intervals and parallel decision preparation remain experiments.
 
 **Limits:** Whole-game worker scaling remains weak in the ordinary survival fixture; faster single-worker storage is the principal gain. Shared-store default medians at 10,000 people are 512.3, 493.1, 482.8, 472.8 minutes/s at 1/2/4/8 workers. Full late-game production, tactical load, unique long histories, campaign catch-up, mature full-world snapshots, and mass-death latency remain unmeasured. These fixtures establish their asserted behavior and budgets, not the complete game design.
+
+## Raw-world diagnostic replay
+
+`cargo run -p game-performance --profile simulation --example resume_world -- SAVE [DAYS] [OUTPUT]` resumes a raw world checkpoint with bounded advancement and rejects sustained failure of clock progress. Set `LEGACY_PROFILE=1` for feature spans. Run timing measurements without concurrent builds or other simulations, using a frozen executable and the same input. This tool does not reconstruct ancestry or history ledgers; use the history driver for multigeneration evidence.
+
+## Sampling complete histories
+
+On Linux with GNU gprofng installed, `gprofng collect app -p on -a off -o target/history/profile.er target/simulation/game-history --resume CHECKPOINT --days END_DAY --output target/history/profile-run` samples call stacks without requiring kernel performance counters. Read inclusive call paths with `gprofng display text -sort i.%totalcpu -functions target/history/profile.er`. Keep profiles under `target/`. Use samples to identify costs; use uninstrumented alternating replay pairs to establish time and peak RSS changes.
+
+For a runtime specific to the build machine, add `--target-cpu native`. `CARGO_PROFILE_RELEASE_LTO=fat` selects whole-program optimization for both compilation phases. Metadata records the CPU target and release-profile overrides. Compare the resulting executable on workloads beyond the training windows, and keep the ordinary portable build for other machines.

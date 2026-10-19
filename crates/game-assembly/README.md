@@ -1,9 +1,36 @@
 # game-assembly
 
-Ordered plugin installation, public command binding, immutable view composition, and Simulation lifecycle. Gameplay loops, scoring, and thresholds are forbidden here by architecture tests.
+`game-assembly` composes all feature plugins into a playable `Simulation`, routes public player commands to the current ruler, and constructs `PlayerView` snapshots.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-api](../game-api/README.md), [game-openings](../game-openings/README.md), [game-land](../game-land/README.md), [game-transport](../game-transport/README.md), [game-cargo](../game-cargo/README.md), [game-property](../game-property/README.md), [game-environment](../game-environment/README.md), [game-physiology](../game-physiology/README.md), [game-knowledge](../game-knowledge/README.md), [game-skills](../game-skills/README.md), [game-ecology](../game-ecology/README.md), [game-agriculture](../game-agriculture/README.md), [game-workshop](../game-workshop/README.md), [game-health](../game-health/README.md), [game-relationships](../game-relationships/README.md), [game-agreements](../game-agreements/README.md), [game-institutions](../game-institutions/README.md), [game-justice](../game-justice/README.md), [game-lifecycle](../game-lifecycle/README.md), [game-lineage](../game-lineage/README.md), [game-guardians](../game-guardians/README.md), [game-invocation](../game-invocation/README.md), [game-characters](../game-characters/README.md), [game-logistics](../game-logistics/README.md), [game-projects](../game-projects/README.md), [game-realm](../game-realm/README.md), [game-conflict](../game-conflict/README.md), [game-confinement](../game-confinement/README.md), [game-missions](../game-missions/README.md), [game-armies](../game-armies/README.md).
+**Why it matters:** Keeping plugin wiring and client command binding in a thin composition layer ensures feature crates remain independent of one another and never import the top-level application.
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+## Responsibilities
 
-**Verification:** Run `cargo test -p game-assembly`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+- **Ordered plugin installation (`plugins::builder`):** Registers all hosted feature plugins in dependency order on `game_sim::Builder`.
+- **Ruler-bound command routing (`binding`):** Registers the `binding.command` request, resolves the active ruler from [`game-lineage`](../game-lineage/README.md), and dispatches `game_api::Command` variants to their owning feature requests.
+- **View composition (`binding::observe`):** Queries committed feature resources for the current ruler to build an immutable `PlayerView`.
+- **Simulation lifecycle (`Simulation`):** Exposes `new`, `with_content`, `uncontrolled`, `load`, `save`, `submit`, `observe`, and `advance`.
+- **Backward-compatible save loading (`plugins::load`):** Injects empty default state for newly introduced plugins when loading older save manifests.
+
+## Boundaries
+
+- **Zero gameplay logic:** Architecture tests restrict `src/` to `lib.rs`, `plugins.rs`, and `binding.rs` and forbid gameplay loops, thresholds, or scoring in this crate.
+- **Privileged debug access:** `debug_host` and `debug_host_mut` are explicitly marked for developer fixtures and tests, never normal player commands.
+
+## How It Works
+
+- **Sequence-keyed command deduplication:** `Simulation::submit(sequence, command)` wraps the public command in an `Execute` request so retries across ruler death or save/load remain idempotent.
+- **Witness-filtered events:** `observe` filters `host.notices()` so `PlayerView::events` includes only notices where `witnesses` contains the current ruler.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Application composition crate (`Simulation`, `scenarios`, `scenarios_with_content`, `default_scenario`); registers internal `client-binding` plugin.
+- **Requests & Events:** Handles `Execute` (`binding.command`).
+- **Callers:** Used by [`game-session`](../game-session/README.md), [`game-cli`](../game-cli/README.md), `tools/history`, and `tools/performance`.
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-api`](../game-api/README.md), [`game-openings`](../game-openings/README.md), [`game-content`](../game-content/README.md), and all hosted `game-*` feature crates.
+- **Testing:** `cargo test -p game-assembly` runs architecture enforcement (`tests/architecture.rs`), command retry tests, content validation, and full save/load integration checks.
+
+`Simulation::load_from` accepts a reader that can seek. Current checkpoints decode without retaining the entire JSON text, while older manifests rewind through the existing migration path.

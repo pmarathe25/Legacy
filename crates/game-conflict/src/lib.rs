@@ -3,13 +3,12 @@ use game_storage::Records;
 mod geometry;
 mod resolution;
 mod view;
-use game_core::*;
-use game_sim::*;
 pub use geometry::{Map, Point};
 pub use resolution::{Effect, OrderKind, resolve};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub use view::{BattleView, view};
+use {game_core::*, game_sim::*};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fighter {
     pub team: u32,
@@ -215,6 +214,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(id)
     })?;
     b.request::<Order>(|tx, r| {
+        require(
+            match r.action {
+                OrderKind::Attack(_) => game_vitality::can_manipulate(tx, r.person),
+                OrderKind::Move(_) | OrderKind::Retreat => game_vitality::can_walk(tx, r.person),
+                OrderKind::Wait => true,
+            },
+            "combat action exceeds motor capacity",
+        )?;
         let battle = tx
             .get::<Battles>()?
             .0
@@ -253,7 +260,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         queue(tx, r.battle)
     })?;
     b.request::<Round>(|tx, r| {
-        let snapshot = tx.get::<Battles>()?.0[&r.battle].clone();
+        let mut snapshot = tx.get::<Battles>()?.0[&r.battle].clone();
+        for person in snapshot.fighters.keys() {
+            let order = snapshot.orders.get(person);
+            let possible = match order {
+                Some(OrderKind::Move(_) | OrderKind::Retreat) => {
+                    game_vitality::can_walk(tx, *person)
+                }
+                Some(OrderKind::Wait) => true,
+                _ => game_vitality::can_manipulate(tx, *person),
+            };
+            if !possible {
+                snapshot.orders.insert(*person, OrderKind::Wait);
+            }
+        }
         let strength = snapshot
             .fighters
             .keys()
@@ -350,7 +370,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         queue(tx, r.battle)
     })
 }
-
 impl Battles {
     fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Battle>) -> Result<()> {
         for b in rows {

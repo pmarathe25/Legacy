@@ -90,12 +90,7 @@ impl<'a> Transaction<'a> {
         &self.host.pool
     }
     pub fn get<T: Resource>(&self) -> Result<&T> {
-        self.data
-            .as_ref()
-            .unwrap_or(&self.host.data)
-            .get(&TypeId::of::<T>())
-            .and_then(|value| value.downcast_ref())
-            .ok_or_else(|| Error::Missing(T::KEY.into()))
+        registry::read(self.data.as_ref().unwrap_or(&self.host.data))
     }
     /// Stage a resource snapshot. Persistent tables copy only changed paths and records.
     pub fn edit<T: Resource>(&mut self) -> Result<&mut T> {
@@ -133,20 +128,13 @@ impl<'a> Transaction<'a> {
         for frame in &mut self.frames {
             frame.entry(id).or_insert_with(|| (codec.checkpoint)(state));
         }
-        Ok(Arc::get_mut(state)
-            .expect("exclusive transaction resource")
-            .downcast_mut()
-            .expect("registered resource type"))
+        Ok(registry::mutable(state))
     }
     fn resolve(&mut self, frame: HashMap<TypeId, Checkpoint>, commit: bool) {
         for (id, checkpoint) in frame {
             let codec = &self.host.registry.resources[&id];
-            let state = self
-                .data
-                .as_mut()
-                .expect("writable transaction")
-                .get_mut(&id)
-                .unwrap();
+            let data = self.data.as_mut().expect("writable transaction");
+            let state = data.get_mut(&id).unwrap();
             if commit {
                 (codec.commit)(state, checkpoint);
             } else {
@@ -154,7 +142,6 @@ impl<'a> Transaction<'a> {
             }
         }
     }
-
     pub fn allocate(&mut self) -> Result<u64> {
         require(
             self.data.is_some(),
@@ -163,6 +150,10 @@ impl<'a> Transaction<'a> {
         let id = self.next_id;
         self.next_id = id.checked_add(1).ok_or(Error::Overflow)?;
         Ok(id)
+    }
+    pub fn invoke(&mut self, mut pending: Pending) -> Result<Value> {
+        pending.bind(&self.host.registry)?;
+        pending.invoke(self)
     }
     pub fn call<R: Request>(&mut self, request: R) -> Result<R::Response> {
         self.calls += 1;
@@ -240,10 +231,23 @@ impl<'a> Transaction<'a> {
             (job.at, job.priority, job.id) < key && !self.cancelled_jobs.contains(&i)
         })
     }
+    /// Cancel this owner's callbacks of one type, including staged work.
+    pub fn cancel_scheduled<R: Request>(&mut self) -> Result<()> {
+        let owner = self.host.registry.request_owners.get(R::KEY);
+        require(
+            owner == Some(&self.owner),
+            "scheduled work belongs to owner",
+        )?;
+        let jobs = self.host.jobs.values().chain(&self.jobs);
+        let owned = jobs.filter(|job| job.request.key() == R::KEY);
+        let ids: Vec<_> = owned.map(|job| job.id).collect();
+        for id in ids {
+            self.unschedule(id);
+        }
+        Ok(())
+    }
     pub fn unschedule(&mut self, id: ScheduleId) {
         self.cancelled.push(id);
-        // Allocated IDs increase in append order. Only work already staged at
-        // this call is cancelled; an unknown future ID cannot cancel a later job.
         if let Ok(index) = self.jobs.binary_search_by_key(&id, |job| job.id) {
             self.cancelled_jobs.push(index);
         }
@@ -302,19 +306,17 @@ impl<'a> Transaction<'a> {
             "actor is busy",
         )?;
         require(
-            self.host.registry.request_owners.get(R::KEY) == Some(&self.owner),
-            "cancellation must belong to the action owner",
+            self.registered::<R>()
+                && self.host.registry.request_owners.get(R::KEY) == Some(&self.owner),
+            "cancellation must be registered to the action owner",
         )?;
         let action = Action {
+            id: self.allocate()?,
             owner: self.host.registry.owners[self.owner].clone(),
             kind: kind.into(),
             until,
             cancel: Pending::new(cancel)?,
         };
-        require(
-            self.registered::<R>(),
-            "missing action cancellation handler",
-        )?;
         self.edit_owned::<Actions>()?.0.insert(person, action);
         Ok(())
     }
@@ -338,7 +340,6 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
     pub(crate) fn validate(&self) -> Result<()> {
-        // Each feature owns validation of its state. Cross-feature checks can be registered as listeners.
         for (id, checkpoint) in &self.frames[0] {
             let codec = &self.host.registry.resources[id];
             (codec.validate_checkpoint)(&self.data.as_ref().unwrap()[id], checkpoint.as_ref())?;
@@ -350,7 +351,6 @@ impl<'a> Transaction<'a> {
         while let Some(frame) = self.frames.pop() {
             self.resolve(frame, commit);
         }
-
         if !self.cancelled_jobs.is_empty() {
             self.cancelled_jobs.sort_unstable();
             self.cancelled_jobs.dedup();

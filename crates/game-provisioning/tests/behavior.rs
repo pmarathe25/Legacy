@@ -38,7 +38,7 @@ fn stock_and_location_must_both_be_known_and_inspection_is_passive() {
         })
         .unwrap();
     f.host
-        .dispatch(game_knowledge::Tell {
+        .dispatch(game_testimony::Tell {
             sender: f.ruler,
             recipient: f.other,
             key: game_knowledge::store_key(f.store),
@@ -50,7 +50,7 @@ fn stock_and_location_must_both_be_known_and_inspection_is_passive() {
         vec![Plan::Explore { area: f.away }]
     );
     f.host
-        .dispatch(game_knowledge::Tell {
+        .dispatch(game_testimony::Tell {
             sender: f.ruler,
             recipient: f.other,
             key: game_knowledge::location_key(f.store),

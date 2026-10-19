@@ -290,3 +290,43 @@ fn absent_listeners_gain_no_language_and_invalid_phonemes_fail_loading() {
         ["sounds"] = serde_json::json!([255]);
     assert!(builder().load(&corrupt.to_string(), 1).is_err());
 }
+
+#[test]
+fn pain_does_not_erase_food_evidence_and_forecasts_survive_loading() {
+    let (mut h, p, _) = setup();
+    h.dispatch(game_physiology::Start).unwrap();
+    h.dispatch(game_physiology::Rest { person: p[1] }).unwrap();
+    let at = h.now().after(MINUTE).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    let hungry = h
+        .dispatch(Notice {
+            observer: p[0],
+            person: p[1],
+        })
+        .unwrap();
+    assert_eq!(hungry.guessed_need.as_deref(), Some("food"));
+    h.dispatch(game_physiology::Damage {
+        person: p[1],
+        amount: 50,
+    })
+    .unwrap();
+    let hurt = h
+        .dispatch(Notice {
+            observer: p[0],
+            person: p[1],
+        })
+        .unwrap();
+    assert_eq!(hurt.guessed_need.as_deref(), Some("pain"));
+    assert_eq!(hurt.food, hungry.food);
+    let saved = h.save().unwrap();
+    let mut loaded = builder().load(&saved, 4).unwrap();
+    assert_eq!(
+        loaded
+            .dispatch(Notice {
+                observer: p[0],
+                person: p[1]
+            })
+            .unwrap(),
+        hurt
+    );
+}

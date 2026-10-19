@@ -1,0 +1,16 @@
+[package]
+name = "game-signals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-skills.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-choice.workspace = true
+game-physiology.workspace = true
+game-objects.workspace = true
+game-transport.workspace = true
+game-vitality.workspace = true
+serde.workspace = true

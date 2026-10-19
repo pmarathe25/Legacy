@@ -1,17 +1,33 @@
 # game-pressure
 
-Owns local demands for submission and the pending connection between those demands and actual conflict. It creates no government or permission by itself. `game-communities` decides whether a character attempts a demand and how another person's response changes social arrangements.
+Coercive demands (`DemandSubmission`, `Press`), refusal escalation into combat, bystander intervention, and road-based escape.
 
-`DemandSubmission` requires both people alive, capable, idle, and together. Current player responses require an explicit control path and are not resolved automatically. A person can comply from remembered fear or anticipate danger from visible build, their own wounds, and expressed foresight. Resistance also reflects independence, aggression, grievance, risk tolerance, and authority beliefs. Another person's hidden traits are not inspected. Following a refusal, the leader weighs aggression, ambition, grievance, affection, patience, fear, and needs before escalating; declining emits `BackedDown` without submission. Escalation starts an ordinary `game-conflict` encounter; both people reserve the canonical action clock, can fight back, suffer real bodily damage, and can die. There is no separate damage resolver or protective damage cap.
+**Why it matters:** Coercion bridges social politics and physical violence. An ambitious aggressor can demand allegiance or a public endorsement, forcing the target to weigh compliance, flight along a known road, or fighting back—with real bodily wounds and mortality at stake.
 
-The conflict owner emits attributed `Struck` evidence after simultaneous round damage. A direct victim learns fear, distrust, and grievance through `game-relationships::SufferForce`. Fear is compared with that person's risk tolerance, grievance, and attitude toward authority. The subject may submit, the aggressor may abandon the demand, or fighting may continue. Submission is an event, not affection, legitimacy, a ballot, or automatic ownership. An upper social owner can act on that response.
+## Responsibilities
 
-Completion, interruption, retreat, incapacity, and death release the pending pair. An interrupted demand grants no submission. Pending engagements save with symmetric participant references and an actual battle; save validation checks actions and live fighters. No independent review clock is added.
+- **Coercive Demands (`DemandSubmission`, `Press`):** Initiates local demands for either political allegiance or public endorsement of a specific stance between co-located, capable characters.
+- **Anticipated Danger & Refusal:** Lets the target weigh compliance against resistance or flight using remembered fear, visible build, own wounds, foresight, independence, and conviction—without peeking at the aggressor's hidden traits.
+- **Combat Escalation & Submission:** Escalates refused demands into real `game-conflict` battles if the aggressor chooses not to back down (`BackedDown`), re-evaluating submission, flight, or continued fighting after each round's `Struck` damage and `game-relationships::SufferForce` updates.
+- **Escape & Bystander Aid:** Allows targets to flee (`Fled`) along a personally remembered outgoing road (`game-knowledge`, `game-transport`) and lets local friends weigh their regard and risk before intervening.
 
-A person refusing submission can instead flee, before escalation or after a hit. Perceived danger and foresight compete with aggression, risk tolerance, grievance, and travel cost. Escape uses a personally remembered outgoing road and the ordinary travel action, including its elapsed time and speed. Unknown roads provide no escape option. A closed remembered road rolls back the attempted withdrawal, leaving the encounter intact. `Fled` records departure without consent or allegiance. Defiant characters can still fight to death.
+## Boundaries
 
-This uses the current tactical model's simple local encounter geometry, damage, and timing. Pursuit, interception, coalitions, negotiated threats, witnesses' indirect fear, larger military power, and player-facing responses are not yet implemented.
+- **Submission Is Not Legitimacy:** Emitting `Submitted` records fearful compliance—never affection, trust, a democratic ballot, or automatic ownership. Upper owners (`game-communities`, `game-discourse`) decide how to apply the result.
+- **Player Autonomy Preserved:** Never auto-resolves compliance or surrender for the active player character.
 
-Run `cargo test -p game-pressure`. Tests cover cancellation and death of either participant, actual fatal resistance, anticipated force, refused escalation, real escape, stale or unknown roads, distance, player control, and save/load. Dependencies are `game-core`, `game-sim`, `game-storage`, `game-physiology`, `game-transport`, `game-conflict`, `game-relationships`, `game-traits`, `game-lineage`, `game-knowledge`, and `serde`.
+## How It Works
 
-`Press` distinguishes allegiance from endorsement of a specific expressed stance. Existing `DemandSubmission` requests retain the allegiance default. Pending demands and `Submitted` events retain their purpose across battles and save/load. Conviction can increase resistance to an opposed statement. Endorsement does not alter private beliefs or join a community; the discourse owner can record the coerced statement separately.
+- **Shared Tactical Lifecycle:** Reserves both participants' action clocks and links the pending demand to an active `game-conflict` encounter. If a remembered escape road turns out to be closed, withdrawal rolls back and leaves the engagement intact.
+- **Symmetric Persistence:** Persists pending demands, their purpose (allegiance vs. endorsement), and linked combat pairs across save/load checkpoints.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers demand state, `DemandSubmission` / `Press` handlers, and `game-conflict` round listeners in `game-assembly`.
+- **Requests & Events:** Exposes `DemandSubmission` and `Press`; emits `Submitted`, `BackedDown`, and `Fled` events.
+- **Callers:** Invoked by `game-communities` and `game-discourse`; drives `game-conflict`, `game-relationships`, and `game-transport`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-physiology`, `game-transport`, `game-conflict`, `game-relationships`, `game-traits`, `game-lineage`, `game-knowledge`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-pressure`) cover anticipated force, refused escalation, fatal resistance, road escape, closed-road rollback, friend intervention, endorsement coercion, and save/load consistency.

@@ -1,0 +1,29 @@
+id = "objects/animals-and-tokens"
+version = 1
+[data.objects.raw-meat]
+id = 9201
+name = "Raw meat"
+mass = 1
+tags = ["food", "animal", "protein"]
+food = { portion = 10, relief = 40, shelf_days = 2, nutrients = { energy = 40, protein = 20, fat = 8, vitamins = 2, minerals = 4 }, effects = { health = -1 } }
+[data.objects.roast-meat]
+id = 9202
+name = "Roasted meat"
+mass = 1
+tags = ["food", "animal", "cooked"]
+food = { portion = 8, relief = 50, shelf_days = 3, nutrients = { energy = 50, protein = 20, fat = 8, vitamins = 1, minerals = 4 }, effects = { mood = 2 } }
+[data.objects.copper-blank]
+id = 9203
+name = "Copper blank"
+mass = 1
+tags = ["crafted", "metal", "disc"]
+[data.objects.bronze-blank]
+id = 9204
+name = "Bronze blank"
+mass = 1
+tags = ["crafted", "metal", "disc"]
+[data.objects.barrier-frame]
+id = 9205
+name = "Timber barrier frame"
+mass = 40
+tags = ["crafted", "barrier-resistance:300"]

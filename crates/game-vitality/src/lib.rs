@@ -3,8 +3,12 @@ use game_core::*;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
+mod expression_cache;
 mod growth;
-pub use growth::{Upbringing, can_converse, can_walk, disposition, maturation};
+pub use growth::{
+    Upbringing, attention_horizon, can_converse, can_manipulate, can_walk, disposition, maturation,
+    switching_margin,
+};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Life {
     pub born: SimTime,
@@ -83,7 +87,9 @@ pub fn expressed(
     at: SimTime,
 ) -> u64 {
     let raw = traits.map_or(1000, |t| t.ability(person, key));
-    life.map_or(raw, |life| life.ability(raw, key, at))
+    life.map_or(raw, |life| {
+        expression_cache::ability(life, person, key, at, raw)
+    })
 }
 pub fn ability(tx: &Transaction<'_>, person: PersonId, key: &str) -> u64 {
     expressed(
@@ -105,32 +111,33 @@ pub fn condition(tx: &Transaction<'_>, person: PersonId) -> Option<(u32, i32)> {
             .condition(tx.now()),
     )
 }
+const MENTAL: &[&str] = &[
+    "intelligence",
+    "attention",
+    "learning",
+    "foresight",
+    "resilience",
+    "interpretation",
+    "hearing",
+];
+const PHYSICAL: &[&str] = &[
+    "strength",
+    "speed",
+    "endurance",
+    "agility",
+    "hardiness",
+    "robustness",
+    "size",
+    "constitution",
+    "metabolism",
+    "recovery",
+    "vocalization",
+    "gesturing",
+];
 impl Life {
     pub fn ability(&self, raw: u64, key: &str, at: SimTime) -> u64 {
-        let mental = [
-            "intelligence",
-            "learning",
-            "foresight",
-            "resilience",
-            "interpretation",
-            "hearing",
-        ]
-        .contains(&key);
-        let physical = [
-            "strength",
-            "speed",
-            "endurance",
-            "agility",
-            "hardiness",
-            "robustness",
-            "size",
-            "constitution",
-            "metabolism",
-            "recovery",
-            "vocalization",
-            "gesturing",
-        ]
-        .contains(&key);
+        let mental = MENTAL.contains(&key);
+        let physical = PHYSICAL.contains(&key);
         if !mental && !physical {
             return raw;
         }

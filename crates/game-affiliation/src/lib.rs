@@ -127,93 +127,235 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
     }
     Ok(())
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct Depart {
+    person: PersonId,
+    institution: InstitutionId,
+}
+impl Request for Depart {
+    const KEY: &'static str = "affiliation.depart";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Discuss {
+    person: PersonId,
+    institution: InstitutionId,
+    procedure: Procedure,
+}
+impl Request for Discuss {
+    const KEY: &'static str = "affiliation.discuss";
+    type Response = bool;
+}
+// Called only when a proposal has actually been addressed to this participant.
+fn assent(tx: &Transaction<'_>, p: PersonId, procedure: &Procedure) -> bool {
+    let social = tx.get::<game_relationships::Social>().unwrap();
+    let voice = social
+        .values
+        .get(&p)
+        .and_then(|v| v.get("shared-decisions"))
+        .copied()
+        .unwrap_or(0);
+    match procedure {
+        Procedure::Leader(l) => {
+            *l == p || accepts(tx, p, *l) && social.beliefs.get(&p).is_some_and(|b| b.authority > 0)
+        }
+        Procedure::Majority | Procedure::Unanimity => voice > 0,
+        Procedure::Personal => social.beliefs.get(&p).is_none_or(|b| b.authority <= 0),
+    }
+}
 fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
-    let s = tx.get::<game_communities::Communities>()?;
-    if !s.enabled
+    if !game_vitality::can_converse(tx, p)
+        || !tx.get::<game_communities::Communities>()?.enabled
         || Some(p) == tx.get::<game_lineage::Lineage>()?.current
-        || tx
-            .get::<Affiliation>()?
-            .next
-            .get(&p)
-            .is_some_and(|at| *at > tx.now())
     {
         return Ok(());
     }
-    let Some(id) = s.members.get(&p).copied() else {
+    let Some(id) = tx
+        .get::<game_communities::Communities>()?
+        .members
+        .get(&p)
+        .copied()
+    else {
         return Ok(());
     };
-    let next = tx.now().after(SimDuration(7 * DAY.0))?;
-    tx.edit::<Affiliation>()?.next.insert(p, next);
     let group = tx.get::<game_institutions::Institutions>()?.groups[&id].clone();
     if group.members.len() > 1
-        && !matches!(group.procedure,Procedure::Leader(l) if l==p)
+        && !matches!(group.procedure, Procedure::Leader(l) if l == p)
         && basis(tx, p, &group)?.is_none()
-    {
-        return leave(tx, p, id);
-    }
-    if !matches!(group.procedure, Procedure::Personal) || group.members.len() < 2 {
-        return Ok(());
-    }
-    // Each survivor considers a local arrangement. Votes require an expressed wish for shared decisions.
-    let area = game_transport::area(tx.get()?, p)?;
-    if !group
-        .members
-        .iter()
-        .all(|m| game_transport::area(tx.get().unwrap(), *m).ok() == Some(area))
-    {
-        return Ok(());
-    }
-    let social = tx.get::<game_relationships::Social>()?;
-    let voting = group.members.iter().all(|m| {
-        social
-            .values
-            .get(m)
-            .and_then(|v| v.get("shared-decisions"))
-            .is_some_and(|n| *n >= 6)
-    });
-    let leader = group.members.iter().copied().find(|l| {
-        tx.get::<game_traits::Traits>()
-            .is_ok_and(|t| t.disposition(*l, "ambition") >= 650)
-            && group.members.iter().all(|m| {
-                m == l
-                    || (accepts(tx, *m, *l)
-                        && social.beliefs.get(m).is_some_and(|b| b.authority > 0))
-            })
-    });
-    let procedure = if voting {
-        Some(Procedure::Majority)
-    } else {
-        leader.map(Procedure::Leader)
-    };
-    if let Some(procedure) = procedure {
-        tx.call(game_institutions::Arrange {
-            institution: id,
-            procedure: procedure.clone(),
-            responses: group.members.clone(),
-        })?;
-        for m in group.members {
-            let attachment = match procedure {
-                Procedure::Leader(l) if m != l => Attachment::Loyalty(l),
-                Procedure::Majority => Attachment::Voice,
-                _ => Attachment::Independent,
-            };
-            tx.call(game_communities::Membership {
+        && !game_choice::offer(
+            tx,
+            p,
+            format!("affiliation:leave:{}", id.0),
+            game_choice::motive(0, 60, 0, 1, 0),
+            Depart {
+                person: p,
                 institution: id,
-                person: m,
-                attachment: Some(attachment),
-            })?;
+            },
+        )?
+    {
+        leave(tx, p, id)?;
+    }
+    let own = tx.get::<game_relationships::Social>()?;
+    let voice = own
+        .values
+        .get(&p)
+        .and_then(|v| v.get("shared-decisions"))
+        .copied()
+        .unwrap_or(0);
+    let independence = own
+        .values
+        .get(&p)
+        .and_then(|v| v.get("independence"))
+        .copied()
+        .unwrap_or(0);
+    for (name, procedure, value) in [
+        ("majority", Procedure::Majority, i64::from(voice) * 4),
+        (
+            "unanimity",
+            Procedure::Unanimity,
+            i64::from(voice) * 3 + game_vitality::disposition(tx, p, "patience") / 100,
+        ),
+        ("personal", Procedure::Personal, i64::from(independence) * 3),
+        (
+            "lead",
+            Procedure::Leader(p),
+            game_vitality::disposition(tx, p, "ambition") / 10 - 50,
+        ),
+    ] {
+        if procedure == group.procedure || group.members.len() < 2 {
+            continue;
         }
+        let recent = tx.get::<Affiliation>()?.next.get(&p).map_or(0, |at| {
+            60i64.saturating_sub((tx.now().0.saturating_sub(at.0) / HOUR.0).min(60) as i64)
+        });
+        game_choice::offer(
+            tx,
+            p,
+            format!("affiliation:{name}:{}", id.0),
+            game_choice::motive(0, 0, value, 5 + recent, 0),
+            Discuss {
+                person: p,
+                institution: id,
+                procedure,
+            },
+        )?;
     }
     Ok(())
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("affiliation", 1)?;
     b.resource::<Affiliation>()?;
+    b.request::<Depart>(|tx, r| leave(tx, r.person, r.institution))?;
+    b.request::<Discuss>(|tx, r| {
+        let group = tx.get::<game_institutions::Institutions>()?.groups[&r.institution].clone();
+        require(group.members.contains(&r.person), "not a member")?;
+        let area = game_transport::area(tx.get()?, r.person)?;
+        let now = tx.now();
+        tx.edit::<Affiliation>()?.next.insert(r.person, now);
+        for p in &group.members {
+            if Some(*p) == tx.get::<game_lineage::Lineage>()?.current
+                || game_transport::area(tx.get()?, *p).ok() != Some(area)
+                || !assent(tx, *p, &r.procedure)
+            {
+                return Ok(false);
+            }
+        }
+        tx.call(game_institutions::Arrange {
+            institution: r.institution,
+            procedure: r.procedure.clone(),
+            responses: group.members.clone(),
+        })?;
+        for p in group.members {
+            let attachment = match r.procedure {
+                Procedure::Leader(l) if l != p => Attachment::Loyalty(l),
+                Procedure::Majority | Procedure::Unanimity => Attachment::Voice,
+                _ => Attachment::Independent,
+            };
+            tx.call(game_communities::Membership {
+                institution: r.institution,
+                person: p,
+                attachment: Some(attachment),
+            })?;
+        }
+        Ok(true)
+    })?;
     b.subscribe::<game_social_life::Encounter>("z.affiliation.admission", |tx, e| {
         encounter(tx, e.first, e.second)
     })?;
-    b.subscribe::<game_characters::IdleReview>("a.affiliation.consider", |tx, e| {
-        consider(tx, e.person)
+    game_choice::provider(b, "a.affiliation.consider", |tx, e| {
+        if !game_vitality::can_converse(tx, e.person) {
+            return Ok(());
+        }
+        consider(tx, e.person)?;
+        if !game_choice::collecting(tx, e.person)
+            || !tx.get::<game_communities::Communities>()?.enabled
+        {
+            return Ok(());
+        }
+        let protected = tx.get::<game_lineage::Lineage>()?.current;
+        if Some(e.person) == protected {
+            return Ok(());
+        }
+        let Ok(area) = game_transport::area(tx.get()?, e.person) else {
+            return Ok(());
+        };
+        let peers: Vec<_> = tx
+            .get::<game_social_life::SocialLife>()?
+            .residents
+            .get(&area)
+            .into_iter()
+            .flat_map(|r| r.keys())
+            .copied()
+            .filter(|p| *p != e.person && Some(*p) != protected)
+            .take(16)
+            .collect();
+        for other in peers {
+            let relation = tx
+                .get::<game_relationships::Social>()?
+                .relationships
+                .get(&e.person)
+                .and_then(|r| r.get(&other))
+                .cloned()
+                .unwrap_or_default();
+            let s = tx.get::<game_communities::Communities>()?;
+            if s.members.get(&e.person) == s.members.get(&other) {
+                let value = i64::from(relation.affection + relation.trust - relation.grievance);
+                game_choice::offer(
+                    tx,
+                    e.person,
+                    format!("community:cooperate:{}", other.0),
+                    game_choice::motive(0, 0, value, 10, 0),
+                    game_communities::Cooperate {
+                        person: e.person,
+                        other,
+                    },
+                )?;
+            }
+            if game_vitality::can_manipulate(tx, e.person)
+                && game_vitality::can_converse(tx, other)
+                && !tx
+                    .get::<game_communities::Communities>()?
+                    .members
+                    .contains_key(&e.person)
+            {
+                let goal = game_vitality::disposition(tx, e.person, "aggression") / 10
+                    + game_vitality::disposition(tx, e.person, "ambition") / 10
+                    - 100;
+                let risk = (1000 - game_vitality::disposition(tx, e.person, "risk-tolerance")) / 10
+                    + i64::from(relation.affection.max(0));
+                game_choice::offer(
+                    tx,
+                    e.person,
+                    format!("community:pressure:{}", other.0),
+                    game_choice::motive(0, goal, 0, 10, risk),
+                    game_pressure::DemandSubmission {
+                        leader: e.person,
+                        subject: other,
+                    },
+                )?;
+            }
+        }
+        Ok(())
     })?;
     b.subscribe::<game_physiology::Died>("affiliation.departure", |tx, e| {
         if let Some(id) = tx

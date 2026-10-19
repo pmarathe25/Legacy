@@ -5,6 +5,7 @@ use support::*;
 
 fn recipe() -> Recipe {
     Recipe {
+        work: None,
         inputs: std::collections::BTreeMap::from([(game_cargo::TIMBER, 5)]),
         output: GoodId(8),
         quantity: 1,

@@ -1,11 +1,33 @@
 # game-names
 
-Owns stable personal identities, original given names, chosen-name history, names heard from particular people, and each speaker's current nicknames, titles, and epithets. A nickname never changes its recipient's chosen identity or grants an office. Stable person IDs distinguish people who share a name.
+Personal identity histories, heard-name memories, and speaker-specific nicknames, titles, and epithets.
 
-`NameChild` asks a present parent or caregiver to name an unnamed child. `SuggestChild` lets a higher decision owner supply that person's choice; without it, the caregiver's own name is used. `Change` records a self-chosen name and announces it locally. Distant acquaintances retain their previous memory. `Label` records a speaker's form of address; a nickname used in the recipient's presence becomes a suggestion they can consider adopting. Each speaker retains one current address of each kind per person.
+**Why it matters:** Names are social facts, not global string labels. A person's chosen name, the old name a distant acquaintance still remembers, and a local nickname or epithet can all differ at the same time.
 
-Social life owns the public name projection and emits registration and rename events. `NameFor` supplies observer-specific names to social observations, including old memories and private usage. Knowing someone's ID does not reveal their name. Saves validate identity history, heard names, and usage; invalid changes roll back atomically.
+## Responsibilities
 
-Identities share immutable records and name-history entries across transaction checkpoints. Appends validate their new suffix when the retained prefix shares the original entries; replacements and loaded worlds receive full validation. Histories retain every recorded change and serialize as ordinary arrays.
+- **Identity & Name History:** Stores original given names, full chosen-name histories (`Change`), and immutable person IDs that distinguish individuals who share a name.
+- **Observer-Relative Memory (`NameFor`):** Tracks which names each observer has actually heard from or for specific people; knowing a person's ID never automatically reveals their current name.
+- **Forms of Address (`Label`):** Records each speaker's active nickname, title, and epithet per person without altering the recipient's self-chosen identity or granting political office.
+- **Child Naming Hooks (`NameChild`, `SuggestChild`):** Requests a present parent or caregiver to name an unnamed child, delegating candidate generation to `game-naming` when registered.
 
-When communication is enabled, chosen names require understandable presentation before another person learns them. A silent rename can remain private, and deaf observers can retain an older name. The person choosing a child's name already knows their own choice and can present it on the child's behalf. Identity storage and personally heard names remain separate.
+## Boundaries
+
+- **No Candidate Scoring:** Does not decide which name a parent prefers or when an adult wants to rename themselves (owned by `game-naming`).
+- **No Public Event Projection:** Coordinates with `game-social-life` for public registration and rename events.
+
+## How It Works
+
+- **Communication-Gated Learning:** When `game-communication` is active, a rename (`Change`) or child naming (`NameChild`) must be understandably presented before local observers update their heard-name table. Silent renames stay private, and distant or deaf observers retain older names until informed.
+- **Copy-on-Write History Validation:** Shares immutable name-history prefixes across checkpoints, validating only newly appended entries during normal execution and full histories on load.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers identity records, heard-name tables, and naming request handlers in `game-assembly`.
+- **Requests & Events:** Exposes `NameChild`, `SuggestChild`, `Change`, `Label`, and `NameFor` queries.
+- **Callers:** Used by `game-naming`, `game-social-life`, `game-parenthood`, `game-nurture`, and UI/CLI presentation layers.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-transport`, `game-physiology`, `game-communication`, `game-social-life`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-names`) verify child naming, local vs. distant rename propagation, communication gating, speaker labels, and save/load validation.

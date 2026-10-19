@@ -158,6 +158,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(until)
     })?;
     b.request::<PutAway>(|tx, r| {
+        tx.call(game_property::Use {
+            actor: r.person,
+            inventory: r.transfer.to,
+            purpose: "food storage".into(),
+        })?;
         game_physiology::capable(tx, r.person)?;
         let area = game_transport::area(tx.get()?, r.person)?;
         require(
@@ -301,7 +306,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
-    b.subscribe::<game_characters::IdleReview>("c.storage.prepare", |tx, e| {
+    game_choice::provider(b, "c.storage.prepare", |tx, e| {
         decisions::consider(tx, e.person)
     })?;
     Ok(())

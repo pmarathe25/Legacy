@@ -17,6 +17,7 @@ pub fn builder() -> Builder {
     game_property::plugin(&mut b).unwrap();
     game_communication::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
     game_nutrition::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
@@ -42,6 +43,7 @@ pub fn builder() -> Builder {
     b.request::<ObservedFeeding>(|tx, r| {
         tx.emit(
             game_physiology::Fed {
+                inventory: None,
                 caregiver: r.caregiver,
                 patient: r.patient,
                 good: game_cargo::FOOD,

@@ -1,15 +1,32 @@
 # game-livelihoods
 
-**Purpose:** People pursue personal stock goals by composing real gathering and workshop actions. Goals come from [runtime content](../../content/livelihoods/daily.toml). Traits, individual variation, learned interests, available supplies, and remembered local resources determine which goal is feasible and attractive.
+Autonomous pursuit of personal material stock goals by chaining gathering and workshop crafting.
 
-`Install` freezes resolved goals and source stamps before `Enable`. `Consider` is also subscribed to the characters owner's `IdleReview`; it adds no scheduler. The current player is excluded. Encountered, permitted local inventories supply ingredients and hold outputs. Planning prefers the person's carried supplies and checks capacity through every intermediate step. Stock targets cover all encountered accessible inventories, although a production chain runs in one inventory.
+**Why it matters:** Characters need tools, containers, clothing, and household kits before emergencies strike. Livelihoods turn declarative stock goals into intelligence-bounded gathering and crafting plans.
 
-Installed rules are shared immutably across transaction snapshots. Planning removes already satisfied and unreachable goals before scoring and sorting; feasible goals retain their original preference and tie order.
+## Responsibilities
 
-Expressed intelligence bounds search depth (2–32 dependency levels), plan length (4–256 actions), and ingredient checks (32–8,192). Each recipe permits at most eight batches. Search rejects cycles and chooses cheaper feasible ingredient paths. A plan stores its remaining typed steps. Each step calls the ecology or workshop owner, which reserves capacity, consumes physical inputs, and owns cancellation. Failed attempts roll back and abandon the plan until the configured retry time. Contested access is weighed against personal motives. A completed stock goal slowly strengthens the person's interest in its concept.
+- **Stock Goal Evaluation:** Loads personal material goals from `content/livelihoods/daily.toml` and compares them against carried possessions, personal claims, and cooperatively shared local supplies.
+- **Intelligence-Bounded Planning:** Scales `game-craft-planning` search depth (2–32), plan length (4–256), and node checks (32–8,192) using the character's intelligence trait (`game-traits`).
+- **Choice Proposal & Execution:** Submits weighted livelihood proposals into `game-choice` and executes the resulting `game-ecology::Gather` or `game-workshop::Craft` step.
 
-Generated history enables this owner. Authored fixtures install the catalog for validation but leave autonomous production disabled. Travel, transfers between ingredient stores, markets, prices, assigned professions, and collective production orders are outside this owner. [Horticulture](../game-horticulture/README.md) owns plant-tending decisions separately.
+## Boundaries
 
-**Verification:** `cargo test -p game-livelihoods` covers real costs and time, cancellation, stale knowledge, permission withdrawal, capacity, cycles, and save/load across worker counts.
+- **No Recipe or Resource Ownership:** Delegates actual resource extraction to `game-ecology` and item transformation to `game-workshop`.
+- **No Immediate Hunger Relief:** Routine material provisioning is separate from urgent meal seeking and eating (owned by `game-food-actions` and `game-provisioning`).
 
-Personal stock goals count carried possessions, the person's claims, and cooperatively shared local supplies. Another person's unrelated possessions do not automatically satisfy the goal. Physical crafting can still defy a claim; expanding autonomous proposals for appropriating another person's inputs belongs to the deferred autonomy plan. Ingredient reachability is indexed per work inventory, because a single-inventory plan cannot combine materials from every neighboring container.
+## How It Works
+
+- **Accessible Stock Accounting:** Aggregates items the actor carries, owns locally (`game-property`), or can borrow from trusted household/lineage peers (`game-relationships`, `game-lineage`).
+- **Plan Caching & Step Execution:** Invokes `game-craft-planning` using recipes the actor actually knows (`game-knowledge`), scores the highest-priority missing stock goal, and executes the first unfulfilled step when chosen by `game-choice`.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` loads livelihood goals from `game-content` and registers `game-choice` proposal providers in `game-assembly`.
+- **Requests & Events:** Submits livelihood proposals during `game-choice::Collect` and dispatches `game-ecology::Gather` or `game-workshop::Craft` requests when selected.
+- **Callers:** Driven by `game-choice` decision cycles across all capable characters.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-knowledge`, `game-ecology`, `game-workshop`, `game-characters`, `game-traits`, `game-relationships`, `game-lineage`, `game-choice`, `game-craft-planning`, `game-vitality`, `game-food-memory`, `game-diagnostics`.
+- **Testing:** Integration tests in `tests/` verify stock goal accounting, cooperative supply sharing, intelligence-bounded multi-step planning, and end-to-end tool/kit crafting.

@@ -12,6 +12,7 @@ serde.workspace = true
 serde_json.workspace = true
 rayon.workspace = true
 rustc-hash = "2.1.3"
+erased-serde = "0.4.10"
 
 [[bench]]
 name = "kernel"

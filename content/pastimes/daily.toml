@@ -2,6 +2,7 @@ id = "pastimes/daily"
 version = 1
 
 [data.activities.whittle]
+abilities = { agility = 100, gesturing = 200 }
 name = "Whittle a keepsake"
 inputs = { timber = 1 }
 requires = {  }
@@ -12,6 +13,7 @@ concept = "carving"
 skill = "carving"
 
 [data.activities.play-reed-pipe]
+abilities = { agility = 100, gesturing = 200 }
 name = "Play a reed pipe"
 inputs = {  }
 requires = { reed-pipe = 1 }
@@ -22,6 +24,7 @@ concept = "music"
 skill = "music"
 
 [data.activities.play-flute]
+abilities = { agility = 100, gesturing = 200 }
 name = "Play a wooden flute"
 inputs = {  }
 requires = { wooden-flute = 1 }
@@ -32,6 +35,7 @@ concept = "music"
 skill = "music"
 
 [data.activities.play-ocarina]
+abilities = { agility = 100, gesturing = 200 }
 name = "Play a clay ocarina"
 inputs = {  }
 requires = { clay-ocarina = 1 }
@@ -42,6 +46,7 @@ concept = "music"
 skill = "music"
 
 [data.activities.ring-bell]
+abilities = { agility = 100, gesturing = 200 }
 name = "Practice bell rhythms"
 inputs = {  }
 requires = { bronze-bell = 1 }
@@ -52,6 +57,7 @@ concept = "music"
 skill = "music"
 
 [data.activities.sketch]
+abilities = { agility = 100, gesturing = 200 }
 name = "Sketch on paper"
 inputs = { paper = 1, ink = 1 }
 requires = {  }
@@ -62,6 +68,7 @@ concept = "painting"
 skill = "painting"
 
 [data.activities.write]
+abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Write a personal reflection"
 inputs = { paper = 1, ink = 1 }
 requires = {  }
@@ -72,6 +79,7 @@ concept = "writing"
 skill = "writing"
 
 [data.activities.read]
+abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Read a written page"
 inputs = {  }
 requires = { written-page = 1 }
@@ -82,6 +90,7 @@ concept = "writing"
 skill = "reading"
 
 [data.activities.paint]
+abilities = { agility = 100, gesturing = 200 }
 name = "Practice with earth pigments"
 inputs = { pigment = 1, bark = 1 }
 requires = {  }
@@ -92,6 +101,7 @@ concept = "painting"
 skill = "painting"
 
 [data.activities.weave-pattern]
+abilities = { agility = 100, gesturing = 200 }
 name = "Try a woven pattern"
 inputs = { linen-thread = 1 }
 requires = {  }
@@ -102,6 +112,7 @@ concept = "weaving"
 skill = "weaving"
 
 [data.activities.savor-tea]
+abilities = { agility = 100, gesturing = 200 }
 name = "Prepare and savor herbal tea"
 inputs = { herbal-tea = 1, timber = 1 }
 requires = {  }
@@ -112,6 +123,7 @@ concept = "herbalism"
 skill = "herbalism"
 
 [data.activities.savor-leaf-tea]
+abilities = { agility = 100, gesturing = 200 }
 name = "Prepare leaf tea"
 inputs = { tea-leaf = 2, timber = 1 }
 requires = {  }
@@ -122,6 +134,7 @@ concept = "reflection"
 skill = "herbalism"
 
 [data.activities.burn-incense]
+abilities = { intelligence = 150 }
 name = "Reflect with incense"
 inputs = { incense = 1 }
 requires = {  }
@@ -132,6 +145,7 @@ concept = "reflection"
 skill = "reflection"
 
 [data.activities.candlelight]
+abilities = { intelligence = 150 }
 name = "Sit quietly by candlelight"
 inputs = { candle = 1 }
 requires = {  }
@@ -142,6 +156,7 @@ concept = "reflection"
 skill = "reflection"
 
 [data.activities.lamplight]
+abilities = { intelligence = 150 }
 name = "Reflect by lamplight"
 inputs = { oil-lamp-fuel = 1 }
 requires = { clay-lamp = 1 }
@@ -152,6 +167,7 @@ concept = "reflection"
 skill = "reflection"
 
 [data.activities.arrange-garland]
+abilities = { agility = 100, gesturing = 200 }
 name = "Arrange a flower garland"
 inputs = { flower-garland = 1 }
 requires = {  }
@@ -162,6 +178,7 @@ concept = "decoration"
 skill = "decoration"
 
 [data.activities.arrange-mosaic]
+abilities = { agility = 100, gesturing = 200 }
 name = "Study a mosaic pattern"
 inputs = {  }
 requires = { mosaic = 1 }
@@ -172,6 +189,7 @@ concept = "decoration"
 skill = "decoration"
 
 [data.activities.token-game]
+abilities = { agility = 100, gesturing = 200 }
 name = "Practice a game of tokens"
 inputs = {  }
 requires = { carved-token = 2 }
@@ -182,6 +200,7 @@ concept = "play"
 skill = "play"
 
 [data.activities.tend-clothing]
+abilities = { agility = 100, gesturing = 200 }
 name = "Clean and mend a tunic"
 inputs = { linen-thread = 1, soap = 1 }
 requires = { tunic = 1 }
@@ -192,6 +211,7 @@ concept = "cleanliness"
 skill = "weaving"
 
 [data.activities.braid-ribbon]
+abilities = { agility = 100, gesturing = 200 }
 name = "Practice decorative braiding"
 inputs = { hemp-thread = 1 }
 requires = { woven-ribbon = 1 }
@@ -202,6 +222,7 @@ concept = "decoration"
 skill = "weaving"
 
 [data.activities.nature-journal]
+abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Keep a nature journal"
 inputs = { moss-paper = 1, berry-ink = 1 }
 requires = {  }
@@ -212,6 +233,7 @@ concept = "writing"
 skill = "writing"
 
 [data.activities.flower-study]
+abilities = { agility = 100, gesturing = 200 }
 name = "Study pressed flowers"
 inputs = {  }
 requires = { pressed-flowers = 1 }
@@ -222,6 +244,7 @@ concept = "decoration"
 skill = "decoration"
 
 [data.activities.doll-play]
+abilities = { agility = 100, gesturing = 200 }
 name = "Play with a woven doll"
 inputs = {  }
 requires = { woven-doll = 1 }
@@ -232,6 +255,7 @@ concept = "play"
 skill = "play"
 
 [data.activities.mask-play]
+abilities = { intelligence = 150, interpretation = 200, vocalization = 160 }
 name = "Practice a masked story"
 inputs = {  }
 requires = { painted-mask = 1 }

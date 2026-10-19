@@ -209,3 +209,35 @@ fn payload_deltas_match_a_full_scan_across_metadata_refreshes_and_branching() {
         }
     }
 }
+
+#[test]
+fn namespace_versions_track_forks_scenes_and_payloads_without_tracking_metadata() {
+    let mut original = Facts::default();
+    original.insert("store:1".into(), fact("ten apples", 1));
+    let mut left = original.clone();
+    let mut right = original.clone();
+    left.insert("store:1".into(), fact("twenty apples", 2));
+    right.insert("store:1".into(), fact("thirty apples", 2));
+    assert!(!left.same_namespace(&right, "store"));
+    assert!(!left.same_namespace(&original, "store"));
+    let mut metadata = original.clone();
+    let value = original.get("store:1").unwrap().value.clone();
+    metadata.insert(
+        "store:1".into(),
+        Fact {
+            value,
+            ..fact("unused", 10)
+        },
+    );
+    assert!(metadata.same_namespace(&original, "store"));
+    let mut unrelated = original.clone();
+    unrelated.insert("theory:falling".into(), fact("falls down", 3));
+    assert!(unrelated.same_namespace(&original, "store"));
+    let visible = scene(&["store:2"], None);
+    let mut observed = original.clone();
+    observed.observe(visible.clone(), stamp(4));
+    assert!(!observed.same_namespace(&original, "store"));
+    let before = observed.clone();
+    observed.observe(visible, stamp(5));
+    assert!(observed.same_namespace(&before, "store"));
+}

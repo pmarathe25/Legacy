@@ -1,13 +1,32 @@
 # game-institutions
 
-Founding and explicit procedures, bounded access-rule proposals, voting with executable permission consequences, offices, and removal. Institutional power is separate from the ruler lineage.
+Founding, governance procedures (`Personal`, `Decide`, `Vote`, `Arrange`), offices, and rule adoption vs. physical enactment.
 
-**Dependencies:** [game-core](../game-core/README.md), [game-sim](../game-sim/README.md), [game-property](../game-property/README.md).
+**Why it matters:** Institutional rules are social arrangements, not laws of physics. Separating rule adoption (a vote or decree) from physical enactment (whether a custodian actually grants access) lets authority, compliance, and defiance emerge naturally.
 
-**Interface:** [Source](src/lib.rs) defines the public types and operations. Hosted features register their state and request handlers through `plugin`. The public player API is bound by `game-assembly`; internal construction requests are privileged.
+## Responsibilities
 
-**Verification:** Run `cargo test -p game-institutions`. Tests belong to the crate and compose required owners without the application, except for client and application integration tests.
+- **Institution & Office Registry:** Tracks founded institutions, membership rolls, recognized offices, and governance procedures independently of the player's dynastic lineage.
+- **Governance Procedures:** Supports individual custody (`Personal`), recognized leader decisions (`Decide`), ballot procedures (`Vote`), negotiated arrangements (`Arrange`), and recorded ongoing practices (`RecordPractice`).
+- **Adoption vs. Enactment Separation:** Distinguishes adopting a rule proposal (`RuleAdopted`) from practically enacting its permission changes in `game-property` (`Proposal::enacted`).
+- **Custodian Commitment Checks (`CanCommit`):** Queries upper social owners (`game-communities`) to verify whether a custodian still follows a decision-maker before committing their property permissions.
 
-`Personal` leaves commitments with their individual custodians. `Decide` handles a recognized individual’s decision; `Vote` is reserved for actual voting procedures. `Arrange` records a change after the affected people respond, without treating compliance as approval. `RecordPractice` records permissions already enacted by the relevant holders. The optional upper-owned `CanCommit` request lets generated communities refuse practical implementation when a custodian no longer follows the decision maker. Proposals cannot commit people outside the membership.
+## Boundaries
 
-Rule adoption and enactment have separate records. A procedure can adopt a proposal while its custodian refuses to enact it. `Proposal::enacted` records actual permission changes; `RuleAdopted` reports the outcome. A recognized decision never creates an invisible barrier preventing a physical act.
+- **No Invisible Forcefields:** An institutional decision or office title never creates a magical barrier preventing a physical act—it only updates recognized `game-property` permissions when enacted.
+- **No Non-Member Compulsion:** Proposals cannot bind people outside the institution's membership.
+
+## How It Works
+
+- **Executable Permission Consequences:** When a proposal passes via `Decide` or `Vote`, `game-institutions` checks `CanCommit` for each affected custodian. Compliant custodians update `game-property` access rules (`Proposal::enacted`), while defiant custodians leave the rule adopted on paper only.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers institution records, office tables, and procedure/proposal handlers in `game-assembly`.
+- **Requests & Events:** Exposes founding, office assignment, `Decide`, `Vote`, `Arrange`, `RecordPractice`, and `CanCommit` hooks; emits `RuleAdopted` and membership/procedure events.
+- **Callers:** Used by `game-communities`, `game-affiliation`, `game-realm`, `game-naming`, and `game-justice`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-property`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-institutions`) verify procedure transitions, ballot tallying, office succession, custodian refusal via `CanCommit`, and save/load consistency.

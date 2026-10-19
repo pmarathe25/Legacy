@@ -99,22 +99,20 @@ impl Input {
         self.reference()
     }
 }
-fn select(current_id: u64, urgent: bool, rows: impl Iterator<Item = (u64, bool, i64)>) -> Answer {
+fn select(current_id: u64, _urgent: bool, rows: impl Iterator<Item = (u64, bool, i64)>) -> Answer {
     let mut best = Answer::NONE;
     let mut current = None;
-    for (id, survival, score) in rows {
+    for (id, _survival, score) in rows {
         if id == current_id {
             current = Some(Answer { id, score });
         }
-        if (!urgent || survival)
-            && (best.id == u64::MAX
-                || (score, std::cmp::Reverse(id)) > (best.score, std::cmp::Reverse(best.id)))
+        if best.id == u64::MAX
+            || (score, std::cmp::Reverse(id)) > (best.score, std::cmp::Reverse(best.id))
         {
             best = Answer { id, score };
         }
     }
     if best.id != u64::MAX
-        && !urgent
         && let Some(current) = current
         && best.score <= current.score.saturating_add(5)
     {
@@ -323,7 +321,6 @@ impl Lanes {
             }
             for (i, answer) in answers.iter_mut().enumerate() {
                 let current = best_id[i] != u64::MAX
-                    && !input.urgent[first + i]
                     && current_seen[i] != 0
                     && best_score[i] <= current_score[i].saturating_add(5);
                 *answer = if current {
@@ -377,11 +374,9 @@ fn rank(data: LaneInput<'_>, state: LaneState<'_>) {
             .saturating_add(data.fields[2][i])
             .saturating_sub(data.fields[3][i])
             .saturating_sub(data.fields[4][i]);
-        let eligible = !data.urgent[i] | (data.survival[i] != 0);
-        let wins = eligible
-            & ((state.best_id[i] == u64::MAX)
-                | (score > state.best_score[i])
-                | ((score == state.best_score[i]) & (data.ids[i] < state.best_id[i])));
+        let wins = (state.best_id[i] == u64::MAX)
+            | (score > state.best_score[i])
+            | ((score == state.best_score[i]) & (data.ids[i] < state.best_id[i]));
         state.best_id[i] = if wins { data.ids[i] } else { state.best_id[i] };
         state.best_score[i] = if wins { score } else { state.best_score[i] };
         let current = data.ids[i] == data.current[i];

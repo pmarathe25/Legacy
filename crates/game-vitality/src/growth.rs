@@ -76,7 +76,9 @@ pub fn maturation(born: SimTime, at: SimTime, key: &str) -> u64 {
         "hearing" => curve(age, &[(0, 298), (2, 460), (12, 730), (20, 1000)]),
         "language" => curve(age, &[(0, 0), (1, 150), (2, 400), (6, 800), (12, 1000)]),
         "intelligence" => curve(age, &[(0, 80), (2, 220), (6, 450), (14, 800), (20, 1000)]),
-        "foresight" | "resilience" => curve(age, &[(0, 50), (6, 250), (14, 650), (24, 1000)]),
+        "foresight" | "resilience" | "attention" => {
+            curve(age, &[(0, 50), (6, 250), (14, 650), (24, 1000)])
+        }
         "learning" => curve(age, &[(0, 500), (3, 1100), (8, 1200), (20, 1000)]),
         _ => 1000,
     }
@@ -98,12 +100,21 @@ impl Life {
         }
     }
     pub fn disposition(&self, raw: i64, key: &str, at: SimTime) -> i64 {
+        if !matches!(
+            key,
+            "patience" | "risk-tolerance" | "sociability" | "empathy" | "compassion"
+        ) {
+            return raw;
+        }
         let regulation = self.maturity(at, "resilience") as i64;
         let adversity = self.upbringing_at(at).distress() as i64;
         match key {
             "patience" => (raw * (500 + regulation / 2) / 1000 - adversity / 5).clamp(0, 1000),
             "risk-tolerance" => (raw + (1000 - regulation) / 5 - adversity / 4).clamp(0, 1000),
             "sociability" => (raw - adversity / 5).clamp(0, 1000),
+            "empathy" | "compassion" => {
+                (raw * (500 + regulation / 2) / 1000 - adversity / 10).clamp(0, 1000)
+            }
             _ => raw,
         }
     }
@@ -122,15 +133,47 @@ pub fn disposition(tx: &Transaction<'_>, person: PersonId, key: &str) -> i64 {
 }
 /// Physical locomotion readiness; a dependent may still be carried by another person.
 pub fn can_walk(tx: &Transaction<'_>, person: PersonId) -> bool {
-    tx.get::<Vitality>()
+    let maturity = tx
+        .get::<Vitality>()
         .ok()
         .and_then(|v| v.people.get(&person))
-        .is_none_or(|life| life.maturity(tx.now(), "speed") >= 200)
+        .map_or(1000, |life| life.maturity(tx.now(), "speed"));
+    maturity.saturating_mul(factor(ability(tx, person, "speed"))) / 1000 >= 200
 }
 
 pub fn can_converse(tx: &Transaction<'_>, person: PersonId) -> bool {
     tx.get::<Vitality>()
         .ok()
         .and_then(|v| v.people.get(&person))
-        .is_none_or(|life| life.maturity(tx.now(), "language") >= 400)
+        .is_none_or(|life| {
+            life.maturity(tx.now(), "language") * factor(ability(tx, person, "intelligence")) / 1000
+                >= 400
+        })
+}
+
+/// Coordinated deliberate manipulation, rather than reflexive infant movement.
+/// Uses expressed motor development, so inherited potential and impairment matter.
+pub fn can_manipulate(tx: &Transaction<'_>, person: PersonId) -> bool {
+    let maturity = tx
+        .get::<Vitality>()
+        .ok()
+        .and_then(|v| v.people.get(&person))
+        .map_or(1000, |life| life.maturity(tx.now(), "agility"));
+    maturity.saturating_mul(factor(ability(tx, person, "agility"))) / 1000 >= 200
+}
+
+/// Attention supports a current commitment; important needs can still interrupt it.
+pub fn switching_margin(tx: &Transaction<'_>, person: PersonId, base: i64) -> i64 {
+    base.saturating_mul(250 + ability(tx, person, "attention").min(32000) as i64) / 1250
+}
+
+/// A personal horizon for reconsideration, shortened by the stakes of current needs.
+/// External evidence remains free to interrupt; this does not exclude any action.
+pub fn attention_horizon(tx: &Transaction<'_>, p: PersonId, pressure: u64) -> u64 {
+    let attention = tx
+        .get::<Vitality>()
+        .ok()
+        .filter(|v| v.enabled)
+        .map_or(0, |_| ability(tx, p, "attention").min(16000));
+    1 + attention / 250 / pressure.max(1)
 }

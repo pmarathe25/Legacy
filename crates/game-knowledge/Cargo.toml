@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-reasoning.workspace = true
 game-communication.workspace = true
 game-diagnostics.workspace = true
 game-storage.workspace = true
@@ -22,6 +23,8 @@ serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
+game-choice.workspace = true
+game-testimony.workspace = true
 game-objects.workspace = true
 game-physiology.workspace = true
 game-skills.workspace = true

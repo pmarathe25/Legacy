@@ -141,8 +141,25 @@ fn grant(
     custodian: PersonId,
     inventory: InventoryId,
     users: BTreeSet<PersonId>,
-) -> Result<()> {
-    for person in &users {
+) -> Result<bool> {
+    let terms = AccessRule {
+        custodian,
+        inventory,
+        users,
+    };
+    let recorded = tx.get::<game_institutions::Institutions>()?.groups[&id]
+        .rules
+        .contains(&terms);
+    if recorded
+        && terms.users.iter().all(|p| {
+            tx.get::<game_property::Property>()
+                .unwrap()
+                .allowed(*p, inventory)
+        })
+    {
+        return Ok(false);
+    }
+    for person in &terms.users {
         tx.call(game_property::Permit {
             issuer: custodian,
             person: *person,
@@ -152,28 +169,25 @@ fn grant(
     }
     tx.call(game_institutions::RecordPractice {
         institution: id,
-        terms: AccessRule {
-            custodian,
-            inventory,
-            users,
-        },
-    })
+        terms,
+    })?;
+    Ok(true)
 }
-fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) -> Result<()> {
+fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) -> Result<bool> {
     if !eligible(tx, a, b)? {
-        return Ok(());
+        return Ok(false);
     }
     if tx.get::<Communities>()?.members.get(&a).is_some_and(|id| {
         tx.get::<game_institutions::Institutions>()
             .is_ok_and(|s| s.groups[id].members.len() > 2)
     }) {
-        return Ok(());
+        return Ok(false);
     }
     let Some((procedure, attachments)) = choose(tx, a, b, forced)? else {
-        return Ok(());
+        return Ok(false);
     };
     let (Some(first), Some(second)) = (supplies(tx, a)?, supplies(tx, b)?) else {
-        return Ok(());
+        return Ok(false);
     };
     let members = BTreeSet::from([a, b]);
     let existing = tx.get::<Communities>()?.members.get(&a).copied();
@@ -195,8 +209,10 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
             "Hearth"
         }
     );
+    let mut changed = existing.is_none();
     let id = if let Some(id) = existing {
         if tx.get::<game_institutions::Institutions>()?.groups[&id].procedure != procedure {
+            changed = true;
             tx.call(game_institutions::Arrange {
                 institution: id,
                 procedure: procedure.clone(),
@@ -239,10 +255,11 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
                 })?;
             }
         } else {
-            grant(tx, id, p, inventory, users)?;
+            changed |= grant(tx, id, p, inventory, users)?;
         }
     }
     for (p, basis) in attachments {
+        changed |= tx.get::<Communities>()?.attachments.get(&p) != Some(&basis);
         let s = tx.edit::<Communities>()?;
         s.members.insert(p, id);
         s.attachments.insert(p, basis);
@@ -264,7 +281,7 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
             members.into_iter().collect(),
         )?;
     }
-    Ok(())
+    Ok(changed)
 }
 fn withdraw(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     let basis = tx.get::<Communities>()?.attachments.get(&p).cloned();
@@ -285,7 +302,22 @@ fn withdraw(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     }
     Ok(())
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Cooperate {
+    pub person: PersonId,
+    pub other: PersonId,
+}
+impl Request for Cooperate {
+    const KEY: &'static str = "communities.cooperate";
+    type Response = ();
+}
 pub(super) fn register(b: &mut Builder) -> Result<()> {
+    b.request::<Cooperate>(|tx, r| {
+        require(
+            organize(tx, r.person, r.other, false)?,
+            "cooperation made no progress",
+        )
+    })?;
     b.request::<game_institutions::CanCommit>(|tx, r| {
         if tx.get::<Communities>()?.members.get(&r.custodian) != Some(&r.institution) {
             return Ok(true);
@@ -318,58 +350,23 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     outcome: 1 + (-i64::from(b.authority)).min(10) as i32 / 4,
                 })?;
             }
+        }
+        if tx.get::<game_characters::Minds>().is_ok_and(|m| m.running) {
+            tx.notify(game_choice::Changed { person: e.first })?;
+            tx.notify(game_choice::Changed { person: e.second })?;
+            return Ok(());
+        }
+        for p in [e.first, e.second] {
             withdraw(tx, p)?;
         }
-        organize(tx, e.first, e.second, false)
+        organize(tx, e.first, e.second, false).map(|_| ())
     })?;
     b.subscribe::<game_pressure::Submitted>("communities.submission", |tx, e| {
         if matches!(e.purpose, game_pressure::Purpose::Allegiance) {
-            organize(tx, e.leader, e.subject, true)
+            organize(tx, e.leader, e.subject, true).map(|_| ())
         } else {
             Ok(())
         }
     })?;
-    b.subscribe::<game_characters::IdleReview>("communities.ambition", |tx, e| {
-        let protected = tx.get::<game_lineage::Lineage>()?.current;
-        let s = tx.get::<Communities>()?;
-        if !s.enabled || Some(e.person) == protected {
-            return Ok(());
-        }
-        if s.members.contains_key(&e.person) {
-            return withdraw(tx, e.person);
-        }
-        if s.retry_at.get(&e.person).is_some_and(|at| *at > tx.now())
-            || game_pressure::disposition(tx, e.person, "aggression") < 850
-            || game_pressure::disposition(tx, e.person, "ambition") < 650
-            || game_pressure::disposition(tx, e.person, "risk-tolerance") < 600
-        {
-            return Ok(());
-        }
-        let social = tx.get::<game_social_life::SocialLife>()?;
-        let Some(area) = social.people.get(&e.person).and_then(|p| p.area) else {
-            return Ok(());
-        };
-        let target = social.residents[&area]
-            .scan_after(Some(&e.person))
-            .chain(social.residents[&area].iter())
-            .take(16)
-            .map(|(p, _)| *p)
-            .find(|p| {
-                *p != e.person
-                    && Some(*p) != protected
-                    && !s.members.contains_key(p)
-                    && !tx.get::<Actions>().unwrap().0.contains_key(p)
-                    && game_physiology::capable(tx, *p).is_ok()
-                    && relation(tx, e.person, *p).affection < 16
-            });
-        let retry = tx.now().after(SimDuration(6 * HOUR.0))?;
-        tx.edit::<Communities>()?.retry_at.insert(e.person, retry);
-        if let Some(subject) = target {
-            tx.call(game_pressure::DemandSubmission {
-                leader: e.person,
-                subject,
-            })?;
-        }
-        Ok(())
-    })
+    Ok(())
 }

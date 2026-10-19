@@ -3,6 +3,12 @@ pub use game_core::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Neighbor {
+    pub person: PersonId,
+    pub name: String,
+    pub action: Option<String>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Command {
     Move {
         destination: AreaId,
@@ -134,7 +140,7 @@ pub struct PlayerView {
     pub past_lives: Vec<LifeId>,
     pub borrowed_memories: BTreeMap<String, game_lineage::Life>,
     pub battles: Vec<game_conflict::BattleView>,
-    pub neighbors: Vec<game_social_life::Neighbor>,
+    pub neighbors: Vec<Neighbor>,
     pub communities: Vec<game_communities::CommunityView>,
     pub pastimes: BTreeMap<String, u64>,
     #[serde(default)]

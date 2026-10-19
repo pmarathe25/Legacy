@@ -78,10 +78,10 @@ fn remaining_hunger_can_prompt_another_portion_without_waiting_for_the_review_cl
     let mut loaded = support::builder().load(&h.save().unwrap(), 4).unwrap();
     for host in [&mut h, &mut loaded] {
         support::run(host, at);
-        assert_eq!(support::food(host, pack), 70);
+        assert_eq!(support::food(host, pack), 80);
         assert_eq!(
             host.get::<game_physiology::Bodies>().unwrap().people[&person].hunger,
-            0
+            60
         );
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
@@ -205,7 +205,11 @@ fn a_chosen_food_journey_continues_on_completion_without_multiplying_review_cloc
     );
     assert_eq!(
         interrupted.get::<game_physiology::Bodies>().unwrap().people[&person].hunger,
-        60
+        120
+    );
+    assert_eq!(
+        interrupted.get::<Actions>().unwrap().0[&person].kind,
+        "rest"
     );
     assert!(
         h.get::<game_characters::Minds>().unwrap().people[&person]
@@ -214,11 +218,11 @@ fn a_chosen_food_journey_continues_on_completion_without_multiplying_review_cloc
     );
     assert_eq!(
         h.get::<game_ecology::Ecology>().unwrap().patches[&patch].stock,
-        70
+        80
     );
     assert_eq!(
         h.get::<game_physiology::Bodies>().unwrap().people[&person].hunger,
-        0
+        60
     );
     assert!(
         h.notices()

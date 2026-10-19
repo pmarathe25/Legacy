@@ -1,6 +1,5 @@
 //! Built rooms use ordinary areas, roads, inventories, and local observation.
 mod climate;
-mod decisions;
 use game_core::*;
 use game_sim::*;
 use game_storage::Table;
@@ -302,9 +301,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             tx.unschedule(w.job);
         }
         Ok(())
-    })?;
-    b.subscribe::<game_characters::IdleReview>("b.shelter.warmth", |tx, e| {
-        decisions::consider(tx, e.person)
     })?;
     Ok(())
 }

@@ -47,10 +47,9 @@ fn notice(tx: &mut Transaction<'_>, e: &game_property::Interfered) -> Result<()>
             continue;
         }
         let empathy = game_vitality::disposition(tx, *witness, "empathy");
-        let actor = tx.get::<game_physiology::Bodies>()?.people.get(&e.actor);
-        let necessary = ["eating", "feeding", "treatment"].contains(&e.purpose.as_str())
-            && actor.is_some_and(|b| b.hunger >= 30 || b.health < 50);
-        let forgiven = necessary && empathy >= 650;
+        // Purpose and locally witnessed conduct are evidence; hidden hunger is not.
+        let necessary = ["eating", "feeding", "treatment"].contains(&e.purpose.as_str());
+        let forgiven = !tx.get::<game_characters::Minds>()?.running && necessary && empathy >= 650;
         if forgiven {
             tx.edit::<Grievances>()?.forgiven += 1;
         } else {
@@ -79,64 +78,210 @@ fn notice(tx: &mut Transaction<'_>, e: &game_property::Interfered) -> Result<()>
     }
     Ok(())
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub enum Resolution {
+    Forgive,
+    Warn,
+    Negotiate,
+    Report(PersonId),
+    Avoid(AreaId),
+    Retaliate,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Resolve {
+    pub person: PersonId,
+    pub other: PersonId,
+    pub resolution: Resolution,
+}
+impl Request for Resolve {
+    const KEY: &'static str = "grievances.resolve";
+    type Response = ();
+}
 fn respond(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
-    let _measurement = game_diagnostics::span("grievance planning");
+    if !game_vitality::can_converse(tx, person) {
+        return Ok(());
+    }
     if !tx.get::<Grievances>()?.enabled
         || Some(person) == tx.get::<game_lineage::Lineage>()?.current
-        || tx.get::<Actions>()?.0.contains_key(&person)
     {
         return Ok(());
     }
     let Ok(area) = game_transport::area(tx.get()?, person) else {
         return Ok(());
     };
-    let Some(known) = tx.get::<Grievances>()?.noticed.get(&person) else {
-        return Ok(());
-    };
-    let aggression = game_vitality::disposition(tx, person, "aggression");
-    let patience = game_vitality::disposition(tx, person, "patience");
-    let target = known
-        .keys()
+    let known: Vec<_> = tx
+        .get::<Grievances>()?
+        .noticed
+        .get(&person)
+        .into_iter()
+        .flat_map(|r| r.keys())
         .copied()
-        .filter(|p| {
-            Some(*p) != tx.get::<game_lineage::Lineage>().unwrap().current
-                && game_transport::area(tx.get().unwrap(), *p).ok() == Some(area)
-                && game_physiology::capable(tx, *p).is_ok()
-                && !tx.get::<Actions>().unwrap().0.contains_key(p)
-        })
-        .filter_map(|p| {
-            let r = tx
-                .get::<game_relationships::Social>()
-                .ok()?
-                .relationships
-                .get(&person)?
-                .get(&p)?;
-            Some((
-                i64::from(r.grievance) * 10 + aggression / 5 - patience / 5 - i64::from(r.fear) * 4,
-                p,
-            ))
-        })
-        .max();
-    if let Some((score, subject)) = target
-        && score > 150
-        && tx
-            .attempt(game_pressure::DemandSubmission {
-                leader: person,
-                subject,
+        .take(16)
+        .collect();
+    for other in known {
+        let r = tx
+            .get::<game_relationships::Social>()?
+            .relationships
+            .get(&person)
+            .and_then(|r| r.get(&other))
+            .cloned()
+            .unwrap_or_default();
+        let patience = game_vitality::disposition(tx, person, "patience");
+        let empathy = game_vitality::disposition(tx, person, "empathy");
+        let aggression = game_vitality::disposition(tx, person, "aggression");
+        let local = game_transport::area(tx.get()?, other).ok() == Some(area);
+        let mut options = vec![(
+            "forgive",
+            Resolution::Forgive,
+            (patience + empathy) / 20 + i64::from(r.affection) - i64::from(r.grievance) * 2,
+        )];
+        if local {
+            options.extend([
+                (
+                    "warn",
+                    Resolution::Warn,
+                    aggression / 20 + i64::from(r.grievance) * 2,
+                ),
+                (
+                    "negotiate",
+                    Resolution::Negotiate,
+                    patience / 10 + i64::from(r.trust),
+                ),
+                (
+                    "retaliate",
+                    Resolution::Retaliate,
+                    aggression / 5 + i64::from(r.grievance) * 3
+                        - patience / 10
+                        - i64::from(r.fear) * 3,
+                ),
+            ]);
+        }
+        if let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person)
+            && let Some(roads) =
+                game_knowledge::known::<game_land::Area>(facts, &game_knowledge::roads_key(area))
+            && let Some(destination) = roads.links.keys().next().copied()
+        {
+            options.push((
+                "avoid",
+                Resolution::Avoid(destination),
+                i64::from(r.fear) * 2 + patience / 20,
+            ));
+        }
+        let listener = tx
+            .get::<game_relationships::Social>()?
+            .relationships
+            .get(&person)
+            .into_iter()
+            .flat_map(|r| r.iter())
+            .filter(|(p, r)| {
+                **p != other
+                    && r.trust > 0
+                    && game_transport::area(tx.get().unwrap(), **p).ok() == Some(area)
             })
-            .is_ok()
-    {
-        tx.edit::<Grievances>()?
-            .noticed
-            .get_mut(&person)
-            .unwrap()
-            .remove(&subject);
+            .max_by_key(|(p, r)| (r.trust, std::cmp::Reverse(**p)))
+            .map(|(p, _)| *p);
+        if let Some(listener) = listener {
+            options.push((
+                "report",
+                Resolution::Report(listener),
+                i64::from(r.grievance) + patience / 10,
+            ));
+        }
+        for (name, resolution, value) in options {
+            let request = Resolve {
+                person,
+                other,
+                resolution,
+            };
+            if !game_choice::offer(
+                tx,
+                person,
+                format!("dispute:{name}:{}", other.0),
+                game_choice::motive(0, 0, value, 5, 0),
+                game_choice::Undertake {
+                    person,
+                    kind: "dispute".into(),
+                    duration: SimDuration(5 * MINUTE.0),
+                    request: Pending::new(request.clone())?,
+                },
+            )? && value > 150
+            {
+                let _ = tx.attempt(request);
+                return Ok(());
+            }
+        }
     }
     Ok(())
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("grievances", 1)?;
     b.resource::<Grievances>()?;
+    b.request::<Resolve>(|tx, r| {
+        require(
+            tx.get::<Grievances>()?
+                .noticed
+                .get(&r.person)
+                .is_some_and(|known| known.contains_key(&r.other)),
+            "no remembered grievance",
+        )?;
+        match r.resolution {
+            Resolution::Forgive => {
+                tx.call(game_relationships::Reconcile {
+                    observer: r.person,
+                    other: r.other,
+                    amount: 100,
+                })?;
+                tx.edit::<Grievances>()?.forgiven += 1;
+            }
+            Resolution::Avoid(destination) => {
+                tx.call(game_transport::Move {
+                    person: r.person,
+                    destination,
+                })?;
+            }
+            Resolution::Retaliate => {
+                tx.call(game_pressure::DemandSubmission {
+                    leader: r.person,
+                    subject: r.other,
+                })?;
+            }
+            resolution => {
+                let (listener, concept, stance, approach) = match resolution {
+                    Resolution::Report(listener) => (
+                        listener,
+                        format!("claim:{}", r.other.0),
+                        -80,
+                        game_discourse::Approach::Explain,
+                    ),
+                    Resolution::Negotiate => (
+                        r.other,
+                        "share-necessities".into(),
+                        50,
+                        game_discourse::Approach::Persuade,
+                    ),
+                    _ => (
+                        r.other,
+                        "respect-claims".into(),
+                        80,
+                        game_discourse::Approach::Explain,
+                    ),
+                };
+                tx.call(game_discourse::Advocate {
+                    speaker: r.person,
+                    listener,
+                    concept,
+                    stance,
+                    approach,
+                })?;
+            }
+        }
+        tx.edit::<Grievances>()?
+            .noticed
+            .get_mut(&r.person)
+            .unwrap()
+            .remove(&r.other);
+        Ok(())
+    })?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Grievances>()?.enabled = true;
         Ok(())
@@ -162,8 +307,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
-    b.subscribe::<game_characters::IdleReview>("disputes.responses", |tx, e| {
-        respond(tx, e.person)
-    })?;
+    game_choice::provider(b, "disputes.responses", |tx, e| respond(tx, e.person))?;
     Ok(())
 }

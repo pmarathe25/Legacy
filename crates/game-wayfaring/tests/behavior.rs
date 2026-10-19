@@ -26,7 +26,7 @@ fn journey() -> (game_sim::Host, PersonId, AreaId, AreaId) {
     (h, p, home, away)
 }
 #[test]
-fn a_voluntary_visit_uses_real_travel_and_returns_after_a_layover() {
+fn a_voluntary_visit_can_return_without_an_imposed_layover() {
     let (mut h, p, home, away) = journey();
     assert!(h.dispatch(Consider { person: p }).unwrap());
     assert!(game_transport::area(h.get().unwrap(), p).is_err());
@@ -36,12 +36,10 @@ fn a_voluntary_visit_uses_real_travel_and_returns_after_a_layover() {
         h.get::<game_knowledge::Knowledge>().unwrap().0[&p]
             .contains_key(game_knowledge::roads_key(away).as_str())
     );
-    assert!(!h.dispatch(Consider { person: p }).unwrap());
+    assert!(h.dispatch(Consider { person: p }).unwrap());
     let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
     for host in [&mut h, &mut loaded] {
-        run(host, 4 * HOUR.0 + MINUTE.0);
-        assert!(host.dispatch(Consider { person: p }).unwrap());
-        run(host, 4 * HOUR.0 + 2 * MINUTE.0);
+        run(host, 2 * MINUTE.0);
         assert_eq!(game_transport::area(host.get().unwrap(), p).unwrap(), home);
         host.dispatch(Consider { person: p }).unwrap();
         assert_eq!(host.get::<Wayfaring>().unwrap().completed, 1);
@@ -49,11 +47,17 @@ fn a_voluntary_visit_uses_real_travel_and_returns_after_a_layover() {
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
 #[test]
-fn cautious_people_and_player_control_do_not_start_implicit_trips() {
+fn personal_aversion_and_player_control_can_suppress_journeys() {
     let (mut h, p, _, _) = journey();
     h.dispatch(game_traits::Set {
         person: p,
         profile: [("risk-tolerance".into(), 0)].into(),
+    })
+    .unwrap();
+    h.dispatch(game_relationships::Initialize {
+        person: p,
+        beliefs: Default::default(),
+        values: [("discovery".into(), -100)].into(),
     })
     .unwrap();
     assert!(!h.dispatch(Consider { person: p }).unwrap());

@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-digestion.workspace = true
 game-nutrition.workspace = true
 game-soma.workspace = true
 game-body.workspace = true

@@ -35,6 +35,10 @@ game-physiology.workspace=true
 serde.workspace=true
 
 [dev-dependencies]
+game-search.workspace = true
+game-testimony.workspace = true
+game-family-life.workspace = true
+game-comfort.workspace = true
 serde_json.workspace = true
 game-affiliation.workspace = true
 game-land.workspace=true

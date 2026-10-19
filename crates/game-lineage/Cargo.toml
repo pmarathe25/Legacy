@@ -15,6 +15,7 @@ game-knowledge.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-testimony.workspace = true
 game-objects.workspace = true
 game-land.workspace = true
 game-transport.workspace = true

@@ -12,10 +12,12 @@ fn builder() -> Builder {
     game_environment::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_skills::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     game_agriculture::plugin(&mut b).unwrap();
     game_workshop::plugin(&mut b).unwrap();
+    game_mechanics::plugin(&mut b).unwrap();
     game_health::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_agreements::plugin(&mut b).unwrap();
@@ -44,6 +46,7 @@ fn builder() -> Builder {
     game_pastimes::plugin(&mut b).unwrap();
     game_heredity::plugin(&mut b).unwrap();
     game_households::plugin(&mut b).unwrap();
+    game_family_life::plugin(&mut b).unwrap();
     game_exchange::plugin(&mut b).unwrap();
     game_works::plugin(&mut b).unwrap();
     game_preservation::plugin(&mut b).unwrap();

@@ -3,10 +3,13 @@ use game_core::*;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
+mod proposals;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Gardens {
     pub enabled: bool,
     pub plots: Table<PersonId, PlotId>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    pub all: Table<PersonId, Table<PlotId, ()>>,
     pub retry_at: Table<PersonId, SimTime>,
 }
 impl Resource for Gardens {
@@ -62,18 +65,13 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         let next = tx.now().after(HOUR)?;
         tx.edit::<Gardens>()?.retry_at.insert(person, next);
-        let stocks: Vec<_> = tx
-            .get::<game_cargo::Cargo>()?
-            .carried(person)
-            .filter(|id| {
-                tx.get::<game_property::Property>()
-                    .unwrap()
-                    .allowed(person, *id)
-            })
-            .collect();
+        let stocks: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(person).collect();
         consider(tx, person, &stocks)
     })?;
-    b.subscribe::<game_characters::IdleReview>("horticulture.tend", |tx, e| {
+    game_choice::provider(b, "horticulture.tend", |tx, e| {
+        if game_choice::collecting(tx, e.person) {
+            return proposals::offer(tx, e.person);
+        }
         tx.call(Consider { person: e.person })?;
         Ok(())
     })?;
@@ -94,10 +92,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     });
     b.request::<Plant>(|tx, r| {
-        require(
-            !tx.get::<Gardens>()?.plots.contains_key(&r.person),
-            "already tending land",
-        )?;
         let area = game_transport::area(tx.get()?, r.person)?;
         let plot = tx.call(game_agriculture::Create(game_agriculture::Plot {
             area,
@@ -111,6 +105,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             seed: r.inventory,
         })?;
         tx.edit::<Gardens>()?.plots.insert(r.person, plot);
+        tx.edit::<Gardens>()?
+            .all
+            .entry(r.person)
+            .or_default()
+            .insert(plot, ());
         Ok(plot)
     })
 }
@@ -147,12 +146,6 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId, stocks: &[InventoryId]) 
             }
         }
         for inventory in stocks {
-            if !tx
-                .get::<game_property::Property>()?
-                .allowed(person, *inventory)
-            {
-                continue;
-            }
             let result = match phase {
                 game_agriculture::Phase::Ripe { yield_units: 0 } => tx
                     .attempt(game_agriculture::Harvest {

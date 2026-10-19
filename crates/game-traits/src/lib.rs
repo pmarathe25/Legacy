@@ -1,10 +1,12 @@
 //! Trait names and their numeric effects are data, not Rust variants.
+mod abilities;
 use game_content::{Document, Stamp, Store};
 use game_core::*;
 use game_sim::*;
 use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Trait {
@@ -33,6 +35,8 @@ pub struct Traits {
     pub stamps: Vec<Stamp>,
     #[serde(skip)]
     compiled: Table<PersonId, Weights>,
+    #[serde(skip)]
+    abilities: Arc<abilities::Index>,
 }
 #[derive(Deserialize)]
 struct SavedTraits {
@@ -47,6 +51,7 @@ impl From<SavedTraits> for Traits {
             people: saved.people,
             stamps: saved.stamps,
             compiled: Table::default(),
+            abilities: Arc::default(),
         };
         traits.rebuild();
         traits
@@ -128,6 +133,9 @@ impl std::ops::Index<&str> for Weights {
 impl Traits {
     /// Express a disposition on a common 0..=1000 scale, using authored defaults.
     pub fn disposition(&self, person: PersonId, key: &str) -> i64 {
+        if let Some((_, disposition)) = self.abilities.get(self, person, key) {
+            return disposition;
+        }
         let Some(t) = self.definitions.get(key) else {
             return 500;
         };
@@ -142,6 +150,9 @@ impl Traits {
     }
     /// Raw ability units: 1000 is an ordinary baseline, not a ceiling.
     pub fn ability(&self, person: PersonId, key: &str) -> u64 {
+        if let Some((ability, _)) = self.abilities.get(self, person, key) {
+            return ability;
+        }
         self.people
             .get(&person)
             .and_then(|p| p.get(key))
@@ -171,6 +182,7 @@ impl Traits {
         })
     }
     fn rebuild(&mut self) {
+        self.abilities = Arc::new(abilities::Index::new(self));
         self.compiled = self
             .people
             .iter()
@@ -211,6 +223,7 @@ pub fn load(store: &mut Store) -> Result<Traits> {
         people: Records::new(),
         stamps,
         compiled: Table::default(),
+        abilities: Arc::default(),
     };
     traits.validate()?;
     Ok(traits)
@@ -249,6 +262,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let state = tx.edit::<Traits>()?;
         state.people.insert(r.person, r.profile);
         state.compiled.insert(r.person, weights);
+        let source = state.people.shared(&r.person).unwrap();
+        Arc::make_mut(&mut state.abilities).set(&state.definitions, r.person, source);
         Ok(())
     })
 }

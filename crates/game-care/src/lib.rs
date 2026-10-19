@@ -9,6 +9,12 @@ use serde::{Deserialize, Serialize};
 pub struct Care {
     pub enabled: bool,
     pub requests: Table<PersonId, PersonId>,
+    #[serde(default)]
+    pub sought: Table<PersonId, Table<PersonId, (SimTime, u64)>>,
+    #[serde(default)]
+    pub received: Table<PersonId, Table<PersonId, (SimTime, u64)>>,
+    #[serde(default)]
+    pub request_cursor: Table<PersonId, PersonId>,
     pub assigned: Table<PersonId, PersonId>,
     pub helping: Table<PersonId, PersonId>,
     pub treated: Table<PersonId, u64>,
@@ -40,11 +46,62 @@ impl Request for RequestAid {
     const KEY: &'static str = "care.request-aid";
     type Response = bool;
 }
+fn requested(tx: &Transaction<'_>, patient: PersonId, caregiver: PersonId) -> bool {
+    tx.get::<Care>().is_ok_and(|c| {
+        c.requests.get(&patient) == Some(&caregiver)
+            || c.received
+                .get(&caregiver)
+                .is_some_and(|r| r.contains_key(&patient))
+    })
+}
+fn injury(tx: &Transaction<'_>, person: PersonId) -> Result<u64> {
+    let bodies = tx.get::<game_physiology::Bodies>()?;
+    let body = bodies
+        .people
+        .get(&person)
+        .ok_or_else(|| Error::Missing("patient".into()))?;
+    Ok(body
+        .maximum(&bodies.rules)
+        .saturating_sub(body.health)
+        .min(100))
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Appeal(RequestAid);
+impl Request for Appeal {
+    const KEY: &'static str = "care.appeal";
+    type Response = game_choice::Outcome;
+}
 fn release(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     if let Some(patient) = tx.edit::<Care>()?.helping.remove(&person) {
         tx.edit::<Care>()?.assigned.remove(&patient);
     }
     Ok(())
+}
+fn known_supplies(
+    tx: &Transaction<'_>,
+    p: PersonId,
+    good: GoodId,
+    quantity: u64,
+    area: AreaId,
+) -> Vec<InventoryId> {
+    tx.get::<game_knowledge::Knowledge>()
+        .ok()
+        .and_then(|k| k.0.get(&p))
+        .map(|facts| {
+            game_food_memory::with_stores(p, facts, tx.get().expect("objects"), |s| {
+                s.all()
+                    .filter_map(|store| {
+                        let location = store.location.as_ref()?;
+                        ((location.carrier == Some(p) || location.area == area)
+                            && store.stock.as_ref()?.get(&good).copied().unwrap_or(0) >= quantity)
+                            .then_some(store.id)
+                    })
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect()
+            })
+        })
+        .unwrap_or_default()
 }
 fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     let _measurement = game_diagnostics::span("care planning");
@@ -62,26 +119,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     let supplies = tx.get::<game_health::TreatmentRules>()?;
     let cargo = tx.get::<game_cargo::Cargo>()?;
     let positions = tx.get::<game_transport::Positions>()?;
-    let known = tx
-        .get::<game_knowledge::Knowledge>()
-        .ok()
-        .and_then(|k| k.0.get(&person))
-        .map(|facts| {
-            game_food_memory::with_stores(
-                person,
-                facts,
-                tx.get::<game_objects::Objects>().unwrap(),
-                |s| {
-                    s.among(
-                        cargo
-                            .stores_with(supplies.supply_object, supplies.supply)
-                            .into_iter()
-                            .filter(|id| cargo.0[id].area(positions) == Some(area)),
-                    )
-                },
-            )
-        })
-        .unwrap_or_default();
+    let known = known_supplies(tx, person, supplies.supply_object, supplies.supply, area);
     let claims = game_property::ClaimCosts::new(tx, person);
     let inventory = known
         .into_iter()
@@ -146,11 +184,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
             } else {
                 empathy * altruism / 500 + i64::from(duty) * 8 + i64::from(tie.affection) * 8
                     - i64::from(tie.grievance) * 8
-                    + if tx.get::<Care>().unwrap().requests.get(p) == Some(&person) {
-                        350
-                    } else {
-                        0
-                    }
+                    + if requested(tx, *p, person) { 350 } else { 0 }
             };
             let concern = concern - game_property::reluctance(tx, person, supplies) * 5;
             (concern >= 600).then_some((
@@ -180,9 +214,58 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     }
     Ok(false)
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct Treatment {
+    caregiver: PersonId,
+    patient: PersonId,
+    supplies: InventoryId,
+}
+impl Request for Treatment {
+    const KEY: &'static str = "care.treatment";
+    type Response = game_choice::Outcome;
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("care", 1)?;
     b.resource::<Care>()?;
+    b.request::<Appeal>(|tx, r| {
+        let need = injury(tx, r.0.patient)?;
+        let delivered = tx.attempt(r.0.clone()).is_ok_and(|sent| sent);
+        let now = tx.now();
+        let care = tx.edit::<Care>()?;
+        care.sought
+            .entry(r.0.patient)
+            .or_default()
+            .insert(r.0.caregiver, (now, need));
+        care.request_cursor.insert(r.0.patient, r.0.caregiver);
+        Ok(if delivered {
+            game_choice::Outcome::Performed
+        } else {
+            game_choice::Outcome::Reconsider
+        })
+    })?;
+    b.request::<Treatment>(|tx, r| {
+        require(
+            !tx.get::<Care>()?.assigned.contains_key(&r.patient),
+            "patient already has a caregiver",
+        )?;
+        if tx
+            .attempt(game_health::Treat {
+                caregiver: r.caregiver,
+                patient: r.patient,
+                supplies: r.supplies,
+            })
+            .is_err()
+        {
+            let _ = tx.attempt(game_knowledge::ObserveStore {
+                person: r.caregiver,
+                inventory: r.supplies,
+            });
+            return Ok(game_choice::Outcome::Reconsider);
+        }
+        tx.edit::<Care>()?.assigned.insert(r.patient, r.caregiver);
+        tx.edit::<Care>()?.helping.insert(r.caregiver, r.patient);
+        Ok(game_choice::Outcome::Performed)
+    })?;
     game_nurture::register(b)?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Care>()?.enabled = true;
@@ -199,11 +282,219 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             Some(r.caregiver) != tx.get::<game_lineage::Lineage>()?.current,
             "player decides aid",
         )?;
-        tx.edit::<Care>()?.requests.insert(r.patient, r.caregiver);
-        consider(tx, r.caregiver)
+        let injury = injury(tx, r.patient)?;
+        let now = tx.now();
+        if tx
+            .get::<Care>()?
+            .received
+            .get(&r.caregiver)
+            .and_then(|row| row.get(&r.patient))
+            == Some(&(now, injury))
+        {
+            return Ok(false);
+        }
+        let spoken = game_vitality::ability(tx, r.patient, "vocalization") > 0
+            && game_vitality::ability(tx, r.caregiver, "hearing") > 0;
+        let shown = game_vitality::ability(tx, r.patient, "gesturing") > 0
+            && game_vitality::ability(tx, r.caregiver, "interpretation") > 0;
+        require(spoken || shown, "no available channel for requesting aid")?;
+        let care = tx.edit::<Care>()?;
+        care.received
+            .entry(r.caregiver)
+            .or_default()
+            .insert(r.patient, (now, injury));
+        care.requests.insert(r.patient, r.caregiver);
+        care.sought
+            .entry(r.patient)
+            .or_default()
+            .insert(r.caregiver, (now, injury));
+        if tx.get::<game_characters::Minds>().is_ok_and(|m| m.running) {
+            tx.notify(game_choice::Changed {
+                person: r.caregiver,
+            })?;
+        } else {
+            consider(tx, r.caregiver)?;
+        }
+        Ok(true)
     })?;
     b.request::<Consider>(|tx, r| consider(tx, r.person))?;
-    b.subscribe::<game_characters::IdleReview>("care.help", |tx, e| {
+    game_choice::provider(b, "care.help", |tx, e| {
+        if game_choice::collecting(tx, e.person) {
+            if !tx.get::<Care>()?.enabled {
+                return Ok(());
+            }
+            let p = e.person;
+            let Ok(area) = game_transport::area(tx.get()?, p) else {
+                return Ok(());
+            };
+            let body = &tx.get::<game_physiology::Bodies>()?.people[&p];
+            let injury = body
+                .maximum(&tx.get::<game_physiology::Bodies>()?.rules)
+                .saturating_sub(body.health)
+                .min(100);
+            let helpers: Vec<_> = tx
+                .get::<game_social_life::SocialLife>()?
+                .residents
+                .get(&area)
+                .into_iter()
+                .flat_map(|r| {
+                    r.scan_after(
+                        tx.get::<Care>()
+                            .unwrap()
+                            .request_cursor
+                            .get(&p)
+                            .or(Some(&p)),
+                    )
+                    .chain(r.iter())
+                    .take(r.len().min(16))
+                })
+                .map(|(q, _)| *q)
+                .filter(|q| {
+                    *q != p && Some(*q) != tx.get::<game_lineage::Lineage>().unwrap().current
+                })
+                .take(8)
+                .collect();
+            for helper in helpers {
+                let previous = tx
+                    .get::<Care>()?
+                    .sought
+                    .get(&p)
+                    .and_then(|r| r.get(&helper));
+                let need = previous.map_or(injury, |(at, old)| {
+                    injury.saturating_sub(*old)
+                        + injury * ((tx.now().0.saturating_sub(at.0) / HOUR.0).min(24)) / 24
+                });
+                if need > 0
+                    && (game_vitality::ability(tx, p, "vocalization") > 0
+                        || game_vitality::ability(tx, p, "gesturing") > 0)
+                {
+                    let regard = tx
+                        .get::<game_relationships::Social>()?
+                        .relationships
+                        .get(&p)
+                        .and_then(|r| r.get(&helper))
+                        .map_or(0, |r| {
+                            i64::from(
+                                r.affection + r.trust + r.respect + r.admiration
+                                    - r.fear
+                                    - r.grievance,
+                            )
+                        })
+                        .clamp(-75, 150);
+                    let need = need as i64 * (100 + regard) / 100;
+                    game_choice::offer(
+                        tx,
+                        p,
+                        format!("aid:request:{}", helper.0),
+                        game_choice::motive(need.min(1000), 0, 0, 2, 0),
+                        game_choice::Undertake {
+                            person: p,
+                            kind: "request-aid".into(),
+                            duration: MINUTE,
+                            request: Pending::new(Appeal(RequestAid {
+                                patient: p,
+                                caregiver: helper,
+                            }))?,
+                        },
+                    )?;
+                }
+            }
+            let rules = tx.get::<game_health::TreatmentRules>()?;
+            let supplies = rules.supply_object;
+            let quantity = rules.supply;
+            let inventories = known_supplies(tx, p, supplies, quantity, area);
+            let peers: Vec<_> = std::iter::once(p)
+                .chain(
+                    tx.get::<game_social_life::SocialLife>()?
+                        .residents
+                        .get(&area)
+                        .into_iter()
+                        .flat_map(|r| r.keys())
+                        .copied()
+                        .filter(|q| *q != p),
+                )
+                .take(32)
+                .collect();
+            for patient in peers {
+                let body = &tx.get::<game_physiology::Bodies>()?.people[&patient];
+                let injury = body
+                    .maximum(&tx.get::<game_physiology::Bodies>()?.rules)
+                    .saturating_sub(body.health)
+                    .min(100) as i64;
+                if !body.alive || injury == 0 || tx.get::<Care>()?.assigned.contains_key(&patient) {
+                    continue;
+                }
+                let tie = tx
+                    .get::<game_relationships::Social>()?
+                    .relationships
+                    .get(&p)
+                    .and_then(|r| r.get(&patient))
+                    .cloned()
+                    .unwrap_or_default();
+                let duty = tx
+                    .get::<game_relationships::Social>()?
+                    .values
+                    .get(&p)
+                    .and_then(|v| v.get("care"))
+                    .copied()
+                    .unwrap_or(0);
+                let mut concern = if patient == p {
+                    injury * 3
+                } else {
+                    injury
+                        * game_vitality::disposition(tx, p, "empathy")
+                        * game_vitality::disposition(tx, p, "altruism")
+                        / 500000
+                        + i64::from(tie.affection - tie.grievance + duty * 2)
+                };
+                if patient != p && requested(tx, patient, p) && concern > 0 {
+                    concern += concern / 2;
+                }
+                if inventories.is_empty()
+                    && concern > 0
+                    && tx.registered::<game_livelihoods::Supply>()
+                {
+                    let object = tx
+                        .get::<game_objects::Objects>()?
+                        .items
+                        .iter()
+                        .find(|(_, o)| o.id == supplies)
+                        .map(|(key, _)| key.clone());
+                    if let Some(object) = object {
+                        game_choice::offer(
+                            tx,
+                            p,
+                            format!("care:supplies:{}:{}", supplies.0, patient.0),
+                            game_choice::motive(concern, 0, 0, 10, 0),
+                            game_livelihoods::Supply {
+                                person: p,
+                                goal: game_livelihoods::Goal {
+                                    object,
+                                    quantity,
+                                    priority: 100,
+                                    affinity: "altruism".into(),
+                                    concept: "care".into(),
+                                },
+                            },
+                        )?;
+                    }
+                }
+                for inventory in &inventories {
+                    game_choice::offer(
+                        tx,
+                        p,
+                        format!("care:treatment:{}:{}", patient.0, inventory.0),
+                        game_choice::motive(concern, 0, 0, 5, 0),
+                        Treatment {
+                            caregiver: p,
+                            patient,
+                            supplies: *inventory,
+                        },
+                    )?;
+                }
+            }
+            return Ok(());
+        }
         tx.call(Consider { person: e.person })?;
         Ok(())
     })?;

@@ -160,10 +160,73 @@ impl Event for Departed {
 impl Event for Arrived {
     const KEY: &'static str = "transport.arrived";
 }
+/// Simultaneous travellers at the same physical point can perceive one another.
+pub fn together(positions: &Positions, a: PersonId, b: PersonId) -> bool {
+    match (positions.0.get(&a), positions.0.get(&b)) {
+        (Some(Location::At(a)), Some(Location::At(b))) => a == b,
+        (
+            Some(Location::Transit {
+                from: a,
+                to: b,
+                departed: c,
+                arrives: d,
+                ..
+            }),
+            Some(Location::Transit {
+                from: w,
+                to: x,
+                departed: y,
+                arrives: z,
+                ..
+            }),
+        ) => (a, b, c, d) == (w, x, y, z),
+        (
+            Some(Location::Road {
+                from: a,
+                to: b,
+                elapsed: c,
+                duration: d,
+            }),
+            Some(Location::Road {
+                from: w,
+                to: x,
+                elapsed: y,
+                duration: z,
+            }),
+        ) => (a, b, c, d) == (w, x, y, z),
+        _ => false,
+    }
+}
+pub fn carrier(tx: &Transaction<'_>, person: PersonId) -> Option<PersonId> {
+    tx.get::<Riders>().ok()?.moving.get(&person).copied()
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct CarriedMass {
+    pub person: PersonId,
+}
+impl Request for CarriedMass {
+    const KEY: &'static str = "transport.carried-mass";
+    type Response = u64;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Dismount {
+    pub person: PersonId,
+}
+impl Request for Dismount {
+    const KEY: &'static str = "transport.dismount";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("transport", 2)?;
     b.resource::<Positions>()?;
     b.resource::<Riders>()?;
+    b.request::<Dismount>(|tx, r| {
+        require(
+            carrier(tx, r.person).is_some() && game_vitality::can_walk(tx, r.person),
+            "cannot dismount independently",
+        )?;
+        tx.call(Cancel { person: r.person })
+    })?;
     b.validate_save(|h| {
         let riders = h.get::<Riders>()?;
         let positions = h.get::<Positions>()?;
@@ -257,7 +320,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             _ => return Err(Error::Rejected("already travelling".into())),
         };
         tx.edit::<Riders>()?.departures.insert(r.person, location);
-        let arrives = begin(tx, r.person, from, r.destination, duration)?;
+        let arrives = begin(tx, r.person, from, r.destination, duration, true)?;
         tx.emit(
             Departed {
                 person: r.person,
@@ -291,14 +354,54 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 && tx.get::<Riders>()?.departures.contains_key(&r.carrier),
             "passenger is not at departure",
         )?;
+        let load = if tx.registered::<CarriedMass>() {
+            tx.call(CarriedMass { person: r.carrier })?
+        } else {
+            0
+        };
+        let passengers = tx
+            .get::<Riders>()?
+            .moving
+            .iter()
+            .filter(|(_, p)| **p == r.carrier)
+            .map(|(p, _)| game_vitality::ability(tx, *p, "size"))
+            .sum::<u64>();
+        let capacity = game_vitality::factor(game_vitality::ability(tx, r.carrier, "strength"))
+            .saturating_mul(2)
+            .saturating_add(game_vitality::factor(game_vitality::ability(
+                tx,
+                r.carrier,
+                "endurance",
+            )));
+        require(
+            load.saturating_add(passengers)
+                .saturating_add(game_vitality::ability(tx, r.passenger, "size"))
+                <= capacity,
+            "passenger exceeds carrying capacity",
+        )?;
+        if tx
+            .get::<Actions>()?
+            .0
+            .get(&r.passenger)
+            .is_some_and(|a| !["rest", "express-need"].contains(&a.kind.as_str()))
+        {
+            tx.cancel_action(r.passenger)?;
+        }
         let duration = SimDuration(arrives.0.saturating_sub(tx.now().0));
-        let arrives = begin(tx, r.passenger, from, r.destination, duration)?;
+        let arrives = begin(tx, r.passenger, from, r.destination, duration, false)?;
         tx.edit::<Riders>()?.moving.insert(r.passenger, r.carrier);
         Ok(arrives)
     })?;
     b.request::<Arrive>(|tx, r| {
         tx.edit::<Riders>()?.moving.remove(&r.person);
-        tx.finish_action(r.person, "travel")?;
+        if tx
+            .get::<Actions>()?
+            .0
+            .get(&r.person)
+            .is_some_and(|a| a.kind == "travel")
+        {
+            tx.finish_action(r.person, "travel")?;
+        }
         tx.edit::<Positions>()?
             .0
             .insert(r.person, Location::At(r.destination));
@@ -320,7 +423,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .map(|(p, _)| *p)
             .collect();
         for passenger in passengers {
-            tx.cancel_action(passenger)?;
+            tx.call(Cancel { person: passenger })?;
         }
         if let Some(Location::Transit {
             from,
@@ -360,10 +463,13 @@ fn begin(
     from: AreaId,
     destination: AreaId,
     duration: SimDuration,
+    active: bool,
 ) -> Result<SimTime> {
     let now = tx.now();
     let arrives = now.after(duration)?;
-    tx.start_action(person, "travel", Some(arrives), Cancel { person })?;
+    if active {
+        tx.start_action(person, "travel", Some(arrives), Cancel { person })?;
+    }
     let job = tx.schedule(
         arrives,
         10,

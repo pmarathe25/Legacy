@@ -99,9 +99,55 @@ pub struct Defaulted {
 impl Event for Defaulted {
     const KEY: &'static str = "agreements.defaulted";
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Assign {
+    pub creditor: PersonId,
+    pub recipient: PersonId,
+    pub agreement: AgreementId,
+    pub term: usize,
+    pub to: InventoryId,
+}
+impl Request for Assign {
+    const KEY: &'static str = "agreements.assign";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Settled {
+    pub debtor: PersonId,
+    pub creditor: PersonId,
+    pub agreement: AgreementId,
+    pub term: usize,
+}
+impl Event for Settled {
+    const KEY: &'static str = "agreements.settled";
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("agreements", 1)?;
     b.resource::<Agreements>()?;
+    b.request::<Assign>(|tx, r| {
+        let a = tx
+            .edit::<Agreements>()?
+            .0
+            .get_mut(&r.agreement)
+            .ok_or_else(|| Error::Missing("agreement".into()))?;
+        require(
+            a.status == Status::Active && !a.fulfilled.contains(&r.term),
+            "promise unavailable",
+        )?;
+        let t = a
+            .terms
+            .get_mut(r.term)
+            .ok_or_else(|| Error::Missing("term".into()))?;
+        require(
+            t.creditor == r.creditor && r.creditor != r.recipient,
+            "not the creditor or same recipient",
+        )?;
+        t.creditor = r.recipient;
+        t.to = r.to;
+        a.parties.insert(r.recipient);
+        a.accepted.insert(r.recipient);
+        Ok(())
+    })?;
     b.request::<Offer>(|tx, r| {
         require(r.parties.contains(&r.proposer), "proposer is not a party")?;
         require(
@@ -195,7 +241,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         if a.fulfilled.len() == a.terms.len() {
             a.status = Status::Complete;
         }
-        Ok(())
+        tx.emit(
+            Settled {
+                debtor: r.person,
+                creditor: t.creditor,
+                agreement: r.agreement,
+                term: r.term,
+            },
+            vec![r.person, t.creditor],
+        )
     })?;
     b.request::<Due>(|tx, r| {
         let a = tx.edit::<Agreements>()?.0.get_mut(&r.agreement).unwrap();

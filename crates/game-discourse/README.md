@@ -1,15 +1,33 @@
 # game-discourse
 
-Composes personal advocacy during completed conversations. Assertiveness and conviction affect whether someone presses a learned position; foresight, honesty, sociability, aggression, personal attachment, and previous experience affect their approach. Genes express characteristics through traits and vitality. They do not encode the contents of an opinion.
+Personal advocacy, persuasion tactics, third-party citations, and coerced public endorsements during conversations.
 
-Speakers can explain, appeal to a relationship, cite another person, or threaten a particular public endorsement. An endorsement may be invented from a known contact; no hidden truth flag is broadcast. Listeners hear only local speech and assess it using their own openness, conviction, independence, experience, and directed trust, affection, respect, and admiration. Revisions are gradual and can be rejected even when a speaker is admired.
+**Why it matters:** Beliefs and reputations spread through argument, appeal, reputation, and threat. `game-discourse` lets speakers advocate learned positions using tactics shaped by their personality—while listeners weigh claims critically and spot contradictions.
 
-Relationships owns heard expressions and regard. A later direct statement can contradict reported testimony and reduce that observer's estimate of the reporter's credibility. This is an interpretation of conflicting evidence: statements can be false or outdated. It does not inspect the cited person's private beliefs or notify absent people. Conversation warmth likewise uses remembered statements.
+## Responsibilities
 
-Pressure owns physical escalation, resistance, escape, and withdrawal. Its specific endorsement purpose can produce a publicly coerced statement while leaving private conviction and allegiance unchanged. Allegiance demands retain their separate meaning. Institutional records and permissions are changed only through their existing owners.
+- **Conversational Advocacy:** Composes persuasion attempts onto completed `game-social-life` conversations when a speaker's assertiveness and conviction motivate pressing a position.
+- **Tactical Approach Selection:** Chooses between reasoned explanation, relationship appeal, citing a third party's stance, or threatening coercion based on foresight, honesty, sociability, aggression, and past experience.
+- **Listener Evaluation & Credibility:** Evaluates heard claims through the listener's openness, conviction, independence, and directed bonds (`game-relationships`), penalizing a reporter's credibility if a cited person later states a contradicting view directly.
+- **Coerced Endorsements:** Connects with `game-pressure` so physical intimidation can force a public endorsement (`HearOpinion` with visible coercion context) without altering the victim's private conviction.
 
-Received food and treatment can shape the recipient's directed impressions. Food offers require recipient assent and availability; known effects are evaluated through the recipient's own dietary experience. Caregivers select foods from their own knowledge.
+## Boundaries
 
-`plugin` explicitly registers advocacy independently of affiliation; persistent impressions still belong to relationships. Enabled communication requires the listener to understand the expressed concept. Explanations can introduce a word using the speaker's own familiar vocabulary. `Spoken` contains public claims and observed delivery quality, with no listener belief delta or acceptance flag. Compact history logs retain first statements by speaker, topic, stance range, and coercion context while counting all speech.
+- **No Genetic Opinions:** Genes influence personality traits and vitality (`game-traits`, `game-vitality`), never the content of an opinion.
+- **No Direct Bond Ownership:** Stores all resulting heard opinions, credibility shifts, and regard changes in `game-relationships`.
 
-Run `cargo test -p game-discourse`. Tests cover personality and learned content, respected but disliked speakers, resistance to admired speakers, false endorsements and local counterevidence, specific coercion without private conversion or allegiance, recipient assent, and save/load of pending pressure.
+## How It Works
+
+- **Public Speech Events (`Spoken`):** Emits public claims and observed delivery quality (gated by `game-communication` vocabulary comprehension) without leaking hidden truth flags or private listener belief deltas.
+- **Gift & Care Impressions:** Also evaluates voluntary food and care offers through the recipient's own dietary memory and consent, updating directed gratitude and regard.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` registers discourse hooks on completed conversations, gift/care impression listeners, and compact speech history logs in `game-assembly`.
+- **Requests & Events:** Emits `Spoken` events and dispatches `game-relationships::HearOpinion`, `ReviseOpinion`, and `Regard` updates.
+- **Callers:** Triggered by `game-social-life`, `game-pressure`, `game-nurture`, and `game-care`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-transport`, `game-physiology`, `game-vitality`, `game-traits`, `game-communication`, `game-knowledge`, `game-food-memory`, `game-relationships`, `game-social-life`, `game-pressure`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-discourse`) cover personality-driven advocacy, resistance to admired speakers, false citations and counterevidence, coerced statements vs. private belief, and save/load consistency.

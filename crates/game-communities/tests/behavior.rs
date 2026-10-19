@@ -2,6 +2,7 @@ use game_core::*;
 use game_sim::*;
 fn builder() -> Builder {
     let mut b = Builder::new();
+    game_choice::plugin(&mut b).unwrap();
     game_land::plugin(&mut b).unwrap();
     game_transport::plugin(&mut b).unwrap();
     game_objects::plugin(&mut b).unwrap();
@@ -11,6 +12,7 @@ fn builder() -> Builder {
     game_skills::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_social_life::plugin(&mut b).unwrap();
     game_lineage::plugin(&mut b).unwrap();
@@ -22,7 +24,14 @@ fn builder() -> Builder {
     b
 }
 fn setup(sharing: i32, enabled: bool) -> (Host, Vec<PersonId>, Vec<InventoryId>) {
-    let mut h = builder().build(1, 1).unwrap();
+    setup_builder(builder(), sharing, enabled)
+}
+fn setup_builder(
+    b: Builder,
+    sharing: i32,
+    enabled: bool,
+) -> (Host, Vec<PersonId>, Vec<InventoryId>) {
+    let mut h = b.build(1, 1).unwrap();
     h.dispatch(game_traits::Install(
         game_traits::load(&mut game_content::Store::standard()).unwrap(),
     ))
@@ -505,4 +514,175 @@ fn members_meeting_elsewhere_keep_their_institutions_original_locality_index() {
     assert!(!state.places.contains_key(&away));
     assert!(game_communities::view(&h, p[0]).unwrap().is_empty());
     builder().load(&h.save().unwrap(), 4).unwrap();
+}
+
+#[test]
+fn an_unrealized_compact_is_not_reported_as_a_performed_choice() {
+    let (mut h, p, _) = setup(-10, true);
+    let before = h.save().unwrap();
+    assert!(
+        h.dispatch(game_choice::Run(
+            Pending::new(game_communities::Cooperate {
+                person: p[0],
+                other: p[1],
+            })
+            .unwrap()
+        ))
+        .is_err()
+    );
+    assert_eq!(h.save().unwrap(), before);
+    // Refusal is feedback, not a prohibition: changed beliefs allow another attempt.
+    for person in &p {
+        beliefs(&mut h, *person, 10, 0);
+    }
+    assert!(
+        h.dispatch(game_communities::Cooperate {
+            person: p[0],
+            other: p[1]
+        })
+        .is_ok()
+    );
+}
+
+#[test]
+fn fulfilled_compacts_stop_claiming_progress_and_can_be_renegotiated() {
+    let (mut h, p, packs) = setup(10, true);
+    assert!(
+        h.dispatch(game_communities::Cooperate {
+            person: p[0],
+            other: p[1]
+        })
+        .is_ok()
+    );
+    let before = h.save().unwrap();
+    assert!(
+        h.dispatch(game_choice::Run(
+            Pending::new(game_communities::Cooperate {
+                person: p[0],
+                other: p[1],
+            })
+            .unwrap()
+        ))
+        .is_err()
+    );
+    assert_eq!(h.save().unwrap(), before);
+    h.dispatch(game_property::Permit {
+        issuer: p[0],
+        person: p[1],
+        inventory: packs[0],
+        allow: false,
+    })
+    .unwrap();
+    assert!(
+        h.dispatch(game_communities::Cooperate {
+            person: p[0],
+            other: p[1]
+        })
+        .is_ok()
+    );
+    assert!(
+        h.get::<game_property::Property>()
+            .unwrap()
+            .allowed(p[1], packs[0])
+    );
+    assert!(
+        h.dispatch(game_communities::Cooperate {
+            person: p[0],
+            other: p[1]
+        })
+        .is_err()
+    );
+}
+
+#[test]
+fn pair_organization_reports_no_progress_for_an_existing_larger_group() {
+    let (mut h, p, _) = setup(10, true);
+    assert!(
+        h.dispatch(game_communities::Cooperate {
+            person: p[0],
+            other: p[1]
+        })
+        .is_ok()
+    );
+    let id = h.get::<game_communities::Communities>().unwrap().members[&p[0]];
+    let third = h
+        .dispatch(game_physiology::Create {
+            kind: game_physiology::Kind::Mortal,
+            born: SimTime(0),
+        })
+        .unwrap();
+    h.dispatch(game_institutions::Join {
+        institution: id,
+        person: third,
+        responses: [p[0], p[1], third].into(),
+    })
+    .unwrap();
+    h.dispatch(game_communities::Membership {
+        institution: id,
+        person: third,
+        attachment: Some(game_communities::Attachment::Cooperation),
+    })
+    .unwrap();
+    let before = h.save().unwrap();
+    let mut loaded = builder().load(&before, 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        assert!(
+            host.dispatch(game_choice::Run(
+                Pending::new(game_communities::Cooperate {
+                    person: p[0],
+                    other: p[1]
+                })
+                .unwrap()
+            ))
+            .is_err()
+        );
+        assert_eq!(host.save().unwrap(), before);
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Autonomous;
+impl Request for Autonomous {
+    const KEY: &'static str = "test.autonomous";
+    type Response = ();
+}
+#[test]
+fn live_encounters_can_teach_shared_decisions_without_automatically_enacting_them() {
+    let mut b = builder();
+    b.plugin("test-mind", 1).unwrap();
+    b.resource::<game_characters::Minds>().unwrap();
+    b.request::<Autonomous>(|tx, _| {
+        tx.edit::<game_characters::Minds>()?.running = true;
+        Ok(())
+    })
+    .unwrap();
+    let (mut h, people, _) = setup_builder(b, 30, true);
+    for p in &people {
+        h.dispatch(game_relationships::DefineBeliefs {
+            person: *p,
+            beliefs: game_relationships::Beliefs {
+                sharing: 30,
+                authority: -20,
+                honesty: 0,
+            },
+        })
+        .unwrap();
+    }
+    h.dispatch(Autonomous).unwrap();
+    let end = h
+        .dispatch(game_social_life::Talk {
+            person: people[0],
+            other: people[1],
+        })
+        .unwrap();
+    while h.advance(end, 128).unwrap().stop == Stop::Budget {}
+    assert!(
+        h.get::<game_relationships::Social>().unwrap().values[&people[0]]["shared-decisions"] > 0
+    );
+    assert!(
+        h.get::<game_institutions::Institutions>()
+            .unwrap()
+            .groups
+            .is_empty()
+    );
 }

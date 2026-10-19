@@ -17,8 +17,15 @@ impl Input<'_> {
     }
 }
 trait Payload: Send + Sync {
+    fn payload(&self) -> &dyn erased_serde::Serialize;
     fn key(&self) -> &str;
-    fn encode(&self) -> Result<Envelope>;
+    fn encode(&self) -> Result<Envelope> {
+        Ok(Envelope {
+            key: self.key().into(),
+            payload: erased_serde::serialize(self.payload(), serde_json::value::Serializer)
+                .map_err(registry::json_error)?,
+        })
+    }
     fn invoke(&self, tx: &mut Transaction<'_>) -> Result<Value>;
     fn bound(&self) -> bool {
         true
@@ -28,14 +35,11 @@ trait Payload: Send + Sync {
     }
 }
 impl<R: Request> Payload for R {
+    fn payload(&self) -> &dyn erased_serde::Serialize {
+        self
+    }
     fn key(&self) -> &str {
         R::KEY
-    }
-    fn encode(&self) -> Result<Envelope> {
-        Ok(Envelope {
-            key: R::KEY.into(),
-            payload: serde_json::to_value(self).map_err(registry::json_error)?,
-        })
     }
     fn invoke(&self, tx: &mut Transaction<'_>) -> Result<Value> {
         serde_json::to_value(tx.call(self.clone())?).map_err(registry::json_error)
@@ -47,14 +51,11 @@ struct Unbound {
     payload: Box<serde_json::value::RawValue>,
 }
 impl Payload for Unbound {
+    fn payload(&self) -> &dyn erased_serde::Serialize {
+        &self.payload
+    }
     fn key(&self) -> &str {
         &self.key
-    }
-    fn encode(&self) -> Result<Envelope> {
-        Ok(Envelope {
-            key: self.key.clone(),
-            payload: serde_json::from_str(self.payload.get()).map_err(registry::json_error)?,
-        })
     }
     fn invoke(&self, _: &mut Transaction<'_>) -> Result<Value> {
         Err(Error::InvalidSave("unbound request".into()))
@@ -71,10 +72,15 @@ impl Payload for Unbound {
 #[derive(Clone)]
 pub struct Pending(Arc<dyn Payload>);
 impl Pending {
-    pub(crate) fn new<R: Request>(request: R) -> Result<Self> {
+    pub fn new<R: Request>(request: R) -> Result<Self> {
         // Reject non-JSON requests before committing, without retaining a JSON tree.
         serde_json::to_writer(std::io::sink(), &request).map_err(registry::json_error)?;
-        Ok(Self(Arc::new(request)))
+        Ok(Self::immediate(request))
+    }
+    /// Like a typed Transaction::call, for work consumed within the current transaction.
+    /// Retained work must pass through new(), which validates nested payloads as well.
+    pub fn immediate<R: Request>(request: R) -> Self {
+        Self(Arc::new(request))
     }
     pub fn key(&self) -> &str {
         self.0.key()
@@ -94,10 +100,16 @@ impl Pending {
 }
 impl Serialize for Pending {
     fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
-        self.0
-            .encode()
-            .map_err(serde::ser::Error::custom)?
-            .serialize(serializer)
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            key: &'a str,
+            payload: &'a dyn erased_serde::Serialize,
+        }
+        Wire {
+            key: self.key(),
+            payload: self.0.payload(),
+        }
+        .serialize(serializer)
     }
 }
 impl<'de> Deserialize<'de> for Pending {

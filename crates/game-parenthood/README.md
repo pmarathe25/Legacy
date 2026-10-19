@@ -1,9 +1,30 @@
 # game-parenthood
 
-Prospective parents weigh their own attachment, learned interest in kinship, current hunger, fatigue, stress, fear, grievance, and the care still needed by their existing children. Both must want another child. Independent adult children consume no lifetime allowance; empathy and patience do not determine eligibility.
+`game-parenthood` evaluates voluntary reproductive decisions between household partners based on mutual attachment, current condition, and existing child-care demands.
 
-This owner considers intentions after a partnership forms and during ordinary idle reviews. It owns no population target or replacement births. Lifecycle validates biological maturity, reproductive aging, locality, and existing pregnancy, then schedules real gestation. Households owns partnerships and dependent care. A registered partnership does not imply continuing consent to parenthood.
+**Why it matters:** Birth rates in long simulations emerge from partners' actual well-being, affection, kinship values, and current caregiving load rather than demographic targets or forced replacement rules.
 
-Current limitations include one recorded partner per person, a shared gestation profile, and no distinct reproductive sexes. Lifecycle's fertile window is a coarse fraction of inherited natural lifespan, rather than a complete reproductive biology model. Parenthood does not choose births to improve population statistics.
+## Responsibilities
 
-Run `cargo test -p game-campaign` for composed reproductive choice, refusal under care demands, inheritance, and save/load checks.
+- **Mutual desire evaluation (`Consider`):** Checks whether co-located household partners both desire a child given their affection, trust, learned kinship value, hunger, fatigue, stress, fear, grievance, and current dependent children.
+- **Conception trigger:** Submits a reproductive proposal via [`game-choice`](../game-choice/README.md) (or invokes [`game-lifecycle::Conceive`](../game-lifecycle/README.md)) when both partners consent.
+
+## Boundaries
+
+- **Voluntary intention only:** Owns no persistent population target or fertility state; [`game-households`](../game-households/README.md) owns partnerships and dependent rosters, and [`game-lifecycle`](../game-lifecycle/README.md) enforces biological fertility and gestation.
+
+## How It Works
+
+- **Dependent load sensitivity:** Existing dependent children impose a caregiving load that reduces desire for another child until older children mature into independent adults.
+- **Bilateral consent:** Both partners must independently score positive willingness at the same place and time; partnership alone never implies automatic conception.
+
+## Game Integration
+
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`parenthood`).
+- **Requests & Events:** Handles `Consider`; registers with [`game-choice`](../game-choice/README.md) and subscribes to `game_households::Partnered`.
+- **Callers:** Enabled in generated worlds via [`game-campaign`](../game-campaign/README.md).
+
+## Dependencies & Testing
+
+- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-choice`](../game-choice/README.md), [`game-households`](../game-households/README.md), [`game-lifecycle`](../game-lifecycle/README.md), [`game-physiology`](../game-physiology/README.md), [`game-relationships`](../game-relationships/README.md), [`game-vitality`](../game-vitality/README.md), [`game-lineage`](../game-lineage/README.md), [`game-characters`](../game-characters/README.md).
+- **Testing:** Exercised by `cargo test -p game-campaign` for voluntary conception, refusal under high care load or distress, and save/load continuity.

@@ -27,6 +27,7 @@ game-ecology.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-testimony.workspace = true
 game-content.workspace = true
 serde_json.workspace=true
 game-skills.workspace = true

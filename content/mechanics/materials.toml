@@ -1,0 +1,30 @@
+id = "mechanics/materials"
+version = 1
+[data.materials.timber]
+span = 12
+limit = 3600
+efficiency = 850
+[data.materials.bamboo]
+span = 16
+limit = 1800
+efficiency = 900
+[data.materials.stone]
+span = 6
+limit = 10000
+efficiency = 700
+[data.materials.iron]
+span = 12
+limit = 20000
+efficiency = 950
+[data.materials.bronze]
+span = 12
+limit = 12000
+efficiency = 930
+[data.materials.fiberboard]
+span = 16
+limit = 6000
+efficiency = 900
+[data.materials.laminated-beam]
+span = 24
+limit = 12000
+efficiency = 900

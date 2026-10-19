@@ -1,5 +1,10 @@
 id = "traits/abilities"
 version = 1
+[data.traits.attention]
+name = "Sustained attention"
+minimum = 0
+maximum = 16000
+default = 1000
 [data.traits.intelligence]
 name = "Intelligence"
 minimum = 0
@@ -83,4 +88,11 @@ default = 1000
 name = "Recovery potential"
 minimum = 0
 maximum = 16000
+default = 1000
+
+# A physical reproductive phenotype; preferences remain separate.
+[data.traits.reproductive_role]
+name = "Reproductive role"
+minimum = 0
+maximum = 2000
 default = 1000

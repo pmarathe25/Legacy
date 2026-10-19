@@ -1,13 +1,33 @@
 # game-social-life
 
-Owns local company, contact history, and timed conversations. Character autonomy asks `SeekCompany` when immediate food and rest needs are satisfied. Sociability and learned fellowship values affect how often someone seeks company. Directed affection, trust, fear, grievance, and the last companion influence selection. A rotating local window bounds each search; refused searches back off. The autonomy caller excludes the current player from implicit consent.
+Timed local conversations (`Talk`), recipient consent, contact history, and area residency indexing.
 
-`Talk` checks that both people are alive, capable, available, and together. The recipient can refuse based on their own relationship. Both participants occupy the common action clock for the configured duration. Completion changes each person's relationship and fellowship value separately, according to expressed beliefs and empathy. Each speaker shares one of their own remembered facts through `game-knowledge`; reports retain evidence time and reduced confidence. A conversation can strengthen one person's affection while worsening the other's.
+**Why it matters:** People form bonds and exchange knowledge face-to-face. `game-social-life` enforces co-location, mutual availability, and recipient consent for conversations while updating each participant's feelings and memories independently.
 
-Cancellation, urgent hunger interruption, or death releases both participants and cancels completion. Interrupted conversations grant no encounter credit. Movement and mortality update an area index through receiver-owned requests and event subscriptions. No independent polling loop is added. `neighbors` exposes only people currently present with the observer and their visible activity; it reveals no private beliefs or scores.
+## Responsibilities
 
-Generated worlds use [default rules](../../content/social-life/default.toml). Explicit developer fixtures select `social_life = "fixture"` from `tools/fixtures/content`. Registration supplies an initial name; typed rename events keep the naming owner's history consistent. When installed, the naming owner supplies observer-specific forms of address. Initial beliefs, values, and directed bonds belong to `game-relationships`. All resolved rules, search cursors, recent contacts, and in-flight pairs persist in saves. Validation checks pair symmetry, actions, bodies, and the locality index.
+- **Physical Conversation (`Talk`):** Verifies both participants are alive, capable, available, and co-located; checks recipient consent based on their directed relationship; and occupies both action clocks for the conversation duration.
+- **Asymmetric Impression & Fact Sharing:** Updates each speaker's relationship (`game-relationships`) and fellowship value separately according to expressed beliefs and empathy, and exchanges one remembered fact via `game-testimony`.
+- **Contact History & Residency:** Tracks recent encounter timestamps, search progress (`Scanned`), public person registration/rename projections, and an event-driven area residency index (`neighbors`).
+- **Interruption Cleanup:** Releases both participants without encounter credit if either cancels, dies, or suffers an urgent hunger interruption.
 
-This is ordinary companionship and conversation. It does not implement household care, romance, political persuasion, occupational planning, or autonomous enterprise formation.
+## Boundaries
 
-Run `cargo test -p game-social-life`. Feature tests compose the required lower owners and cover consent, different dispositions, asymmetric impressions, personal evidence, bounded search, interruption, death, locality, and continued save/load across workers. Dependencies are `game-core`, `game-sim`, `game-storage`, `game-content`, `game-physiology`, `game-transport`, `game-knowledge`, `game-relationships`, and `game-traits`.
+- **No Initiator Search Policy:** Autonomous companion-seeking proposals (`SeekCompany`) are owned by `game-companionship`.
+- **No Political or Household Rules:** Models ordinary companionship and conversation—not romance, household care, or political coercion.
+
+## How It Works
+
+- **Event-Driven Locality Index:** Subscribes to movement (`game-transport`) and mortality (`game-physiology`) events to maintain per-area neighbor lists without polling. `neighbors` exposes only co-located people and their visible activity.
+- **Independent Outcome Evaluation:** Because impressions depend on each listener's own beliefs and empathy, a single conversation can warm one participant's affection while souring the other's.
+
+## Game Integration
+
+- **Plugin / Entry Point:** `Plugin` loads rules from `content/social-life/*.toml` and registers residency indices, contact logs, and `Talk` / `Scanned` handlers in `game-assembly`.
+- **Requests & Events:** Exposes `Talk`, `Scanned`, `Register`, `Rename`, and `neighbors` queries; emits completed conversation events.
+- **Callers:** Used by `game-companionship`, `game-characters`, `game-discourse`, `game-naming`, `game-names`, `game-inquiry`, and `game-literacy`.
+
+## Dependencies & Testing
+
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-physiology`, `game-transport`, `game-knowledge`, `game-testimony`, `game-relationships`, `game-traits`, `game-communication`, `game-choice`, `game-utility`.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-social-life`) cover consent refusals, asymmetric impressions, fact sharing, interruption cleanup, locality indexing, and multi-worker save/load.

@@ -16,6 +16,12 @@ fn regional_catalogs_have_physical_sources_and_complete_production_chains() {
             assert!(r.renew_per_person <= r.stock_per_person);
         }
     }
+    available.extend(
+        game_animal_species::load(&mut store, &objects)
+            .unwrap()
+            .values()
+            .map(|s| s.meat),
+    );
     loop {
         let count = available.len();
         for r in recipes.recipes.values() {

@@ -22,25 +22,15 @@ impl Request for Cancel {
     const KEY: &'static str = "social-life.cancel";
     type Response = ();
 }
-fn disposition(tx: &Transaction<'_>, p: PersonId, key: &str) -> i64 {
-    game_vitality::disposition(tx, p, key)
+use game_vitality::disposition;
+pub fn ready(tx: &Transaction<'_>, person: PersonId) -> bool {
+    let people = &tx.get::<SocialLife>().unwrap().people;
+    people.get(&person).is_some_and(|p| p.area.is_some())
+        && game_vitality::can_converse(tx, person)
+        && game_physiology::capable(tx, person).is_ok()
+        && !tx.get::<Actions>().unwrap().0.contains_key(&person)
 }
-fn ready(tx: &Transaction<'_>, person: PersonId) -> bool {
-    let Ok(state) = tx.get::<SocialLife>() else {
-        return false;
-    };
-    game_vitality::can_converse(tx, person)
-        && state.people.get(&person).is_some_and(|p| p.area.is_some())
-        && tx.get::<game_physiology::Bodies>().is_ok_and(|s| {
-            s.people
-                .get(&person)
-                .is_some_and(|p| p.alive && p.health > 0)
-        })
-        && tx
-            .get::<Actions>()
-            .is_ok_and(|a| !a.0.contains_key(&person))
-}
-fn affinity(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> i64 {
+pub fn affinity(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> i64 {
     tx.get::<game_relationships::Social>()
         .ok()
         .and_then(|s| s.relationships.get(&person)?.get(&other))
@@ -64,20 +54,21 @@ fn willing(tx: &Transaction<'_>, person: PersonId, other: PersonId) -> bool {
         > body.hunger.min(10000) as i64 * 2 + body.fatigue.min(10000) as i64 * 3
 }
 fn share(tx: &mut Transaction<'_>, sender: PersonId, recipient: PersonId) -> Result<()> {
-    let knowledge = tx.get::<game_knowledge::Knowledge>()?;
     let count = tx.get::<SocialLife>()?.people[&sender].encounters;
-    let key = knowledge
+    let Some(facts) = tx
+        .get::<game_knowledge::Knowledge>()?
         .0
         .get(&sender)
         .filter(|f| !f.is_empty())
-        .and_then(|facts| {
-            facts
-                .iter()
-                .nth((count % facts.len() as u64) as usize)
-                .map(|(key, _)| key.to_string())
-        });
+    else {
+        return Ok(());
+    };
+    let key = facts
+        .iter()
+        .nth((count % facts.len() as u64) as usize)
+        .map(|(key, _)| key.to_string());
     if let Some(key) = key {
-        let _ = tx.attempt(game_knowledge::Tell {
+        let _ = tx.attempt(game_testimony::Tell {
             sender,
             recipient,
             key,
@@ -118,72 +109,9 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         }
         Ok(until)
     })?;
-    b.request::<SeekCompany>(|tx, r| {
-        if !ready(tx, r.person) {
-            return Ok(false);
-        }
-        if company_motivation(tx, r.person) <= 0 {
-            return Ok(false);
-        }
-        let state = tx.get::<SocialLife>()?;
-        let p = &state.people[&r.person];
-        if p.retry_at > tx.now() {
-            return Ok(false);
-        }
-        let area = p.area.unwrap();
-        // Rotate a bounded local window so a crowded settlement never starves later identities.
-        let residents = &state.residents[&area];
-        let peers: Vec<_> = residents
-            .scan_after(p.cursor.as_ref())
-            .chain(residents.iter())
-            .take(residents.len().min(state.rules.candidates))
-            .map(|(p, _)| *p)
-            .collect();
-        let explore = random(tx.seed(), r.person.0, p.encounters.wrapping_add(901)) % 1000
-            < ((disposition(tx, r.person, "sociability")
-                + disposition(tx, r.person, "risk-tolerance"))
-                / 4) as u64;
-        let familiar = tx
-            .get::<game_relationships::Social>()?
-            .relationships
-            .get(&r.person);
-        let chosen = peers
-            .iter()
-            .copied()
-            .filter(|other| {
-                *other != r.person
-                    && Some(*other) != r.protected
-                    && willing(tx, *other, r.person)
-                    && affinity(tx, r.person, *other) >= -20
-            })
-            .max_by_key(|other| {
-                (
-                    affinity(tx, r.person, *other) - if p.recent == Some(*other) { 10 } else { 0 }
-                        + if explore && familiar.is_none_or(|ties| !ties.contains_key(other)) {
-                            200
-                        } else {
-                            0
-                        },
-                    std::cmp::Reverse(*other),
-                )
-            });
-        let retry_at = tx.now().after(state.rules.retry)?;
-        let p = tx.edit::<SocialLife>()?.people.get_mut(&r.person).unwrap();
-        p.cursor = peers.last().copied();
-        if let Some(other) = chosen {
-            tx.call(Talk {
-                person: r.person,
-                other,
-            })?;
-            Ok(true)
-        } else {
-            p.retry_at = retry_at;
-            Ok(false)
-        }
-    })?;
     b.request::<Finish>(|tx, r| {
         let now = tx.now();
-        let retry_at = now.after(tx.get::<SocialLife>()?.rules.retry)?;
+        let retry_at = now;
         if game_communication::active(tx) {
             tx.call(game_communication::Practice {
                 first: r.first,
@@ -208,6 +136,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             p.last_contact = now;
             p.retry_at = retry_at;
             p.recent = Some(other);
+            p.cursor = Some(other);
             p.encounters = p.encounters.saturating_add(1);
             tx.edit::<SocialLife>()?.meetings.remove(&person);
             tx.finish_action(person, "socialize")?;
@@ -225,7 +154,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             tx.unschedule(meeting.job);
             tx.edit::<SocialLife>()?.meetings.remove(&meeting.other);
             tx.finish_action(meeting.other, "socialize")?;
-            let retry = tx.now().after(tx.get::<SocialLife>()?.rules.retry)?;
+            let retry = tx.now();
             for p in [r.person, meeting.other] {
                 tx.edit::<SocialLife>()?
                     .people

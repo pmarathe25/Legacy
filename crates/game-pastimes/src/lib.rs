@@ -12,6 +12,8 @@ pub struct Activity {
     pub name: String,
     pub inputs: BTreeMap<GoodId, u64>,
     pub requires: BTreeMap<GoodId, u64>,
+    #[serde(default)]
+    pub abilities: BTreeMap<String, u64>,
     pub duration: SimDuration,
     #[serde(alias = "interval")]
     pub satisfaction_span: SimDuration,
@@ -119,6 +121,8 @@ struct Spec {
     inputs: BTreeMap<String, u64>,
     #[serde(default)]
     requires: BTreeMap<String, u64>,
+    #[serde(default)]
+    abilities: BTreeMap<String, u64>,
     duration: SimDuration,
     #[serde(alias = "interval")]
     satisfaction_span: SimDuration,
@@ -147,6 +151,7 @@ pub fn load(store: &mut game_content::Store, objects: &game_objects::Objects) ->
                 name: s.name,
                 inputs: resolve(s.inputs)?,
                 requires: resolve(s.requires)?,
+                abilities: s.abilities,
                 duration: s.duration,
                 satisfaction_span: s.satisfaction_span,
                 affinity: s.affinity,
@@ -167,7 +172,11 @@ fn available(tx: &Transaction<'_>, person: PersonId, inventory: InventoryId, a: 
     let Ok(area) = game_transport::area(tx.get().unwrap(), person) else {
         return false;
     };
-    game_cargo::locality(tx, inventory).is_ok_and(|at| at == area)
+    game_vitality::can_manipulate(tx, person)
+        && a.abilities
+            .iter()
+            .all(|(key, minimum)| game_vitality::ability(tx, person, key) >= *minimum)
+        && game_cargo::locality(tx, inventory).is_ok_and(|at| at == area)
         && tx
             .get::<game_cargo::Cargo>()
             .unwrap()
@@ -207,16 +216,6 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     options.sort_unstable();
     // Leisure draws only on the participant's own possessions, not everyone's shared stock.
     let inventories: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(person).collect();
-    let best = options.first().map_or(i64::MIN, |(score, _)| score.0);
-    if game_social_life::company_motivation(tx, person) > best.max(0)
-        && tx.registered::<game_social_life::SeekCompany>()
-        && tx.call(game_social_life::SeekCompany {
-            person,
-            protected: tx.get::<game_lineage::Lineage>()?.current,
-        })?
-    {
-        return Ok(());
-    }
     for (score, activity) in options {
         if score.0 <= 0 {
             continue;
@@ -251,6 +250,15 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                     .definitions
                     .contains_key(&a.affinity),
                 "unknown pastime affinity",
+            )?;
+            require(
+                a.abilities.keys().all(|key| {
+                    tx.get::<game_traits::Traits>()
+                        .unwrap()
+                        .definitions
+                        .contains_key(key)
+                }),
+                "unknown pastime ability",
             )?;
             for good in a.inputs.keys().chain(a.requires.keys()) {
                 tx.get::<game_objects::Objects>()?.by_id(*good)?;
@@ -402,7 +410,13 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
-    b.subscribe::<game_characters::IdleReview>("pastimes.leisure", |tx, e| consider(tx, e.person))?;
+    game_choice::provider(b, "pastimes.leisure", |tx, e| {
+        if game_choice::collecting(tx, e.person) {
+            motivation::propose(tx, e.person)
+        } else {
+            consider(tx, e.person)
+        }
+    })?;
     b.subscribe::<game_physiology::Died>("pastimes.death", |tx, e| {
         tx.edit::<Pastimes>()?.satisfaction.remove(&e.person);
         Ok(())

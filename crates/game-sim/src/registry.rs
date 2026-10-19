@@ -26,8 +26,6 @@ pub trait Resource: Clone + Default + Serialize + DeserializeOwned + Send + Sync
     fn allocated_ids(&self) -> Vec<u64> {
         vec![]
     }
-    /// Validate changed records against the committed resource. Full validation
-    /// remains mandatory when constructing or loading a save.
     fn validate_changes(&self, _previous: &Self) -> Result<()> {
         self.validate()
     }
@@ -51,6 +49,26 @@ pub(crate) struct Typed<R: Request> {
 }
 pub(crate) type Stored = Arc<dyn Any + Send + Sync>;
 type Listener = Arc<dyn Fn(&mut Transaction<'_>, &dyn Any) -> Result<()> + Send + Sync>;
+fn register_listener<T: 'static>(
+    listeners: &mut BTreeMap<String, Listener>,
+    owner: usize,
+    name: &str,
+    listener: impl Fn(&mut Transaction<'_>, &T) -> Result<()> + Send + Sync + 'static,
+) -> Result<()> {
+    if listeners.contains_key(name) {
+        return Err(Error::Duplicate(name.into()));
+    }
+    listeners.insert(
+        name.into(),
+        Arc::new(move |tx, value| {
+            let value = value
+                .downcast_ref::<T>()
+                .ok_or_else(|| Error::Rejected("listener type mismatch".into()))?;
+            tx.with_owner(owner, |tx| listener(tx, value))
+        }),
+    );
+    Ok(())
+}
 type Decoder = for<'a> fn(pending::Input<'a>) -> Result<Pending>;
 type Guard = Box<dyn Fn(&Host, &Envelope) -> Result<()> + Send + Sync>;
 type Stopper = Box<dyn Fn(&Host) -> Result<Option<String>> + Send + Sync>;
@@ -128,28 +146,17 @@ impl Builder {
             Codec {
                 key: T::KEY,
                 owner: self.owner,
-                encode: |s, out| {
-                    serde_json::to_writer(out, s.downcast_ref::<T>().expect("registered type"))
-                        .map_err(json_error)
-                },
+                encode: |s, out| serde_json::to_writer(out, value::<T>(s)).map_err(json_error),
                 decode: |v| {
                     let x: T = serde_json::from_str(v).map_err(json_error)?;
                     Ok(Arc::new(x))
                 },
-                ids: |s| {
-                    s.downcast_ref::<T>()
-                        .expect("registered type")
-                        .allocated_ids()
-                },
-                validate: |s| s.downcast_ref::<T>().expect("registered type").validate(),
+                ids: |s| value::<T>(s).allocated_ids(),
+                validate: |s| value::<T>(s).validate(),
                 checkpoint: |s| mutable::<T>(s).checkpoint(),
                 restore: |s, checkpoint| mutable::<T>(s).restore(checkpoint),
                 commit: |s, checkpoint| mutable::<T>(s).commit(checkpoint),
-                validate_checkpoint: |s, checkpoint| {
-                    s.downcast_ref::<T>()
-                        .expect("resource type")
-                        .validate_checkpoint(checkpoint)
-                },
+                validate_checkpoint: |s, checkpoint| value::<T>(s).validate_checkpoint(checkpoint),
             },
         );
         let initial = T::default();
@@ -177,8 +184,7 @@ impl Builder {
         self.registry.typed.insert(TypeId::of::<R>(), typed);
         Ok(())
     }
-    /// Opt into atomic, ordered batches of adjacent due requests. Public commands
-    /// remain individual transactions. A failure rejects the entire due phase.
+    /// Opt into atomic, ordered batches of adjacent due requests.
     pub fn batch<R: Request>(&mut self, limit: usize) -> Result<()> {
         require((1..=128).contains(&limit), "batch limit must be 1..=128")?;
         require(
@@ -193,48 +199,24 @@ impl Builder {
         name: &str,
         listener: impl Fn(&mut Transaction<'_>, &E) -> Result<()> + Send + Sync + 'static,
     ) -> Result<()> {
-        let listeners = self.registry.listeners.entry(E::KEY.into()).or_default();
-        if listeners.contains_key(name) {
-            return Err(Error::Duplicate(name.into()));
-        }
-        let owner = self.owner;
-        listeners.insert(
-            name.into(),
-            Arc::new(move |tx, value| {
-                tx.with_owner(owner, |tx| {
-                    listener(
-                        tx,
-                        value
-                            .downcast_ref::<E>()
-                            .ok_or_else(|| Error::Rejected("event type mismatch".into()))?,
-                    )
-                })
-            }),
-        );
-        Ok(())
+        register_listener(
+            self.registry.listeners.entry(E::KEY.into()).or_default(),
+            self.owner,
+            name,
+            listener,
+        )
     }
     pub fn before<R: Request>(
         &mut self,
         name: &str,
         check: impl Fn(&mut Transaction<'_>, &R) -> Result<()> + Send + Sync + 'static,
     ) -> Result<()> {
-        let checks = self.registry.before.entry(R::KEY.into()).or_default();
-        if checks.contains_key(name) {
-            return Err(Error::Duplicate(name.into()));
-        }
-        let owner = self.owner;
-        checks.insert(
-            name.into(),
-            Arc::new(move |tx, value| {
-                tx.with_owner(owner, |tx| {
-                    check(
-                        tx,
-                        value.downcast_ref::<R>().expect("registered request type"),
-                    )
-                })
-            }),
-        );
-        Ok(())
+        register_listener(
+            self.registry.before.entry(R::KEY.into()).or_default(),
+            self.owner,
+            name,
+            check,
+        )
     }
     pub fn validate_save(&mut self, check: fn(&Host) -> Result<()>) {
         self.registry.save_checks.push(check);
@@ -278,10 +260,20 @@ impl Default for Builder {
 pub(crate) fn json_error(e: serde_json::Error) -> Error {
     Error::InvalidSave(e.to_string())
 }
-
-fn mutable<T: Resource>(stored: &mut Stored) -> &mut T {
+pub(crate) fn mutable<T: Resource>(stored: &mut Stored) -> &mut T {
     Arc::get_mut(stored)
         .expect("exclusive transaction resource")
         .downcast_mut()
         .expect("registered resource type")
+}
+
+fn value<T: Resource>(stored: &Stored) -> &T {
+    stored
+        .downcast_ref::<T>()
+        .expect("registered resource type")
+}
+pub(crate) fn read<T: Resource>(data: &HashMap<TypeId, Stored>) -> Result<&T> {
+    data.get(&TypeId::of::<T>())
+        .and_then(|s| s.downcast_ref())
+        .ok_or_else(|| Error::Missing(T::KEY.into()))
 }

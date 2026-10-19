@@ -68,6 +68,58 @@ pub struct Moved {
 impl Event for Moved {
     const KEY: &'static str = "items.moved";
 }
+fn container<'a>(tx: &'a Transaction<'_>, item: u64) -> Option<&'a game_cargo::Inventory> {
+    let id = tx.get::<Items>().ok()?.objects.get(&item)?.inventory?;
+    tx.get::<game_cargo::Cargo>().ok()?.0.get(&id)
+}
+/// Physical custody for validating an actual presentation, not personal knowledge of its location.
+pub fn holder(tx: &Transaction<'_>, item: u64) -> Option<PersonId> {
+    match container(tx, item)?.custody {
+        game_cargo::Custody::Carried(p) => Some(p),
+        _ => None,
+    }
+}
+pub fn exposed(
+    tx: &Transaction<'_>,
+    observer: PersonId,
+    item: u64,
+    presenter: Option<PersonId>,
+) -> bool {
+    exposed_in(
+        tx.get().unwrap(),
+        tx.get().unwrap(),
+        tx.get().unwrap(),
+        observer,
+        item,
+        presenter,
+    )
+}
+pub fn exposed_in(
+    items: &Items,
+    cargo: &game_cargo::Cargo,
+    positions: &game_transport::Positions,
+    observer: PersonId,
+    item: u64,
+    presenter: Option<PersonId>,
+) -> bool {
+    let Some(inv) = items
+        .objects
+        .get(&item)
+        .and_then(|i| i.inventory)
+        .and_then(|i| cargo.0.get(&i))
+    else {
+        return false;
+    };
+    let Ok(area) = game_transport::area(positions, observer) else {
+        return false;
+    };
+    inv.area(positions) == Some(area)
+        && match inv.custody {
+            game_cargo::Custody::Area(_) => true,
+            game_cargo::Custody::Carried(p) => p == observer || presenter == Some(p),
+            _ => false,
+        }
+}
 pub fn departing(
     s: &Items,
     inventory: InventoryId,
@@ -84,9 +136,35 @@ pub fn departing(
         .copied()
         .collect()
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Inspect {
+    pub person: PersonId,
+    pub inventory: InventoryId,
+    pub item: u64,
+}
+impl Request for Inspect {
+    const KEY: &'static str = "items.inspect";
+    type Response = bool;
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("items", 1)?;
     b.resource::<Items>()?;
+    b.request::<Inspect>(|tx, r| {
+        require(
+            game_transport::area(tx.get()?, r.person)? == game_cargo::locality(tx, r.inventory)?,
+            "inspection is not local",
+        )?;
+        tx.call(game_property::Use {
+            actor: r.person,
+            inventory: r.inventory,
+            purpose: "inspecting named objects".into(),
+        })?;
+        Ok(tx
+            .get::<Items>()?
+            .held
+            .get(&r.inventory)
+            .is_some_and(|goods| goods.values().any(|ids| ids.contains(&r.item))))
+    })?;
     b.request::<Mark>(|tx, r| {
         game_physiology::capable(tx, r.person)?;
         require(

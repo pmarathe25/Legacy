@@ -7,6 +7,8 @@ pub enum FactValue {
     Patch(game_ecology::Patch),
     Stock(#[serde(serialize_with = "stock_wire")] Table<GoodId, u64>),
     Location(StoreLocation),
+    Theory(Box<game_reasoning::Claim>),
+    Measurement(Box<game_reasoning::Observation>),
     Other(serde_json::Value),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +47,8 @@ impl FactValue {
             Self::Patch(v) => (v, None),
             Self::Stock(v) => (v, None),
             Self::Location(v) => (v, None),
+            Self::Theory(v) => (v.as_ref(), None),
+            Self::Measurement(v) => (v.as_ref(), None),
             Self::Other(v) => (v, Some(v)),
         };
         game_facts::decode(typed, self, json)
@@ -61,6 +65,10 @@ impl FactValue {
             serde_json::from_value(raw.clone()).map(Self::Stock)
         } else if key.starts_with("patch:") {
             serde_json::from_value(raw.clone()).map(Self::Patch)
+        } else if key.starts_with("theory:") {
+            game_reasoning::Claim::deserialize(raw).map(|c| Self::Theory(Box::new(c)))
+        } else if key.starts_with("measured:") {
+            game_reasoning::Observation::deserialize(raw).map(|o| Self::Measurement(Box::new(o)))
         } else {
             return value;
         };

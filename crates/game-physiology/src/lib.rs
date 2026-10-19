@@ -1,6 +1,6 @@
 //! Needs, bodily harm, rest, and guardian recovery.
 pub use game_body::{
-    Body, BodyView, Damaged, DeathCause, Died, Kind, Rates, Rested, Rules, advance_body,
+    Body, BodyView, Damaged, DeathCause, Died, Exert, Kind, Rates, Rested, Rules, advance_body,
     hunger_threshold, load,
 };
 use game_core::*;
@@ -11,7 +11,7 @@ pub use game_soma::{
 };
 use serde::{Deserialize, Serialize};
 mod eating;
-pub use eating::{ConsumeEdible, Serve};
+pub use eating::{Administer, ConsumeEdible, Eating, Restrained, Serve};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {
@@ -60,6 +60,8 @@ impl Request for CancelRest {
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Fed {
+    #[serde(default)]
+    pub inventory: Option<InventoryId>,
     pub caregiver: PersonId,
     pub patient: PersonId,
     pub good: GoodId,
@@ -81,6 +83,7 @@ impl Request for Feed {
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     game_soma::plugin(b)?;
+    game_digestion::plugin(b)?;
     b.plugin("physiology", 1)?;
     b.request::<game_property::Observers>(|tx, r| {
         let positions = tx.get::<game_transport::Positions>()?;
@@ -115,7 +118,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     eating::register(b)?;
     b.request::<Rest>(|tx, r| {
         capable(tx, r.person)?;
-        game_transport::area(tx.get()?, r.person)?;
+        require(
+            tx.get::<game_transport::Positions>()?
+                .0
+                .contains_key(&r.person),
+            "rest needs a physical location",
+        )?;
         let until = tx.now().after(tx.get::<Bodies>()?.rules.tick.max(HOUR))?;
         let job = tx.schedule(until, 10, Wake { person: r.person })?;
         tx.start_action(

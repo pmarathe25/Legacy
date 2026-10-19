@@ -1,0 +1,16 @@
+id = "workshop/mechanical-materials"
+version = 1
+[data.recipes.press-fiberboard]
+inputs = { timber = 8, resin = 2 }
+output = "fiberboard"
+quantity = 6
+duration = 3600000
+skill = "carpentry"
+work = { force = 1800, travel = 200 }
+[data.recipes.laminate-beam]
+inputs = { fiberboard = 4, resin = 1 }
+output = "laminated-beam"
+quantity = 2
+duration = 7200000
+skill = "carpentry"
+work = { force = 3000, travel = 300 }

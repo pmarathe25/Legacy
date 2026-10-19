@@ -10,6 +10,7 @@ fn body() -> Body {
         fatigue_fraction: 0,
         hunger_fraction: 0,
         recovery_fraction: 0,
+        healing_fraction: 0,
         metabolic_rates: Default::default(),
         health: 100,
         maximum_health: None,
@@ -72,4 +73,51 @@ fn recovery_retains_fractions_and_forecasts_use_expressed_energy_demand() {
     let at = hunger_threshold(&active, &rules, 10).unwrap();
     assert!(advance_rates(&active, &rules, SimTime(at.0 - MINUTE.0), rates).hunger < 10);
     assert!(advance_rates(&active, &rules, at, rates).hunger >= 10);
+}
+
+#[test]
+fn nourished_rest_heals_slowly_with_fractional_genetic_recovery_and_never_revives() {
+    let rules = Rules {
+        natural_recovery: 2,
+        hunger_per_tick: 0,
+        ..Default::default()
+    };
+    let rates = Rates {
+        recovery: 777,
+        ..Default::default()
+    };
+    let mut wounded = body();
+    wounded.health = 50;
+    wounded.resting = true;
+    let mut split = wounded;
+    for hour in 1..=48 {
+        split = advance_rates(&split, &rules, SimTime(hour * HOUR.0), rates);
+    }
+    let bulk = advance_rates(&wounded, &rules, SimTime(2 * DAY.0), rates);
+    assert_eq!(split, bulk);
+    assert_eq!(bulk.health, 53);
+    assert!(
+        advance_rates(
+            &wounded,
+            &rules,
+            SimTime(2 * DAY.0),
+            Rates {
+                recovery: 2000,
+                ..rates
+            }
+        )
+        .health
+            > bulk.health
+    );
+    wounded.resting = false;
+    assert_eq!(
+        advance_rates(&wounded, &rules, SimTime(DAY.0), rates).health,
+        50
+    );
+    wounded.resting = true;
+    wounded.health = 0;
+    assert_eq!(
+        advance_rates(&wounded, &rules, SimTime(DAY.0), rates).health,
+        0
+    );
 }

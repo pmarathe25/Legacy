@@ -51,14 +51,22 @@ pub fn store_foods_partial(
     else {
         return vec![];
     };
+    stock_foods(tx, person, &stock, cache, partial)
+}
+pub fn stock_foods(
+    tx: &Transaction<'_>,
+    person: PersonId,
+    stock: &game_knowledge::Stock,
+    cache: &mut Cache,
+    partial: bool,
+) -> Vec<(GoodId, u64, i64)> {
+    let Ok(objects) = tx.get::<game_objects::Objects>() else {
+        return vec![];
+    };
     stock
         .iter()
         .filter_map(|(good, q)| {
-            let f = tx
-                .get::<game_objects::Objects>()
-                .ok()?
-                .food_rules()
-                .get(good)?;
+            let f = objects.food_rules().get(good)?;
             (*q >= if partial { 1 } else { f.portion }).then(|| {
                 let (appetite, value) = food(tx, person, *good, f, cache);
                 (*good, appetite, value)

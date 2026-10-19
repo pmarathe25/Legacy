@@ -13,6 +13,7 @@ hash-index = ["game-packed/hash-index"]
 compact-storage = ["game-packed/compact"]
 
 [dependencies]
+game-diagnostics.workspace=true
 game-social-life.workspace = true
 mimalloc = { workspace = true, optional = true }
 game-ecology.workspace = true

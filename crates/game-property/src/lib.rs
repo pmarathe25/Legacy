@@ -118,6 +118,10 @@ pub struct Taking {
     pub actor: PersonId,
     pub inventory: InventoryId,
     pub unauthorized: bool,
+    #[serde(default)]
+    pub transfer: Option<game_cargo::Transfer>,
+    #[serde(default)]
+    pub witnesses: Vec<PersonId>,
 }
 impl Event for Taking {
     const KEY: &'static str = "property.taken";
@@ -177,14 +181,22 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             inventory: from,
             purpose: "taking".into(),
         })?;
-        tx.call(r.transfer)?;
+        tx.call(r.transfer.clone())?;
+        let witnesses = if tx.registered::<Observers>() {
+            let area = game_transport::area(tx.get()?, r.actor)?;
+            tx.call(Observers { area })?
+        } else {
+            vec![r.actor]
+        };
         tx.emit(
             Taking {
                 actor: r.actor,
                 inventory: from,
                 unauthorized,
+                transfer: Some(r.transfer),
+                witnesses: witnesses.clone(),
             },
-            vec![r.actor],
+            witnesses,
         )
     })
 }

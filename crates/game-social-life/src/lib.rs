@@ -1,9 +1,9 @@
-//! Local company, mutual consent, remembered encounters, and finite conversations.
 use game_core::*;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
 mod conversation;
+pub use conversation::{affinity, ready};
 mod persistence;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -129,16 +129,6 @@ impl Request for Talk {
     const KEY: &'static str = "social-life.talk";
     type Response = SimTime;
 }
-/// The autonomy owner supplies the player-controlled person, who never consents implicitly.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct SeekCompany {
-    pub person: PersonId,
-    pub protected: Option<PersonId>,
-}
-impl Request for SeekCompany {
-    const KEY: &'static str = "social-life.seek";
-    type Response = bool;
-}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Encounter {
     pub first: PersonId,
@@ -147,37 +137,18 @@ pub struct Encounter {
 impl Event for Encounter {
     const KEY: &'static str = "social-life.encounter";
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Neighbor {
-    pub person: PersonId,
-    pub name: String,
-    pub action: Option<String>,
-}
-pub fn neighbors(host: &Host, observer: PersonId) -> Result<Vec<Neighbor>> {
+pub fn neighbors(host: &Host, observer: PersonId) -> Result<Vec<PersonId>> {
     let Ok(area) = game_transport::area(host.get()?, observer) else {
         return Ok(vec![]);
     };
-    let state = host.get::<SocialLife>()?;
-    Ok(state
+    Ok(host
+        .get::<SocialLife>()?
         .residents
         .get(&area)
         .into_iter()
         .flat_map(|r| r.keys())
-        .filter(|p| **p != observer)
-        .map(|p| Neighbor {
-            person: *p,
-            name: host
-                .query(NameFor {
-                    observer,
-                    person: *p,
-                    fallback: state.people[p].name.clone(),
-                })
-                .unwrap_or_else(|_| state.people[p].name.clone()),
-            action: host
-                .get::<Actions>()
-                .ok()
-                .and_then(|a| a.0.get(p).map(|a| a.kind.clone())),
-        })
+        .copied()
+        .filter(|p| *p != observer)
         .collect())
 }
 fn relocate(tx: &mut Transaction<'_>, person: PersonId, area: Option<AreaId>) -> Result<()> {
@@ -202,9 +173,34 @@ pub fn load(store: &mut game_content::Store, key: &str) -> Result<Rules> {
     doc.data.validate()?;
     Ok(doc.data)
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Scanned {
+    pub person: PersonId,
+    pub through: PersonId,
+    pub failed: bool,
+}
+impl Request for Scanned {
+    const KEY: &'static str = "social-life.scanned";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("social-life", 1)?;
     b.resource::<SocialLife>()?;
+    b.request::<Scanned>(|tx, r| {
+        let retry = if r.failed {
+            tx.now().after(tx.get::<SocialLife>()?.rules.retry)?
+        } else {
+            tx.now()
+        };
+        let p = tx
+            .edit::<SocialLife>()?
+            .people
+            .get_mut(&r.person)
+            .ok_or_else(|| Error::Missing("social person".into()))?;
+        p.cursor = Some(r.through);
+        p.retry_at = retry;
+        Ok(())
+    })?;
     b.validate_save(persistence::validate_host);
     b.request::<Configure>(|tx, r| {
         r.0.validate()?;
@@ -272,7 +268,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     conversation::register(b)
 }
-
 /// A personal motive, not an action lock: loneliness and sociability compete with other interests.
 pub fn company_motivation(tx: &Transaction<'_>, person: PersonId) -> i64 {
     let Ok(state) = tx.get::<SocialLife>() else {

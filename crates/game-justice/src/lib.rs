@@ -1,7 +1,9 @@
 //! Known precedents influence judgments. Enforcement requires a physical actor.
 use game_core::*;
 use game_sim::*;
-use game_storage::Records;
+use game_storage::{Records, Table};
+mod incidents;
+pub use incidents::Prosecute;
 use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Evidence {
@@ -46,8 +48,12 @@ pub struct Case {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Justice {
+    #[serde(default)]
+    pub incidents: Table<PersonId, Table<PersonId, Case>>,
     pub cases: Records<CaseId, Case>,
     pub known: Records<PersonId, Vec<Precedent>>,
+    #[serde(default)]
+    pub heard: Records<PersonId, std::collections::BTreeSet<CaseId>>,
 }
 impl Resource for Justice {
     fn allocated_ids(&self) -> Vec<u64> {
@@ -89,9 +95,120 @@ impl Request for KnowPrecedent {
     const KEY: &'static str = "justice.know_precedent";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TellCase {
+    pub speaker: PersonId,
+    pub listener: PersonId,
+    pub case: CaseId,
+}
+impl Request for TellCase {
+    const KEY: &'static str = "justice.tell-case";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ExecuteOrder {
+    pub person: PersonId,
+    pub case: CaseId,
+}
+impl Request for ExecuteOrder {
+    const KEY: &'static str = "justice.execute-order";
+    type Response = ();
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("justice", 1)?;
     b.resource::<Justice>()?;
+    incidents::register(b)?;
+    b.request::<TellCase>(|tx, r| {
+        require(
+            tx.get::<Justice>()?
+                .heard
+                .get(&r.speaker)
+                .is_some_and(|heard| heard.contains(&r.case)),
+            "case is unfamiliar",
+        )?;
+        require(
+            game_transport::area(tx.get()?, r.speaker)?
+                == game_transport::area(tx.get()?, r.listener)?,
+            "testimony needs contact",
+        )?;
+        tx.edit::<Justice>()?
+            .heard
+            .entry(r.listener)
+            .or_default()
+            .insert(r.case);
+        Ok(())
+    })?;
+    b.request::<ExecuteOrder>(|tx, r| {
+        let case = &tx.get::<Justice>()?.cases[&r.case];
+        let own = r.person == case.claimant;
+        let social = tx.get::<game_relationships::Social>().ok();
+        let value = social
+            .and_then(|s| s.values.get(&r.person)?.get("justice"))
+            .copied()
+            .unwrap_or(0);
+        let willing = if own {
+            true
+        } else {
+            i64::from(value) * 4 + game_vitality::disposition(tx, r.person, "altruism") / 10 > 60
+        };
+        tx.call(Enforce {
+            person: r.person,
+            case: r.case,
+            willing,
+        })
+    })?;
+    game_choice::provider(b, "justice.choices", |tx, e| {
+        if !game_choice::collecting(tx, e.person) {
+            return Ok(());
+        }
+        let cases: Vec<_> = tx
+            .get::<Justice>()?
+            .heard
+            .get(&e.person)
+            .into_iter()
+            .flatten()
+            .copied()
+            .take(32)
+            .collect();
+        for case in cases {
+            let c = &tx.get::<Justice>()?.cases[&case];
+            let own = c.claimant == e.person;
+            let interest = if own {
+                80
+            } else {
+                game_vitality::disposition(tx, e.person, "altruism") / 20
+            };
+            if c.remedy.is_none() {
+                game_choice::offer(
+                    tx,
+                    e.person,
+                    format!("justice:judge:{}", case.0),
+                    game_choice::motive(0, interest, 0, 10, 0),
+                    game_choice::Undertake {
+                        person: e.person,
+                        kind: "adjudicate".into(),
+                        duration: HOUR,
+                        request: Pending::new(Decide {
+                            judge: e.person,
+                            case,
+                        })?,
+                    },
+                )?;
+            } else if c.remedy == Some(Remedy::Return) && !c.enforced {
+                game_choice::offer(
+                    tx,
+                    e.person,
+                    format!("justice:enforce:{}", case.0),
+                    game_choice::motive(0, interest, 0, 10, 20),
+                    ExecuteOrder {
+                        person: e.person,
+                        case,
+                    },
+                )?;
+            }
+        }
+        Ok(())
+    })?;
     b.request::<KnowPrecedent>(|tx, r| {
         tx.edit::<Justice>()?
             .known
@@ -106,6 +223,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             "new case already resolved",
         )?;
         let id = CaseId(tx.allocate()?);
+        tx.edit::<Justice>()?
+            .heard
+            .entry(r.0.claimant)
+            .or_default()
+            .insert(id);
         tx.edit::<Justice>()?.cases.insert(id, r.0);
         Ok(id)
     })?;
@@ -116,11 +238,51 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get(&r.case)
             .ok_or_else(|| Error::Missing("case".into()))?;
         require(case.remedy.is_none(), "case already decided")?;
-        let remedy = judge(
+        let mut remedy = judge(
             &case.evidence,
             state.known.get(&r.judge).map_or(&[], Vec::as_slice),
-            32,
+            (game_vitality::ability(tx, r.judge, "intelligence") / 100).clamp(1, 128) as usize,
         );
+        if let Ok(social) = tx.get::<game_relationships::Social>() {
+            let property = social
+                .values
+                .get(&r.judge)
+                .and_then(|v| v.get("property"))
+                .copied()
+                .unwrap_or(0);
+            let compassion = if case.evidence.necessity {
+                game_vitality::disposition(tx, r.judge, "empathy") / 10
+            } else {
+                0
+            };
+            if case.evidence.credible && case.evidence.taking && !case.evidence.consent {
+                let beliefs = social.beliefs.get(&r.judge).cloned().unwrap_or_default();
+                let standards = game_vitality::disposition(tx, r.judge, "honesty") / 10
+                    - game_vitality::disposition(tx, r.judge, "altruism") / 10
+                    + (i64::from(beliefs.honesty) - i64::from(beliefs.sharing)) * 3
+                    + if case.claimant == r.judge { 10 } else { 0 };
+                let tradition = state
+                    .known
+                    .get(&r.judge)
+                    .filter(|v| !v.is_empty())
+                    .map_or(0, |_| if remedy == Remedy::Return { 20 } else { -20 });
+                remedy = if standards + tradition + i64::from(property) > compassion {
+                    Remedy::Return
+                } else {
+                    Remedy::None
+                };
+            }
+        }
+        let precedent = Precedent {
+            id: r.case,
+            evidence: case.evidence.clone(),
+            remedy: remedy.clone(),
+        };
+        tx.edit::<Justice>()?
+            .known
+            .entry(r.judge)
+            .or_default()
+            .push(precedent);
         tx.edit::<Justice>()?.cases.get_mut(&r.case).unwrap().remedy = Some(remedy.clone());
         Ok(remedy)
     })?;

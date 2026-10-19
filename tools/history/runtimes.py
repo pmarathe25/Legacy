@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 from study import digest
+from state_hashes import artifact_digest
 
 
 def accept_upgrade(plan, state, root):
@@ -27,7 +28,8 @@ def accept_upgrade(plan, state, root):
             raise ValueError('each continuing population needs replay evidence')
         report_path = root/report_path
         report = json.loads(report_path.read_text())
-        if (report.get('equivalent') is not True or report.get('pairs', 0) < 3
+        if (report.get('mode', 'equivalent') != 'equivalent'
+                or report.get('equivalent') is not True or report.get('pairs', 0) < 3
                 or report.get('checkpoint_sha256') != world or report.get('days', 0) <= row['days']
                 or report['binaries']['control']['sha256'] != old
                 or report['binaries']['candidate']['sha256'] != new):
@@ -41,7 +43,7 @@ def accept_upgrade(plan, state, root):
         # The comparator retains its last pair. Check the actual files, not only metadata.
         for run in [r for r in report['runs'] if r['pair'] == report['pairs']]:
             folder = report_path.parent/f"{report['pairs']:02d}-{run['build']}"
-            if any(digest(folder/name) != expected for name, expected in run['hashes'].items()):
+            if any(artifact_digest(folder/name, report.get('hash_mode')) != expected for name, expected in run['hashes'].items()):
                 raise ValueError('retained replay outputs differ from their evidence')
         verified.append({'name': row['name'], 'days': row['days'], 'cursor': row['cursor'],
                          'world_sha256': world, 'evidence': str(report_path.resolve()),

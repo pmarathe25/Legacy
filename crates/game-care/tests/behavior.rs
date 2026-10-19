@@ -180,3 +180,68 @@ fn a_second_automatic_caregiver_does_not_duplicate_an_assignment() {
     assert_eq!(h.get::<Care>().unwrap().assigned[&patient], p);
     assert_eq!(amount(&h, i, "medicine"), 3);
 }
+#[test]
+fn public_known_medical_supplies_are_usable_and_stale_stock_teaches_reconsideration() {
+    let mut b = support::builder();
+    game_choice::plugin(&mut b).unwrap();
+    game_knowledge::plugin(&mut b).unwrap();
+    let mut h = b.build(2, 1).unwrap();
+    h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
+        .unwrap();
+    let area = h
+        .dispatch(game_land::CreateArea {
+            name: "Clinic".into(),
+        })
+        .unwrap();
+    let p = support::person(&mut h, area);
+    let bin = h
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Area(area),
+            capacity: 100,
+        })
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory: bin,
+        good: game_cargo::MEDICINE,
+        quantity: 1,
+    })
+    .unwrap();
+    h.dispatch(game_property::ClaimInventory {
+        claimant: p,
+        inventory: bin,
+        recognized_by: [p].into(),
+    })
+    .unwrap();
+    h.dispatch(game_knowledge::ObserveStore {
+        person: p,
+        inventory: bin,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Damage {
+        person: p,
+        amount: 30,
+    })
+    .unwrap();
+    h.dispatch(game_care::Enable).unwrap();
+    let offers = h.dispatch(game_choice::Collect { person: p }).unwrap();
+    let offer = offers
+        .into_iter()
+        .find(|p| p.key.starts_with("care:treatment:"))
+        .unwrap();
+    h.dispatch(game_cargo::Consume {
+        inventory: bin,
+        good: game_cargo::MEDICINE,
+        quantity: 1,
+    })
+    .unwrap();
+    assert_eq!(
+        h.dispatch(game_choice::Run(offer.request)).unwrap(),
+        game_choice::Outcome::Reconsider
+    );
+    assert!(
+        h.dispatch(game_choice::Collect { person: p })
+            .unwrap()
+            .iter()
+            .all(|o| !o.key.starts_with("care:treatment:"))
+    );
+}

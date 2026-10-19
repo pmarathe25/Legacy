@@ -25,7 +25,24 @@ The production plan uses 20-year chunks. `chunk_days` is available for short dev
 
 Compact logging is the default. It retains all human births and deaths, social milestones, chosen names and personal forms of address, notable objects and losses, and first occurrences of routine experiences. Repeated meals, trades, symptoms, and disputes update totals without writing every occurrence. Ecological records are sampled annually per patch, with up to four newly observed plant genomes. Ungerminated seed and fruit families are counted without individual entries. Witness lists are capped at four; total witness counts remain available.
 
+During a long chunk, `python3 tools/history/progress.py PLAN.json` reports the
+latest verified checkpoint and a separate live clock lower bound from the active
+journal. It reads at most 64 KiB, ignores unfinished rows, and keeps population
+counts and generation depth labeled as verified. A quiet journal can lag behind
+the simulation clock; live progress is never checkpoint or ancestry evidence.
+
+For an intentional behavior change, `fork.py SOURCE_PLAN DESTINATION --executable
+BINARY --reason TEXT --validation RESULT_JSON` preserves a stopped study's
+population, complete journal prefix, and immutable origin checkpoints in a new
+experiment. It records the old and new binary hashes and each phase's starting
+day and generation. The original study remains available as a control. Optional
+`--days N` extends the horizon. The source must have a stop request and release
+its supervisor lease first. Equivalent performance upgrades continue to use the
+stricter replay checks in `runtimes.py`; model forks explicitly change behavior.
+
 Event counts, production totals, population and climate snapshots, and the latest feeding context at death remain available. Plant samples describe distributions; they are not a complete plant pedigree. Human parentage and demographic evidence remain complete. Private developer records do not become character knowledge.
+
+New cultural transmissions retain `works.shared` with the speaker, listener, work, and medium. Repeated transmission to the same listener does not produce another record. Snapshot `cultural_reach` counts oral memories, text presentations, works with an audience, and the widest audience. These measure recorded exposure; they do not establish comprehension of an entire work or agreement with it.
 
 Use `--journal full` only for a short diagnostic run requiring individual plant-family records and detailed witnesses. Changing logging does not change simulation decisions.
 
@@ -62,7 +79,7 @@ python3 tools/history/compare.py \
   --pairs 3 --workers 1 --output target/history/comparison
 ```
 
-The end day is absolute. The driver disables instrumentation, alternates execution order, records wall time, CPU time, and peak RSS, and checks complete world, ledger, journal, and individual-snapshot hashes. A mismatch retains both outputs and fails the comparison. It retains the last matching pair and small measurements, pruning earlier duplicate worlds. Run comparisons without concurrent builds or simulations. Keep measured results under `target/history/`; usage guidance belongs here.
+The end day is absolute. The driver disables instrumentation, alternates execution order, records wall time, CPU time, and peak RSS, and checks complete world, ledger, journal, and individual-snapshot hashes. World JSON hashes use canonical object field order; arrays and every value remain significant. Ledger, journal, and individual snapshots require exact bytes. Reports declare the hash mode; older byte-hash evidence remains supported. A mismatch retains both outputs and fails the comparison. It retains the last matching pair and small measurements, pruning earlier duplicate worlds. Run comparisons without concurrent builds or simulations. Keep measured results under `target/history/`; usage guidance belongs here.
 
 Run `cargo test -p game-history` and `python3 -m unittest discover -s tools/history/tests -p 'test_*.py'`. Replay checks compare complete worlds and journals across worker counts, advancement batches, and checkpoint continuation.
 
@@ -79,3 +96,5 @@ The supervisor holds an exclusive process lease to prevent two invocations from 
 Set `chunks_per_invocation` to a positive number to return after that many verified chunks, making room for inspection before continuing. Omit it for continuous supervision. Current studies declare `reproductive_window: {"lifespan_fraction": [2, 3]}` so cohort censoring follows expressed natural lifespan. Legacy manifests without this metadata retain their original fixed age-45 interpretation. This analysis metadata describes the frozen mechanics; it does not alter fertility.
 
 `--distress true` writes a separate diagnostic `distress.jsonl` for urgent hunger. It records up to eight samples per continuous episode, at least two days apart, including current intentions, journeys, carried food, bulky goods, local physical food stocks, and caregiver context. It reads developer state and grants characters no information. Keep this mode to short investigations; normal histories leave it disabled.
+
+A study can set `continue_after_extinction: true` to observe the physical world through its requested horizon after all mortals die. Standalone histories accept `--continue-after-extinction true`. Extinction is still recorded in summaries and mortality evidence; no replacement population is introduced. This option extends ecological observation and does not turn extinct worlds into successful human lineages.

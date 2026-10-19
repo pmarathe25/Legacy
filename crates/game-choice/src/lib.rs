@@ -1,0 +1,292 @@
+//! Feature offers are gathered before a character chooses an executable owner request.
+mod templates;
+pub use templates::Templates;
+mod agenda;
+mod undertaking;
+pub use agenda::{Next, Schedule};
+use game_core::*;
+use game_sim::*;
+pub use game_utility::Candidate;
+use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
+pub use undertaking::{Resolved, Undertake};
+pub const LIMIT: usize = 256;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Proposal {
+    pub key: String,
+    pub motive: Candidate,
+    pub request: Pending,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub continuation: Option<u64>,
+}
+pub fn identity(key: &str) -> u64 {
+    key.bytes().fold(14695981039346656037, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(1099511628211)
+    })
+}
+impl Proposal {
+    pub fn new<R: Request>(
+        key: impl Into<String>,
+        mut motive: Candidate,
+        request: R,
+    ) -> Result<Self> {
+        let key = key.into();
+        require(!key.is_empty() && key.len() <= 160, "invalid proposal key")?;
+        motive.id = identity(&key);
+        Ok(Self {
+            key,
+            motive,
+            request: Pending::immediate(request),
+            continuation: None,
+        })
+    }
+}
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct Offers {
+    #[serde(skip)]
+    active: Option<Collection>,
+}
+type Rank = (i64, Reverse<u64>);
+#[derive(Clone, Debug)]
+struct Collection {
+    person: PersonId,
+    weights: Option<game_traits::Weights>,
+    ranked: bool,
+    ongoing: Option<u64>,
+    items: Vec<(Proposal, Rank)>,
+    identities: rustc_hash::FxHashSet<u64>,
+}
+impl Collection {
+    fn insert(&mut self, proposal: Proposal, weights: Option<game_traits::Weights>) -> Result<()> {
+        let key_hash = identity(&proposal.key);
+        require(
+            !self.identities.contains(&key_hash)
+                || self.items.iter().all(|(p, _)| p.key != proposal.key),
+            "duplicate proposal key",
+        )?;
+        let rank = |p: &Proposal| {
+            let mut c = p.motive;
+            c.reweight(|term| {
+                weights
+                    .as_ref()
+                    .and_then(|w| w.get(term))
+                    .copied()
+                    .unwrap_or(100)
+            });
+            (c.score(), Reverse(c.id))
+        };
+        let score = if self.items.len() >= LIMIT {
+            if !self.ranked || self.weights != weights {
+                for (p, score) in &mut self.items {
+                    *score = rank(p);
+                }
+                self.weights = weights;
+                self.ranked = true;
+            }
+            rank(&proposal)
+        } else {
+            (0, Reverse(0))
+        };
+        self.identities.insert(key_hash);
+        self.items.push((proposal, score));
+        if self.items.len() > LIMIT {
+            let worst = self
+                .items
+                .iter()
+                .enumerate()
+                .min_by_key(|(_, (p, score))| {
+                    (
+                        self.ongoing.is_some_and(|id| p.continuation == Some(id)),
+                        *score,
+                        &p.key,
+                    )
+                })
+                .map(|(i, _)| i)
+                .unwrap();
+            let (removed, _) = self.items.swap_remove(worst);
+            let removed_hash = identity(&removed.key);
+            if !self
+                .items
+                .iter()
+                .any(|(p, _)| identity(&p.key) == removed_hash)
+            {
+                self.identities.remove(&removed_hash);
+            }
+        }
+        Ok(())
+    }
+}
+impl Resource for Offers {
+    const KEY: &'static str = "choice.offers";
+    fn validate(&self) -> Result<()> {
+        require(self.active.is_none(), "unfinished choice collection")
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Review {
+    pub person: PersonId,
+}
+impl Event for Review {
+    const KEY: &'static str = "characters.idle-review";
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Changed {
+    pub person: PersonId,
+}
+impl Event for Changed {
+    const KEY: &'static str = "choice.changed";
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Collect {
+    pub person: PersonId,
+}
+impl Request for Collect {
+    const KEY: &'static str = "choice.collect";
+    type Response = Vec<Proposal>;
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct Offer {
+    person: PersonId,
+    proposal: Proposal,
+}
+impl Request for Offer {
+    const KEY: &'static str = "choice.offer";
+    type Response = ();
+}
+/// Owners can retain observed failure evidence while asking the chooser to try another offer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "choice")]
+pub enum Outcome {
+    Performed,
+    Reconsider,
+}
+impl From<bool> for Outcome {
+    fn from(performed: bool) -> Self {
+        if performed {
+            Self::Performed
+        } else {
+            Self::Reconsider
+        }
+    }
+}
+/// Inert fallback; the historical wire key remains readable in saved requests.
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Wait;
+impl Request for Wait {
+    const KEY: &'static str = "characters.wait";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Run(pub Pending);
+impl Request for Run {
+    const KEY: &'static str = "choice.run";
+    type Response = Outcome;
+}
+pub fn collecting(tx: &Transaction<'_>, person: PersonId) -> bool {
+    tx.get::<Offers>()
+        .is_ok_and(|o| o.active.as_ref().is_some_and(|c| c.person == person))
+}
+pub fn submit(tx: &mut Transaction<'_>, person: PersonId, proposal: Proposal) -> Result<()> {
+    tx.call(Offer { person, proposal })
+}
+pub fn offer<R: Request>(
+    tx: &mut Transaction<'_>,
+    person: PersonId,
+    key: impl Into<String>,
+    motive: Candidate,
+    request: R,
+) -> Result<bool> {
+    if !collecting(tx, person) {
+        return Ok(false);
+    }
+    tx.call(Offer {
+        person,
+        proposal: Proposal::new(key, motive, request)?,
+    })?;
+    Ok(true)
+}
+pub fn motive(need: i64, goal: i64, value: i64, effort: i64, risk: i64) -> Candidate {
+    Candidate {
+        id: 0,
+        need,
+        goal,
+        value,
+        effort,
+        risk,
+        survival: false,
+    }
+}
+pub fn reweight(tx: &Transaction<'_>, person: PersonId, offers: &mut [Proposal]) {
+    let weights = tx
+        .get::<game_traits::Traits>()
+        .ok()
+        .map(|t| t.weights(person));
+    for o in offers {
+        o.motive.reweight(|term| {
+            weights
+                .as_ref()
+                .and_then(|w| w.get(term))
+                .copied()
+                .unwrap_or(100)
+        });
+    }
+}
+/// Profile proposal providers without coupling the kernel to gameplay diagnostics.
+pub fn provider(
+    b: &mut Builder,
+    name: &'static str,
+    listener: impl Fn(&mut Transaction<'_>, &Review) -> Result<()> + Send + Sync + 'static,
+) -> Result<()> {
+    b.subscribe::<Review>(name, move |tx, e| {
+        let _span = game_diagnostics::span(name);
+        listener(tx, e)
+    })
+}
+pub fn plugin(b: &mut Builder) -> Result<()> {
+    b.plugin("choice", 1)?;
+    b.resource::<Offers>()?;
+    undertaking::register(b)?;
+    b.request::<Wait>(|_, _| Ok(()))?;
+    b.request::<Collect>(|tx, r| {
+        require(
+            tx.get::<Offers>()?.active.is_none(),
+            "recursive choice collection",
+        )?;
+        let ongoing = tx.get::<Actions>()?.0.get(&r.person).map(|a| a.id);
+        tx.edit::<Offers>()?.active = Some(Collection {
+            person: r.person,
+            weights: None,
+            ranked: false,
+            ongoing,
+            items: Vec::new(),
+            identities: Default::default(),
+        });
+        tx.notify(Review { person: r.person })?;
+        let mut collection = tx.edit::<Offers>()?.active.take().unwrap();
+        collection
+            .items
+            .sort_unstable_by(|(a, _), (b, _)| a.key.cmp(&b.key));
+        Ok(collection.items.into_iter().map(|(p, _)| p).collect())
+    })?;
+    b.request::<Offer>(|tx, r| {
+        let weights = tx
+            .get::<game_traits::Traits>()
+            .ok()
+            .map(|t| t.weights(r.person));
+        let collection = tx
+            .edit::<Offers>()?
+            .active
+            .as_mut()
+            .ok_or_else(|| Error::Rejected("no choice collection".into()))?;
+        require(collection.person == r.person, "offer for another person")?;
+        collection.insert(r.proposal, weights)
+    })?;
+    b.request::<Run>(|tx, r| {
+        let response = tx.invoke(r.0)?;
+        require(
+            response != serde_json::Value::Bool(false),
+            "opportunity no longer available",
+        )?;
+        Ok(serde_json::from_value(response).unwrap_or(Outcome::Performed))
+    })
+}

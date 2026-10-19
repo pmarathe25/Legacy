@@ -159,9 +159,35 @@ impl Request for Renew {
     const KEY: &'static str = "ecology.renew";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Browse {
+    pub patch: u64,
+    pub quantity: u64,
+}
+impl Request for Browse {
+    const KEY: &'static str = "ecology.browse";
+    type Response = u64;
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("ecology", 1)?;
     b.resource::<Ecology>()?;
+    b.request::<Browse>(|tx, r| {
+        let quantity = tx.get::<Ecology>()?.available(r.patch)?.min(r.quantity);
+        if quantity > 0 {
+            if tx.registered::<PlantOrigin>() {
+                tx.call(PlantOrigin {
+                    patch: r.patch,
+                    quantity,
+                })?;
+            }
+            tx.edit::<Ecology>()?
+                .patches
+                .get_mut(&r.patch)
+                .unwrap()
+                .stock -= quantity;
+        }
+        Ok(quantity)
+    })?;
     b.request::<SetRenewal>(|tx, r| {
         require(
             tx.get::<Ecology>()?.patches.contains_key(&r.patch),
@@ -205,6 +231,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(id)
     })?;
     b.request::<Gather>(|tx, r| {
+        require(
+            game_vitality::can_walk(tx, r.person),
+            "gathering requires locomotion",
+        )?;
         game_physiology::capable(tx, r.person)?;
         require(r.quantity > 0, "empty gathering")?;
         let patch = tx

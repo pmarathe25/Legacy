@@ -62,3 +62,20 @@ fn fixture_state_roundtrips_with_only_required_plugins() {
     let loaded = builder().load(&save, 2).unwrap();
     assert_eq!(save, loaded.save().unwrap());
 }
+
+#[test]
+fn claimed_consent_does_not_override_a_healthy_targets_own_choice() {
+    let mut f = setup();
+    let before = f.host.save().unwrap();
+    assert!(
+        f.host
+            .dispatch(Confine {
+                custodian: f.ruler,
+                person: f.other,
+                consent: true,
+                resistance: u64::MAX
+            })
+            .is_err()
+    );
+    assert_eq!(before, f.host.save().unwrap());
+}

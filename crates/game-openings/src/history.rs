@@ -34,6 +34,8 @@ pub(super) fn initialize(
     let assets = assets::Assets::load(store, &definition)?;
     host.dispatch(game_communities::Enable)?;
     build::initialize(host, &definition, assets, seed, false)?;
+    host.dispatch(game_fauna::Seed { per_habitat: 2 })?;
+    host.dispatch(game_fauna::Start)?;
     host.dispatch(game_campaign::Start)?;
     let until = host.now().after(if player {
         settings.history

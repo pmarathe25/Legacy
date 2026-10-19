@@ -101,6 +101,18 @@ impl Builder {
     pub fn load(self, source: &str, workers: usize) -> Result<Host> {
         let save: Save<&serde_json::value::RawValue> =
             serde_json::from_str(source).map_err(registry::json_error)?;
+        self.restore(save, workers)
+    }
+    pub fn load_from(self, source: impl std::io::Read, workers: usize) -> Result<Host> {
+        let save: Save<Box<serde_json::value::RawValue>> =
+            serde_json::from_reader(source).map_err(registry::json_error)?;
+        self.restore(save, workers)
+    }
+    fn restore<R: std::borrow::Borrow<serde_json::value::RawValue>>(
+        self,
+        mut save: Save<R>,
+        workers: usize,
+    ) -> Result<Host> {
         require(
             save.version == 1 && save.plugins == self.registry.plugins,
             "incompatible save manifest",
@@ -113,23 +125,14 @@ impl Builder {
         for (id, codec) in &host.registry.resources {
             let value = save
                 .resources
-                .get(codec.key)
+                .remove(codec.key)
                 .ok_or_else(|| Error::InvalidSave(format!("missing {}", codec.key)))?;
-            host.data.insert(*id, (codec.decode)(value.get())?);
+            host.data.insert(*id, (codec.decode)(value.borrow().get())?);
         }
         let mut seen = std::collections::BTreeSet::new();
-        // Resource decoding has no registry access. Bind action payloads once
-        // after all owners and resources exist, before exposing the loaded host.
-        let stored = host
-            .data
-            .get_mut(&TypeId::of::<Actions>())
-            .expect("loaded actions");
-        let actions = Arc::get_mut(stored)
-            .expect("fresh resource")
-            .downcast_mut::<Actions>()
-            .expect("action type");
-        let ids: Vec<_> = actions.0.keys().copied().collect();
-        for id in ids {
+        let actions =
+            registry::mutable::<Actions>(host.data.get_mut(&TypeId::of::<Actions>()).unwrap());
+        for id in actions.0.keys().copied().collect::<Vec<_>>() {
             let action = actions.0.get_mut(&id).expect("loaded action");
             action.cancel.bind(&host.registry)?;
         }

@@ -1,23 +1,35 @@
 # game-storage
 
-Persistent ordered tables keep transaction snapshots cheap while preserving stable game IDs. This crate owns storage only; features own their records and validation.
+`game-storage` provides persistent copy-on-write B-tree tables, sparse shared records, and deadline agendas for simulation resources.
 
-`Table<K, V>` stores numeric records in contiguous leaves of at most 64 rows. Branches hold at most 32 child references. Cloning a table shares its immutable root. A write copies the path and affected leaf; splits trim spare allocation capacity, and deletion merges adjacent nodes when they fit. Storage scales with occupied records, including when IDs have large gaps.
+**Why it matters:** Transactional rollback and save validation need cheap snapshots, incremental change detection, and deterministic key-ordered iteration even when entity IDs have large gaps.
 
-`Records<K, V>` uses the same table with individually shared values for sparse, heap-owning records. A mutation copies one sparse value. Replacement and removal return a shared snapshot, avoiding a deep copy when the old value is discarded. Growing personal histories, relationships, and skill profiles use nested persistent tables so an update also stays bounded within one person.
+## Responsibilities
 
-Borrowed-key lookups, `insert`, `remove`, `entry`, ordered ranges, and `changed(previous)` support owner requests and incremental validation. `changed` conservatively includes numeric rows from touched leaves; sparse records filter unchanged shared values. Removed records are absent, so cross-record constraints involving deletion need owner checks. Save loading validates complete resources.
+- **Dense persistent tables (`Table<K, V>`):** Stores small numeric records in contiguous leaves (up to 64 rows) and branches (up to 32 children) with copy-on-write path cloning.
+- **Sparse shared records (`Records<K, V>`):** Wraps heap-owning per-entity records (such as histories or relationship maps) in individually reference-counted pointers so mutating one entity copies only that entity's value.
+- **Deadline queues (`Agenda<K, T>`):** Tracks one deadline per key and derives an ordered `(time, key)` index for due-work scans.
+- **Incremental diffs & cache tokens:** Exposes `changed(previous)`, `changed_pairs(previous)`, and process-local `version()` tokens for fast post-transaction validation.
 
-Empty tables allocate nothing. `modify` updates an existing row with one search and creates its default only when absent. `changed_pairs` supplies previous values by merging aligned leaves; structural changes fall back to keyed lookup. Validation avoids searching the previous tree for every unchanged neighbour. Callers of `changed` that only need current values skip old-value pairing entirely.
+## Boundaries
 
-`version` returns a weak cache token. Writes invalidate it, including writes made without a strong snapshot. It keeps the allocation identity available for comparison without retaining records. Tokens are process-local and excluded from saves and game ordering.
+- **Storage mechanics only:** Owns tree layout, path copying, and parallel leaf staging; feature crates own record schemas and gameplay invariants.
+- **Cold/sparse counterpart to `game-packed`:** `game-storage` handles persistent trees and sparse records, whereas [`game-packed`](../game-packed/README.md) handles hot dense component arrays with undo journals.
 
-`Agenda<K, T>` stores one deadline per key and derives its time index on load. Due scans visit time and key order; replacing or cancelling a deadline uses bounded table updates.
+## How It Works
 
-`update` stages disjoint leaves with the host's bounded Rayon pool. Small tables run inline. The callback reads its key and changes its own row. Shared-resource arbitration and structural changes remain outside this numeric phase. A worker panic discards the transaction.
+- **Copy-on-write snapshots:** Cloning a `Table` or `Records` shares its root pointer in $O(1)$ time; subsequent mutations clone only the touched branch path and leaf.
+- **Aligned diff scans:** `changed` and `changed_pairs` skip identical shared subtrees by pointer identity, visiting only leaves modified since the checkpoint.
+- **Parallel leaf updates:** `Table::update` stages disjoint leaves across a bounded Rayon thread pool and aborts the transaction if any worker panics.
+- **Canonical serialization:** Saves emit logical `(key, value)` pairs in sorted key order, never exposing internal tree branching.
 
-Range scans seek to their lower bound. Traversal keeps one frame per tree level and allocates nothing for a single leaf.
+## Game Integration
 
-Serialization writes logical records in key order and excludes tree layout. Loading rebuilds the table and rejects duplicate keys. Physical placement and worker completion order never assign identity or event order.
+- **Plugin / Entry Point:** Pure library crate; registers no `game-sim` plugin.
+- **Requests & Events:** None.
+- **Callers:** Used by `game-sim` and feature crates for cold/sparse resources, nested per-person tables, and deadline agendas.
 
-Run `cargo test -p game-storage`. Differential tests compare splits, merges, deletion, snapshots, and pagination against an ordered reference. Other tests verify bounded copies, incremental change detection, worker equality, and panic isolation. See the [performance harness](../../tools/performance/README.md) for the storage comparison and current workload measurements.
+## Dependencies & Testing
+
+- **Dependencies:** None (foundational storage crate).
+- **Testing:** `cargo test -p game-storage` runs differential tests against `BTreeMap` across splits, merges, snapshots, incremental diffs, and worker panics.

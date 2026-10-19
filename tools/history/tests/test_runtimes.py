@@ -41,6 +41,23 @@ class RuntimeUpgrade(unittest.TestCase):
         self.assertEqual(len(self.state['runtime_upgrades']),1)
         self.assertFalse(runtimes.accept_upgrade(self.plan,self.state,self.root))
 
+    def test_canonical_world_upgrade_checks_retained_values(self):
+        from state_hashes import artifact_digest, WORLD_CANONICAL
+        self.report['hash_mode'] = WORLD_CANONICAL
+        for build, text in [('control', '{"time":7,"jobs":[1,2]}'),
+                            ('candidate', '{"jobs":[1,2],"time":7}')]:
+            path = self.root/f'03-{build}'/'checkpoint.json'
+            path.write_text(text)
+            for run in self.report['runs']:
+                if run['build'] == build:
+                    run['hashes']['checkpoint.json'] = artifact_digest(path, WORLD_CANONICAL)
+        self.write_report()
+        state = copy.deepcopy(self.state)
+        self.assertTrue(runtimes.accept_upgrade(self.plan, state, self.root))
+        (self.root/'03-candidate'/'checkpoint.json').write_text('{"time":8,"jobs":[1,2]}')
+        with self.assertRaises(ValueError):
+            runtimes.accept_upgrade(self.plan, self.state, self.root)
+
     def test_different_journal_rejects_upgrade_without_mutating_study(self):
         self.report['runs'][-1]['hashes']['events.jsonl']='different';self.write_report()
         previous=copy.deepcopy(self.state)
@@ -52,6 +69,14 @@ class RuntimeUpgrade(unittest.TestCase):
         previous=copy.deepcopy(self.state)
         with self.assertRaises(ValueError):runtimes.accept_upgrade(self.plan,self.state,self.root)
         self.assertEqual(self.state,previous)
+
+    def test_behavioral_comparison_cannot_authorize_an_equivalent_upgrade(self):
+        self.report['mode'] = 'behavioral'
+        self.write_report()
+        previous = copy.deepcopy(self.state)
+        with self.assertRaises(ValueError):
+            runtimes.accept_upgrade(self.plan, self.state, self.root)
+        self.assertEqual(self.state, previous)
 
     def test_other_checkpoint_or_live_writer_cannot_be_upgraded(self):
         previous=copy.deepcopy(self.state)

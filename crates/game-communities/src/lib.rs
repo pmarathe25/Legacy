@@ -3,6 +3,7 @@ mod organizing;
 use game_core::*;
 use game_sim::*;
 use game_storage::Table;
+pub use organizing::Cooperate;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

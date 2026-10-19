@@ -1,4 +1,3 @@
-//! Crop phases, paid seed inputs, seasonal growth, and real harvest labor.
 use game_storage::Table;
 mod genetics;
 mod harvest;
@@ -39,6 +38,8 @@ pub struct Plot {
     pub harvests: u64,
     #[serde(default)]
     pub progress: Option<game_crops::Growth>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cohorts: Vec<game_crop_cohorts::Cohort>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Work {
@@ -60,12 +61,6 @@ impl Resource for Farms {
         self.plots.keys().map(|id| id.0).collect()
     }
     const KEY: &'static str = "agriculture.plots";
-    fn validate(&self) -> Result<()> {
-        self.validate_rows(self.plots.values())
-    }
-    fn validate_changes(&self, previous: &Self) -> Result<()> {
-        self.validate_rows(self.plots.changed(&previous.plots).map(|(_, row)| row))
-    }
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Create(pub Plot);
@@ -142,6 +137,10 @@ fn local(
     inventory: InventoryId,
 ) -> Result<()> {
     game_physiology::capable(tx, person)?;
+    require(
+        game_vitality::can_manipulate(tx, person),
+        "cannot yet manipulate farming supplies",
+    )?;
     let p = tx
         .get::<Farms>()?
         .plots
@@ -201,7 +200,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             purpose: "sowing".into(),
         })?;
         let crop = genetics::crop(tx, r.plot)?;
-        genetics::select(tx, r.person, r.plot, r.seed, crop.seed)?;
+        genetics::select(tx, r.person, r.plot, r.seed, crop.seed, crop.seed_input)?;
         tx.call(game_cargo::Consume {
             inventory: r.seed,
             good: crop.seed,
@@ -228,8 +227,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let w = tx.edit::<Farms>()?.work.remove(&r.person).unwrap();
         let ready = tx.now().after(genetics::crop(tx, w.plot)?.growth)?;
         let progress = game_crops::Growth::new(tx.now());
-        tx.edit::<Farms>()?.plots.get_mut(&w.plot).unwrap().progress = Some(progress);
-        tx.edit::<Farms>()?.plots.get_mut(&w.plot).unwrap().phase = Phase::Growing { ready };
+        let plot = tx.edit::<Farms>()?.plots.get_mut(&w.plot).unwrap();
+        game_crop_cohorts::reset(&mut plot.cohorts, &progress);
+        plot.progress = Some(progress);
+        plot.phase = Phase::Growing { ready };
         tx.finish_action(r.person, "farm")?;
         tx.schedule(ready, 25, Ripe { plot: w.plot })?;
         tx.call(game_skills::Practice {
@@ -243,14 +244,23 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Ripe>(|tx, r| {
         let crop = genetics::crop(tx, r.plot)?;
         let season = game_environment::at(tx, tx.get::<Farms>()?.plots[&r.plot].area)?;
-        let productive = season.warmth >= crop.minimum_warmth
-            && season.rain >= crop.minimum_rain
-            && crop.maximum_warmth.is_none_or(|v| season.warmth <= v)
-            && crop.maximum_rain.is_none_or(|v| season.rain <= v);
+        let productive = crop.suitable(season);
         genetics::update(tx, r.plot, None)?;
+        let plot = &tx.get::<Farms>()?.plots[&r.plot];
+        let mixed = if plot.cohorts.is_empty() {
+            None
+        } else {
+            Some(game_crop_cohorts::yield_units(
+                tx.get::<Crops>()?,
+                &plot.crop,
+                &plot.cohorts,
+            )?)
+        };
         let plot = tx.edit::<Farms>()?.plots.get_mut(&r.plot).unwrap();
         plot.phase = Phase::Ripe {
-            yield_units: if let Some(growth) = &plot.progress {
+            yield_units: if let Some(yield_units) = mixed {
+                yield_units
+            } else if let Some(growth) = &plot.progress {
                 growth.yield_units(crop.yield_units)
             } else if productive {
                 crop.yield_units
@@ -318,10 +328,4 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })
-}
-
-impl Farms {
-    fn validate_rows<'a>(&'a self, mut rows: impl Iterator<Item = &'a Plot>) -> Result<()> {
-        require(rows.all(|p| !p.crop.is_empty()), "invalid crop reference")
-    }
 }

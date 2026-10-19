@@ -22,6 +22,13 @@ impl Request for Serve {
     const KEY: &'static str = "physiology.serve";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Eating {
+    pub person: PersonId,
+}
+impl Event for Eating {
+    const KEY: &'static str = "physiology.eating";
+}
 fn consume(
     tx: &mut Transaction<'_>,
     carer: PersonId,
@@ -29,9 +36,20 @@ fn consume(
     inventory: InventoryId,
     good: GoodId,
     quantity: u64,
+    forced: bool,
 ) -> Result<()> {
     capable(tx, carer)?;
-    capable(tx, person)?;
+    require(
+        game_vitality::can_manipulate(tx, carer),
+        "feeding exceeds motor capacity",
+    )?;
+    require(
+        tx.get::<Bodies>()?
+            .people
+            .get(&person)
+            .is_some_and(|b| b.alive),
+        "patient is dead or unknown",
+    )?;
     require(
         !tx.get::<Actions>()?.0.contains_key(&carer),
         "actor is busy",
@@ -49,14 +67,30 @@ fn consume(
         .clone()
         .ok_or_else(|| Error::Rejected("not edible".into()))?;
     require(quantity > 0, "empty meal")?;
-    if carer != person {
+    if forced {
         require(
-            tx.get::<Actions>()?
-                .0
-                .get(&person)
-                .is_none_or(|a| a.kind == "rest"),
-            "recipient is occupied",
+            tx.registered::<Restrained>()
+                && tx.call(Restrained {
+                    actor: carer,
+                    patient: person,
+                })?,
+            "administration needs physical restraint",
         )?;
+        tx.cancel_action(person)?;
+    }
+    if carer != person && !forced {
+        let action = tx.get::<Actions>()?.0.get(&person);
+        require(
+            action.is_none_or(|a| a.kind != "combat"),
+            "recipient is in combat",
+        )?;
+        let commitment = action
+            .filter(|a| !["rest", "express-need"].contains(&a.kind.as_str()))
+            .map_or(0, |a| {
+                a.until.map_or(30, |until| {
+                    (until.0.saturating_sub(tx.now().0) / MINUTE.0).min(120) as i128
+                }) + i128::from(game_vitality::ability(tx, person, "attention").min(16000) / 100)
+            });
         let hunger = i128::from(tx.get::<Bodies>()?.people[&person].hunger.min(1000));
         let preference = game_nutrition::preference(tx, person, good, &food)
             .saturating_sub(food.relief.min(i64::MAX as u64) as i64);
@@ -72,19 +106,33 @@ fn consume(
                 .saturating_add(appetite)
                 .saturating_add(preference)
                 .saturating_sub(excess.saturating_mul(2))
-                > 10,
+                > 10 + commitment,
             "offered food declined",
         )?;
+        if tx
+            .get::<Actions>()?
+            .0
+            .get(&person)
+            .is_some_and(|a| a.kind != "rest")
+        {
+            tx.cancel_action(person)?;
+        }
     }
     tx.call(game_property::Use {
         actor: carer,
         inventory,
         purpose: if carer == person { "eating" } else { "feeding" }.into(),
     })?;
+    tx.notify(Eating { person })?;
     tx.call(game_cargo::Consume {
         inventory,
         good,
         quantity,
+    })?;
+    tx.call(game_digestion::Ingest {
+        person,
+        amount: (u128::from(quantity) * 1000 / u128::from(food.portion)).min(u128::from(u64::MAX))
+            as u64,
     })?;
     let effects = if tx.registered::<game_nutrition::Meal>() {
         tx.call(game_nutrition::Meal {
@@ -112,6 +160,7 @@ fn consume(
     }
     tx.emit(
         Fed {
+            inventory: Some(inventory),
             caregiver: carer,
             patient: person,
             good,
@@ -124,12 +173,54 @@ fn consume(
             .collect(),
     )
 }
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Restrained {
+    pub actor: PersonId,
+    pub patient: PersonId,
+}
+impl Request for Restrained {
+    const KEY: &'static str = "physiology.restrained";
+    type Response = bool;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Administer(pub Serve);
+impl Request for Administer {
+    const KEY: &'static str = "physiology.administer";
+    type Response = ();
+}
 pub(super) fn register(b: &mut Builder) -> Result<()> {
+    b.request::<Administer>(|tx, r| {
+        consume(
+            tx,
+            r.0.caregiver,
+            r.0.patient,
+            r.0.inventory,
+            r.0.good,
+            r.0.quantity,
+            true,
+        )
+    })?;
     b.request::<Serve>(|tx, r| {
-        consume(tx, r.caregiver, r.patient, r.inventory, r.good, r.quantity)
+        consume(
+            tx,
+            r.caregiver,
+            r.patient,
+            r.inventory,
+            r.good,
+            r.quantity,
+            false,
+        )
     })?;
     b.request::<ConsumeEdible>(|tx, r| {
-        consume(tx, r.person, r.person, r.inventory, r.good, r.quantity)
+        consume(
+            tx,
+            r.person,
+            r.person,
+            r.inventory,
+            r.good,
+            r.quantity,
+            false,
+        )
     })?;
     b.request::<Eat>(|tx, r| {
         let inventory = tx
@@ -154,7 +245,15 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .ok_or_else(|| Error::Missing("inventory".into()))?;
         let (good, food) = game_nutrition::choose_meal(tx, r.caregiver, &inventory.goods)
             .ok_or_else(|| Error::Rejected("no edible portion".into()))?;
-        consume(tx, r.caregiver, r.patient, r.inventory, good, food.portion)
+        consume(
+            tx,
+            r.caregiver,
+            r.patient,
+            r.inventory,
+            good,
+            food.portion,
+            false,
+        )
     })?;
     b.subscribe::<game_nutrition::Withdrawal>("physiology.withdrawal", |tx, e| {
         if capable(tx, e.person).is_ok() {

@@ -95,6 +95,7 @@ impl Ledger {
                     | "discourse.spoken"
                     | "communication.learned"
                     | "works.created"
+                    | "works.shared"
                     | "institutions.membership-changed"
                     | "institutions.procedure-changed"
                     | "equipment.exposed"

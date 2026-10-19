@@ -24,6 +24,7 @@ pub fn builder() -> Builder {
     game_skills::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_traits::plugin(&mut b).unwrap();
     game_lineage::plugin(&mut b).unwrap();

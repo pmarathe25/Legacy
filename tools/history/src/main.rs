@@ -36,6 +36,7 @@ fn run() -> Result<()> {
     let mut notable = true;
     let mut final_save = true;
     let mut record_distress = false;
+    let mut continue_after_extinction = false;
     let mut advance_budget = 1;
     let mut stop_file: Option<PathBuf> = None;
     let args: Vec<_> = std::env::args().skip(1).collect();
@@ -55,6 +56,7 @@ fn run() -> Result<()> {
             "--resume" => resume = Some(PathBuf::from(value)),
             "--final-save" => final_save = value.parse()?,
             "--distress" => record_distress = value.parse()?,
+            "--continue-after-extinction" => continue_after_extinction = value.parse()?,
             "--journal" => {
                 notable = match value.as_str() {
                     "full" => false,
@@ -77,11 +79,11 @@ fn run() -> Result<()> {
     }
     let loading = game_diagnostics::span("history load");
     let (mut sim, mut ledger, first_day) = if let Some(folder) = &resume {
-        let saved = std::fs::read_to_string(folder.join("checkpoint.json"))?;
+        let mut saved = BufReader::new(File::open(folder.join("checkpoint.json"))?);
         let ledger: Ledger = serde_json::from_reader(BufReader::new(File::open(
             folder.join("checkpoint-ledger.json"),
         )?))?;
-        let sim = game_assembly::Simulation::load(&saved, workers)?;
+        let sim = game_assembly::Simulation::load_from(&mut saved, workers)?;
         if sim.debug_host().notices().last().map_or(0, |n| n.sequence) != ledger.sequence {
             return Err("world and journal checkpoint do not match".into());
         }
@@ -156,6 +158,7 @@ fn run() -> Result<()> {
             serde_json::to_value(&sim.debug_host().get::<game_cultivars::Cultivars>()?.stocks)?;
     }
     write_json(output.join("initial.json"), &initial, true)?;
+    drop(initial);
     for day in first_day..=days {
         let target = SimTime(
             epoch
@@ -185,7 +188,12 @@ fn run() -> Result<()> {
             eprintln!("seed {seed}: depth {max_generation} first reached on day {day}");
             last_generation = max_generation;
         }
-        if day % sample == 0 || day == days || reached || extinct || stopped {
+        if day % sample == 0
+            || day == days
+            || reached
+            || extinct && !continue_after_extinction
+            || stopped
+        {
             let mut row = snapshots::snapshot(sim.debug_host(), &ledger)?;
             row["day"] = json!(day);
             serde_json::to_writer(&mut daily, &row)?;
@@ -199,7 +207,12 @@ fn run() -> Result<()> {
             );
         }
         journal.flush()?;
-        if day % checkpoint == 0 && !reached && !extinct && !stopped && day != days {
+        if day % checkpoint == 0
+            && !reached
+            && (!extinct || continue_after_extinction)
+            && !stopped
+            && day != days
+        {
             save_checkpoint(&output, &sim, &ledger)?;
             checkpointed = Some(day);
         }
@@ -210,7 +223,7 @@ fn run() -> Result<()> {
                 return Err("save/load changed the world".into());
             }
         }
-        if reached || extinct || stopped {
+        if reached || extinct && !continue_after_extinction || stopped {
             break;
         }
     }
@@ -309,9 +322,19 @@ mod tests {
     }
     #[test]
     fn notable_plant_records_keep_observed_genomes_without_every_fruit_family() {
-        let mut sim =
-            game_assembly::Simulation::uncontrolled(3, 1, &mut game_content::Store::standard())
-                .unwrap();
+        // Keep every habitat; this test exercises plant records rather than population scale.
+        let root =
+            std::env::temp_dir().join(format!("legacy-journal-flora-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("worldgen")).unwrap();
+        let content = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../content");
+        let settings = std::fs::read_to_string(content.join("worldgen/default.toml"))
+            .unwrap()
+            .replace("population = 96", "population = 24");
+        std::fs::write(root.join("worldgen/default.toml"), settings).unwrap();
+        let mut store = game_content::Store::standard();
+        store.overlay(&root).unwrap();
+        let mut sim = game_assembly::Simulation::uncontrolled(3, 1, &mut store).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         let mut ledger = Ledger {
             epoch: sim.now().0,
             sequence: sim.debug_host().notices().last().map_or(0, |n| n.sequence),
@@ -321,9 +344,29 @@ mod tests {
         };
         let mut out = vec![];
         let target = sim.now().after(SimDuration(30 * DAY.0)).unwrap();
+        let mut previous = sim.now();
+        let mut stagnant = 0;
         while advance_commits(&mut sim, target, 64, &mut ledger, &mut out).unwrap()
             == game_sim::Stop::Budget
-        {}
+        {
+            stagnant = if sim.now() == previous {
+                stagnant + 1
+            } else {
+                0
+            };
+            if stagnant >= 1000 {
+                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../target/history/test-failures/notable-plants");
+                std::fs::create_dir_all(&root).unwrap();
+                std::fs::write(root.join("world.json"), sim.save().unwrap()).unwrap();
+                panic!(
+                    "history made 64,000 commits without advancing from {:?}; state: {}",
+                    sim.now(),
+                    root.display()
+                );
+            }
+            previous = sim.now();
+        }
         let rows: Vec<Value> = String::from_utf8(out)
             .unwrap()
             .lines()
@@ -403,6 +446,7 @@ mod tests {
                 }
                 tx.emit(
                     game_physiology::Fed {
+                        inventory: None,
                         caregiver: PersonId(1),
                         patient: PersonId(2),
                         good: GoodId(4),

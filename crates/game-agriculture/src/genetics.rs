@@ -35,7 +35,9 @@ pub(super) fn crop(tx: &Transaction<'_>, plot: PlotId) -> Result<Crop> {
         .plots
         .get(&plot)
         .ok_or_else(|| Error::Missing("plot".into()))?;
-    tx.get::<Crops>()?.expressed(&p.crop, p.strain.as_ref())
+    let mut crop = tx.get::<Crops>()?.expressed(&p.crop, p.strain.as_ref())?;
+    crop.growth = game_crop_cohorts::duration(tx.get()?, &p.crop, &p.cohorts, crop.growth)?;
+    Ok(crop)
 }
 
 pub(super) fn select(
@@ -44,6 +46,7 @@ pub(super) fn select(
     plot: PlotId,
     inventory: InventoryId,
     good: GoodId,
+    quantity: u64,
 ) -> Result<()> {
     let strain = if tx.get::<Crops>()?.natural {
         tx.call(game_cultivars::Select {
@@ -54,9 +57,17 @@ pub(super) fn select(
     } else {
         None
     };
+    let cohorts = game_crop_cohorts::sown(
+        tx.get::<game_cultivars::Cultivars>().ok(),
+        inventory,
+        good,
+        quantity,
+        tx.now(),
+    );
     let at = tx.now();
     let p = tx.edit::<Farms>()?.plots.get_mut(&plot).unwrap();
     p.strain = strain;
+    p.cohorts = cohorts;
     p.established = Some(at);
     p.harvests = 0;
     Ok(())
@@ -69,58 +80,29 @@ pub(super) fn harvest(
     quantity: u64,
 ) -> Result<()> {
     let p = tx.get::<Farms>()?.plots[&plot].clone();
-    let Some(mother) = p.strain.clone() else {
-        return Ok(());
-    };
     let crop = crop(tx, plot)?;
-    tx.call(game_cultivars::Observe {
-        person,
-        strain: mother.id,
-        yield_units: quantity,
-        duration: crop.growth,
-    })?;
-    if quantity == 0 {
+    let parents = if p.cohorts.is_empty() {
+        p.strain
+            .clone()
+            .map(|s| vec![(s, quantity)])
+            .unwrap_or_default()
+    } else {
+        game_crop_cohorts::weights(tx.get()?, &p.crop, &p.cohorts)?
+    };
+    if parents.is_empty() {
         return Ok(());
     }
-    let area = p.area;
     let mates: Vec<_> = tx
         .get::<Farms>()?
         .plots
-        .iter()
-        .filter(|(id, p)| {
-            **id != plot
-                && p.area == area
-                && matches!(p.phase, Phase::Ripe { .. } | Phase::Harvesting { .. })
+        .values()
+        .filter(|other| {
+            other.area == p.area
+                && matches!(other.phase, Phase::Ripe { .. } | Phase::Harvesting { .. })
         })
-        .filter_map(|(_, p)| {
-            p.strain
-                .as_ref()
-                .filter(|s| s.species == mother.species)
-                .cloned()
-        })
+        .flat_map(|other| game_crop_cohorts::strains(&other.cohorts, other.strain.as_ref()))
         .collect();
-    let father = if mates.is_empty() {
-        mother.clone()
-    } else {
-        mates[(random(tx.seed(), plot.0, tx.now().0) % mates.len() as u64) as usize].clone()
-    };
-    let clonal = tx
-        .get::<game_objects::Objects>()?
-        .by_id(crop.seed)?
-        .tags
-        .contains("clonal");
-    let strain = tx.call(game_cultivars::Make {
-        species: mother.species,
-        mother: Some(mother),
-        father: Some(father),
-        clonal,
-    })?;
-    tx.call(game_cultivars::Expect {
-        inventory,
-        good: crop.output,
-        quantity,
-        strain,
-    })
+    game_crop_cohorts::offspring(tx, person, &parents, &mates, quantity, &crop, inventory)
 }
 pub(super) fn after_harvest(tx: &mut Transaction<'_>, plot: PlotId, remaining: u64) -> Result<()> {
     if remaining > 0 {
@@ -143,6 +125,7 @@ pub(super) fn after_harvest(tx: &mut Transaction<'_>, plot: PlotId, remaining: u
     let p = tx.edit::<Farms>()?.plots.get_mut(&plot).unwrap();
     p.phase = phase;
     p.progress = regrowth.map(|_| game_crops::Growth::new(now));
+    game_crop_cohorts::reset(&mut p.cohorts, &game_crops::Growth::new(now));
     p.harvests = p.harvests.saturating_add(1);
     Ok(())
 }
@@ -166,6 +149,15 @@ pub(super) fn update(
         &c,
         tx.now(),
     )?;
-    tx.edit::<Farms>()?.plots.get_mut(&plot).unwrap().progress = Some(growth);
+    let cohorts = game_crop_cohorts::advance(
+        tx.get()?,
+        &p.crop,
+        &p.cohorts,
+        previous.unwrap_or(game_environment::climate(tx, p.area)?),
+        tx.now(),
+    )?;
+    let p = tx.edit::<Farms>()?.plots.get_mut(&plot).unwrap();
+    p.progress = Some(growth);
+    p.cohorts = cohorts;
     Ok(())
 }

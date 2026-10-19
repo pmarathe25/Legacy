@@ -124,6 +124,7 @@ pub fn builder() -> Builder {
     game_physiology::plugin(&mut b).unwrap();
     game_skills::plugin(&mut b).unwrap();
     game_knowledge::plugin(&mut b).unwrap();
+    game_testimony::plugin(&mut b).unwrap();
     game_ecology::plugin(&mut b).unwrap();
     b.plugin("provisioning-test", 1).unwrap();
     b.request::<super::Choices>(|tx, r| {

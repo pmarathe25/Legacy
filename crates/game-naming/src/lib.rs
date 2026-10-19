@@ -34,13 +34,15 @@ fn invent(tx: &mut Transaction<'_>, chooser: PersonId, child: PersonId) -> Resul
     let draw = random(tx.seed(), chooser.0, child.0.wrapping_add(883));
     let a = first(known[(draw % known.len() as u64) as usize]);
     let b = first(known[((draw / 17) % known.len() as u64) as usize]);
-    let prefix: String = a.chars().take((a.chars().count() / 2).max(1)).collect();
+    let prefix_len = 1 + ((draw / 31) % a.chars().count().max(1) as u64) as usize;
+    let suffix_start = ((draw / 101) % b.chars().count().max(1) as u64) as usize;
+    let prefix: String = a.chars().take(prefix_len).collect();
     let suffix: String = b
         .chars()
-        .skip(b.chars().count() / 2)
+        .skip(suffix_start)
         .flat_map(char::to_lowercase)
         .collect();
-    Ok(format!("{prefix}{suffix}"))
+    Ok(format!("{prefix}{suffix}").chars().take(80).collect())
 }
 fn contextual(
     tx: &mut Transaction<'_>,
@@ -139,18 +141,25 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             + affection(tx, r.person, identity.chosen_by).max(0);
         let creative = disposition(tx, r.person, "creativity");
         let ambition = disposition(tx, r.person, "ambition");
+        let support = |speaker| affection(tx, r.person, speaker) * 4 + creative / 2 + ambition / 4;
+        let incumbent = names
+            .offers
+            .get(&r.person)
+            .into_iter()
+            .flat_map(|row| row.iter())
+            .filter(|(_, name)| *name == &current.1)
+            .map(|(speaker, _)| support(*speaker))
+            .max()
+            .unwrap_or(0);
+        // Compare the present name too: equally appealing offers need not cause oscillation.
+        let switching_cost = 25 + disposition(tx, r.person, "patience") / 10;
         let mut candidate = names
             .offers
             .get(&r.person)
             .into_iter()
             .flat_map(|row| row.iter())
             .filter(|(_, name)| *name != &current.1)
-            .map(|(speaker, name)| {
-                (
-                    affection(tx, r.person, *speaker) * 4 + creative / 2 + ambition / 4,
-                    name.clone(),
-                )
-            })
+            .map(|(speaker, name)| (support(*speaker), name.clone()))
             .max_by(|a, b| a.0.cmp(&b.0).then_with(|| b.1.cmp(&a.1)));
         // Self-fashioning competes with attachment to the existing identity.
         if identity.changes.len() == 1 && creative + ambition > 1450 {
@@ -163,6 +172,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         if let Some((score, name)) = candidate
             && score > inertia
+            && score > incumbent + switching_cost
         {
             tx.call(Change {
                 person: r.person,
@@ -247,25 +257,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
-    b.subscribe::<game_works::Created>("naming.reputation", |tx, e| {
+    b.subscribe::<game_works::Shared>("naming.reputation", |tx, e| {
         if !tx.get::<Names>()?.enabled {
             return Ok(());
         }
-        let listeners: Vec<_> = tx.get::<game_works::Works>()?.pieces[&e.work]
-            .audience
-            .keys()
-            .copied()
-            .collect();
-        for listener in listeners {
-            let heard = tx
-                .attempt(LearnName {
-                    listener,
-                    person: e.creator,
-                })
-                .is_ok();
-            if heard && disposition(tx, listener, "creativity") > 350 {
-                contextual(tx, listener, e.creator, Kind::Title, "Teller")?;
-            }
+        let heard = tx
+            .attempt(LearnName {
+                listener: e.listener,
+                person: e.speaker,
+            })
+            .is_ok();
+        if heard && disposition(tx, e.listener, "creativity") > 350 {
+            contextual(tx, e.listener, e.speaker, Kind::Title, "Teller")?;
         }
         Ok(())
     })?;

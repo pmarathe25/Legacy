@@ -116,6 +116,7 @@ pub fn verify() {
             fatigue_fraction: 0,
             hunger_fraction: 0,
             recovery_fraction: 0,
+            healing_fraction: 0,
             metabolic_rates: Default::default(),
             resting: x & 4 != 0,
             last: SimTime(last),
@@ -160,6 +161,7 @@ pub fn measure(n: usize) {
             fatigue_fraction: 0,
             hunger_fraction: 0,
             recovery_fraction: 0,
+            healing_fraction: 0,
             metabolic_rates: Default::default(),
         })
         .collect();

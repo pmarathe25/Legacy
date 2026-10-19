@@ -19,6 +19,7 @@ game-nutrition.workspace = true
 game-health.workspace = true
 serde.workspace = true
 [dev-dependencies]
+game-testimony.workspace = true
 game-communities.workspace = true
 game-institutions.workspace = true
 game-content.workspace = true

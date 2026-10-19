@@ -37,7 +37,11 @@ pub(super) fn suggest(tx: &mut Transaction<'_>, r: SuggestChild) -> Result<Strin
             )
         })
         .collect();
-    for offset in 0..4 {
+    let breadth = (4
+        + game_vitality::ability(tx, r.chooser, "intelligence") / 500
+        + creativity.max(0) as u64 / 250)
+        .clamp(4, 64);
+    for offset in 0..breadth {
         let salt = PersonId(r.child.0.wrapping_add(offset * 997));
         candidates.push((invent(tx, r.chooser, salt)?, 10 + creativity / 4));
     }

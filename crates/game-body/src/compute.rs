@@ -51,6 +51,23 @@ pub fn advance_rates(body: &Body, rules: &Rules, at: SimTime, rates: Rates) -> B
             let harmful = first
                 .filter(|first| *first <= u128::from(ticks))
                 .map_or(0, |first| u128::from(ticks) - first + 1) as u64;
+            if p.resting && p.health > 0 && p.health < p.maximum(rules) {
+                let healing = u128::from(ticks - harmful)
+                    .saturating_mul(u128::from(rules.tick.0))
+                    .saturating_mul(u128::from(rules.natural_recovery))
+                    .saturating_mul(u128::from(rates.recovery))
+                    .saturating_add(u128::from(p.healing_fraction));
+                let unit = u128::from(DAY.0) * 1000;
+                p.health = p
+                    .health
+                    .saturating_add((healing / unit).min(u128::from(u64::MAX)) as u64)
+                    .min(p.maximum(rules));
+                p.healing_fraction = if p.health == p.maximum(rules) {
+                    0
+                } else {
+                    (healing % unit) as u64
+                };
+            }
             p.health = p
                 .health
                 .saturating_sub(harmful.saturating_mul(rules.harm_per_tick));

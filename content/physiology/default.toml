@@ -10,4 +10,5 @@ rest_per_tick = 8
 deprivation = 120
 harm_per_tick = 5
 guardian_recovery = 2
+natural_recovery = 2
 max_health = 100

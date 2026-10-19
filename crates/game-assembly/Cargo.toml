@@ -5,6 +5,23 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-information.workspace = true
+game-search.workspace = true
+game-mechanics.workspace = true
+game-invention.workspace = true
+game-save-compat.workspace = true
+game-companionship.workspace=true
+game-attachments.workspace=true
+game-credit.workspace=true
+game-fauna.workspace=true
+game-testimony.workspace = true
+game-observations.workspace = true
+game-literacy.workspace = true
+game-inquiry.workspace = true
+game-family-life.workspace = true
+game-signals.workspace = true
+game-comfort.workspace = true
+game-choice.workspace = true
 game-discourse.workspace = true
 game-communication.workspace = true
 game-parenthood.workspace = true

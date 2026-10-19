@@ -1,6 +1,10 @@
 //! Pure inherited trait calculations; interpretation belongs to consumers.
+mod gene_name;
+mod shared;
 use game_core::*;
+pub use gene_name::GeneName;
 use serde::{Deserialize, Serialize};
+pub use shared::{Genome, deserialize_genome};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Alleles(pub [u16; 2]);
 pub fn mutate(seed: u64, identity: u64, parent: Alleles, mutation: u16) -> Alleles {
@@ -51,6 +55,35 @@ pub fn inherit(
 }
 pub fn expression(alleles: Alleles) -> u16 {
     ((u32::from(alleles.0[0]) + u32::from(alleles.0[1])) / 2) as u16
+}
+
+/// Independent named founding loci do not change when unrelated loci are added.
+pub fn founder_genome<'a>(
+    seed: u64,
+    identity: u64,
+    loci: impl IntoIterator<Item = &'a str>,
+    minimum: u16,
+    maximum: u16,
+) -> game_core::Result<std::collections::BTreeMap<String, Alleles>> {
+    game_core::require(minimum <= maximum, "invalid founding allele range")?;
+    let span = u64::from(maximum) - u64::from(minimum) + 1;
+    Ok(loci
+        .into_iter()
+        .map(|key| {
+            let stream = key
+                .bytes()
+                .fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)));
+            (
+                key.to_owned(),
+                Alleles([
+                    (u64::from(minimum) + game_core::random(seed, identity, stream) % span) as u16,
+                    (u64::from(minimum)
+                        + game_core::random(seed, identity, stream.wrapping_add(1)) % span)
+                        as u16,
+                ]),
+            )
+        })
+        .collect())
 }
 #[cfg(test)]
 mod tests {
