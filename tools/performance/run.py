@@ -8,10 +8,11 @@ import re
 import subprocess
 
 parser = argparse.ArgumentParser(description=__doc__)
-parser.add_argument("--workload", choices=["all", "economy", "latency", "storage", "ledger", "perception", "traits", "architecture", "packed"], default="all")
+parser.add_argument("--workload", choices=["all", "economy", "latency", "storage", "ledger", "perception", "traits", "architecture", "packed", "language"], default="all")
 parser.add_argument("--population", nargs="+", type=int, default=[15, 1000, 10000, 20000])
 parser.add_argument("--workers", nargs="+", type=int, default=sorted({1, 2, 4, min(8, os.cpu_count() or 1)}))
 parser.add_argument("--repeats", type=int, default=3)
+parser.add_argument("--build-jobs", type=int, default=1)
 parser.add_argument("--allocation-profile", action="store_true")
 parser.add_argument("--system-allocator", action="store_true")
 parser.add_argument("--compact-storage", action="store_true")
@@ -24,8 +25,10 @@ if args.history < 0 or args.extra_patches < 0:
     parser.error("history and extra patches must be nonnegative")
 if args.repeats < 1:
     parser.error("repeats must be positive")
+if args.build_jobs < 1:
+    parser.error("build jobs must be positive")
 root = Path(__file__).resolve().parents[2]
-command = ["cargo", "bench", "-p", "game-performance", "--no-run", "--message-format=json", "--locked", "--offline", "-j", "2"]
+command = ["cargo", "bench", "-p", "game-performance", "--no-run", "--message-format=json", "--locked", "--offline", "-j", str(args.build_jobs)]
 if args.system_allocator:
     command.append("--no-default-features")
 if args.compact_storage:
@@ -71,7 +74,7 @@ if args.workload in ["all", "latency"]:
             for repeat in range(args.repeats):
                 print(f"workload=latency repeat={repeat}", flush=True)
                 run("latency", {"LEGACY_POPULATION": str(population), "LEGACY_WORKERS": str(workers)})
-for name in ["storage", "ledger", "traits", "architecture", "packed"]:
+for name in ["storage", "ledger", "traits", "architecture", "packed", "language"]:
     if args.workload in ["all", name]:
         run(name, {})
 

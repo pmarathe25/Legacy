@@ -1,12 +1,12 @@
 //! Genes express characteristics. Decisions consume traits, never genomes.
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Heredity {
-    pub loci: Table<PersonId, BTreeMap<String, game_genetics::Alleles>>,
+    pub loci: Records<PersonId, BTreeMap<String, game_genetics::Alleles>>,
     pub generation: Table<PersonId, u32>,
     pub maximum: u32,
     pub living: u64,

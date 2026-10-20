@@ -98,3 +98,9 @@ Set `chunks_per_invocation` to a positive number to return after that many verif
 `--distress true` writes a separate diagnostic `distress.jsonl` for urgent hunger. It records up to eight samples per continuous episode, at least two days apart, including current intentions, journeys, carried food, bulky goods, local physical food stocks, and caregiver context. It reads developer state and grants characters no information. Keep this mode to short investigations; normal histories leave it disabled.
 
 A study can set `continue_after_extinction: true` to observe the physical world through its requested horizon after all mortals die. Standalone histories accept `--continue-after-extinction true`. Extinction is still recorded in summaries and mortality evidence; no replacement population is introduced. This option extends ecological observation and does not turn extinct worlds into successful human lineages.
+
+Replay comparison supports `--start-temperature 72 --maximum-temperature 88`
+(Celsius). Cooling occurs before timing and is reported separately. Crossing the
+maximum aborts the replay, discards its timing and terminates the measured process
+group, including descendants of an exited timing wrapper. Affinity and CPU/memory
+limits must also be applied externally on thermally constrained machines.

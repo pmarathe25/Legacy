@@ -15,7 +15,7 @@
 
 ## How It Works
 
-- **Bounded LRU cache:** Retains projections for at most 1,024 recently queried characters in process-local memory; cache eviction or rollback rebuilds the exact same view from committed facts.
+- **Bounded LRU cache:** Retains projections for at most the larger of 1,024 characters and the current retained roster size in process-local memory; cache eviction or rollback rebuilds the exact same view from committed facts.
 - **Intelligence-scaled recall:** Personal carried packs and owned stores are always considered, while comparison across other remembered stores scales with expressed intelligence from [`game-vitality`](../game-vitality/README.md).
 
 ## Game Integration
@@ -28,3 +28,13 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-knowledge`](../game-knowledge/README.md), [`game-objects`](../game-objects/README.md), [`game-nutrition`](../game-nutrition/README.md), [`game-property`](../game-property/README.md), [`game-vitality`](../game-vitality/README.md).
 - **Testing:** `cargo test -p game-food-memory` verifies alias handling, moving carried containers, fact rollback invalidation, and nested query safety.
+
+Supply projections retain weak payload references for small personal supply maps,
+so an inventory index does not keep unrelated histories alive. Maps above 512
+supply/location facts retain the structural tree diff used for large workloads.
+This changes cache storage only; aliases, stale reports, rollbacks, and remembered
+quantities keep the same interpretation.
+
+Concurrent queries share immutable projection images through a bounded process cache.
+The cache lock covers refresh and image acquisition only; callbacks may safely make
+nested queries. A food assessor reuses one borrowed dietary evaluation per batch.

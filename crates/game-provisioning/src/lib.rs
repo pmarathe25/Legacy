@@ -93,6 +93,7 @@ fn options_for(
     let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) else {
         return Ok(vec![]);
     };
+    let walking = game_vitality::can_walk(tx, person);
     game_food_memory::with_stores(
         person,
         facts,
@@ -111,7 +112,7 @@ fn options_for(
                 if matches!(position, game_transport::Location::At(here) if *here == target) {
                     return Some(SimDuration(0));
                 }
-                if !game_vitality::can_walk(tx, person) {
+                if !walking {
                     return None;
                 }
                 *costs.entry(target).or_insert_with(|| {
@@ -122,7 +123,7 @@ fn options_for(
             };
             let can_cache = tx.registered::<game_stockpiles::StoreSurplus>();
             let mut options = vec![];
-            let mut dietary = diet::Cache::new();
+            let mut dietary = diet::Assessor::new(tx, person);
             let ranks = tx.get::<game_objects::Objects>()?.food_ranks();
             let stride = ranks.len() as u64;
             let mut sources = diet::sources(tx, person, stores);
@@ -153,9 +154,7 @@ fn options_for(
                 };
                 let self_supplied = diet::self_supplied(tx, person, inventory.id, location.carrier);
                 let risk = claims.cost(inventory.id);
-                for (good, appetite, value) in
-                    diet::stock_foods(tx, person, stock, &mut dietary, partial)
-                {
+                for (good, appetite, value) in dietary.stock_foods(tx.get()?, stock, partial) {
                     let id = inventory
                         .id
                         .0
@@ -247,7 +246,7 @@ fn options_for(
                 let Some((inventory, quantity, carrier)) = chosen else {
                     continue;
                 };
-                let (appetite, value) = diet::food(tx, person, p.good, food, &mut dietary);
+                let (appetite, value) = dietary.food(p.good, food);
                 options.push(Opportunity {
                     appetite,
                     value,
@@ -289,26 +288,58 @@ fn options_for(
                     }
                 }
             }
-            options.retain(|o| {
-                !matches!(o.plan, Plan::Forage { .. }) || game_vitality::can_walk(tx, person)
-            });
+            options.retain(|o| !matches!(o.plan, Plan::Forage { .. }) || walking);
             Ok(options)
         },
     )
 }
 /// Endpoints of remembered roads whose outgoing surroundings remain unknown.
 pub fn frontiers(facts: &Facts) -> Vec<AreaId> {
-    let mut areas = std::collections::BTreeSet::new();
-    for (_, fact) in with_prefix(facts, "roads:") {
-        if let Some(area) = fact.value.decode::<game_land::Area>() {
-            for next in area.links.keys() {
-                if !facts.contains_key(game_knowledge::roads_key(*next).as_str()) {
-                    areas.insert(*next);
+    use std::{cell::RefCell, collections::BTreeMap, sync::Weak};
+    type Entry = (Weak<()>, u64, Vec<AreaId>);
+    thread_local! { static CACHE: RefCell<(u64, BTreeMap<usize, Entry>)> = const { RefCell::new((0, BTreeMap::new())) }; }
+    let version = facts.namespace_version("roads");
+    let key = version.as_ptr() as usize;
+    CACHE.with(|slot| {
+        let mut cache = slot.borrow_mut();
+        cache.0 = cache.0.saturating_add(1);
+        let now = cache.0;
+        if let Some((_, used, found)) = cache.1.get_mut(&key) {
+            *used = now;
+            return found.clone();
+        }
+        let mut areas = std::collections::BTreeSet::new();
+        for (_, fact) in with_prefix(facts, "roads:") {
+            let area = match fact.value.as_ref() {
+                game_knowledge::FactValue::Roads(a) => Some(std::borrow::Cow::Borrowed(a.as_ref())),
+                _ => fact
+                    .value
+                    .decode::<game_land::Area>()
+                    .map(std::borrow::Cow::Owned),
+            };
+            if let Some(area) = area {
+                for next in area.links.keys() {
+                    if !facts.contains_key(game_knowledge::roads_key(*next).as_str()) {
+                        areas.insert(*next);
+                    }
                 }
             }
         }
-    }
-    areas.into_iter().collect()
+        let result: Vec<_> = areas.into_iter().collect();
+        if result.len() <= 256 {
+            if cache.1.len() >= 128 {
+                let oldest = cache
+                    .1
+                    .iter()
+                    .min_by_key(|(k, (_, used, _))| (*used, **k))
+                    .map(|(k, _)| *k)
+                    .unwrap();
+                cache.1.remove(&oldest);
+            }
+            cache.1.insert(key, (version, now, result.clone()));
+        }
+        result
+    })
 }
 pub fn step(tx: &mut Transaction<'_>, person: PersonId, plan: &mut Plan) -> Result<bool> {
     let done = game_food_actions::step(tx, person, plan)?;

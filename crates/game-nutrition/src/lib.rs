@@ -1,8 +1,7 @@
 //! Actual diets, experienced food effects, and substance dependence.
-mod diet;
 mod motives;
-pub use diet::{Diet, Habit, Learned, Status};
 use game_core::*;
+pub use game_diet::{Diet, Effects, Evaluation as FoodEvaluation, Habit, Learned, Status};
 use game_sim::*;
 use game_storage::{Records, Table};
 pub use motives::appetite_for;
@@ -100,12 +99,6 @@ pub struct Meal {
     pub good: GoodId,
     pub quantity: u64,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Effects {
-    pub health: i32,
-    pub mood: i32,
-    pub alertness: i32,
-}
 impl Request for Meal {
     const KEY: &'static str = "nutrition.meal";
     type Response = Effects;
@@ -182,6 +175,20 @@ pub fn preference(
         score = score.saturating_add(i64::from(habit.craving(tx.now())) / 5);
     }
     score
+}
+/// Prepare shared dietary balances once for a read-only batch of alternatives.
+pub fn food_evaluation<'a>(tx: &'a Transaction<'_>, person: PersonId) -> FoodEvaluation<'a> {
+    let personal = tx
+        .get::<Nutrition>()
+        .ok()
+        .filter(|n| n.enabled)
+        .and_then(|n| n.people.get(&person).map(|d| (d, &n.needs)));
+    let hedonism = game_vitality::disposition(tx, person, "hedonism");
+    let foresight = tx
+        .get::<game_traits::Traits>()
+        .map_or(1000, |_| game_vitality::ability(tx, person, "foresight"))
+        .min(16000) as i64;
+    FoodEvaluation::new(personal, tx.now(), hedonism, foresight)
 }
 pub fn choose_meal(
     tx: &Transaction<'_>,

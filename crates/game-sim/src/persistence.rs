@@ -1,31 +1,9 @@
 use crate::*;
-#[derive(Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Save<R> {
-    version: u32,
-    plugins: BTreeMap<String, u32>,
-    resources: BTreeMap<String, R>,
-    time: SimTime,
-    seed: u64,
-    revision: u64,
-    next_id: u64,
-    next_notice: u64,
-    jobs: Vec<Job>,
-    notices: VecDeque<Notice>,
-    receipts: BTreeMap<u64, Receipt>,
-}
+use game_snapshot::Decoded;
+type Save = game_snapshot::Manifest<Job, Notice, Receipt>;
 impl Host {
     fn validate_saved_state(&self) -> Result<()> {
-        let mut seen = std::collections::BTreeSet::new();
-        for (id, codec) in &self.registry.resources {
-            (codec.validate)(&self.data[id])?;
-            for allocated in (codec.ids)(&self.data[id]) {
-                require(
-                    allocated > 0 && allocated < self.next_id && seen.insert(allocated),
-                    "invalid or reused saved identity",
-                )?;
-            }
-        }
+        let mut seen = self.registry.resources.validate(&self.data, self.next_id)?;
         for job in self.jobs.values() {
             require(
                 seen.insert(job.id.0),
@@ -83,52 +61,32 @@ impl Host {
         let io = |e: std::io::Error| Error::InvalidSave(e.to_string());
         out.write_all(prefix.as_bytes()).map_err(&io)?;
         out.write_all(b"\"resources\":{").map_err(&io)?;
-        let mut codecs: Vec<_> = self.registry.resources.iter().collect();
-        codecs.sort_by_key(|(_, c)| c.key);
-        for (n, (id, codec)) in codecs.into_iter().enumerate() {
-            if n > 0 {
-                out.write_all(b",").map_err(&io)?;
-            }
-            serde_json::to_writer(&mut *out, codec.key).map_err(registry::json_error)?;
-            out.write_all(b":").map_err(&io)?;
-            (codec.encode)(&self.data[id], out)?;
-        }
-        out.write_all(b"}").map_err(&io)?;
+        self.registry.resources.write_entries(&self.data, out)?;
         out.write_all(suffix.as_bytes()).map_err(io)
     }
 }
 impl Builder {
     pub fn load(self, source: &str, workers: usize) -> Result<Host> {
-        let save: Save<&serde_json::value::RawValue> =
-            serde_json::from_str(source).map_err(registry::json_error)?;
+        let codecs = self.registry.resources.values().map(|c| (c.key, c.decode));
+        let save = game_snapshot::from_str(source, codecs).map_err(registry::json_error)?;
         self.restore(save, workers)
     }
     pub fn load_from(self, source: impl std::io::Read, workers: usize) -> Result<Host> {
-        let save: Save<Box<serde_json::value::RawValue>> =
-            serde_json::from_reader(source).map_err(registry::json_error)?;
+        let codecs = self.registry.resources.values().map(|c| (c.key, c.decode));
+        let save = game_snapshot::from_reader(source, codecs).map_err(registry::json_error)?;
         self.restore(save, workers)
     }
-    fn restore<R: std::borrow::Borrow<serde_json::value::RawValue>>(
-        self,
-        mut save: Save<R>,
-        workers: usize,
-    ) -> Result<Host> {
+    fn restore(self, decoded: Decoded<Save, Stored>, workers: usize) -> Result<Host> {
+        let game_snapshot::Decoded {
+            metadata: save,
+            resources,
+        } = decoded;
         require(
             save.version == 1 && save.plugins == self.registry.plugins,
             "incompatible save manifest",
         )?;
-        require(
-            save.resources.len() == self.registry.resources.len(),
-            "save resource set differs",
-        )?;
         let mut host = self.build(save.seed, workers)?;
-        for (id, codec) in &host.registry.resources {
-            let value = save
-                .resources
-                .remove(codec.key)
-                .ok_or_else(|| Error::InvalidSave(format!("missing {}", codec.key)))?;
-            host.data.insert(*id, (codec.decode)(value.borrow().get())?);
-        }
+        host.data = host.registry.resources.restore(resources)?;
         let mut seen = std::collections::BTreeSet::new();
         let actions =
             registry::mutable::<Actions>(host.data.get_mut(&TypeId::of::<Actions>()).unwrap());
@@ -137,10 +95,8 @@ impl Builder {
             action.cancel.bind(&host.registry)?;
         }
         for mut job in save.jobs {
-            require(
-                job.at >= save.time && job.id.0 < save.next_id && seen.insert(job.id),
-                "invalid saved schedule",
-            )?;
+            let valid = job.id.0 > 0 && job.id.0 < save.next_id && seen.insert(job.id);
+            require(valid && job.at >= save.time, "invalid saved schedule")?;
             job.request.bind(&host.registry)?;
             let key = (job.at, job.priority, job.id);
             host.job_keys.insert(job.id, key);
@@ -150,11 +106,11 @@ impl Builder {
             save.next_id > 0 && save.next_notice > 0,
             "invalid saved counters",
         )?;
+        let mut previous = 0;
         for notice in &save.notices {
-            require(
-                notice.at <= save.time && notice.sequence < save.next_notice,
-                "invalid saved event",
-            )?;
+            let valid = notice.at <= save.time && notice.sequence < save.next_notice;
+            require(valid && notice.sequence > previous, "invalid saved event")?;
+            previous = notice.sequence;
         }
         host.time = save.time;
         host.revision = save.revision;

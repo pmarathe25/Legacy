@@ -4,7 +4,7 @@ mod topics;
 use game_core::*;
 use game_knowledge::Knowledge;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::Records;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 pub use topics::Topic;
@@ -24,8 +24,8 @@ pub struct Question {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Information {
-    pub interests: Table<PersonId, Vec<Interest>>,
-    pub inboxes: Table<PersonId, Vec<Question>>,
+    pub interests: Records<PersonId, Vec<Interest>>,
+    pub inboxes: Records<PersonId, Vec<Question>>,
 }
 impl Resource for Information {
     const KEY: &'static str = "information.questions";

@@ -452,3 +452,88 @@ fn an_immediate_need_can_request_supplies_outside_authored_stock_goals() {
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
+
+#[test]
+fn an_alias_with_unknown_canonical_stock_cannot_crash_work_planning() {
+    let (mut h, person, inventory, area) = setup();
+    h.dispatch(game_ecology::Create(game_ecology::Patch {
+        area,
+        good: game_cargo::TIMBER,
+        stock: 100,
+        capacity: 100,
+        renew: 0,
+    }))
+    .unwrap();
+    enable(&mut h, person, inventory, "charcoal", 6);
+    let unknown = h
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(person),
+            capacity: 2000,
+        })
+        .unwrap();
+    h.dispatch(game_knowledge::Conclude {
+        person,
+        key: format!("store:0{}", unknown.0),
+        value: serde_json::json!({"2": 999}),
+        confidence: 100,
+    })
+    .unwrap();
+    h.dispatch(game_knowledge::Conclude {
+        person,
+        key: game_knowledge::location_key(unknown),
+        value: serde_json::to_value(game_knowledge::StoreLocation {
+            area,
+            capacity: 2000,
+            mass: 0,
+            carrier: Some(person),
+        })
+        .unwrap(),
+        confidence: 100,
+    })
+    .unwrap();
+    assert!(
+        h.get::<game_knowledge::Knowledge>().unwrap().0[&person]
+            .get(&game_knowledge::store_key(unknown))
+            .is_none()
+    );
+    let saved = h.save().unwrap();
+    let mut loaded = builder().load(&saved, 4).unwrap();
+    for world in [&mut h, &mut loaded] {
+        assert!(
+            world
+                .dispatch(Consider { person })
+                .expect("unknown beliefs must not panic")
+        );
+        run(world, 5 * MINUTE.0);
+        assert_eq!(amount(world, inventory, "timber"), 12);
+        assert_eq!(amount(world, unknown, "timber"), 0);
+    }
+    assert!(h.save().unwrap() == loaded.save().unwrap());
+}
+
+#[test]
+fn alternate_inventory_keys_do_not_double_count_a_work_goal() {
+    let (mut h, person, inventory, area) = setup();
+    h.dispatch(game_ecology::Create(game_ecology::Patch {
+        area,
+        good: game_cargo::TIMBER,
+        stock: 100,
+        capacity: 100,
+        renew: 0,
+    }))
+    .unwrap();
+    deposit(&mut h, inventory, "charcoal", 3);
+    enable(&mut h, person, inventory, "charcoal", 6);
+    h.dispatch(game_knowledge::Conclude {
+        person,
+        key: format!("store:0{}", inventory.0),
+        value: serde_json::json!({"2": 999}),
+        confidence: 100,
+    })
+    .unwrap();
+    assert_eq!(amount(&h, inventory, "charcoal"), 3);
+    assert!(
+        h.dispatch(Consider { person }).unwrap(),
+        "one remembered container was counted twice"
+    );
+}

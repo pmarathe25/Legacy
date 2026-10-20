@@ -24,27 +24,27 @@ pub struct Claim {
 }
 impl Claim {
     pub fn key(&self) -> String {
+        let mut key =
+            String::with_capacity(self.subject.len() + self.factor.len() + self.outcome.len() + 26);
+        self.write_key(&mut key).unwrap();
+        key
+    }
+    pub fn write_key(&self, output: &mut impl std::fmt::Write) -> std::fmt::Result {
         use std::fmt::Write;
-        struct Fingerprint(u64);
-        impl Write for Fingerprint {
-            fn write_str(&mut self, text: &str) -> std::fmt::Result {
-                for byte in text.bytes() {
-                    self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(1099511628211);
-                }
-                Ok(())
-            }
-        }
-        let mut fingerprint = Fingerprint(14695981039346656037);
+        let mut fingerprint = game_core::Fingerprint::default();
         for (i, (key, value)) in self.context.iter().enumerate() {
             if i > 0 {
-                fingerprint.write_char(',').unwrap();
+                fingerprint.write_char(',')?;
             }
-            write!(fingerprint, "{key}={value}").unwrap();
+            write!(fingerprint, "{key}={value}")?;
         }
-        let hash = fingerprint.0;
-        format!(
-            "theory:{}:{}:{}:{hash:x}",
-            self.subject, self.factor, self.outcome
+        write!(
+            output,
+            "theory:{}:{}:{}:{:x}",
+            self.subject,
+            self.factor,
+            self.outcome,
+            fingerprint.finish()
         )
     }
     pub fn predicts(&self, context: &BTreeMap<String, i64>) -> bool {

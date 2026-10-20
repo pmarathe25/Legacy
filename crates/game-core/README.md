@@ -32,3 +32,7 @@
 
 - **Dependencies:** None (leaf workspace crate).
 - **Testing:** `cargo test -p game-core` verifies checked time arithmetic, overflow rejection, and deterministic RNG output.
+
+`Fingerprint` implements `fmt::Write` for stable FNV-1a fingerprints without a
+temporary formatted string. `fingerprint` handles an existing string. Proposal
+identities and theory keys retain their previous bytes and hash values.

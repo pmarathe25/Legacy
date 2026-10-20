@@ -29,3 +29,9 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-objects`](../game-objects/README.md), [`game-metabolism`](../game-metabolism/README.md), [`game-vitality`](../game-vitality/README.md), [`game-traits`](../game-traits/README.md).
 - **Testing:** `cargo test -p game-nutrition` verifies nutrient depletion, deficiency penalties, first-taste learning, dependence/withdrawal, and `appetite_for` bounds.
+
+Pure dietary records and batched food evaluation live in [`game-diet`](../game-diet/README.md),
+with existing public types reexported here. `food_evaluation` borrows the current
+personal diet and computes nutrient deficits once across food alternatives.
+Tests compare it with the individual query functions, including saturation and
+unknown foods. Simulation resource ownership and intake remain in this crate.

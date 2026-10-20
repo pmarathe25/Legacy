@@ -2,6 +2,12 @@
 
 Run release benchmarks from the repository root. Each process checks its resulting records; timings alone do not constitute a pass.
 
+Both Python build drivers default to one Cargo build job. `--build-jobs` raises
+that limit explicitly. Compiler/linker threads are separate from Cargo jobs;
+use the [bounded test scope](../testing/README.md) when the shared machine needs
+an enforced CPU and memory budget. Do not overlap benchmark timing with builds,
+tests or background simulations.
+
 ## Profile-guided history builds
 
 `python3 tools/performance/pgo.py --training target/history/training.json --output target/history/pgo-build`
@@ -138,3 +144,38 @@ The [architecture experiments](ARCHITECTURE.md) compare persistent hot tables wi
 On Linux with GNU gprofng installed, `gprofng collect app -p on -a off -o target/history/profile.er target/simulation/game-history --resume CHECKPOINT --days END_DAY --output target/history/profile-run` samples call stacks without requiring kernel performance counters. Read inclusive call paths with `gprofng display text -sort i.%totalcpu -functions target/history/profile.er`. Keep profiles under `target/`. Use samples to identify costs; use uninstrumented alternating replay pairs to establish time and peak RSS changes.
 
 For a runtime specific to the build machine, add `--target-cpu native`. `CARGO_PROFILE_RELEASE_LTO=fat` selects whole-program optimization for both compilation phases. Metadata records the CPU target and release-profile overrides. Compare the resulting executable on workloads beyond the training windows, and keep the ordinary portable build for other machines.
+
+## Repeated language interpretation
+
+`cargo bench -p game-performance --bench language` compares the actual decoder
+with the prior complete scan on identical personal vocabularies. Each optimized
+batch starts with a fresh vocabulary version, including reverse-index preparation
+in its timing. Three alternating pairs verify interpretation, confidence,
+rendering, checksums, and unchanged saved vocabulary. `LEGACY_WORDS` and
+`LEGACY_DECODES` select scale. This measures a language query workload, not a
+whole-world speedup.
+
+## World memory phases
+
+`cargo run -p game-performance --profile simulation --features allocation-profile
+--example memory_world -- CHECKPOINT.json 1` reports requested live/peak heap,
+allocation counts, and process RSS after loading, advancing, streaming a save to a
+sink, and releasing a raw world. Omit the final day count to isolate loading and
+saving. Instrumentation changes timing; use frozen, uninstrumented history replays
+for speed comparisons. This probe does not reconstruct the history ledger.
+
+With `LEGACY_PROFILE=1`, the allocation-profile memory probe also attributes
+inclusive allocation counts to the existing feature spans. Nested spans overlap;
+do not add their counts. The default simulation build includes no allocation
+counter. Use this instrumentation to locate churn, then verify optimizers with
+uninstrumented matching replays.
+
+## Sampled allocation stacks
+
+Build `memory_world` with `--features allocation-stacks` and set
+`LEGACY_ALLOCATION_STACKS=target/history/allocation-stacks.json`. It samples roughly
+one in 8,192 advancement allocations, capped at 8,192 stacks. Sampling is guarded
+against recursive allocator calls. Stack grouping/symbol resolution happens after
+advancement. The feature is absent from normal game builds. Use samples only to
+attribute churn: unwinding and symbol resolution add allocations and retain debug
+data, so its heap/RSS/timing numbers are not benchmark evidence.

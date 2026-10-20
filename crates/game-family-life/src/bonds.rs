@@ -267,11 +267,11 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                         person: p,
                         kind: "courtship".into(),
                         duration: HOUR,
-                        request: Pending::new(Bond {
+                        request: Pending::immediate(Bond {
                             person: p,
                             other,
                             kind,
-                        })?,
+                        }),
                     },
                 )?;
             }

@@ -121,7 +121,7 @@ struct Definitions {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Crops {
-    pub items: BTreeMap<String, Crop>,
+    pub items: game_storage::Records<String, Crop>,
     pub stamps: Vec<Stamp>,
     #[serde(default)]
     pub natural: bool,
@@ -186,7 +186,7 @@ pub fn load(store: &mut Store, objects: &Objects) -> Result<Crops> {
         }
     }
     let crops = Crops {
-        items,
+        items: items.into(),
         stamps,
         natural: false,
     };

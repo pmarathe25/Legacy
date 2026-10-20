@@ -1,4 +1,5 @@
 use super::*;
+use std::borrow::Cow;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Hash)]
 pub struct StoreLocation {
     pub area: AreaId,
@@ -64,15 +65,16 @@ pub(super) fn remember(
 /// Traverse recorded roads lazily. A known road may reach an endpoint whose
 /// outgoing roads have not yet been observed.
 pub fn route(facts: &Facts, from: AreaId, to: AreaId) -> Result<game_spatial::Route> {
-    game_spatial::route_with(from, to, |id| {
-        let fact = facts.get(roads_key(id).as_str())?;
-        match fact.value.as_ref() {
-            FactValue::Roads(area) => Some(std::borrow::Cow::Borrowed(area.as_ref())),
-            _ => fact
-                .value
-                .decode::<game_land::Area>()
-                .map(std::borrow::Cow::Owned),
-        }
+    thread_local! {static ROUTES: std::cell::RefCell<game_spatial::Routes> = Default::default();}
+    let version = facts.namespace_version("roads");
+    ROUTES.with(|cache| {
+        cache.borrow_mut().route(version, from, to, |id| {
+            let fact = facts.get(roads_key(id).as_str())?;
+            match fact.value.as_ref() {
+                FactValue::Roads(area) => Some(Cow::Borrowed(area.as_ref())),
+                _ => fact.value.decode::<game_land::Area>().map(Cow::Owned),
+            }
+        })
     })
 }
 
@@ -182,11 +184,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             game_transport::area(tx.get()?, r.person)? == patch.area,
             "cannot observe distant patch",
         )?;
-        remember(
-            tx,
-            r.person,
-            Subject::Patch(r.patch),
-            FactValue::Patch(patch),
-        )
+        let subject = Subject::Patch(r.patch);
+        remember(tx, r.person, subject, FactValue::Patch(patch))
     })
 }

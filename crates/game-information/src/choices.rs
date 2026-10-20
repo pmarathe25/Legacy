@@ -15,7 +15,7 @@ fn offer<R: Request>(
             person,
             kind: "exchange-information".into(),
             duration: SimDuration(2 * MINUTE.0),
-            request: Pending::new(request)?,
+            request: Pending::immediate(request),
         },
     )?;
     Ok(())
@@ -92,13 +92,8 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         let Ok(area) = game_transport::area(tx.get()?, p) else {
             return Ok(());
         };
-        let inbox = tx
-            .get::<Information>()?
-            .inboxes
-            .get(&p)
-            .cloned()
-            .unwrap_or_default();
-        for q in inbox {
+        let inbox = tx.get::<Information>()?.inboxes.shared(&p);
+        for q in inbox.iter().flat_map(|row| row.iter()) {
             if !game_transport::together(tx.get()?, p, q.asker) {
                 continue;
             }
@@ -112,12 +107,16 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 .and_then(|s| s.values.get(&p)?.get("privacy"))
                 .copied()
                 .unwrap_or(0);
+            let prefix = match &q.topic {
+                Topic::Fact(s) | Topic::Category(s) => s.as_str(),
+                Topic::Supplies(_) => "",
+            };
             let key = tx
                 .get::<Knowledge>()?
                 .0
                 .get(&p)
                 .into_iter()
-                .flat_map(|f| f.iter())
+                .flat_map(|f| game_knowledge::with_prefix(f, prefix))
                 .filter(|(key, fact)| q.topic.matches(key, fact.value))
                 .max_by_key(|(key, fact)| (fact.observed, fact.confidence, std::cmp::Reverse(*key)))
                 .map(|(key, _)| key.to_string());
@@ -146,15 +145,14 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 },
             )?;
         }
-        let interests = tx
+        let Some(interests) = tx
             .get::<Information>()?
             .interests
-            .get(&p)
-            .cloned()
-            .unwrap_or_default();
-        if interests.is_empty() {
+            .shared(&p)
+            .filter(|row| !row.is_empty())
+        else {
             return Ok(());
-        }
+        };
         let peers: Vec<_> = tx
             .get::<game_social_life::SocialLife>()
             .ok()
@@ -165,7 +163,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .take(16)
             .copied()
             .collect();
-        for i in interests {
+        for i in interests.iter() {
             let topic_id = game_choice::identity(&format!("{:?}", i.topic));
             for other in &peers {
                 if i.asked.contains(other) || i.asked.len() >= 64 {
@@ -185,7 +183,9 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     },
                 )?;
             }
-            if let Ok(records) = tx.get::<game_literacy::Literacy>() {
+            if i.read.len() < 64
+                && let Ok(records) = tx.get::<game_literacy::Literacy>()
+            {
                 let documents: Vec<_> = records
                     .seen
                     .get(&p)
@@ -193,12 +193,13 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     .flat_map(|seen| seen.keys())
                     .filter_map(|id| Some((*id, records.documents.get(id)?)))
                     .filter(|(id, d)| {
-                        i.read.get(id) != Some(&reading_ability(tx, p, *id))
-                            && i.read.len() < 64
+                        i.read
+                            .get(id)
+                            .is_none_or(|old| *old != reading_ability(tx, p, *id))
                             && tx
                                 .get::<game_communication::Communication>()
                                 .ok()
-                                .and_then(|c| game_communication::decode(c, p, &d.sounds).meaning)
+                                .and_then(|c| game_communication::shared_meaning(c, p, &d.sounds))
                                 .is_some_and(|key| i.topic.relevant_title(&key))
                     })
                     .map(|(id, _)| id)

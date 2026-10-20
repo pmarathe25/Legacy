@@ -51,6 +51,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
     })?;
     b.subscribe::<game_transport::Arrived>("inquiry.travel-outcome", |tx, e| {
         if let Some(trip) = tx.edit::<Observations>()?.trips.remove(&e.person) {
+            let trip = std::sync::Arc::unwrap_or_clone(trip);
             let value = tx.now().0.saturating_sub(trip.at.0) / MINUTE.0;
             tx.call(Witness {
                 observer: e.person,

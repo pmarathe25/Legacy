@@ -11,7 +11,7 @@ struct Shared {
 impl Serialize for Knowledge {
     fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
         use serde::ser::SerializeMap;
-        let archive = game_facts::SharedView::new(self.0.iter().map(|(p, f)| (*p, &f.0)));
+        let archive = game_snapshot::evidence::View::new(self.0.iter().map(|(p, f)| (*p, &f.0)));
         let mut map = s.serialize_map(Some(1))?;
         map.serialize_entry("archive", &archive)?;
         map.end()
@@ -39,7 +39,7 @@ impl<'de> Deserialize<'de> for Knowledge {
                             return Err(A::Error::custom("mixed knowledge formats"));
                         }
                         let archive =
-                            map.next_value::<game_facts::archive::Archive<FactValue>>()?;
+                            map.next_value::<game_snapshot::evidence::Archive<FactValue>>()?;
                         for (p, f) in archive
                             .restore(|key, value| FactValue::promote(value, key))
                             .map_err(A::Error::custom)?

@@ -202,7 +202,7 @@ fn a_person_cannot_plan_through_an_unobserved_intermediate_road() {
     assert!(route(&view(&f.host, f.other).unwrap(), f.home, beyond).is_err());
     run(&mut f.host, arrives.after(MINUTE).unwrap());
     let path = route(&view(&f.host, f.other).unwrap(), f.home, beyond).unwrap();
-    assert_eq!(path.areas, vec![f.home, f.away, beyond]);
+    assert_eq!(path.areas.as_ref(), &[f.home, f.away, beyond]);
     assert_eq!(path.duration, SimDuration(3 * MINUTE.0));
 }
 #[test]

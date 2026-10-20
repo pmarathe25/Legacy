@@ -9,6 +9,11 @@ spec.loader.exec_module(pgo)
 
 
 class TrainingTests(unittest.TestCase):
+    def test_nonpositive_build_concurrency_is_rejected_before_touching_files(self):
+        for jobs in [0, -1]:
+            with self.assertRaisesRegex(ValueError, 'build jobs must be positive'):
+                pgo.build(Path('/unused'), Path('/unused'), Path('/unused'), build_jobs=jobs)
+
     def test_checkpoint_and_external_overlay_changes_are_fingerprinted(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

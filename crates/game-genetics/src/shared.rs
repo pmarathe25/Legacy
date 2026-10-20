@@ -6,7 +6,6 @@ use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::{Arc, Weak},
 };
-pub type Genome = std::collections::BTreeMap<GeneName, Alleles>;
 const LIMIT: usize = 4096;
 #[derive(Default)]
 struct Pool {

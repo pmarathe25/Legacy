@@ -127,3 +127,45 @@ pub fn sources<'a>(
     );
     result
 }
+
+/// Shared numerical context for a batch without retaining a transaction or world snapshot.
+pub struct Assessor<'a> {
+    evaluation: game_nutrition::FoodEvaluation<'a>,
+    values: Cache,
+}
+impl<'a> Assessor<'a> {
+    pub fn new(tx: &'a Transaction<'_>, person: PersonId) -> Self {
+        Self {
+            evaluation: game_nutrition::food_evaluation(tx, person),
+            values: Cache::new(),
+        }
+    }
+    pub fn food(&mut self, good: GoodId, food: &game_objects::Food) -> (u64, i64) {
+        *self.values.entry(good).or_insert_with(|| {
+            (
+                self.evaluation.appetite_for(good),
+                self.evaluation
+                    .preference(good, food)
+                    .saturating_sub(food.relief.min(i64::MAX as u64) as i64)
+                    + self.evaluation.novelty(good),
+            )
+        })
+    }
+    pub fn stock_foods(
+        &mut self,
+        objects: &game_objects::Objects,
+        stock: &game_knowledge::Stock,
+        partial: bool,
+    ) -> Vec<(GoodId, u64, i64)> {
+        stock
+            .iter()
+            .filter_map(|(good, q)| {
+                let f = objects.food_rules().get(good)?;
+                (*q >= if partial { 1 } else { f.portion }).then(|| {
+                    let (a, v) = self.food(*good, f);
+                    (*good, a, v)
+                })
+            })
+            .collect()
+    }
+}

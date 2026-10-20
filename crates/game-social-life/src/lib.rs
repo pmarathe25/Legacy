@@ -1,6 +1,6 @@
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 mod conversation;
 pub use conversation::{affinity, ready};
@@ -52,7 +52,7 @@ pub struct Person {
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SocialLife {
-    pub people: Table<PersonId, Person>,
+    pub people: Records<PersonId, Person>,
     pub rules: Rules,
     pub meetings: Table<PersonId, conversation::Meeting>,
     pub residents: Table<AreaId, Table<PersonId, ()>>,

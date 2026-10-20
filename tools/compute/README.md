@@ -62,3 +62,20 @@ A temporary Bevy ECS 0.20.0 adapter stored candidate IDs, actor ordinals, five n
 That case has one populated archetype and temporary candidate entities. It does not rank native ECS schedulers or a complete ECS game. The existing storage comparison also covers structural changes, sparse records, and snapshots. Neither comparison justifies adding a second authoritative world. The temporary archetype adapter and dependency are absent from the workspace.
 
 The CPU runtime-dispatch approach follows the [Rust architecture documentation](https://doc.rust-lang.org/core/arch/); GPU capability checks use wgpu's [native integer feature](https://docs.rs/wgpu/27.0.1/wgpu/struct.Features.html#associatedconstant.SHADER_INT64).
+
+## Decision preparation and locality
+
+`cargo bench -p game-compute-experiment --bench preparation --profile simulation`
+compares the prior numeric preparation with directly filled columns, including
+allocation, weighting, score evaluation, selection and expected-motive lookup.
+The column prototype uses one allocation and keeps IDs, five numeric terms and
+scores contiguous; executable payloads and strings never enter the kernel.
+Three alternating repetitions compare portable and runtime-detected AVX2 paths.
+
+On the i7-8550U, the AVX2 kernel contains `vpaddq`, `vpsubq` and `vpcmpgtq` and its
+column scoring is faster. Complete preparation remained slower at the tested
+16/64/256-candidate shapes, including a 4,096-person streaming case. It remains an
+experiment. Production selection keeps the existing packed path. These benches
+use the system allocator and measure numeric preparation, not full simulation.
+`tests/preparation.rs` checks full 64-bit saturation, unsigned IDs, ties, negative
+and saturating margins, irregular tails, active subsets and repeated selection.

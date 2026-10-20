@@ -1,5 +1,7 @@
 //! Feature offers are gathered before a character chooses an executable owner request.
+mod keys;
 mod templates;
+pub use keys::Keys;
 pub use templates::Templates;
 mod agenda;
 mod undertaking;
@@ -19,10 +21,9 @@ pub struct Proposal {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub continuation: Option<u64>,
 }
+#[inline]
 pub fn identity(key: &str) -> u64 {
-    key.bytes().fold(14695981039346656037, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(1099511628211)
-    })
+    game_core::fingerprint(key)
 }
 impl Proposal {
     pub fn new<R: Request>(
@@ -41,26 +42,31 @@ impl Proposal {
         })
     }
 }
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Offers {
     #[serde(skip)]
     active: Option<Collection>,
 }
 type Rank = (i64, Reverse<u64>);
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct Collection {
     person: PersonId,
+    capture: bool,
     weights: Option<game_traits::Weights>,
     ranked: bool,
     ongoing: Option<u64>,
     items: Vec<(Proposal, Rank)>,
-    identities: rustc_hash::FxHashSet<u64>,
+    identities: rustc_hash::FxHashMap<u64, usize>,
 }
 impl Collection {
     fn insert(&mut self, proposal: Proposal, weights: Option<game_traits::Weights>) -> Result<()> {
+        if self.capture {
+            self.items.push((proposal, (0, Reverse(0))));
+            return Ok(());
+        }
         let key_hash = identity(&proposal.key);
         require(
-            !self.identities.contains(&key_hash)
+            !self.identities.contains_key(&key_hash)
                 || self.items.iter().all(|(p, _)| p.key != proposal.key),
             "duplicate proposal key",
         )?;
@@ -82,38 +88,59 @@ impl Collection {
                 }
                 self.weights = weights;
                 self.ranked = true;
+                for i in (0..self.items.len() / 2).rev() {
+                    self.sift_down(i);
+                }
             }
             rank(&proposal)
         } else {
             (0, Reverse(0))
         };
-        self.identities.insert(key_hash);
+        *self.identities.entry(key_hash).or_default() += 1;
         self.items.push((proposal, score));
         if self.items.len() > LIMIT {
-            let worst = self
-                .items
-                .iter()
-                .enumerate()
-                .min_by_key(|(_, (p, score))| {
-                    (
-                        self.ongoing.is_some_and(|id| p.continuation == Some(id)),
-                        *score,
-                        &p.key,
-                    )
-                })
-                .map(|(i, _)| i)
-                .unwrap();
-            let (removed, _) = self.items.swap_remove(worst);
+            let mut i = self.items.len() - 1;
+            while i > 0 && self.less(i, (i - 1) / 2) {
+                self.items.swap(i, (i - 1) / 2);
+                i = (i - 1) / 2;
+            }
+            let (removed, _) = self.items.swap_remove(0);
+            self.sift_down(0);
             let removed_hash = identity(&removed.key);
-            if !self
-                .items
-                .iter()
-                .any(|(p, _)| identity(&p.key) == removed_hash)
-            {
+            let count = self.identities.get_mut(&removed_hash).unwrap();
+            *count -= 1;
+            if *count == 0 {
                 self.identities.remove(&removed_hash);
             }
         }
         Ok(())
+    }
+    fn less(&self, a: usize, b: usize) -> bool {
+        let priority = |i: usize| {
+            let (p, rank) = &self.items[i];
+            (
+                self.ongoing.is_some_and(|id| p.continuation == Some(id)),
+                *rank,
+                &p.key,
+            )
+        };
+        priority(a) < priority(b)
+    }
+    fn sift_down(&mut self, mut i: usize) {
+        loop {
+            let mut child = 2 * i + 1;
+            if child >= self.items.len() {
+                break;
+            }
+            if child + 1 < self.items.len() && self.less(child + 1, child) {
+                child += 1;
+            }
+            if !self.less(child, i) {
+                break;
+            }
+            self.items.swap(i, child);
+            i = child;
+        }
     }
 }
 impl Resource for Offers {
@@ -205,6 +232,14 @@ pub fn offer<R: Request>(
     })?;
     Ok(true)
 }
+/// Keep query errors deferred until the caller has checked the resulting actor state.
+pub fn collect_with<T: Send>(
+    tx: &mut Transaction<'_>,
+    person: PersonId,
+    query: impl Fn(&Transaction<'_>) -> Result<T> + Sync,
+) -> Result<(Vec<Proposal>, Result<T>)> {
+    tx.prepare::<Collect, Offers, _>(Collect { person }, |view| Ok(query(view)))
+}
 pub fn motive(need: i64, goal: i64, value: i64, effort: i64, risk: i64) -> Candidate {
     Candidate {
         id: 0,
@@ -237,7 +272,7 @@ pub fn provider(
     name: &'static str,
     listener: impl Fn(&mut Transaction<'_>, &Review) -> Result<()> + Send + Sync + 'static,
 ) -> Result<()> {
-    b.subscribe::<Review>(name, move |tx, e| {
+    b.subscribe_isolated::<Review, Offers>(name, move |tx, e| {
         let _span = game_diagnostics::span(name);
         listener(tx, e)
     })
@@ -255,13 +290,37 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let ongoing = tx.get::<Actions>()?.0.get(&r.person).map(|a| a.id);
         tx.edit::<Offers>()?.active = Some(Collection {
             person: r.person,
+            capture: false,
             weights: None,
             ranked: false,
             ongoing,
             items: Vec::new(),
             identities: Default::default(),
         });
-        tx.notify(Review { person: r.person })?;
+        if tx.has_before::<Offer>() {
+            tx.notify(Review { person: r.person })?;
+        } else {
+            let capture = tx.get::<Offers>()?.clone();
+            tx.notify_prepared(
+                Review { person: r.person },
+                || {
+                    let mut o = capture.clone();
+                    let active = o.active.as_mut().unwrap();
+                    active.capture = true;
+                    active.items.clear();
+                    o
+                },
+                |tx, o: Offers| {
+                    for (proposal, _) in o.active.unwrap().items {
+                        tx.call(Offer {
+                            person: r.person,
+                            proposal,
+                        })?;
+                    }
+                    Ok(())
+                },
+            )?;
+        }
         let mut collection = tx.edit::<Offers>()?.active.take().unwrap();
         collection
             .items

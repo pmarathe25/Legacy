@@ -202,7 +202,7 @@ fn respond(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
                     person,
                     kind: "dispute".into(),
                     duration: SimDuration(5 * MINUTE.0),
-                    request: Pending::new(request.clone())?,
+                    request: Pending::immediate(request.clone()),
                 },
             )? && value > 150
             {

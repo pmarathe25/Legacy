@@ -1,5 +1,5 @@
 //! Recipes and timed manufacturing. Inputs are consumed once, never by previews.
-use game_storage::{Records, Table};
+use game_storage::Records;
 mod catalog;
 mod reachability;
 pub use catalog::{InstallRecipes, load};
@@ -31,7 +31,7 @@ struct Work {
 pub struct Workshop {
     pub stamps: Vec<game_content::Stamp>,
     pub recipes: Records<String, Recipe>,
-    work: Table<PersonId, Work>,
+    work: Records<PersonId, Work>,
     pub waste: BTreeMap<GoodId, u64>,
 }
 impl Resource for Workshop {
@@ -246,9 +246,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 inventory: w.inventory,
                 reservation: w.reservation,
             })?;
-            for (good, quantity) in w.recipe.inputs {
-                let total = tx.edit::<Workshop>()?.waste.entry(good).or_default();
-                *total = total.checked_add(quantity).ok_or(Error::Overflow)?;
+            for (good, quantity) in &w.recipe.inputs {
+                let total = tx.edit::<Workshop>()?.waste.entry(*good).or_default();
+                *total = total.checked_add(*quantity).ok_or(Error::Overflow)?;
             }
         }
         Ok(())

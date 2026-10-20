@@ -83,20 +83,14 @@ fn invent(seed: u64, person: PersonId, salt: u64, familiar: &[u8]) -> Vec<u8> {
         .collect()
 }
 pub fn decode(c: &Communication, reader: PersonId, sounds: &[u8]) -> Translation {
-    let best = c
-        .lexicons
-        .get(&reader)
-        .into_iter()
-        .flat_map(|r| r.iter())
-        .flat_map(|(key, variants)| variants.iter().map(move |w| (key, w)))
-        .filter(|(_, w)| w.sounds == sounds)
-        .max_by_key(|(key, w)| (w.strength, std::cmp::Reverse(*key)));
+    let (meaning, confidence) = crate::decoding::meaning(c, reader, sounds);
     Translation {
         surface: render(sounds),
-        meaning: best.map(|(key, _)| key.clone()),
-        confidence: best.map_or(0, |(_, w)| w.strength),
+        meaning,
+        confidence,
     }
 }
+
 fn associate(
     tx: &mut Transaction<'_>,
     p: PersonId,

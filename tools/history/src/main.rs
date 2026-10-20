@@ -346,9 +346,31 @@ mod tests {
         let target = sim.now().after(SimDuration(30 * DAY.0)).unwrap();
         let mut previous = sim.now();
         let mut stagnant = 0;
+        let mut checked = 0;
         while advance_commits(&mut sim, target, 64, &mut ledger, &mut out).unwrap()
             == game_sim::Stop::Budget
         {
+            // This checks journal enrichment, not thirty days of unrelated decisions.
+            // Keep the original deadline, but finish once the required evidence exists.
+            let observed = std::str::from_utf8(&out[checked..])
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<Value>(line).unwrap())
+                .any(|r| {
+                    r["kind"] == "botany.changed"
+                        && r["data"]["observed_plants"]
+                            .as_array()
+                            .is_some_and(|p| !p.is_empty())
+                });
+            checked = out.len();
+            if observed
+                && ledger
+                    .counts
+                    .get("cultivars.created")
+                    .is_some_and(|n| *n > 0)
+            {
+                break;
+            }
             stagnant = if sim.now() == previous {
                 stagnant + 1
             } else {

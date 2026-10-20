@@ -163,7 +163,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                             person: e.person,
                             kind: "parenthood".into(),
                             duration: HOUR,
-                            request: Pending::new(Consider { person: e.person })?,
+                            request: Pending::immediate(Consider { person: e.person }),
                         },
                     )?;
                 }

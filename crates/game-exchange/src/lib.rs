@@ -376,10 +376,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                     person: e.person,
                     kind: "negotiate".into(),
                     duration: SimDuration(5 * MINUTE.0),
-                    request: Pending::new(Negotiate {
+                    request: Pending::immediate(Negotiate {
                         person: e.person,
                         other,
-                    })?,
+                    }),
                 },
             )?;
         }

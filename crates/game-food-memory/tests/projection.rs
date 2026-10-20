@@ -181,3 +181,134 @@ fn numeric_stock_views_follow_personal_evidence_across_independent_forks() {
         );
     });
 }
+
+#[test]
+fn supply_projections_do_not_retain_unrelated_personal_history() {
+    let objects = game_objects::standard().unwrap();
+    let grain = objects.resolve("grain").unwrap();
+    let person = PersonId(7001);
+    let mut facts = Facts::default();
+    let history = Arc::new(FactValue::Other(
+        serde_json::json!({"private": "x".repeat(100_000)}),
+    ));
+    let weak = Arc::downgrade(&history);
+    facts.insert(
+        "history:private".into(),
+        Fact {
+            value: history,
+            source: person,
+            observed: SimTime(0),
+            revision: 0,
+            confidence: 100,
+        },
+    );
+    insert(
+        &mut facts,
+        "store:4",
+        FactValue::Stock([(grain, 20)].into()),
+    );
+    insert(
+        &mut facts,
+        "store-location:4",
+        FactValue::Location(StoreLocation {
+            area: AreaId(2),
+            capacity: 100,
+            mass: 20,
+            carrier: Some(person),
+        }),
+    );
+    assert_eq!(view(person, &facts, &objects), (vec![4], vec![4], vec![4]));
+    drop(facts);
+    assert!(
+        weak.upgrade().is_none(),
+        "an inventory index retained unrelated history"
+    );
+    game_food_memory::retain_people(std::iter::empty());
+}
+
+#[test]
+fn large_supplier_maps_keep_structural_updates_aliases_and_rollback_correct() {
+    let objects = game_objects::standard().unwrap();
+    let grain = objects.resolve("grain").unwrap();
+    let person = PersonId(7002);
+    let mut facts = Facts::default();
+    for id in 1..=600 {
+        insert(
+            &mut facts,
+            &format!("store:{id}"),
+            FactValue::Stock([(grain, 20)].into()),
+        );
+        insert(
+            &mut facts,
+            &format!("store-location:{id}"),
+            FactValue::Location(StoreLocation {
+                area: AreaId(2),
+                capacity: 100,
+                mass: 20,
+                carrier: Some(person),
+            }),
+        );
+    }
+    assert_eq!(view(person, &facts, &objects).1.len(), 600);
+    let original = facts.clone();
+    insert(&mut facts, "store:2", FactValue::Stock([(grain, 0)].into()));
+    assert_eq!(view(person, &facts, &objects).1.len(), 599);
+    assert_eq!(view(person, &original, &objects).1.len(), 600);
+    let mut alias = original.clone();
+    insert(
+        &mut alias,
+        "store:02",
+        FactValue::Stock([(grain, 0)].into()),
+    );
+    assert_eq!(view(person, &alias, &objects).1.len(), 601);
+    assert_eq!(
+        view(person, &Facts::default(), &objects),
+        (vec![], vec![], vec![])
+    );
+    assert_eq!(view(person, &original, &objects).1.len(), 600);
+    game_food_memory::retain_people(std::iter::empty());
+}
+#[test]
+fn concurrent_worlds_and_nested_queries_keep_independent_immutable_store_images() {
+    let objects = Arc::new(game_objects::standard().unwrap());
+    let grain = objects.resolve("grain").unwrap();
+    let mut threads = vec![];
+    for index in 0..4 {
+        let objects = objects.clone();
+        threads.push(std::thread::spawn(move || {
+            let mut facts = Facts::default();
+            insert(
+                &mut facts,
+                "store:4",
+                FactValue::Stock([(grain, index + 1)].into()),
+            );
+            for _ in 0..100 {
+                with_stores(PersonId(1), &facts, &objects, |outer| {
+                    assert_eq!(
+                        outer.get(InventoryId(4)).unwrap().stock.as_ref().unwrap()[&grain],
+                        index + 1
+                    );
+                    let mut other = facts.clone();
+                    insert(
+                        &mut other,
+                        "store:4",
+                        FactValue::Stock([(grain, index + 100)].into()),
+                    );
+                    with_stores(PersonId(1), &other, &objects, |inner| {
+                        assert_eq!(
+                            inner.get(InventoryId(4)).unwrap().stock.as_ref().unwrap()[&grain],
+                            index + 100
+                        );
+                    });
+                    assert_eq!(
+                        outer.get(InventoryId(4)).unwrap().stock.as_ref().unwrap()[&grain],
+                        index + 1
+                    );
+                });
+            }
+        }));
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+}

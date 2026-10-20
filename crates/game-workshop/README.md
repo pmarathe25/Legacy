@@ -31,3 +31,6 @@ Configurable crafting recipes, input reservation, timed labor, and cultivar prop
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-skills`, `game-cultivars`.
 - **Testing:** Integration tests in `tests/` cover recipe validation, input reservation, skill-scaled crafting times, cultivar seed propagation, and interruption cleanup.
+
+In-flight work shares individual recipe-bearing records across transaction
+snapshots; changing another worker does not copy unrelated recipes.

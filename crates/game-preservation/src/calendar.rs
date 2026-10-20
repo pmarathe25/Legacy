@@ -5,7 +5,7 @@ pub(super) fn ensure(tx: &mut Transaction<'_>) -> Result<()> {
         return Ok(());
     }
     tx.cancel_scheduled::<Expire>()?;
-    let mut due: Table<SimTime, BTreeSet<(InventoryId, GoodId)>> = Table::new();
+    let mut due: Records<SimTime, BTreeSet<(InventoryId, GoodId)>> = Records::new();
     for (inventory, goods) in &tx.get::<Preservation>()?.batches {
         for (good, lots) in goods {
             for lot in lots {

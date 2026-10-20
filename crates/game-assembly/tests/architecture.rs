@@ -60,6 +60,8 @@ fn small_crates_and_dependency_direction_are_enforced() {
                         "game-core.workspace = true",
                         "game-storage.workspace = true",
                         "game-packed.workspace = true",
+                        "game-snapshot.workspace = true",
+                        "game-contracts.workspace = true",
                     ]
                     .contains(&line),
                     "kernel depends on a feature: {line}"

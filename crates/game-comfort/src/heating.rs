@@ -31,7 +31,7 @@ fn fuel<R: Request>(
         FuelRun {
             person: p,
             room,
-            action: Pending::new(action)?,
+            action: Pending::immediate(action),
         },
     )?);
     Ok(())

@@ -157,13 +157,7 @@ pub struct Tested {
 impl Event for Tested {
     const KEY: &'static str = "mechanics.tested";
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Measurement {
-    pub gain: u64,
-    pub travel: u64,
-    #[serde(default)]
-    pub load: u64,
-}
+pub use game_physics::Measurement;
 pub fn known(tx: &Transaction<'_>, p: PersonId, device: u64, outlet: usize) -> Option<Measurement> {
     let facts = tx.get::<game_knowledge::Knowledge>().ok()?.0.get(&p)?;
     game_knowledge::known(facts, &format!("mechanics:device:{device}:{outlet}"))

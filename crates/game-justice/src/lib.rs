@@ -188,10 +188,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                         person: e.person,
                         kind: "adjudicate".into(),
                         duration: HOUR,
-                        request: Pending::new(Decide {
+                        request: Pending::immediate(Decide {
                             judge: e.person,
                             case,
-                        })?,
+                        }),
                     },
                 )?;
             } else if c.remedy == Some(Remedy::Return) && !c.enforced {

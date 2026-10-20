@@ -1,11 +1,13 @@
 //! Deterministic shortest paths over the strategic area graph.
+mod cache;
+pub use cache::Routes;
 use game_core::*;
 use game_land::{Area, Land};
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Route {
-    pub areas: Vec<AreaId>,
+    pub areas: std::sync::Arc<[AreaId]>,
     pub duration: SimDuration,
 }
 pub fn route(land: &Land, from: AreaId, to: AreaId) -> Result<Route> {
@@ -24,7 +26,7 @@ pub fn route_with<'a>(
 ) -> Result<Route> {
     if from == to {
         return Ok(Route {
-            areas: vec![from],
+            areas: vec![from].into(),
             duration: SimDuration(0),
         });
     }
@@ -41,7 +43,7 @@ pub fn route_with<'a>(
             }
             path.reverse();
             return Ok(Route {
-                areas: path,
+                areas: path.into(),
                 duration: SimDuration(cost),
             });
         }
@@ -98,7 +100,7 @@ mod tests {
         assert_eq!(
             route(&land, AreaId(1), AreaId(2)).unwrap(),
             Route {
-                areas: vec![AreaId(1), AreaId(3), AreaId(2)],
+                areas: vec![AreaId(1), AreaId(3), AreaId(2)].into(),
                 duration: SimDuration(3)
             }
         );

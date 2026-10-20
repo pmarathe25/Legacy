@@ -30,3 +30,6 @@ Asynchronous curing, fermentation, and aging of prepared workshop batches into f
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-cargo`, `game-objects`, `game-food-storage`.
 - **Testing:** Integration tests in `tests/` cover curing duration, transfer persistence across inventories, and temperature-dependent success or failure on completion.
+
+Maturation appointments share target sets per date; editing one date does not
+copy neighboring sets. Save data and bounded processing order are unchanged.

@@ -10,8 +10,76 @@ import statistics
 import subprocess
 import os
 import time
+import signal
 from study import digest, write_json
 from state_hashes import artifact_digest, WORLD_CANONICAL
+
+
+def cpu_temperature(root=Path('/sys/class/thermal')):
+    values = []
+    for zone in root.glob('thermal_zone*'):
+        try:
+            if (zone/'type').read_text().strip() in ['x86_pkg_temp', 'cpu-thermal']:
+                values.append(int((zone/'temp').read_text()) / 1000)
+        except OSError:
+            continue
+    if not values:
+        raise RuntimeError('CPU temperature sensor unavailable')
+    return max(values)
+
+
+def cool_before_run(limit):
+    if limit is None:
+        return None, 0
+    started = time.monotonic()
+    while (temperature := cpu_temperature()) > limit:
+        if time.monotonic()-started > 600:
+            raise RuntimeError('CPU did not cool within ten minutes; no timing run started')
+        time.sleep(2)
+    return temperature, time.monotonic()-started
+
+
+def run_measured(command, environment, log, maximum_temperature):
+    if maximum_temperature is None:
+        subprocess.run(command, env=environment, stdout=log, stderr=log, check=True)
+        return None
+    peak = cpu_temperature()
+    if peak > maximum_temperature:
+        raise RuntimeError(f'CPU reached {peak} C; no replay started and timing discarded')
+    process = subprocess.Popen(command, env=environment, stdout=log, stderr=log, start_new_session=True)
+    completed = False
+    try:
+        while process.poll() is None:
+            peak = max(peak, cpu_temperature())
+            if peak > maximum_temperature:
+                raise RuntimeError(f'CPU reached {peak} C; replay aborted and timing discarded')
+            try:
+                process.wait(timeout=0.05)
+            except subprocess.TimeoutExpired:
+                pass
+        if process.returncode:
+            raise subprocess.CalledProcessError(process.returncode, command)
+        peak = max(peak, cpu_temperature())
+        if peak > maximum_temperature:
+            raise RuntimeError(f'CPU reached {peak} C; replay completed but timing discarded')
+        completed = True
+        return peak
+    finally:
+        if not completed:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                pass
+            # The timing wrapper may exit before its descendants; terminate any remainder.
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            process.wait()
 
 
 def compare(args):
@@ -20,7 +88,9 @@ def compare(args):
     destination.mkdir(parents=True, exist_ok=False)
     checkpoint = args.checkpoint.resolve()
     binaries = {key: getattr(args, key).resolve() for key in ['control', 'candidate']}
-    report = {'mode': 'behavioral' if behavioral else 'equivalent',
+    start_limit = getattr(args, 'start_temperature', None)
+    maximum_temperature = getattr(args, 'maximum_temperature', None)
+    report = {'temperature_limits_celsius': {'start': start_limit, 'maximum': maximum_temperature}, 'mode': 'behavioral' if behavioral else 'equivalent',
               'hash_mode': WORLD_CANONICAL, 'checkpoint': str(checkpoint), 'checkpoint_sha256': digest(checkpoint/'checkpoint.json'),
               'days': args.days, 'pairs': args.pairs, 'workers': args.workers,
               'binaries': {key: {'path': str(path), 'sha256': digest(path)} for key, path in binaries.items()},
@@ -41,9 +111,10 @@ def compare(args):
                        '-o', str(folder/'time.json'), str(binaries[key]), '--resume', str(checkpoint),
                        '--days', str(args.days), '--sample-days', '365000', '--checkpoint-days', '365000',
                        '--workers', str(args.workers), '--final-save', 'false', '--journal', 'notable', '--output', str(folder)]
+            starting_temperature, cooling_seconds = cool_before_run(start_limit)
             started = time.perf_counter()
             with (folder/'process.log').open('w') as log:
-                subprocess.run(command, env=environment, stdout=log, stderr=log, check=True)
+                peak_temperature = run_measured(command, environment, log, maximum_temperature)
             measured = json.loads((folder/'time.json').read_text())
             measured['wall_seconds'] = time.perf_counter()-started
             measured['cpu_seconds'] = measured['user_seconds']+measured['system_seconds']
@@ -52,7 +123,7 @@ def compare(args):
                 report['equivalent'] = False; write_json(destination/'comparison.json', report)
                 raise ValueError('nondeterministic replay; outputs retained')
             expected[key] = hashes[key]
-            row = {'pair': pair+1, 'build': key, 'metrics': measured, 'hashes': hashes[key]}
+            row = {'starting_temperature_celsius': starting_temperature, 'peak_temperature_celsius': peak_temperature, 'cooling_seconds_excluded': cooling_seconds, 'pair': pair+1, 'build': key, 'metrics': measured, 'hashes': hashes[key]}
             report['runs'].append(row)
             write_json(destination/'comparison.json', report)
             print(f'{pair+1} {key}: {measured["wall_seconds"]:.3f}s, CPU {measured["cpu_seconds"]:.3f}s', flush=True)
@@ -83,8 +154,12 @@ if __name__ == '__main__':
     parser.add_argument('--days', type=int, required=True, help='absolute simulation end day')
     parser.add_argument('--pairs', type=int, default=3)
     parser.add_argument('--workers', type=int, default=1)
+    parser.add_argument('--start-temperature', type=float, help='wait for a CPU package temperature at or below this Celsius value before timing')
+    parser.add_argument('--maximum-temperature', type=float, help='abort a replay and discard its timing above this Celsius value')
     parser.add_argument('--behavioral', action='store_true',
                         help='measure intentionally different models; never authorizes an optimizer upgrade')
     arguments = parser.parse_args()
     if arguments.pairs < 1 or arguments.workers < 1: parser.error('pairs and workers must be positive')
+    if arguments.start_temperature is not None and arguments.maximum_temperature is not None and arguments.start_temperature >= arguments.maximum_temperature:
+        parser.error('starting temperature must be below maximum temperature')
     compare(arguments)

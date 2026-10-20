@@ -9,3 +9,6 @@ game-objects.workspace = true
 game-workshop.workspace = true
 game-ecology.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

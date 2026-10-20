@@ -19,7 +19,7 @@ impl Request for Execute {
     type Response = game_choice::Outcome;
 }
 fn food(p: PersonId, key: String, plan: Plan, c: Candidate) -> Result<Proposal> {
-    Proposal::new(key.clone(), c, Proceed { person: p, plan })
+    Proposal::new(key, c, Proceed { person: p, plan })
 }
 pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     let _measurement = game_diagnostics::span("character review");
@@ -45,7 +45,9 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
             })?;
         }
     }
-    let mut offers = tx.call(game_choice::Collect { person: p })?;
+    let (mut offers, options) = game_choice::collect_with(tx, p, |view| {
+        plans::options(view, p, view.get::<Minds>()?.rules.gathering_meals)
+    })?;
     let state = tx.get::<Minds>()?;
     let Some(mind) = state.people.get(&p) else {
         return Ok(());
@@ -84,7 +86,7 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
             .unwrap_or("food:committed".into());
         offers.push(food(p, key, plan, motive(pressure(hunger), 5, 0, 0, 0))?);
     }
-    let options = plans::options(tx, p, rules.gathering_meals)?;
+    let options = options?;
     let independent = tx
         .get::<game_relationships::Social>()?
         .values
@@ -101,9 +103,10 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
         gathering_effort: rules.gathering_effort,
     };
     let discomfort = game_digestion::discomfort(tx, p);
+    let mut keys = game_choice::Keys::new(&offers);
     for (o, mut c) in options.iter().zip(scores.candidates(&options)) {
         let key = format!("food:{}", o.id);
-        if offers.iter().any(|o| o.key == key) {
+        if !keys.insert(&key, &offers) {
             continue;
         }
         c.need = pressure(hunger.max(o.appetite));

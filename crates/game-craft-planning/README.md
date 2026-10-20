@@ -1,32 +1,20 @@
 # game-craft-planning
 
-Pure multi-step production planner that chains gathering and workshop recipes to satisfy target item goals.
+Pure, bounded backward search over remembered gathering patches, stock, and
+workshop recipes. `game-livelihoods` chooses goals; this crate finds executable
+`Step` sequences with the lowest labor cost explored within the caller's depth,
+step, and node limits. Equal-cost alternatives retain their original order.
 
-**Why it matters:** Crafting a tool or meal often requires intermediate components, tools, and raw materials. A pure, bounded search planner lets characters figure out multi-step production chains without hardcoding scripts.
+A speculative journal updates one working stock and rolls back rejected branches.
+Winning branches retain only changed quantities and appended steps, avoiding a
+complete stock-map copy for every alternative. Capacity checks track mass changes alongside the journal, including checked
+products and a wide total that can recover after excess stock is consumed. They
+still include all carried goods. Cyclic recipes cannot promise more output than remains after their
+own inputs are consumed. Failure restores the caller's stock, steps, and cost;
+exploration still spends the shared node budget.
 
-## Responsibilities
-
-- **Backward Recipe Search:** Searches backward from desired item tags or kinds through available `game-workshop` recipes and local `game-ecology` gathering sources.
-- **Cognitive Search Bounds:** Enforces caller-supplied limits on search depth, total plan length, and candidate node evaluations so planning scales with character intelligence.
-- **Actionable Step Ordering:** Produces an ordered sequence of `Step` actions (`Gather` or `Craft`) ready for immediate execution.
-
-## Boundaries
-
-- **Pure Planning Library:** Owns no ECS state, registers no simulation plugin, and mutates no world resources.
-- **No Goal Selection:** Does not decide which items a character wants or score competing desires (owned by `game-livelihoods` and `game-food-actions`).
-
-## How It Works
-
-- **Stock-Aware Decomposition:** Compares required recipe inputs and tools against a caller-provided snapshot of accessible stock. Missing intermediates are recursively expanded into prerequisite recipes or wild gathering steps.
-- **Bounded Evaluation:** Terminates cleanly when depth, step count, or node check budgets are exhausted, returning the shortest valid production plan found within the actor's cognitive limits.
-
-## Game Integration
-
-- **Plugin / Entry Point:** Pure library crate (`Plan`, `Step`, `Limits`, `search`); requires no `game-sim` plugin registration.
-- **Requests & Events:** None. Accepts stock/recipe views and returns deterministic `Plan` values.
-- **Callers:** Used by `game-livelihoods` and `game-food-actions` to plan multi-step toolmaking, clothing, and meal preparation.
-
-## Dependencies & Testing
-
-- **Dependencies:** Pure Rust crate with no workspace dependencies.
-- **Testing:** Unit and integration tests cover multi-stage recipe chains, tool prerequisites, stock reuse, cycle avoidance, and cognitive budget cutoffs.
+This crate owns no world resources or plugin. It depends on `game-core`,
+`game-objects`, `game-workshop`, and `game-ecology`. `cargo test -p
+game-craft-planning` compares against the earlier copying algorithm across 1,200
+seeded recipe graphs, including cycles, stock reuse, capacity rejection, and
+cognitive bounds, with separate overflow and incomplete-output regressions.

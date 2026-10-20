@@ -35,3 +35,7 @@ Contrasting personally witnessed episodes without a remembered explanation notif
 `Uncertain`. The information owner can turn this into curiosity about the subject,
 allowing a character to ask for an explanation rather than having to discover it
 alone. Notification itself grants no explanation and prescribes no action.
+
+Empirical episodes are immutable shared records inside each personal queue. New
+witnesses copy queue pointers across snapshots, rather than every old context and
+subject string. Reflection and save data preserve the same episode sequence.

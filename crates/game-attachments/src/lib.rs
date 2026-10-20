@@ -164,11 +164,11 @@ fn prepared(
                             person,
                             kind: "recount-memory".into(),
                             duration: SimDuration(10 * MINUTE.0),
-                            request: Pending::new(TellMemory {
+                            request: Pending::immediate(TellMemory {
                                 person,
                                 listener,
                                 target,
-                            })?,
+                            }),
                         },
                     )
                 } else {
@@ -179,7 +179,7 @@ fn prepared(
                             person,
                             kind: "reminisce".into(),
                             duration: HOUR,
-                            request: Pending::new(Recall { person, target })?,
+                            request: Pending::immediate(Recall { person, target }),
                         },
                     )
                 }

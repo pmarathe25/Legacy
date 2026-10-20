@@ -118,7 +118,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                         person: e.person,
                         kind: "approach-company".into(),
                         duration: MINUTE,
-                        request: Pending::new(request)?,
+                        request: Pending::immediate(request),
                     },
                 )?
             } else {

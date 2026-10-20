@@ -65,8 +65,7 @@ pub(super) fn supporting(facts: &Facts, key: &str, here: AreaId) -> Vec<String> 
             .areas
             .iter()
             .take(6)
-            .copied()
-            .map(game_knowledge::roads_key);
+            .map(|id| game_knowledge::roads_key(*id));
         keys.extend(roads);
     }
     keys

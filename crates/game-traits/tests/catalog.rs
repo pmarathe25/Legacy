@@ -184,3 +184,75 @@ fn numeric_characteristics_follow_profiles_defaults_loading_and_direct_revisions
     direct.people.remove(&PersonId(1));
     assert_eq!(direct.ability(PersonId(1), "intelligence"), 1000);
 }
+
+#[test]
+fn recent_numeric_views_follow_shared_snapshots_world_switches_and_sparse_edits() {
+    let make = |value| {
+        let mut b = Builder::new();
+        plugin(&mut b).unwrap();
+        let mut h = b.build(1, 1).unwrap();
+        let mut data = Traits::default();
+        data.definitions.insert(
+            "intelligence".into(),
+            Trait {
+                name: "Intelligence".into(),
+                minimum: 0,
+                maximum: 16000,
+                default: value,
+                founder_spread: 65535,
+                weights: BTreeMap::new(),
+            },
+        );
+        h.dispatch(Install(data)).unwrap();
+        for p in 0..24 {
+            h.dispatch(Set {
+                person: PersonId(p),
+                profile: [("intelligence".into(), value + p as i32)].into(),
+            })
+            .unwrap();
+        }
+        h
+    };
+    let (mut a, b) = (make(1000), make(4000));
+    let retained = a.get::<Traits>().unwrap().clone();
+    for value in [8000, 2000, 16000] {
+        a.dispatch(Set {
+            person: PersonId(1),
+            profile: [("intelligence".into(), value)].into(),
+        })
+        .unwrap();
+        for _ in 0..3 {
+            for p in 0..24 {
+                for (t, expected) in [
+                    (
+                        a.get::<Traits>().unwrap(),
+                        if p == 1 { value as u64 } else { 1000 + p },
+                    ),
+                    (b.get::<Traits>().unwrap(), 4000 + p),
+                    (&retained, 1000 + p),
+                ] {
+                    assert_eq!(t.ability(PersonId(p), "intelligence"), expected);
+                    assert_eq!(
+                        t.disposition(PersonId(p), "intelligence"),
+                        expected as i64 * 1000 / 16000
+                    );
+                }
+            }
+        }
+        let mut edited = a.get::<Traits>().unwrap().clone();
+        edited
+            .people
+            .get_mut(&PersonId(1))
+            .unwrap()
+            .insert("intelligence".into(), 1234);
+        assert_eq!(edited.ability(PersonId(1), "intelligence"), 1234);
+        edited.people.remove(&PersonId(1));
+        assert_eq!(edited.ability(PersonId(1), "intelligence"), 1000);
+        assert_eq!(
+            a.get::<Traits>()
+                .unwrap()
+                .ability(PersonId(1), "intelligence"),
+            value as u64
+        );
+    }
+}

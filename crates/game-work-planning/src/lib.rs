@@ -1,12 +1,35 @@
-use super::*;
-pub(super) use game_craft_planning::{MAX_STEPS, Search, Step};
-pub(super) fn choose(
+//! Personally perceived work goals and bounded recipe search. Execution belongs to livelihoods.
+use game_core::*;
+use game_sim::*;
+use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, VecDeque};
+mod memo;
+pub use memo::choose;
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Goal {
+    pub object: String,
+    pub quantity: u64,
+    pub priority: u32,
+    pub affinity: String,
+    pub concept: String,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Plan {
+    pub inventory: InventoryId,
+    pub goal: GoodId,
+    pub quantity: u64,
+    pub concept: String,
+    pub steps: VecDeque<Step>,
+}
+pub use game_craft_planning::{MAX_STEPS, Search, Step};
+pub fn uncached(
     tx: &Transaction<'_>,
     person: PersonId,
     inventories: &[InventoryId],
     goals: &[Goal],
 ) -> Result<Option<Plan>> {
-    let _measurement = game_diagnostics::span("work planning");
+    let _measurement = game_diagnostics::span("work search");
     let Some(facts) = tx.get::<game_knowledge::Knowledge>()?.0.get(&person) else {
         return Ok(None);
     };

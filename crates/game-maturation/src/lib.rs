@@ -2,7 +2,7 @@
 use game_core::*;
 mod exposure;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,7 +25,7 @@ pub struct Lot {
 pub struct Maturation {
     pub enabled: bool,
     pub lots: Table<InventoryId, Table<GoodId, VecDeque<Lot>>>,
-    pub due: Table<SimTime, BTreeSet<(InventoryId, GoodId)>>,
+    pub due: Records<SimTime, BTreeSet<(InventoryId, GoodId)>>,
     pub finished: u64,
     pub failed: u64,
 }
@@ -216,6 +216,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .edit::<Maturation>()?
             .due
             .remove(&now)
+            .map(std::sync::Arc::unwrap_or_clone)
             .unwrap_or_default();
         let selected: Vec<_> = (0..128).filter_map(|_| due.pop_first()).collect();
         if !due.is_empty() {

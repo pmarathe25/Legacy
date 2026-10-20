@@ -391,10 +391,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                             person: p,
                             kind: "request-aid".into(),
                             duration: MINUTE,
-                            request: Pending::new(Appeal(RequestAid {
+                            request: Pending::immediate(Appeal(RequestAid {
                                 patient: p,
                                 caregiver: helper,
-                            }))?,
+                            })),
                         },
                     )?;
                 }

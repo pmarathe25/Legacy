@@ -14,3 +14,7 @@ game-core.workspace = true
 rayon.workspace = true
 wgpu = { version = "27.0.1", default-features = false, features = ["std", "vulkan", "wgsl"], optional = true }
 bytemuck = { version = "1.25.2", optional = true }
+
+[[bench]]
+name = "preparation"
+harness = false

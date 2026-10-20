@@ -87,3 +87,35 @@ fn new_question_and_search_owners_start_empty_without_rewriting_private_knowledg
         );
     }
 }
+
+#[test]
+fn migration_borrows_opaque_resources_without_changing_numbers_escaping_or_private_data() {
+    let mut old = defaults();
+    old["plugins"].as_object_mut().unwrap().remove("search");
+    for key in ["search.people", "search.goods"] {
+        old["resources"].as_object_mut().unwrap().remove(key);
+    }
+    let mut text = old.to_string();
+    // Raw preservation also avoids rounding an opaque extension's large numeric literal.
+    text = text.replacen("\"resources\":{", "\"resources\":{\"opaque\":{\"large\":18446744073709551616,\"escaped\":\"\\u0061\",\"private\":[1,2,3]},", 1);
+    let migrated = normalize(&text, || Ok(defaults().to_string())).unwrap();
+    assert!(migrated.contains(
+        r#""opaque":{"large":18446744073709551616,"escaped":"\u0061","private":[1,2,3]}"#
+    ));
+    assert_eq!(
+        normalize(&migrated, || panic!("already normalized")).unwrap(),
+        migrated
+    );
+}
+
+#[test]
+fn malformed_legacy_communication_is_rejected_without_panicking() {
+    let mut old = defaults();
+    old["plugins"].as_object_mut().unwrap().remove("signals");
+    old["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("signals.experience");
+    old["resources"]["communication.experience"] = serde_json::Value::Null;
+    assert!(normalize(&old.to_string(), || Ok(defaults().to_string())).is_err());
+}

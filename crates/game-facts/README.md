@@ -32,3 +32,8 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md).
 - **Testing:** `cargo test -p game-facts` verifies shared scene reuse, scene transitions, overrides, namespace revision tokens, and canonical map serialization.
+
+Compact shared evidence dictionaries are owned by
+[`game-snapshot::evidence`](../game-snapshot/README.md). `Facts` retains its expanded
+map serialization and runtime memory behavior; archive encoding and restoration
+remain independent of perception rules.

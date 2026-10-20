@@ -119,18 +119,14 @@ pub(super) fn offer(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
             _ => {}
         }
     }
-    let crops: Vec<_> = tx
-        .get::<Crops>()?
-        .items
-        .iter()
-        .filter(|(_, crop)| {
-            stocks
-                .iter()
-                .any(|(_, stock)| stock.get(&crop.seed).copied().unwrap_or(0) >= crop.seed_input)
-        })
-        .map(|(k, c)| (k.clone(), c.clone()))
-        .collect();
-    for (key, crop) in crops {
+    let crops = tx.get::<Crops>()?.items.clone();
+    for (key, crop) in &crops {
+        if !stocks
+            .iter()
+            .any(|(_, stock)| stock.get(&crop.seed).copied().unwrap_or(0) >= crop.seed_input)
+        {
+            continue;
+        }
         let tradition = tx
             .get::<game_relationships::Social>()?
             .values

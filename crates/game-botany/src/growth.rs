@@ -73,49 +73,51 @@ pub(super) fn advance(
         }
     }
     let mut born = 0;
-    for _ in 0..8 {
-        if s.plants.len() >= 32 {
-            break;
-        }
+    if s.plants.len() < 32 {
+        // Climate and inherited expression are fixed during this germination interval.
+        // Keep seed-bank positions stable until every draw has consumed its seed.
         let candidates: Vec<_> = s
             .seedbank
             .iter()
             .enumerate()
             .filter(|(_, l)| s.suitable(l.strain.expression(), season.warmth, season.rain))
-            .map(|(i, l)| (i, l.quantity))
+            .map(|(i, _)| i)
             .collect();
-        if candidates.is_empty() {
-            break;
+        let mut total: u64 = candidates.iter().map(|i| s.seedbank[*i].quantity).sum();
+        for _ in 0..8 {
+            if s.plants.len() >= 32 || total == 0 {
+                break;
+            }
+            let mut draw = random(tx.seed(), r.patch, at.0 + born) % total;
+            let choice = candidates
+                .iter()
+                .copied()
+                .find(|i| {
+                    let q = s.seedbank[*i].quantity;
+                    if draw < q {
+                        true
+                    } else {
+                        draw -= q;
+                        false
+                    }
+                })
+                .unwrap();
+            let seed = &mut s.seedbank[choice];
+            let strain = seed.strain.clone();
+            seed.quantity -= 1;
+            total -= 1;
+            s.sequence = s.sequence.checked_add(1).ok_or(Error::Overflow)?;
+            s.plants.push(Plant {
+                id: s.sequence,
+                expression: strain.expression(),
+                strain,
+                born: at,
+                age_offset: 0,
+                family: None,
+            });
+            born += 1;
         }
-        let total: u64 = candidates.iter().map(|(_, q)| *q).sum();
-        let mut draw = random(tx.seed(), r.patch, at.0 + born) % total;
-        let choice = candidates
-            .into_iter()
-            .find_map(|(i, q)| {
-                if draw < q {
-                    Some(i)
-                } else {
-                    draw -= q;
-                    None
-                }
-            })
-            .unwrap();
-        let seed = &mut s.seedbank[choice];
-        let strain = seed.strain.clone();
-        seed.quantity -= 1;
-        if seed.quantity == 0 {
-            s.seedbank.remove(choice);
-        }
-        s.sequence = s.sequence.checked_add(1).ok_or(Error::Overflow)?;
-        s.plants.push(Plant {
-            id: s.sequence,
-            expression: strain.expression(),
-            strain,
-            born: at,
-            age_offset: 0,
-            family: None,
-        });
-        born += 1;
+        s.seedbank.retain(|seed| seed.quantity > 0);
     }
     let decay = s.shelf.map_or(0, |days| {
         let life = u128::from(days)

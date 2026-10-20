@@ -29,3 +29,7 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-utility`](../game-utility/README.md), [`game-food-memory`](../game-food-memory/README.md), [`game-food-actions`](../game-food-actions/README.md), [`game-vitality`](../game-vitality/README.md), [`game-relationships`](../game-relationships/README.md), [`game-traits`](../game-traits/README.md), [`game-property`](../game-property/README.md), [`game-stockpiles`](../game-stockpiles/README.md), [`game-objects`](../game-objects/README.md), [`game-knowledge`](../game-knowledge/README.md), [`game-land`](../game-land/README.md), [`game-cargo`](../game-cargo/README.md), [`game-transport`](../game-transport/README.md), [`game-physiology`](../game-physiology/README.md), [`game-ecology`](../game-ecology/README.md), [`game-diagnostics`](../game-diagnostics/README.md).
 - **Testing:** `cargo test -p game-provisioning` verifies multi-hop meal/foraging plans, stale-stock recovery, dietary preference weighting, and frontier fallback.
+
+Frontier recall uses a bounded weak road-namespace cache. Unchanged personal
+roads do not require rebuilding the frontier or cloning area names and links.
+Learning, rollback, and unrelated worlds retain exact query results.

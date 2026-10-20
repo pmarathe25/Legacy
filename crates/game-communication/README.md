@@ -29,5 +29,12 @@ Procedural vocabularies, sound–meaning associations, physical demonstration gr
 
 ## Dependencies & Testing
 
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-transport`, `game-physiology`, `game-vitality`, `game-traits`, `game-knowledge`, `game-signals`.
+- **Dependencies:** `game-lexicon`, `game-signals`, `game-core`, `game-sim`, `game-storage`, `game-physiology`, `game-vitality`, `game-traits`, `game-transport`, `game-cargo`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-communication`) verify word coining, demonstration grounding, dialect divergence, deafness/gesture fallback, infant cues, and multi-worker save/load.
+
+Reverse lookup lives in `game-lexicon`; learning and social requests remain here.
+The decoder keeps up to 128 recent personal vocabularies, 32,768 forms and a 4 MiB
+index-data budget. Compact sound keys and pooled text preserve strongest-association
+and lexical ties. Weak versions invalidate edits, rollback and loading. Oversized
+inputs keep the complete scan. `shared_meaning` checks understood titles without
+building a translation surface or copying the matched text.

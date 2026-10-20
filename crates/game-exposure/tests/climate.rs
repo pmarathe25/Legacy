@@ -68,6 +68,32 @@ fn run(h: &mut Host, at: SimTime) {
     while h.advance(at, 1000).unwrap().stop != Stop::Target {}
 }
 #[test]
+fn exposure_effects_and_notices_ignore_saved_body_field_order() {
+    let (mut h, area) = setup(-40);
+    for _ in 0..12 {
+        person(&mut h, area);
+    }
+    let save = h.save().unwrap();
+    // Canonical JSON object order is lexicographic, whereas packed storage emits numeric IDs.
+    // Loading either legal encoding must produce the same ordered effects and chronology.
+    let reordered = serde_json::from_str::<serde_json::Value>(&save)
+        .unwrap()
+        .to_string();
+    let mut numeric = builder().load(&save, 1).unwrap();
+    let mut lexical = builder().load(&reordered, 4).unwrap();
+    assert!(
+        numeric.save().unwrap() == lexical.save().unwrap(),
+        "body field order changed the saved world"
+    );
+    run(&mut numeric, SimTime(EPOCH + DAY.0));
+    run(&mut lexical, SimTime(EPOCH + DAY.0));
+    assert!(numeric.notices().any(|n| n.kind == "exposure.changed"));
+    assert!(
+        numeric.save().unwrap() == lexical.save().unwrap(),
+        "body field order changed the saved world"
+    );
+}
+#[test]
 fn clothes_reduce_cold_injury_and_removal_prevents_heat_stress() {
     let (mut h, a) = setup(-35);
     let (bare, _) = person(&mut h, a);

@@ -1,7 +1,7 @@
 //! FIFO food batches keep their expiry during transport; spoilage consumes real stock.
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, VecDeque};
 mod calendar;
@@ -25,7 +25,7 @@ pub struct Batch {
 pub struct Preservation {
     pub enabled: bool,
     pub batches: Table<InventoryId, Table<GoodId, VecDeque<Batch>>>,
-    pub due: Table<SimTime, BTreeSet<(InventoryId, GoodId)>>,
+    pub due: Records<SimTime, BTreeSet<(InventoryId, GoodId)>>,
     pub spoiled: u64,
     #[serde(default)]
     pub rates: Table<InventoryId, u32>,
@@ -220,6 +220,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .edit::<Preservation>()?
             .due
             .remove(&at)
+            .map(std::sync::Arc::unwrap_or_clone)
             .unwrap_or_default();
         let batch: Vec<_> = (0..128).filter_map(|_| targets.pop_first()).collect();
         if !targets.is_empty() {

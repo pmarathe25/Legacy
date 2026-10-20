@@ -1,7 +1,10 @@
 //! Lossless shared dictionaries for collections of personal evidence.
-use crate::*;
+use game_core::{Error, PersonId, Result, SimTime, require};
+use game_facts::{Fact, Facts};
 use game_storage::Table;
-use std::collections::HashMap;
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 type Row = (usize, usize, PersonId, SimTime, u64, u8);
 #[derive(Serialize, Deserialize)]
 pub struct Archive<V> {
@@ -45,28 +48,48 @@ impl<V: Eq + std::hash::Hash> Archive<V> {
 }
 impl<V: Clone> Archive<V> {
     pub fn restore(
-        self,
+        mut self,
         mut promote: impl FnMut(&str, Arc<V>) -> Arc<V>,
     ) -> Result<Vec<(PersonId, Facts<V>)>> {
         require(self.version == 1, "unknown evidence archive version")?;
+        let pairs: HashSet<_> = self.people.values().flatten().map(|r| (r.0, r.1)).collect();
+        let mut remaining = vec![0usize; self.values.len()];
+        for (key, value) in pairs {
+            require(key < self.keys.len(), "invalid archived fact key")?;
+            let count = remaining
+                .get_mut(value)
+                .ok_or_else(|| Error::Rejected("invalid archived fact value".into()))?;
+            *count += 1;
+        }
+        let mut values: Vec<_> = self
+            .values
+            .into_iter()
+            .enumerate()
+            .map(|(i, value)| (remaining[i] > 0).then_some(value))
+            .collect();
         let mut promoted = HashMap::new();
         let mut people = vec![];
-        for (person, rows) in &self.people {
-            let person = *person;
+        let ids: Vec<_> = self.people.keys().copied().collect();
+        for person in ids {
+            let rows = self.people.remove(&person).unwrap();
             let mut facts = Facts::default();
-            for &(k, v, source, observed, revision, confidence) in rows {
-                let key = self
-                    .keys
-                    .get(k)
-                    .ok_or_else(|| Error::Rejected("invalid archived fact key".into()))?;
-                let value = self
-                    .values
-                    .get(v)
-                    .ok_or_else(|| Error::Rejected("invalid archived fact value".into()))?;
-                // Promotion depends on the namespace as well as the payload.
+            for (k, v, source, observed, revision, confidence) in rows {
+                let key = &self.keys[k];
+                // Keep each original only until every required namespace has its own projection.
                 let value = promoted
                     .entry((k, v))
-                    .or_insert_with(|| promote(key, value.clone()))
+                    .or_insert_with(|| {
+                        let raw = values[v]
+                            .as_ref()
+                            .expect("unpromoted archive source")
+                            .clone();
+                        let value = promote(key, raw);
+                        remaining[v] -= 1;
+                        if remaining[v] == 0 {
+                            values[v] = None;
+                        }
+                        value
+                    })
                     .clone();
                 require(confidence <= 100, "invalid archived confidence")?;
                 require(

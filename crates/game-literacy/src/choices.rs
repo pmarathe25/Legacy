@@ -112,10 +112,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     person: p,
                     kind: "read-note".into(),
                     duration: SimDuration(10 * MINUTE.0),
-                    request: Pending::new(Read {
+                    request: Pending::immediate(Read {
                         person: p,
                         document,
-                    })?,
+                    }),
                 },
             )?;
         }

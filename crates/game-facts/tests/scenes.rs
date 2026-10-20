@@ -30,6 +30,40 @@ fn scene(keys: &[&str], old: Option<&Scene<String>>) -> Arc<Scene<String>> {
     )
 }
 #[test]
+fn changed_scenes_invalidate_only_changed_payload_namespaces_and_keep_cold_evidence() {
+    let first = scene(&["roads:1", "patch:1"], None);
+    let mut facts = Facts::default();
+    facts.observe(first.clone(), stamp(1));
+    let original = facts.clone();
+    let roads = facts.namespace_version("roads");
+    let patch = facts.namespace_version("patch");
+    let next = Arc::new(
+        Scene::new(
+            vec![
+                ("roads:1".into(), Arc::new("roads:1".into())),
+                ("patch:1".into(), Arc::new("depleted".into())),
+            ],
+            Some(&first),
+        )
+        .unwrap(),
+    );
+    facts.observe(next.clone(), stamp(2));
+    assert!(roads.ptr_eq(&facts.namespace_version("roads")));
+    assert!(!patch.ptr_eq(&facts.namespace_version("patch")));
+    let changed = facts.clone();
+    // A new scene allocation with identical shared payloads changes only metadata.
+    facts.observe(scene(&["roads:1"], Some(&next)), stamp(3));
+    assert!(facts.same_namespace(&changed, "roads"));
+    assert!(facts.same_namespace(&changed, "patch"));
+    assert_eq!(facts.get("patch:1").unwrap().value.as_str(), "depleted");
+    assert_eq!(facts.get("patch:1").unwrap().observed, SimTime(20));
+    facts.insert("roads:1".into(), fact("closed", 4));
+    let reported = facts.clone();
+    facts.observe(first, stamp(5));
+    assert!(!facts.same_namespace(&reported, "roads"));
+    assert_eq!(original.get("roads:1").unwrap().observed, SimTime(10));
+}
+#[test]
 fn shared_scenes_keep_individual_evidence_without_per_fact_payload_copies() {
     let s = scene(&["patch:1", "roads:1"], None);
     let mut people: Vec<Facts<String>> = (0..1000).map(|_| Facts::default()).collect();

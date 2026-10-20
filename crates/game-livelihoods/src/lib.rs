@@ -1,22 +1,12 @@
 //! Personal stock goals compose gathering, recipe chains, and small plantings.
-mod planning;
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
+use game_work_planning as planning;
+pub use planning::Goal;
+use planning::Plan;
 use serde::{Deserialize, Serialize};
-use std::{
-    collections::{BTreeMap, VecDeque},
-    sync::Arc,
-};
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Goal {
-    pub object: String,
-    pub quantity: u64,
-    pub priority: u32,
-    pub affinity: String,
-    pub concept: String,
-}
+use std::sync::Arc;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rules {
@@ -39,20 +29,12 @@ impl Rules {
         )
     }
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct Plan {
-    inventory: InventoryId,
-    goal: GoodId,
-    quantity: u64,
-    concept: String,
-    steps: VecDeque<planning::Step>,
-}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Livelihoods {
     pub enabled: bool,
     pub rules: Option<Arc<Rules>>,
     pub stamps: Vec<game_content::Stamp>,
-    plans: Table<PersonId, Plan>,
+    plans: Records<PersonId, Plan>,
     pub retry_at: Table<PersonId, SimTime>,
     pub achieved: Table<PersonId, u64>,
     pub failures: Table<PersonId, u64>,
@@ -163,6 +145,7 @@ fn inventories(tx: &Transaction<'_>, person: PersonId) -> Result<Vec<InventoryId
     let mut rows = game_food_memory::with_stores(person, facts, tx.get()?, |s| {
         s.all()
             .filter_map(|s| {
+                s.stock.as_ref()?;
                 let l = s.location.as_ref()?;
                 (l.carrier == Some(person) || l.area == area)
                     .then_some((l.carrier != Some(person), s.id))
@@ -170,6 +153,7 @@ fn inventories(tx: &Transaction<'_>, person: PersonId) -> Result<Vec<InventoryId
             .collect::<Vec<_>>()
     });
     rows.sort_unstable();
+    rows.dedup();
     Ok(rows.into_iter().map(|(_, id)| id).collect())
 }
 fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {

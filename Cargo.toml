@@ -8,6 +8,11 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-work-planning = { path = "crates/game-work-planning" }
+game-diet = { path = "crates/game-diet" }
+game-contracts = { path = "crates/game-contracts" }
+game-lexicon = { path = "crates/game-lexicon" }
+game-snapshot = { path = "crates/game-snapshot" }
 game-information = { path = "crates/game-information" }
 game-search = { path = "crates/game-search" }
 game-physics = { path = "crates/game-physics" }

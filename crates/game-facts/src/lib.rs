@@ -3,9 +3,6 @@ use game_core::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize, ser::SerializeMap};
 use std::{ops::Bound, sync::Arc};
-pub mod archive;
-mod writing;
-pub use writing::View as SharedView;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Fact<V> {
     pub value: Arc<V>,
@@ -158,13 +155,19 @@ impl<V: Clone> Facts<V> {
             .is_none_or(|old| !Arc::ptr_eq(&old.scene, &scene))
             || self.overrides > 0
         {
-            self.payload_version = Arc::new(());
             let mask = scene
                 .keys
                 .iter()
-                .chain(self.local.iter().flat_map(|o| o.scene.keys.iter()))
-                .fold(0, |mask, key| mask | (1u64 << namespace(key)));
-            self.touch(mask);
+                .zip(scene.values.iter())
+                .filter(|(key, value)| {
+                    self.get(key)
+                        .is_none_or(|old| !Arc::ptr_eq(old.value, value))
+                })
+                .fold(0, |mask, (key, _)| mask | (1u64 << namespace(key)));
+            if mask != 0 {
+                self.payload_version = Arc::new(());
+                self.touch(mask);
+            }
         }
         let same = self
             .local
@@ -215,20 +218,21 @@ impl<V> Facts<V> {
         }
     }
     /// Hash collisions conservatively invalidate additional namespaces.
+    pub fn namespace_version(&self, prefix: &str) -> std::sync::Weak<()> {
+        self.namespaces
+            .get(&namespace(prefix))
+            .map(Arc::downgrade)
+            .unwrap_or_default()
+    }
     pub fn same_namespace(&self, old: &Self, prefix: &str) -> bool {
         let slot = namespace(prefix);
-        match (self.namespaces.get(&slot), old.namespaces.get(&slot)) {
-            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-            (None, None) => true,
-            _ => false,
-        }
+        self.namespaces.get(&slot).map(Arc::as_ptr) == old.namespaces.get(&slot).map(Arc::as_ptr)
     }
     pub fn valid_at(&self, at: SimTime, revision: u64) -> bool {
         self.values()
             .all(|f| f.observed <= at && f.revision <= revision)
     }
-    /// Visit changed immutable payloads, including removals. Metadata-only
-    /// refreshes are ignored; equivalent payload copies may be visited again.
+    /// Visit changed payloads/removals, not metadata-only refreshes; equal copies may be visited.
     pub fn changed_values(
         &self,
         previous: &Self,
@@ -397,8 +401,29 @@ impl<V: PartialEq> PartialEq<Fact<V>> for FactRef<'_, V> {
             && self.confidence == other.confidence
     }
 }
-
 /// Compare logical payloads even when an owner retains a typed form beside opaque saved JSON.
 pub fn same_value<V: Eq + Serialize>(a: &V, b: &V) -> bool {
     a == b || matches!((serde_json::to_value(a), serde_json::to_value(b)), (Ok(a), Ok(b)) if a == b)
+}
+
+/// Prefer a lossless compact schema while retaining every other JSON value unchanged.
+pub fn deserialize_preferred<'de, D, T, R>(
+    d: D,
+    specific: impl FnOnce(T) -> R,
+    other: impl FnOnce(serde_json::Value) -> R,
+) -> std::result::Result<R, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Preferred<T> {
+        Specific(T),
+        Other(serde_json::Value),
+    }
+    Preferred::deserialize(d).map(|value| match value {
+        Preferred::Specific(v) => specific(v),
+        Preferred::Other(v) => other(v),
+    })
 }

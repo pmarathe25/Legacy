@@ -530,3 +530,49 @@ fn a_simpler_held_explanation_can_unlock_new_deductions() {
             .any(|c| c.factor == "heat" && c.outcome == "durability")
     );
 }
+
+#[test]
+fn retained_empirical_episodes_survive_new_witnesses_and_invalid_episode_rollback() {
+    let mut b = support::builder();
+    plugin(&mut b).unwrap();
+    let (mut h, p, _) = support::people(b);
+    let episode = |n| Observation {
+        context: [("heat".into(), n)].into(),
+        subject: "iron".into(),
+        outcome: "hardness".into(),
+        trial: n as u64,
+        value: n,
+    };
+    h.dispatch(Witness {
+        observer: p[0],
+        observation: episode(1),
+    })
+    .unwrap();
+    let earlier = h.get::<Inquiry>().unwrap().clone();
+    h.dispatch(Witness {
+        observer: p[0],
+        observation: episode(2),
+    })
+    .unwrap();
+    assert_eq!(earlier.people[&p[0]].observations.len(), 1);
+    assert_eq!(earlier.people[&p[0]].observations[0].value, 1);
+    let saved = h.save().unwrap();
+    let mut invalid = episode(3);
+    invalid.context.insert("".into(), 0);
+    assert!(
+        h.dispatch(Witness {
+            observer: p[0],
+            observation: invalid
+        })
+        .is_err()
+    );
+    assert_eq!(h.save().unwrap(), saved);
+    let mut b = support::builder();
+    plugin(&mut b).unwrap();
+    let loaded = b.load(&saved, 1).unwrap();
+    assert_eq!(loaded.save().unwrap(), saved);
+    assert_eq!(
+        loaded.get::<Inquiry>().unwrap(),
+        h.get::<Inquiry>().unwrap()
+    );
+}

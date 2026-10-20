@@ -4,6 +4,8 @@ use game_sim::*;
 use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 
+mod decoding;
+pub use decoding::shared_meaning;
 mod sounds;
 pub use game_signals::{Notice, Perception, Signalled, estimated_hunger};
 pub use sounds::{
@@ -13,13 +15,7 @@ pub const PHONEMES: &[&str] = &[
     "a", "e", "i", "o", "u", "m", "n", "p", "t", "k", "s", "l", "r", "v", "h", "sh", "f", "b", "d",
     "g", "w", "y",
 ];
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Association {
-    pub sounds: Vec<u8>,
-    pub strength: u16,
-    pub source: PersonId,
-    pub at: SimTime,
-}
+pub use game_lexicon::Association;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Communication {
     pub enabled: bool,

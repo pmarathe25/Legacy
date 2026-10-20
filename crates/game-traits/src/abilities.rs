@@ -73,15 +73,55 @@ impl Index {
             return None;
         }
         let slot = *self.keys.get(key)?;
-        let values = if let Some(source) = traits.people.get(&person) {
-            let compiled = self.people.get(&person)?;
-            if !std::ptr::eq(source, compiled.source.as_ref()) {
-                return None;
+        RECENT.with(|cache| {
+            let mut cache = cache.borrow_mut();
+            let entry = &mut cache[person.0 as usize % CACHE_SLOTS];
+            if let Some(old) = entry
+                && old.person == person
+                && self.people.matches(&old.compiled)
+                && traits.people.matches(&old.sources)
+            {
+                return old
+                    .profile
+                    .as_ref()
+                    .map_or(&self.defaults, |p| &p.values)
+                    .get(slot)
+                    .copied();
             }
-            &compiled.values
-        } else {
-            &self.defaults
-        };
-        values.get(slot).copied()
+            let profile = if let Some(source) = traits.people.get(&person) {
+                let compiled = self.people.shared(&person)?;
+                if !std::ptr::eq(source, compiled.source.as_ref()) {
+                    return None;
+                }
+                Some(compiled)
+            } else {
+                None
+            };
+            let result = profile
+                .as_ref()
+                .map_or(&self.defaults, |p| &p.values)
+                .get(slot)
+                .copied();
+            *entry = Some(Recent {
+                person,
+                compiled: self.people.version(),
+                sources: traits.people.version(),
+                profile,
+            });
+            result
+        })
     }
+}
+// Repeated attributes in one review share the exact checked personal projection.
+// Weak table versions invalidate on direct edits, rollback, loading and world switches.
+struct Recent {
+    person: PersonId,
+    compiled: game_storage::Version<PersonId, Arc<Profile>>,
+    sources: game_storage::Version<PersonId, Arc<BTreeMap<String, i32>>>,
+    profile: Option<Arc<Profile>>,
+}
+const CACHE_SLOTS: usize = 8;
+thread_local! {
+    static RECENT: std::cell::RefCell<[Option<Recent>; CACHE_SLOTS]> =
+        const { std::cell::RefCell::new([const { None }; CACHE_SLOTS]) };
 }

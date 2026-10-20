@@ -92,10 +92,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     person: e.person,
                     kind: "file-claim".into(),
                     duration: HOUR,
-                    request: Pending::new(Prosecute {
+                    request: Pending::immediate(Prosecute {
                         claimant: e.person,
                         defendant,
-                    })?,
+                    }),
                 },
             )?;
         }

@@ -27,3 +27,7 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-content`](../game-content/README.md), [`game-objects`](../game-objects/README.md), [`game-environment`](../game-environment/README.md), [`game-cultivars`](../game-cultivars/README.md).
 - **Testing:** Exercised by `cargo test -p game-agriculture` and `cargo test -p game-botany`.
+
+Crop definitions use shared records. Proposal preparation can retain an immutable
+catalog revision while request hooks run, without copying every crop name. Saved
+TOML/JSON definitions and per-strain expression remain unchanged.

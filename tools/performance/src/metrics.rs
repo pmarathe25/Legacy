@@ -2,6 +2,8 @@ use std::{
     sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
 };
+#[cfg(feature = "allocation-stacks")]
+pub mod stacks;
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 static PEAK: AtomicUsize = AtomicUsize::new(0);
 static ALLOCS: AtomicUsize = AtomicUsize::new(0);
@@ -23,7 +25,11 @@ mod allocator {
         unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
             let ptr = unsafe { BASE.alloc(layout) };
             if !ptr.is_null() {
-                ALLOCS.fetch_add(1, Ordering::Relaxed);
+                let count = ALLOCS.fetch_add(1, Ordering::Relaxed);
+                #[cfg(feature = "allocation-stacks")]
+                stacks::record(count);
+                #[cfg(not(feature = "allocation-stacks"))]
+                let _ = count;
                 let live = LIVE.fetch_add(layout.size(), Ordering::Relaxed) + layout.size();
                 PEAK.fetch_max(live, Ordering::Relaxed);
             }
@@ -111,4 +117,9 @@ pub fn rss() {
 }
 pub fn percentile(sorted: &[f64], pct: usize) -> f64 {
     sorted[(sorted.len() - 1) * pct / 100]
+}
+
+/// Monotonic requested-allocation count when the optional meter is enabled.
+pub fn allocation_count() -> u64 {
+    ALLOCS.load(Ordering::Relaxed) as u64
 }

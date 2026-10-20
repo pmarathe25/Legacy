@@ -9,6 +9,7 @@ pub enum FactValue {
     Location(StoreLocation),
     Theory(Box<game_reasoning::Claim>),
     Measurement(Box<game_reasoning::Observation>),
+    Mechanical(game_physics::MechanicalReading),
     Other(serde_json::Value),
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -37,7 +38,7 @@ impl Subject {
 
 impl<'de> Deserialize<'de> for FactValue {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
-        serde_json::Value::deserialize(d).map(Self::Other)
+        game_facts::deserialize_preferred(d, Self::Mechanical, Self::Other)
     }
 }
 impl FactValue {
@@ -49,6 +50,7 @@ impl FactValue {
             Self::Location(v) => (v, None),
             Self::Theory(v) => (v.as_ref(), None),
             Self::Measurement(v) => (v.as_ref(), None),
+            Self::Mechanical(v) => (&v.measured, None),
             Self::Other(v) => (v, Some(v)),
         };
         game_facts::decode(typed, self, json)
@@ -57,7 +59,9 @@ impl FactValue {
         let Self::Other(raw) = value.as_ref() else {
             return value;
         };
-        let typed = if key.starts_with("roads:") {
+        let typed = if let Some(reading) = game_physics::MechanicalReading::from_json(raw) {
+            Ok(Self::Mechanical(reading))
+        } else if key.starts_with("roads:") {
             serde_json::from_value(raw.clone()).map(Self::Roads)
         } else if key.starts_with("store-location:") {
             serde_json::from_value(raw.clone()).map(Self::Location)
@@ -75,8 +79,7 @@ impl FactValue {
         typed
             .ok()
             .filter(|typed| serde_json::to_value(typed).ok().as_ref() == Some(raw))
-            .map(Arc::new)
-            .unwrap_or(value)
+            .map_or(value, Arc::new)
     }
 }
 impl From<serde_json::Value> for FactValue {
@@ -84,7 +87,6 @@ impl From<serde_json::Value> for FactValue {
         Self::Other(value)
     }
 }
-
 fn stock_wire<S: serde::Serializer>(
     stock: &Stock,
     serializer: S,

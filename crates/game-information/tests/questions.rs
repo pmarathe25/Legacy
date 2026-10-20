@@ -617,3 +617,49 @@ fn unexplained_contrasts_create_voluntary_information_interests_without_revealin
     })).unwrap() }).unwrap();
     assert!(h.get::<Information>().unwrap().interests[&observer].is_empty());
 }
+
+#[test]
+fn changing_one_question_history_preserves_other_people_and_older_revisions() {
+    let (mut h, people, _) = setup();
+    for person in people {
+        h.dispatch(Want {
+            person,
+            topic: Topic::Fact("weather".into()),
+            importance: 50,
+        })
+        .unwrap();
+    }
+    let previous = h.get::<Information>().unwrap().clone();
+    let previous_wire = serde_json::to_string(&previous).unwrap();
+    let other = previous.interests.get(&people[1]).unwrap().clone();
+    h.dispatch(Ask {
+        person: people[0],
+        other: people[1],
+        topic: Topic::Fact("weather".into()),
+    })
+    .unwrap();
+    assert_eq!(serde_json::to_string(&previous).unwrap(), previous_wire);
+    assert_eq!(
+        h.get::<Information>().unwrap().interests.get(&people[1]),
+        Some(&other)
+    );
+    assert!(
+        !h.get::<Information>()
+            .unwrap()
+            .inboxes
+            .get(&people[1])
+            .unwrap()
+            .is_empty()
+    );
+    let before = h.save().unwrap();
+    assert!(
+        h.dispatch(Ask {
+            person: people[0],
+            other: people[0],
+            topic: Topic::Fact("weather".into())
+        })
+        .is_err()
+    );
+    assert_eq!(h.save().unwrap(), before);
+    assert_eq!(builder().load(&before, 4).unwrap().save().unwrap(), before);
+}

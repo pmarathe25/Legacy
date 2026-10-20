@@ -1,0 +1,21 @@
+[package]
+name = "game-work-planning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-craft-planning.workspace = true
+game-knowledge.workspace = true
+game-ecology.workspace = true
+game-workshop.workspace = true
+game-food-memory.workspace = true
+game-relationships.workspace = true
+game-traits.workspace = true
+game-vitality.workspace = true
+game-objects.workspace = true
+game-transport.workspace = true
+game-diagnostics.workspace = true
+serde.workspace = true

@@ -3,7 +3,7 @@ use game_core::*;
 use game_inquiry::Witness;
 use game_reasoning::Observation;
 use game_sim::*;
-use game_storage::Table;
+use game_storage::{Records, Table};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 mod life;
@@ -11,7 +11,7 @@ mod witnesses;
 pub use game_food_inquiry::{Experiment, Inspect, Samples};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observations {
-    pub trips: Table<PersonId, witnesses::Trip>,
+    pub trips: Records<PersonId, witnesses::Trip>,
     pub meals: Table<PersonId, witnesses::Meal>,
     pub crafts: Table<PersonId, (SimTime, u64)>,
     #[serde(default)]

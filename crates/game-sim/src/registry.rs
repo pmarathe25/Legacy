@@ -1,53 +1,13 @@
 use crate::*;
-use serde::de::DeserializeOwned;
+pub use game_contracts::{Checkpoint, Resource};
+pub(crate) use game_contracts::{Stored, json_error, mutable, read};
 use std::any::Any;
-pub type Checkpoint = Box<dyn Any + Send + Sync>;
-/// Mutable fields must clone independently; resource state cannot share mutable aliases.
-pub trait Resource: Clone + Default + Serialize + DeserializeOwned + Send + Sync + 'static {
-    const KEY: &'static str;
-    /// Snapshot metadata or begin a row journal. These storage hooks must not run gameplay.
-    fn checkpoint(&mut self) -> Checkpoint {
-        Box::new(self.clone())
-    }
-    fn restore(&mut self, checkpoint: Checkpoint) {
-        *self = *checkpoint
-            .downcast::<Self>()
-            .expect("resource checkpoint type");
-    }
-    /// Infallible storage housekeeping; keep nested undo until the outer commit.
-    fn commit(&mut self, _checkpoint: Checkpoint) {}
-    fn validate_checkpoint(&self, checkpoint: &dyn Any) -> Result<()> {
-        self.validate_changes(
-            checkpoint
-                .downcast_ref::<Self>()
-                .expect("resource checkpoint type"),
-        )
-    }
-    fn allocated_ids(&self) -> Vec<u64> {
-        vec![]
-    }
-    fn validate_changes(&self, _previous: &Self) -> Result<()> {
-        self.validate()
-    }
-    fn validate(&self) -> Result<()> {
-        Ok(())
-    }
-}
-/// Requests clone independent immutable values; shared mutable aliases are unsupported.
-pub trait Request: Clone + Serialize + DeserializeOwned + Send + Sync + 'static {
-    const KEY: &'static str;
-    type Response: Serialize + DeserializeOwned;
-}
-pub trait Event: Serialize + DeserializeOwned + 'static {
-    const KEY: &'static str;
-}
 type TypedOperation<R> =
     dyn Fn(&mut Transaction<'_>, R) -> Result<<R as Request>::Response> + Send + Sync;
 pub(crate) struct Typed<R: Request> {
     pub owner: usize,
     pub run: Box<TypedOperation<R>>,
 }
-pub(crate) type Stored = Arc<dyn Any + Send + Sync>;
 type Listener = Arc<dyn Fn(&mut Transaction<'_>, &dyn Any) -> Result<()> + Send + Sync>;
 fn register_listener<T: 'static>(
     listeners: &mut BTreeMap<String, Listener>,
@@ -72,26 +32,15 @@ fn register_listener<T: 'static>(
 type Decoder = for<'a> fn(pending::Input<'a>) -> Result<Pending>;
 type Guard = Box<dyn Fn(&Host, &Envelope) -> Result<()> + Send + Sync>;
 type Stopper = Box<dyn Fn(&Host) -> Result<Option<String>> + Send + Sync>;
-pub(crate) struct Codec {
-    pub key: &'static str,
-    pub owner: usize,
-    pub encode: fn(&Stored, &mut dyn std::io::Write) -> Result<()>,
-    pub decode: fn(&str) -> Result<Stored>,
-    pub ids: fn(&Stored) -> Vec<u64>,
-    pub validate: fn(&Stored) -> Result<()>,
-    pub checkpoint: fn(&mut Stored) -> Checkpoint,
-    pub restore: fn(&mut Stored, Checkpoint),
-    pub commit: fn(&mut Stored, Checkpoint),
-    pub validate_checkpoint: fn(&Stored, &dyn Any) -> Result<()>,
-}
 #[derive(Default)]
 pub(crate) struct Registry {
-    pub resources: HashMap<TypeId, Codec>,
+    pub resources: game_contracts::Catalog,
     pub owners: Vec<Arc<str>>,
     pub typed: HashMap<TypeId, Stored>,
     pub batches: HashMap<String, usize>,
     pub request_owners: HashMap<String, usize>,
     pub listeners: HashMap<String, BTreeMap<String, Listener>>,
+    pub isolated: HashMap<String, HashMap<String, TypeId>>,
     pub save_checks: Vec<fn(&Host) -> Result<()>>,
     pub guards: Vec<Guard>,
     pub stops: Vec<Stopper>,
@@ -136,34 +85,11 @@ impl Builder {
         Ok(())
     }
     pub fn resource<T: Resource>(&mut self) -> Result<()> {
-        if self.registry.resources.contains_key(&TypeId::of::<T>())
-            || self.registry.resources.values().any(|c| c.key == T::KEY)
-        {
-            return Err(Error::Duplicate(T::KEY.into()));
-        }
-        self.registry.resources.insert(
-            TypeId::of::<T>(),
-            Codec {
-                key: T::KEY,
-                owner: self.owner,
-                encode: |s, out| serde_json::to_writer(out, value::<T>(s)).map_err(json_error),
-                decode: |v| {
-                    let x: T = serde_json::from_str(v).map_err(json_error)?;
-                    Ok(Arc::new(x))
-                },
-                ids: |s| value::<T>(s).allocated_ids(),
-                validate: |s| value::<T>(s).validate(),
-                checkpoint: |s| mutable::<T>(s).checkpoint(),
-                restore: |s, checkpoint| mutable::<T>(s).restore(checkpoint),
-                commit: |s, checkpoint| mutable::<T>(s).commit(checkpoint),
-                validate_checkpoint: |s, checkpoint| value::<T>(s).validate_checkpoint(checkpoint),
-            },
-        );
-        let initial = T::default();
-        initial.validate()?;
-        self.data.insert(TypeId::of::<T>(), Arc::new(initial));
-        Ok(())
+        self.registry
+            .resources
+            .register::<T>(self.owner, &mut self.data)
     }
+
     pub fn request<R: Request>(
         &mut self,
         handler: impl Fn(&mut Transaction<'_>, R) -> Result<R::Response> + Send + Sync + 'static,
@@ -205,6 +131,20 @@ impl Builder {
             name,
             listener,
         )
+    }
+    /// Independent drafts must not inspect partial results of other subscribers.
+    pub fn subscribe_isolated<E: Event, T: Resource>(
+        &mut self,
+        name: &str,
+        listener: impl Fn(&mut Transaction<'_>, &E) -> Result<()> + Send + Sync + 'static,
+    ) -> Result<()> {
+        self.subscribe::<E>(name, listener)?;
+        self.registry
+            .isolated
+            .entry(E::KEY.into())
+            .or_default()
+            .insert(name.into(), TypeId::of::<T>());
+        Ok(())
     }
     pub fn before<R: Request>(
         &mut self,
@@ -256,24 +196,4 @@ impl Default for Builder {
     fn default() -> Self {
         Self::new()
     }
-}
-pub(crate) fn json_error(e: serde_json::Error) -> Error {
-    Error::InvalidSave(e.to_string())
-}
-pub(crate) fn mutable<T: Resource>(stored: &mut Stored) -> &mut T {
-    Arc::get_mut(stored)
-        .expect("exclusive transaction resource")
-        .downcast_mut()
-        .expect("registered resource type")
-}
-
-fn value<T: Resource>(stored: &Stored) -> &T {
-    stored
-        .downcast_ref::<T>()
-        .expect("registered resource type")
-}
-pub(crate) fn read<T: Resource>(data: &HashMap<TypeId, Stored>) -> Result<&T> {
-    data.get(&TypeId::of::<T>())
-        .and_then(|s| s.downcast_ref())
-        .ok_or_else(|| Error::Missing(T::KEY.into()))
 }

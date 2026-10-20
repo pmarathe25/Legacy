@@ -105,9 +105,23 @@ mod tests {
     use super::*;
     #[test]
     fn distress_snapshots_are_bounded_and_leave_the_world_unchanged() {
-        let mut sim =
-            game_assembly::Simulation::uncontrolled(3, 1, &mut game_content::Store::standard())
-                .unwrap();
+        // The watch needs a hungry subject and full feature state, not ninety-six
+        // unrelated residents making decisions while the subject becomes hungry.
+        let root =
+            std::env::temp_dir().join(format!("legacy-distress-fixture-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("worldgen")).unwrap();
+        let settings = std::fs::read_to_string(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../content/worldgen/default.toml"),
+        )
+        .unwrap()
+        .replace("population = 96", "population = 4")
+        .replace("areas = 12", "areas = 2");
+        std::fs::write(root.join("worldgen/default.toml"), settings).unwrap();
+        let mut store = game_content::Store::standard();
+        store.overlay(&root).unwrap();
+        let mut sim = game_assembly::Simulation::uncontrolled(3, 1, &mut store).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
         let epoch = sim.now().0;
         let area = *sim
             .debug_host()
@@ -196,6 +210,12 @@ mod tests {
             .collect();
         assert!(rows.iter().any(|r| r["person"] == json!(person)));
         let bytes = output.len();
+        watch.collect(sim.debug_host(), epoch, &mut output).unwrap();
+        assert_eq!(bytes, output.len());
+        // A previously exhausted episode stays bounded even after its spacing interval.
+        let episode = watch.episodes.get_mut(&person).unwrap();
+        episode.1 = SimTime(sim.now().0.saturating_sub(2 * DAY.0));
+        episode.2 = 8;
         watch.collect(sim.debug_host(), epoch, &mut output).unwrap();
         assert_eq!(bytes, output.len());
         assert_eq!(sim.save().unwrap(), before);

@@ -31,7 +31,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     person: p,
                     kind: "reason".into(),
                     duration: HOUR,
-                    request: Pending::new(Reflect { person: p })?,
+                    request: Pending::immediate(Reflect { person: p }),
                 },
             )?;
         }
@@ -44,11 +44,16 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             if interest < 900 {
                 continue;
             }
-            let known = claims(tx, teacher);
-            let Some(claim) = known.get(
-                (random(tx.seed(), teacher.0, tx.now().0) % known.len().max(1) as u64) as usize,
-            ) else {
-                continue;
+            let key = {
+                let known: Vec<_> = perceived_claims(tx, teacher)
+                    .map(|(claim, _)| claim)
+                    .collect();
+                let Some(claim) = known.get(
+                    (random(tx.seed(), teacher.0, tx.now().0) % known.len().max(1) as u64) as usize,
+                ) else {
+                    continue;
+                };
+                claim.key()
             };
             let form = if game_vitality::disposition(tx, teacher, "patience") > 500 {
                 Explanation::Practical
@@ -58,7 +63,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             let _ = tx.attempt(Explain {
                 teacher,
                 listener,
-                key: claim.key(),
+                key,
                 form,
             });
         }

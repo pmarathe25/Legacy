@@ -1,10 +1,12 @@
 //! Pure inherited trait calculations; interpretation belongs to consumers.
 mod gene_name;
+mod genome;
+pub use genome::Genome;
 mod shared;
 use game_core::*;
 pub use gene_name::GeneName;
 use serde::{Deserialize, Serialize};
-pub use shared::{Genome, deserialize_genome};
+pub use shared::deserialize_genome;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Alleles(pub [u16; 2]);
 pub fn mutate(seed: u64, identity: u64, parent: Alleles, mutation: u16) -> Alleles {

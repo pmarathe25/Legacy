@@ -125,10 +125,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     person: p,
                     kind: "inspect-food".into(),
                     duration: SimDuration(5 * MINUTE.0),
-                    request: Pending::new(food::Inspect {
+                    request: Pending::immediate(food::Inspect {
                         person: p,
                         inventory,
-                    })?,
+                    }),
                 },
             )?;
         }

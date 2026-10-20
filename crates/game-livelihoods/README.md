@@ -7,7 +7,7 @@ Autonomous pursuit of personal material stock goals by chaining gathering and wo
 ## Responsibilities
 
 - **Stock Goal Evaluation:** Loads personal material goals from `content/livelihoods/daily.toml` and compares them against carried possessions, personal claims, and cooperatively shared local supplies.
-- **Intelligence-Bounded Planning:** Scales `game-craft-planning` search depth (2–32), plan length (4–256), and node checks (32–8,192) using the character's intelligence trait (`game-traits`).
+- **Intelligence-Bounded Planning:** Scales `game-work-planning` search depth (2–32), plan length (4–256), and node checks (32–8,192) using the character's intelligence trait (`game-traits`).
 - **Choice Proposal & Execution:** Submits weighted livelihood proposals into `game-choice` and executes the resulting `game-ecology::Gather` or `game-workshop::Craft` step.
 
 ## Boundaries
@@ -18,7 +18,7 @@ Autonomous pursuit of personal material stock goals by chaining gathering and wo
 ## How It Works
 
 - **Accessible Stock Accounting:** Aggregates items the actor carries, owns locally (`game-property`), or can borrow from trusted household/lineage peers (`game-relationships`, `game-lineage`).
-- **Plan Caching & Step Execution:** Invokes `game-craft-planning` using recipes the actor actually knows (`game-knowledge`), scores the highest-priority missing stock goal, and executes the first unfulfilled step when chosen by `game-choice`.
+- **Plan Caching & Step Execution:** Invokes `game-work-planning` using recipes the actor actually knows (`game-knowledge`), scores the highest-priority missing stock goal, and executes the first unfulfilled step when chosen by `game-choice`.
 
 ## Game Integration
 
@@ -28,5 +28,13 @@ Autonomous pursuit of personal material stock goals by chaining gathering and wo
 
 ## Dependencies & Testing
 
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-knowledge`, `game-ecology`, `game-workshop`, `game-characters`, `game-traits`, `game-relationships`, `game-lineage`, `game-choice`, `game-craft-planning`, `game-vitality`, `game-food-memory`, `game-diagnostics`.
+- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-knowledge`, `game-ecology`, `game-workshop`, `game-characters`, `game-traits`, `game-relationships`, `game-lineage`, `game-choice`, `game-work-planning`, `game-vitality`, `game-food-memory`, `game-diagnostics`.
 - **Testing:** Integration tests in `tests/` verify stock goal accounting, cooperative supply sharing, intelligence-bounded multi-step planning, and end-to-end tool/kit crafting.
+
+Queued plans share individual records across transaction snapshots, avoiding
+copies of other characters' step queues when one character advances a plan.
+
+[`game-work-planning`](../game-work-planning/README.md) owns read-only stock-goal
+ranking and search. It reuses results only when all search inputs match, with a
+512-entry, 4 MiB estimated-data cache. Livelihoods retains scheduled work, execution
+validation, failure learning and achievements. Goal and Step remain reexports.

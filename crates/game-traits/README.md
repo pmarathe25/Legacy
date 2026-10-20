@@ -29,3 +29,8 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-content`](../game-content/README.md), [`game-sim`](../game-sim/README.md).
 - **Testing:** `cargo test -p game-traits` verifies catalog validation, profile bounds, compiled weight equivalence, and save/load cache reconstruction.
+
+Repeated attribute queries reuse eight recent personal numeric projections per
+thread, guarded by weak source and compiled-record versions. Direct profile edits,
+retained snapshots, and world changes still receive exact values. The cache holds
+only those individual profiles, not a whole traits resource or population.

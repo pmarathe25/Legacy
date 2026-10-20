@@ -160,11 +160,11 @@ fn discussion<R: Request>(
             person: p,
             kind: "discuss-exchange".into(),
             duration: SimDuration(5 * MINUTE.0),
-            request: Pending::new(Discuss {
+            request: Pending::immediate(Discuss {
                 person: p,
                 peer: q,
-                request: Pending::new(request)?,
-            })?,
+                request: Pending::immediate(request),
+            }),
         },
     )
 }

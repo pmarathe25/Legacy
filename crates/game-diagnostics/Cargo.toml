@@ -3,5 +3,8 @@ name="game-diagnostics"
 version.workspace=true
 edition.workspace=true
 license.workspace=true
+[features]
+allocations = []
+
 [dependencies]
 serde.workspace=true

@@ -1,13 +1,13 @@
 //! Derived indexes of personal evidence. Queries cannot inspect actual stocks.
 pub mod assessment;
+mod projection;
 mod remembered;
 use game_core::*;
 use game_knowledge::{Facts, StoreLocation, known, location_key, store_key};
 pub use remembered::remembered_meal;
 use std::{
-    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    sync::{Arc, Weak},
+    sync::{Arc, Mutex, MutexGuard, OnceLock, Weak},
 };
 
 #[derive(Clone, Debug)]
@@ -17,7 +17,7 @@ pub struct Store {
     pub stock: Option<game_knowledge::Stock>,
     canonical_meal: bool,
 }
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct Stores {
     all: BTreeMap<Arc<str>, Arc<Store>>,
     indexed: BTreeMap<InventoryId, Arc<Store>>,
@@ -161,8 +161,10 @@ impl Stores {
 }
 #[derive(Default)]
 struct Entry {
-    facts: Facts,
-    stores: Stores,
+    facts: Option<Facts>,
+    versions: [Weak<()>; 2],
+    payloads: Vec<(Arc<str>, Weak<game_knowledge::FactValue>)>,
+    stores: Arc<Stores>,
     rules: Weak<BTreeMap<GoodId, game_objects::Food>>,
 }
 #[derive(Default)]
@@ -171,16 +173,23 @@ struct Cache {
     clock: u64,
     active_limit: usize,
 }
-thread_local! {static CACHE: RefCell<Cache> = RefCell::new(Cache::default());}
+static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
+fn cache() -> MutexGuard<'static, Cache> {
+    let slot = CACHE.get_or_init(Default::default);
+    slot.lock().unwrap_or_else(|poisoned| {
+        let mut value = poisoned.into_inner();
+        *value = Cache::default();
+        slot.clear_poison();
+        value
+    })
+}
 /// Keep projections for the current living population. A fixed actor limit
 /// otherwise causes every review to rebuild indexes once the population grows.
 pub fn retain_people(people: impl Iterator<Item = PersonId>) {
     let people: BTreeSet<_> = people.collect();
-    CACHE.with(|slot| {
-        let mut cache = slot.borrow_mut();
-        cache.entries.retain(|p, _| people.contains(p));
-        cache.active_limit = people.len().max(1024);
-    });
+    let mut cache = cache();
+    cache.entries.retain(|p, _| people.contains(p));
+    cache.active_limit = people.len().max(1024);
 }
 /// The index ignores evidence metadata because only payloads determine these
 /// physical possibilities. Assessment of confidence or age must read the facts.
@@ -190,48 +199,43 @@ pub fn with_stores<T>(
     objects: &game_objects::Objects,
     query: impl FnOnce(&Stores) -> T,
 ) -> T {
-    let (mut entry, used) = CACHE.with(|slot| {
-        let mut cache = slot.borrow_mut();
-        cache.clock = cache.clock.saturating_add(1);
-        let used = cache.clock;
-        if let Some((_, entry)) = cache.entries.remove(&person) {
-            return (entry, used);
-        }
-        (Entry::default(), used)
-    });
+    let mut cache = cache();
+    cache.clock = cache.clock.saturating_add(1);
+    let used = cache.clock;
+    if cache.entries.len() >= cache.active_limit.max(1024) && !cache.entries.contains_key(&person) {
+        let oldest = cache
+            .entries
+            .iter()
+            .min_by_key(|(id, (used, _))| (*used, **id))
+            .map(|(id, _)| *id)
+            .unwrap();
+        cache.entries.remove(&oldest);
+    }
+    let (_, entry) = cache.entries.entry(person).or_default();
     if entry.rules.as_ptr() != Arc::as_ptr(objects.food_rules()) {
-        entry = Entry {
+        *entry = Entry {
             rules: Arc::downgrade(objects.food_rules()),
             ..Default::default()
         };
     }
-    if !facts.same_namespace(&entry.facts, "store")
-        || !facts.same_namespace(&entry.facts, "store-location")
+    let versions = [
+        facts.namespace_version("store"),
+        facts.namespace_version("store-location"),
+    ];
+    if versions
+        .iter()
+        .zip(&entry.versions)
+        .any(|(new, old)| !new.ptr_eq(old))
     {
-        let mut changed = vec![];
-        facts.changed_values(&entry.facts, |key, _| {
-            if key.starts_with("store:") || key.starts_with("store-location:") {
-                changed.push(key.clone());
-            }
-        });
-        entry.stores.refresh(facts, objects, changed);
+        let changed = projection::changed(entry, facts);
+        Arc::make_mut(&mut entry.stores).refresh(facts, objects, changed);
+        entry.versions = versions;
     }
-    entry.facts = facts.clone();
-    let result = query(&entry.stores);
-    CACHE.with(|slot| {
-        let mut cache = slot.borrow_mut();
-        if cache.entries.len() >= cache.active_limit.max(1024)
-            && !cache.entries.contains_key(&person)
-        {
-            let oldest = cache
-                .entries
-                .iter()
-                .min_by_key(|(id, (used, _))| (*used, **id))
-                .map(|(id, _)| *id)
-                .unwrap();
-            cache.entries.remove(&oldest);
-        }
-        cache.entries.insert(person, (used, entry));
-    });
-    result
+    if entry.facts.is_some() {
+        entry.facts = Some(facts.clone());
+    }
+    let stores = entry.stores.clone();
+    cache.entries.get_mut(&person).unwrap().0 = used;
+    drop(cache);
+    query(&stores)
 }

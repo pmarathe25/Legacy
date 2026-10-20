@@ -31,3 +31,7 @@ Pure bounded empirical inference over numerical observations, single-factor cont
 
 - **Dependencies:** `serde` only (no workspace dependencies).
 - **Testing:** Unit tests cover single-factor isolation, experiment ID deduplication, cross-setting abstraction, noise rejection, and deductive confidence decay.
+
+`Claim::write_key` streams the same persisted key as `Claim::key` into any
+`fmt::Write` destination. Hashing reasoning evidence can use it without allocating
+intermediate key strings. Key formatting and context ordering remain unchanged.

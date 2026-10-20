@@ -8,7 +8,7 @@ use std::collections::VecDeque;
 mod choices;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Experience {
-    pub observations: VecDeque<Observation>,
+    pub observations: VecDeque<std::sync::Arc<Observation>>,
     pub count: u64,
     pub considered: u64,
     #[serde(default)]
@@ -118,18 +118,23 @@ fn claims(tx: &Transaction<'_>, p: PersonId) -> Vec<Claim> {
         })
         .collect()
 }
+fn signature(c: &Claim, confidence: u8) -> u64 {
+    use std::fmt::Write;
+    let mut hash = game_core::Fingerprint::default();
+    c.write_key(&mut hash).unwrap();
+    write!(
+        hash,
+        ":{}:{}:{}",
+        c.effect,
+        c.confidence.min(confidence),
+        c.complexity
+    )
+    .unwrap();
+    hash.finish()
+}
 fn evidence(tx: &Transaction<'_>, p: PersonId) -> (usize, u64) {
     perceived_claims(tx, p).fold((0, 0), |(count, hash), (c, confidence)| {
-        (
-            count + 1,
-            hash ^ game_choice::identity(&format!(
-                "{}:{}:{}:{}",
-                c.key(),
-                c.effect,
-                c.confidence.min(confidence),
-                c.complexity,
-            )),
-        )
+        (count + 1, hash ^ signature(&c, confidence))
     })
 }
 fn retain(tx: &mut Transaction<'_>, p: PersonId, c: Claim, deduction: bool) -> Result<()> {
@@ -212,7 +217,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         });
         m.contrasts |= contrasted;
         let subject = r.observation.subject.clone();
-        m.observations.push_back(r.observation);
+        m.observations.push_back(std::sync::Arc::new(r.observation));
         m.count = m.count.saturating_add(1);
         while m.observations.len() > memory {
             m.observations.pop_front();
@@ -242,7 +247,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get(&r.person)
             .into_iter()
             .flat_map(|p| p.observations.iter())
-            .cloned()
+            .map(|o| o.as_ref().clone())
             .collect();
         let inferred = game_reasoning::infer(
             &observations,
@@ -326,4 +331,34 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         })?;
         Ok(true)
     })
+}
+
+#[cfg(test)]
+mod signature_tests {
+    use super::*;
+    #[test]
+    fn streamed_signatures_preserve_reasoning_progress_and_confidence_sensitivity() {
+        for effect in [i64::MIN, -500, 0, 20, i64::MAX] {
+            let claim = Claim {
+                subject: "food:storage".into(),
+                factor: "warmth".into(),
+                outcome: "duration".into(),
+                effect,
+                complexity: 4,
+                confidence: 80,
+                comparisons: 15,
+                context: [("café".into(), -200)].into(),
+            };
+            for confidence in [0, 1, 40, 80, 100, 255] {
+                let old = game_choice::identity(&format!(
+                    "{}:{}:{}:{}",
+                    claim.key(),
+                    claim.effect,
+                    claim.confidence.min(confidence),
+                    claim.complexity
+                ));
+                assert_eq!(signature(&claim, confidence), old);
+            }
+        }
+    }
 }

@@ -63,3 +63,33 @@ pub fn random(seed: u64, identity: u64, counter: u64) -> u64 {
     x = (x ^ (x >> 27)).wrapping_mul(0x94d049bb133111eb);
     x ^ (x >> 31)
 }
+
+/// Stable FNV-1a text fingerprints for persisted identities and incremental formatting.
+#[derive(Clone, Copy, Debug)]
+pub struct Fingerprint(u64);
+impl Default for Fingerprint {
+    fn default() -> Self {
+        Self(14695981039346656037)
+    }
+}
+impl Fingerprint {
+    #[inline]
+    pub fn finish(&self) -> u64 {
+        self.0
+    }
+}
+impl std::fmt::Write for Fingerprint {
+    #[inline]
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        for byte in text.bytes() {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(1099511628211);
+        }
+        Ok(())
+    }
+}
+#[inline]
+pub fn fingerprint(text: &str) -> u64 {
+    let mut result = Fingerprint::default();
+    std::fmt::Write::write_str(&mut result, text).unwrap();
+    result.finish()
+}

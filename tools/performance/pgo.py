@@ -74,7 +74,9 @@ def prepare_output(output, restart):
     return previous
 
 
-def build(root, plan_path, output, restart=False, target_cpu=None):
+def build(root, plan_path, output, restart=False, target_cpu=None, build_jobs=1):
+    if build_jobs < 1:
+        raise ValueError('build jobs must be positive')
     plan = json.loads(plan_path.read_text())
     runs = training_runs(plan, plan_path.parent)
     if os.environ.get('RUSTFLAGS') or os.environ.get('CARGO_ENCODED_RUSTFLAGS'):
@@ -93,7 +95,7 @@ def build(root, plan_path, output, restart=False, target_cpu=None):
     raw.mkdir(exist_ok=restart)
     report = {'compiler': compiler, 'target': target, 'source_sha256': original,
               'training': runs, 'training_inputs': inputs, 'training_plan_sha256': digest(plan_path),
-              'target_cpu': target_cpu or 'portable default',
+              'target_cpu': target_cpu or 'portable default', 'build_jobs': build_jobs,
               'profile_overrides': {k:v for k,v in os.environ.items() if k.startswith('CARGO_PROFILE_RELEASE_')}}
     if previous is not None:
         report['restarted_compilation'] = previous
@@ -112,7 +114,7 @@ def build(root, plan_path, output, restart=False, target_cpu=None):
                            stderr=stream, check=True)
 
     def compile_to(directory, flag, log):
-        run(['cargo', 'build', '--locked', '--release', '--target', target,
+        run(['cargo', 'build', '--locked', '--release', '--jobs', str(build_jobs), '--target', target,
              '--target-dir', str(directory), '-p', 'game-history'], log, '\x1f'.join([flag] + (['-Ctarget-cpu='+target_cpu] if target_cpu else [])))
         return directory/target/'release/game-history'
 
@@ -142,5 +144,6 @@ if __name__ == '__main__':
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--restart-build', action='store_true', help='reuse caches from interrupted compilation before training')
     parser.add_argument('--target-cpu', help='optional compiler CPU target; native is specific to this machine')
+    parser.add_argument('--build-jobs', type=int, default=1)
     args = parser.parse_args()
-    build(Path(__file__).resolve().parents[2], args.training.resolve(), args.output.resolve(), args.restart_build, args.target_cpu)
+    build(Path(__file__).resolve().parents[2], args.training.resolve(), args.output.resolve(), args.restart_build, args.target_cpu, args.build_jobs)

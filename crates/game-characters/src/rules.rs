@@ -20,10 +20,7 @@ impl Default for Rules {
             retry: SimDuration(5 * MINUTE.0),
             meal_hunger: 30,
             urgent_hunger: 100,
-            hunger_interrupts: ["rest", "craft", "farm", "build"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            hunger_interrupts: ["rest", "craft", "farm", "build"].map(str::to_owned).into(),
             rest_fatigue: 10,
             switching_margin: 5,
             travel_effort_per_minute: 1,

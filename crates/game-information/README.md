@@ -39,3 +39,8 @@ Refusal is a completed action, not a failed attempt. A failed explanation, readi
 or stock search can retain its evidence and return `Outcome::Reconsider` to the
 chooser. This keeps failure learning without rolling back a deliberate refusal
 or newly discovered absence.
+
+Question inboxes and interests use per-person shared records. Updating one history
+copies that person's row, preserving retained revisions without copying neighbors'
+question vectors. Proposal collection borrows immutable row snapshots; it changes
+neither willingness to answer nor which facts are available.

@@ -82,7 +82,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let people: Vec<_> = tx
             .get::<game_physiology::Bodies>()?
             .people
-            .rows()
+            .iter()
             .filter(|(_, p)| p.alive && p.health > 0)
             .map(|(id, _)| *id)
             .collect();

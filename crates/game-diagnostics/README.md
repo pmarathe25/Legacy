@@ -30,3 +30,8 @@
 
 - **Dependencies:** None.
 - **Testing:** `cargo test -p game-diagnostics` checks span accumulation and counter resets.
+
+The optional `allocations` feature accepts a process-local monotonic allocation
+counter. With `LEGACY_PROFILE=1`, spans report inclusive allocation deltas alongside
+time. No simulation resources, decisions, or saves contain this telemetry. Other
+threads can contribute to a process-wide counter; use one worker for attribution.

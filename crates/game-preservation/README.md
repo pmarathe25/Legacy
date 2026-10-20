@@ -26,3 +26,7 @@ only through cargo requests.
 changing conditions, failed transactions, legacy calendars, and save/load across
 worker counts. Composed maturation and campaign tests cover physical storage
 and aging during transport.
+
+Expiry appointments share each date's target set independently, so changing one
+date does not copy neighboring appointment sets. Removed sets retain ordinary
+rollback and deterministic bounded expiry processing.

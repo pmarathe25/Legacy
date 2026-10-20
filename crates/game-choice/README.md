@@ -42,3 +42,26 @@ Bounded recall retains a proposal continuing the actor's actual current action.
 It still counts toward the ordinary offer limit and receives ordinary utility
 scoring; stronger alternatives can win. Unrelated continuation identities receive
 no retention preference.
+
+`Keys` indexes append-only offer keys by numeric fingerprints. Hash collisions
+still compare complete strings; motive IDs are not treated as key equality.
+
+Provider callbacks prepare independent alternatives. When collected in an isolated
+scratch transaction, they may run concurrently. Raw drafts merge in the original
+provider order before applying the existing 256-offer ranking, duplicate checks and
+continuation preference. Request hooks retain serial collection. Any provider
+attempting world effects forces the complete collection back through serial dispatch.
+Callers must not use partial offers from other providers to compute their own drafts;
+ordinary event subscribers provide ordered serial barriers when needed.
+
+Bounded offer retention uses an in-place min-heap after reaching the offer limit.
+The priority remains active continuation, weighted score, numeric motive tie break
+and full key. Weight changes rebuild the heap. Hash counts accelerate removal;
+full keys still decide duplicates. Integration tests compare retained offers with
+a scan oracle under changing weights, saturation, ties and continuations.
+
+Temporary proposals can carry `Pending::immediate` inside undertakings and other
+action wrappers. Chosen work passes through the ordinary schedule/action boundary,
+which validates nested payloads before commit. This avoids serializing discarded
+options. Tests cover deferred serialization, scheduled completion and cross-worker
+save/load.

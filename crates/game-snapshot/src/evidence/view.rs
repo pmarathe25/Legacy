@@ -1,7 +1,10 @@
 //! Stream shared evidence without materializing every personal metadata row.
-use crate::*;
+use game_core::PersonId;
+use game_facts::Facts;
+use serde::Serialize;
 use serde::ser::{SerializeMap, SerializeSeq, SerializeStruct};
 use std::collections::HashMap;
+use std::sync::Arc;
 pub struct View<'a, V>(Vec<(PersonId, &'a Facts<V>)>);
 impl<'a, V> View<'a, V> {
     pub fn new(people: impl Iterator<Item = (PersonId, &'a Facts<V>)>) -> Self {

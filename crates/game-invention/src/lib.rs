@@ -121,11 +121,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                     person: p,
                     kind: "assemble".into(),
                     duration: HOUR,
-                    request: Pending::new(Assemble {
+                    request: Pending::immediate(Assemble {
                         person: p,
                         inventory,
                         parts,
-                    })?,
+                    }),
                 },
             )?;
         }

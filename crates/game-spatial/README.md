@@ -28,3 +28,8 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-land`](../game-land/README.md).
 - **Testing:** `cargo test -p game-spatial` verifies multi-hop shortest paths, equal-cost tie-breaking, and disconnected graph handling without a simulation host.
+
+`Routes` bounds derived path reuse to 2,048 entries. Callers supply weak namespace tokens that change whenever perceived roads change; cached failures invalidate too. The cache retains no personal history or world snapshot. Physical travel rates are applied separately to the unchanged base route.
+
+Cached route paths use shared contiguous area slices, so repeated path reads
+reuse numeric data instead of copying the entire path.

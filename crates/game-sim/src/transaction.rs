@@ -1,6 +1,6 @@
 use crate::*;
 // Independent events in a 20,000-person phase must fit; recursion remains depth-limited.
-const MAX_CALLS: usize = 1_000_000;
+pub(super) const MAX_CALLS: usize = 1_000_000;
 pub(crate) struct Changes {
     pub data: HashMap<TypeId, Stored>,
     pub jobs: Vec<Job>,
@@ -10,6 +10,9 @@ pub(crate) struct Changes {
     pub next_notice: u64,
 }
 pub struct Transaction<'a> {
+    parent: Option<&'a Transaction<'a>>,
+    blocked: bool,
+    scratch: Option<TypeId>,
     host: &'a Host,
     owner: usize,
     at: SimTime,
@@ -27,6 +30,9 @@ pub struct Transaction<'a> {
 impl<'a> Transaction<'a> {
     pub(crate) fn new(host: &'a Host, at: SimTime) -> Self {
         Self {
+            parent: None,
+            blocked: false,
+            scratch: None,
             host,
             owner: 0,
             at,
@@ -89,7 +95,13 @@ impl<'a> Transaction<'a> {
     pub fn compute(&self) -> &rayon::ThreadPool {
         &self.host.pool
     }
+    #[inline]
     pub fn get<T: Resource>(&self) -> Result<&T> {
+        if let Some(parent) = self.parent
+            && self.scratch != Some(TypeId::of::<T>())
+        {
+            return parent.get();
+        }
         registry::read(self.data.as_ref().unwrap_or(&self.host.data))
     }
     /// Stage a resource snapshot. Persistent tables copy only changed paths and records.
@@ -117,6 +129,10 @@ impl<'a> Transaction<'a> {
     }
     fn edit_owned<T: Resource>(&mut self) -> Result<&mut T> {
         let id = TypeId::of::<T>();
+        if self.parent.is_some() && self.scratch != Some(id) {
+            self.blocked = true;
+            return Err(Error::Rejected("isolated write".into()));
+        }
         let data = self
             .data
             .as_mut()
@@ -143,6 +159,7 @@ impl<'a> Transaction<'a> {
         }
     }
     pub fn allocate(&mut self) -> Result<u64> {
+        self.external_effect()?;
         require(
             self.data.is_some(),
             "query attempted to allocate an identity",
@@ -233,6 +250,7 @@ impl<'a> Transaction<'a> {
     }
     /// Cancel this owner's callbacks of one type, including staged work.
     pub fn cancel_scheduled<R: Request>(&mut self) -> Result<()> {
+        self.external_effect()?;
         let owner = self.host.registry.request_owners.get(R::KEY);
         require(
             owner == Some(&self.owner),
@@ -247,12 +265,16 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
     pub fn unschedule(&mut self, id: ScheduleId) {
+        if self.external_effect().is_err() {
+            return;
+        }
         self.cancelled.push(id);
         if let Ok(index) = self.jobs.binary_search_by_key(&id, |job| job.id) {
             self.cancelled_jobs.push(index);
         }
     }
     pub fn emit<E: Event>(&mut self, event: E, witnesses: Vec<PersonId>) -> Result<()> {
+        self.external_effect()?;
         self.notification_budget()?;
         let data = serde_json::to_value(&event).map_err(registry::json_error)?;
         let sequence = self.next_notice;
@@ -371,3 +393,6 @@ impl<'a> Transaction<'a> {
         }
     }
 }
+
+#[path = "preparation.rs"]
+mod preparation;

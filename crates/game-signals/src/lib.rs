@@ -322,7 +322,7 @@ fn expression(b: &mut Builder) -> Result<()> {
                 person: e.person,
                 kind: "express-need".into(),
                 duration: MINUTE,
-                request: Pending::new(Express { person: e.person })?,
+                request: Pending::immediate(Express { person: e.person }),
             },
         )?;
         Ok(())

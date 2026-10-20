@@ -78,3 +78,55 @@ impl Config {
         Ok(())
     }
 }
+
+/// A remembered force/travel ratio; load feedback remains separate from geometry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Measurement {
+    pub gain: u64,
+    pub travel: u64,
+    #[serde(default)]
+    pub load: u64,
+}
+/// Complete scalar evidence recorded by a physical experiment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
+pub struct MechanicalReading {
+    #[serde(flatten)]
+    pub measured: Measurement,
+    #[serde(default)]
+    pub input_force: u64,
+    #[serde(default)]
+    pub input_travel: u64,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadingWire {
+    gain: u64,
+    travel: u64,
+    load: u64,
+    input_force: u64,
+    input_travel: u64,
+}
+impl<'de> Deserialize<'de> for MechanicalReading {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        let v = ReadingWire::deserialize(d)?;
+        Ok(Self {
+            measured: Measurement {
+                gain: v.gain,
+                travel: v.travel,
+                load: v.load,
+            },
+            input_force: v.input_force,
+            input_travel: v.input_travel,
+        })
+    }
+}
+impl MechanicalReading {
+    pub fn from_json(value: &serde_json::Value) -> Option<Self> {
+        let fields = value.as_object()?;
+        if fields.len() != 5 || !fields.contains_key("input_force") {
+            return None;
+        }
+        Self::deserialize(value).ok()
+    }
+}

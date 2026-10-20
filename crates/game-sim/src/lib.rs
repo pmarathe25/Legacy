@@ -5,8 +5,9 @@ mod persistence;
 pub use pending::Pending;
 mod registry;
 mod transaction;
+pub use game_contracts::{Envelope, Event, Notice, Progress, Request, Stop};
 use game_core::*;
-pub use registry::{Builder, Checkpoint, Event, Request, Resource};
+pub use registry::{Builder, Checkpoint, Resource};
 use registry::{Registry, Stored};
 use rustc_hash::FxHashMap as HashMap;
 use serde::{Deserialize, Serialize};
@@ -18,24 +19,11 @@ use std::{
 };
 pub use transaction::Transaction;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Envelope {
-    pub key: String,
-    pub payload: Value,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Job {
     pub id: ScheduleId,
     pub at: SimTime,
     pub priority: u8,
     pub request: Pending,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Notice {
-    pub sequence: u64,
-    pub at: SimTime,
-    pub kind: String,
-    pub data: Value,
-    pub witnesses: Vec<PersonId>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Action {
@@ -77,19 +65,6 @@ impl Resource for Actions {
     fn validate_checkpoint(&self, _: &dyn std::any::Any) -> Result<()> {
         Ok(())
     }
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Stop {
-    Target,
-    Budget,
-    Choice(String),
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Progress {
-    pub requested: SimTime,
-    pub reached: SimTime,
-    pub revision: u64,
-    pub stop: Stop,
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Receipt {
@@ -138,8 +113,7 @@ impl Host {
     pub fn get<T: Resource>(&self) -> Result<&T> {
         registry::read(&self.data)
     }
-    /// Recent notices: at least 1024 or the latest complete transaction.
-    /// Collect after each commit when every event must be retained externally.
+    /// Keep at least 1024 notices or the last transaction; collect each commit for a full journal.
     pub fn notices(&self) -> impl Iterator<Item = &Notice> {
         self.notices.iter()
     }
@@ -289,11 +263,6 @@ impl Host {
         Ok(self.progress(target, Stop::Budget))
     }
     fn progress(&self, target: SimTime, stop: Stop) -> Progress {
-        Progress {
-            requested: target,
-            reached: self.time,
-            revision: self.revision,
-            stop,
-        }
+        Progress::new(target, self.time, self.revision, stop)
     }
 }

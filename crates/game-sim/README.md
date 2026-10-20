@@ -14,7 +14,7 @@
 
 ## Boundaries
 
-- **Zero gameplay rules:** Knows nothing about food, combat, or institutions; depends only on `game-core`, `game-storage`, and `game-packed`.
+- **Zero gameplay rules:** Knows nothing about food, combat, or institutions; depends only on `game-core`, `game-storage`, `game-packed`, and `game-snapshot`.
 - **Single execution path:** There is no alternate or approximate simulation kernel—both live play and background history runs execute through `Host`.
 
 ## How It Works
@@ -31,10 +31,10 @@
 
 ## Dependencies & Testing
 
-- **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-packed`](../game-packed/README.md).
+- **Dependencies:** [`game-contracts`](../game-contracts/README.md), [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-packed`](../game-packed/README.md), [`game-snapshot`](../game-snapshot/README.md).
 - **Testing:** `cargo test -p game-sim` verifies owner-checked writes, nested `attempt` rollback, batched phases, action cancellation, worker panic recovery, and save/load round-trips.
 
-`Builder::load_from` reads raw resource JSON before decoding registered owners, without constructing a whole JSON value tree. The string API borrows resource slices. Both paths validate the complete restored world and bind pending requests before exposing the host.
+`Builder::load_from` decodes one resource at a time through its registered codec using `game-snapshot`, without retaining every serialized resource. The string API uses the same codecs. Both paths validate the complete restored world and bind pending requests before exposing the host.
 
 `Pending::immediate` provides the same typed call path as `Transaction::call` for
 work consumed within the current transaction. Retained work must pass through
@@ -45,3 +45,15 @@ discarded temporary offers.
 A request owner can retire its callbacks with
 `Transaction::cancel_scheduled::<R>()`. Cancellation includes work staged in the
 current transaction, rolls back on failure, and preserves other request types.
+
+`Transaction::prepare` runs a scratch request alongside a read-only query on the
+same staged world. `notify_prepared` drafts explicitly independent subscribers in
+parallel and merges their private resource results in subscriber order. Ordinary
+subscribers are serial barriers. World writes, IDs, notices and schedule changes
+are denied during drafting; any such attempt, even if caught, retries the original
+request serially. Retained scratch changes also force a serial retry. Selection,
+action execution and world commits remain serial. One worker uses the original path.
+
+Resource contracts and erased codecs live in `game-contracts`; streaming envelope
+metadata lives in `game-snapshot`. The existing `game-sim` public types are reexports.
+The host retains ownership checks and the sole committing execution path.
