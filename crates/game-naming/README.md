@@ -30,3 +30,7 @@ Autonomous child naming tributes, phoneme recombination, conversational nickname
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-transport`, `game-physiology`, `game-traits`, `game-communication`, `game-relationships`, `game-social-life`, `game-names`, `game-care`, `game-works`, `game-institutions`, `game-conflict`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-naming`) cover tribute naming, phoneme recombination, confusion avoidance, epithet generation from deeds, and identity reconsideration stability.
+
+Inherited rigidity contributes to the cost of changing a chosen name. Equal offers
+retain the incumbent; a low-rigidity individual can respond to a smaller change
+in regard, while stronger evidence can still change a high-rigidity identity.

@@ -120,13 +120,13 @@ tags = ["fiber", "crop", "plant"]
 id = 37
 name = "Clay"
 mass = 3
-tags = ["mineral", "material"]
+tags = ["mineral", "material", "mark-surface:0", "mark-impressible"]
 
 [data.objects.stone]
 id = 38
 name = "Stone"
 mass = 5
-tags = ["mineral", "material"]
+tags = ["mineral", "material", "mark-surface:900"]
 
 [data.objects.iron-ore]
 id = 39
@@ -138,7 +138,7 @@ tags = ["mineral", "material"]
 id = 40
 name = "Charcoal"
 mass = 1
-tags = ["fuel", "material", "fuel-hours:3"]
+tags = ["fuel", "material", "fuel-hours:3", "mark-pigment"]
 
 [data.objects.iron]
 id = 41
@@ -150,7 +150,7 @@ tags = ["metal", "material"]
 id = 42
 name = "Linen cloth"
 mass = 1
-tags = ["repair-cloth", "textile", "material"]
+tags = ["repair-cloth", "textile", "material", "mark-surface:40"]
 
 [data.objects.rope]
 id = 43

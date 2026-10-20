@@ -33,3 +33,12 @@
 Food-specific evidence now survives competing pain or rest cues. Observed feeding and hunger intervals refine a personal appetite estimate. Caregivers can restart an interrupted delivery toward the last observed location, including after saving, without learning a remote child's true location. Nourishment can satisfy an ongoing need signal; acceptance weighs the recipient's appetite, preferences, and competing commitment.
 
 Care urgency now includes anticipated consequences of personally perceived need, with reasoning and foresight controlling that anticipation. This allows a concerned caregiver to interrupt an absorbing interest before a dependent is harmed. Altruism, compassion, relationships, learned duty, personal needs, and mistaken observations still affect the choice; an indifferent caregiver can decline care.
+
+An observer's intelligence and foresight can increase anticipated urgency for a
+visibly immature dependent. This affects care valuation only after the observer has
+formed a food hypothesis. The signal interpreter's existing cognitive threshold is
+unchanged: a selfless but incapable individual can still fail to infer hunger, and
+an indifferent but intelligent individual can still decline care. Food hypotheses,
+care techniques, and learned commitments are acquired rather than genetic content.
+
+Neighbors can offer care without kinship or an existing commitment. Candidates include personally known family, voluntary beneficiaries, and bounded local encounters. Actual need must still be inferred or communicated; low cognitive ability can prevent the food hypothesis. Several people may help the same person, and a caregiver may help several others over time.

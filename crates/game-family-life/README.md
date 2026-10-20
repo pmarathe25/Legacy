@@ -31,3 +31,13 @@ Voluntary family bonds, co-parent and companion ties, newborn social initializat
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-diagnostics`, `game-choice`, `game-households`, `game-names`, `game-vitality`, `game-food-memory`, `game-objects`, `game-provisioning`, `game-characters`, `game-lifecycle`, `game-physiology`, `game-social-life`, `game-relationships`, `game-traits`, `game-cargo`, `game-property`, `game-transport`, `game-knowledge`, `game-lineage`.
 - **Testing:** Tested via `cargo test -p game-campaign -p game-transport` covering newborn setup, passenger travel load limits, and capability-driven independence.
+
+Existing companions can negotiate a different kind of bond. The planner excludes
+only the current kind, rather than freezing every existing relationship forever.
+Each participant must prefer a proposed change enough to outweigh their expressed
+rigidity; the other participant can refuse. Reproductive drive contributes to
+co-parent courtship as well as later reproductive choices. Moving from an exclusive
+bond to a nonexclusive one clears the corresponding primary-household partnership
+through the household owner's request, while retaining the agreed family bond.
+
+Care uses the household owner’s many-to-many commitments. `ShareCare` can add or withdraw help without displacing another caregiver. Birth creates kinship, not authority or a care assignment. Dead partners cease to block new voluntary relationships. Romantic attraction is supplied by `game-attraction`; companionship and care do not use romantic physical tastes.

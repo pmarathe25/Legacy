@@ -21,7 +21,7 @@ pub(super) fn consider(tx: &mut Transaction<'_>, person: PersonId, area: AreaId)
         .and_then(|v| v.get("care"))
         .copied()
         .unwrap_or(0);
-    let existing = households.dependents_of(person).count() as i64;
+    let existing = households.beneficiaries_of(person).count() as i64;
     let children: Vec<_> = tx
         .get::<game_social_life::SocialLife>()?
         .residents
@@ -29,10 +29,11 @@ pub(super) fn consider(tx: &mut Transaction<'_>, person: PersonId, area: AreaId)
         .into_iter()
         .flat_map(|r| r.keys())
         .filter_map(|child| {
-            let previous = households.dependents.get(child)?;
-            if game_transport::area(tx.get().ok()?, *previous).ok() != Some(area)
-                || bodies.people.get(previous)?.alive
+            if *child == person
+                || households.committed(person, *child)
                 || !bodies.people.get(child)?.alive
+                || tx.now().0.saturating_sub(bodies.people.get(child)?.born.0) >= 18 * 365 * DAY.0
+                    && game_vitality::can_manipulate(tx, *child)
             {
                 return None;
             }

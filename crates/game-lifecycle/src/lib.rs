@@ -7,14 +7,14 @@ use serde::{Deserialize, Serialize};
 pub struct Family {
     pub mother: PersonId,
     pub father: PersonId,
-    pub caregiver: PersonId,
+    pub attendant: PersonId,
     pub genes: game_genetics::Alleles,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Pregnancy {
     pub mother: PersonId,
     pub father: PersonId,
-    pub caregiver: PersonId,
+    pub attendant: PersonId,
     pub due: SimTime,
     pub job: ScheduleId,
 }
@@ -51,7 +51,7 @@ impl Resource for Population {
 pub struct Birth {
     pub mother: PersonId,
     pub father: PersonId,
-    pub caregiver: PersonId,
+    pub attendant: PersonId,
     pub area: AreaId,
 }
 impl Request for Birth {
@@ -100,7 +100,7 @@ pub fn reproductive(tx: &Transaction<'_>, person: PersonId, role: Role) -> Resul
 pub struct Conceive {
     pub mother: PersonId,
     pub father: PersonId,
-    pub caregiver: PersonId,
+    pub attendant: PersonId,
 }
 impl Request for Conceive {
     const KEY: &'static str = "lifecycle.conceive";
@@ -115,6 +115,15 @@ impl Request for Deliver {
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
+pub struct Conceived {
+    pub mother: PersonId,
+    pub father: PersonId,
+    pub due: SimTime,
+}
+impl Event for Conceived {
+    const KEY: &'static str = "lifecycle.conceived";
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Born {
     pub person: PersonId,
     pub at: SimTime,
@@ -124,13 +133,13 @@ impl Event for Born {
     const KEY: &'static str = "lifecycle.born";
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("lifecycle", 1)?;
+    b.plugin("lifecycle", 2)?;
     b.resource::<Population>()?;
     b.validate_save(|h| {
         for (person, f) in &h.get::<Population>()?.families {
             let p = &h.get::<game_physiology::Bodies>()?.people;
             require(
-                [*person, f.mother, f.father, f.caregiver]
+                [*person, f.mother, f.father, f.attendant]
                     .iter()
                     .all(|id| p.contains_key(id)),
                 "unknown family member",
@@ -140,7 +149,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     });
     b.request::<Birth>(|tx, r| {
         game_physiology::capable(tx, r.mother)?;
-        for person in [r.father, r.caregiver] {
+        for person in [r.father, r.attendant] {
             require(
                 tx.get::<game_physiology::Bodies>()?
                     .people
@@ -174,7 +183,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             Family {
                 mother: r.mother,
                 father: r.father,
-                caregiver: r.caregiver,
+                attendant: r.attendant,
                 genes: inherited,
             },
         );
@@ -189,7 +198,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 at: tx.now(),
                 area: r.area,
             },
-            vec![r.mother, r.caregiver],
+            vec![r.mother, r.attendant],
         )?;
         Ok(person)
     })?;
@@ -228,11 +237,29 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             Pregnancy {
                 mother: r.mother,
                 father: r.father,
-                caregiver: r.caregiver,
+                attendant: r.attendant,
                 due,
                 job,
             },
         );
+        for person in [r.mother, r.father] {
+            if tx.registered::<game_vitality::Experience>() {
+                let reward = game_vitality::disposition(tx, person, "reproductive-drive") / 20;
+                tx.call(game_vitality::Experience {
+                    person,
+                    stress: -(reward / 4) as i32,
+                    satisfaction: reward as i32,
+                })?;
+            }
+        }
+        tx.emit(
+            Conceived {
+                mother: r.mother,
+                father: r.father,
+                due,
+            },
+            vec![r.mother, r.father],
+        )?;
         Ok(id)
     })?;
     b.request::<Deliver>(|tx, r| {
@@ -248,10 +275,19 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             tx.edit::<Population>()?.pregnancies.remove(&r.pregnancy);
         } else if let Ok(area) = game_transport::area(tx.get()?, p.mother) {
             tx.edit::<Population>()?.pregnancies.remove(&r.pregnancy);
+            // Records who was present at delivery; this creates no care commitment.
+            // Responsibility is a care opportunity, not compulsory care or affection.
+            let attendant = if game_physiology::capable(tx, p.attendant).is_ok()
+                && game_transport::area(tx.get()?, p.attendant).ok() == Some(area)
+            {
+                p.attendant
+            } else {
+                p.mother
+            };
             tx.call(Birth {
                 mother: p.mother,
                 father: p.father,
-                caregiver: p.caregiver,
+                attendant,
                 area,
             })?;
         } else {

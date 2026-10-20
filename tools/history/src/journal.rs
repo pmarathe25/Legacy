@@ -78,6 +78,7 @@ impl Ledger {
                     | "pressure.submitted"
                     | "pressure.backed-down"
                     | "pressure.fled"
+                    | "lifecycle.conceived"
                     | "lifecycle.born"
                     | "health.treated"
                     | "agriculture.harvested"
@@ -94,6 +95,11 @@ impl Ledger {
                     | "exchange.traded"
                     | "discourse.spoken"
                     | "communication.learned"
+                    | "syntax.learned"
+                    | "mechanics.built"
+                    | "mechanics.tested"
+                    | "literacy.developed"
+                    | "households.care-changed"
                     | "works.created"
                     | "works.shared"
                     | "institutions.membership-changed"
@@ -134,6 +140,41 @@ impl Ledger {
                 }
                 match event.kind.as_str() {
                     "cultivars.created" => significant = false,
+                    "households.care-changed" => {
+                        significant = self.seen.insert(format!(
+                            "care:{}:{}:{}",
+                            event.data["caregiver"],
+                            event.data["beneficiary"],
+                            event.data["accept"]
+                        ));
+                    }
+                    "mechanics.built" => {
+                        let id = event.data["device"].as_u64().ok_or("apparatus lacks id")?;
+                        let device = &h.get::<game_mechanics::Machines>()?.devices[&id];
+                        significant = self.seen.insert(format!(
+                            "design:{}:{}",
+                            device.maker.0,
+                            game_physics::design_key(&device.parts)
+                        ));
+                    }
+                    "mechanics.tested" => {
+                        let load = event.data["lifted"].as_u64().unwrap_or(0);
+                        let met = event.data["task"].get(1).map(|task| {
+                            load >= task["force"].as_u64().unwrap_or(u64::MAX)
+                                && event.data["travel"].as_u64().unwrap_or(0)
+                                    >= task["travel"].as_u64().unwrap_or(u64::MAX)
+                        });
+                        significant = !event.data["device"].is_null()
+                            && self.seen.insert(format!(
+                                "trial:{}:{}:{}:{}:{:?}",
+                                event.data["device"],
+                                event.data["outlet"],
+                                event.data["task"].get(0).unwrap_or(&Value::Null),
+                                load.checked_ilog2().unwrap_or(0),
+                                met
+                            ));
+                    }
+
                     "discourse.spoken" => {
                         significant = self.seen.insert(format!(
                             "opinion:{}:{}:{}:{}",
@@ -166,10 +207,16 @@ impl Ledger {
                             .insert(format!("injured:{}", event.data["person"]))
                     }
                     "conflict.struck" => {
-                        significant = self.seen.insert(format!(
-                            "struck:{}:{}",
-                            event.data["actor"], event.data["target"]
-                        ))
+                        let fatal = event.data["target"].as_u64().is_some_and(|id| {
+                            h.get::<game_physiology::Bodies>().is_ok_and(|b| {
+                                b.people.get(&PersonId(id)).is_some_and(|body| !body.alive)
+                            })
+                        });
+                        significant = fatal
+                            || self.seen.insert(format!(
+                                "struck:{}:{}",
+                                event.data["actor"], event.data["target"]
+                            ));
                     }
                     "pressure.submitted" | "pressure.backed-down" => {
                         significant = self.seen.insert(format!(
@@ -264,6 +311,12 @@ impl Ledger {
             }
             if significant {
                 let mut data = event.data.clone();
+                if event.kind == "mechanics.built" {
+                    let id = data["device"].as_u64().ok_or("apparatus lacks id")?;
+                    data["design"] =
+                        serde_json::to_value(&h.get::<game_mechanics::Machines>()?.devices[&id])?;
+                }
+
                 if event.kind == "botany.changed" {
                     self.plants.enrich(h, &mut data)?;
                     if self.notable

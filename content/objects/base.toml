@@ -10,7 +10,7 @@ food = { portion = 10, relief = 60, shelf_days = 360, nutrients = { energy = 60,
 id = 2
 name = "Timber"
 mass = 1
-tags = ["material", "plant", "woody", "fuel-hours:1"]
+tags = ["material", "plant", "woody", "fuel-hours:1", "mark-surface:300"]
 [data.objects.grain-seed]
 id = 3
 name = "Grain seed"
@@ -25,7 +25,7 @@ tags = ["medical", "medicine"]
 id = 5
 name = "Tool"
 mass = 1
-tags = ["tool"]
+tags = ["tool", "mark-cutting:1000"]
 [data.objects.training-tool]
 id = 8
 name = "Training tool"

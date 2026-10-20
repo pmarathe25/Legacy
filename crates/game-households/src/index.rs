@@ -6,55 +6,81 @@ pub(super) struct Saved {
     partners: Table<PersonId, PersonId>,
     children: Table<PersonId, Vec<PersonId>>,
     next: Table<PersonId, SimTime>,
-    dependents: Table<PersonId, PersonId>,
+    caregivers: Table<PersonId, Table<PersonId, ()>>,
+    self_reliant: Table<PersonId, ()>,
     review: Option<ScheduleId>,
     #[serde(default)]
     food_care: Table<PersonId, FoodCare>,
 }
 pub(super) fn build(
-    dependents: &Table<PersonId, PersonId>,
+    caregivers: &Table<PersonId, Table<PersonId, ()>>,
 ) -> Table<PersonId, Table<PersonId, ()>> {
     let mut wards = Table::<PersonId, Table<PersonId, ()>>::new();
-    for (child, carer) in dependents {
-        wards.entry(*carer).or_default().insert(*child, ());
+    for (person, carers) in caregivers {
+        for carer in carers.keys() {
+            wards.entry(*carer).or_default().insert(*person, ());
+        }
     }
     wards
 }
 impl From<Saved> for Households {
     fn from(s: Saved) -> Self {
         Self {
-            wards: build(&s.dependents),
+            wards: build(&s.caregivers),
             enabled: s.enabled,
             nursery: s.nursery,
             partners: s.partners,
             children: s.children,
             next: s.next,
-            dependents: s.dependents,
+            caregivers: s.caregivers,
+            self_reliant: s.self_reliant,
             review: s.review,
             food_care: s.food_care,
         }
     }
 }
 impl Households {
-    pub fn dependents_of(&self, person: PersonId) -> impl Iterator<Item = PersonId> + '_ {
+    /// Beneficiaries of this person's freely chosen, revocable commitments.
+    pub fn beneficiaries_of(&self, person: PersonId) -> impl Iterator<Item = PersonId> + '_ {
         self.wards
             .get(&person)
             .into_iter()
             .flat_map(|s| s.keys().copied())
     }
-    pub(super) fn assign(&mut self, child: PersonId, carer: Option<PersonId>) -> Option<PersonId> {
-        let old = self.dependents.remove(&child);
-        if let Some(person) = old {
-            let wards = self.wards.get_mut(&person).expect("caregiver index");
-            wards.remove(&child);
-            if wards.is_empty() {
-                self.wards.remove(&person);
+    pub fn carers_of(&self, person: PersonId) -> impl Iterator<Item = PersonId> + '_ {
+        self.caregivers
+            .get(&person)
+            .into_iter()
+            .flat_map(|s| s.keys().copied())
+    }
+    pub fn committed(&self, caregiver: PersonId, beneficiary: PersonId) -> bool {
+        self.caregivers
+            .get(&beneficiary)
+            .is_some_and(|r| r.contains_key(&caregiver))
+    }
+    pub(super) fn set_care(&mut self, caregiver: PersonId, beneficiary: PersonId, accept: bool) {
+        if accept {
+            self.caregivers
+                .entry(beneficiary)
+                .or_default()
+                .insert(caregiver, ());
+            self.wards
+                .entry(caregiver)
+                .or_default()
+                .insert(beneficiary, ());
+        } else {
+            if let Some(r) = self.caregivers.get_mut(&beneficiary) {
+                r.remove(&caregiver);
+                if r.is_empty() {
+                    self.caregivers.remove(&beneficiary);
+                }
+            }
+            if let Some(r) = self.wards.get_mut(&caregiver) {
+                r.remove(&beneficiary);
+                if r.is_empty() {
+                    self.wards.remove(&caregiver);
+                }
             }
         }
-        if let Some(person) = carer {
-            self.dependents.insert(child, person);
-            self.wards.entry(person).or_default().insert(child, ());
-        }
-        old
     }
 }

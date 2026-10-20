@@ -25,10 +25,11 @@ pub fn transmissions(
             if intact {
                 *count -= 1;
             }
+            let (drive, load) = p.mechanism.ratio(p.drive, p.load, material.span).unwrap();
             Transmission {
                 input: p.input,
-                drive: p.drive,
-                load: p.load,
+                drive,
+                load,
                 efficiency: if intact { material.efficiency } else { 0 },
                 limit: if intact { material.limit } else { u64::MAX },
             }

@@ -86,7 +86,7 @@ offices = { ruler = "ruler" }
 [data.reincarnation]
 mother = "guardian-1"
 father = "guardian-2"
-caregiver = "guardian-1"
+attendant = "guardian-1"
 area = "village"
 delay = 1
 access = ["store"]

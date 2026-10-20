@@ -31,3 +31,7 @@ Personal advocacy, persuasion tactics, third-party citations, and coerced public
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-transport`, `game-physiology`, `game-vitality`, `game-traits`, `game-communication`, `game-knowledge`, `game-food-memory`, `game-relationships`, `game-social-life`, `game-pressure`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-discourse`) cover personality-driven advocacy, resistance to admired speakers, false citations and counterevidence, coerced statements vs. private belief, and save/load consistency.
+
+Expressed rigidity adds resistance to revising an established stance, alongside
+conviction and other personal motives. It favors no particular opinion and does
+not turn a coerced public endorsement into a private belief.

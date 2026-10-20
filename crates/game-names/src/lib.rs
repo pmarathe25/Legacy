@@ -260,7 +260,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 .contains_key(&r.child),
             "child already named",
         )?;
-        let chooser = [family.caregiver, family.mother, family.father]
+        let chooser = [family.attendant, family.mother, family.father]
             .into_iter()
             .find(|p| {
                 tx.get::<Names>()
@@ -295,7 +295,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .get_mut(&r.child)
             .unwrap()
             .chosen_by = chooser;
-        for parent in [family.mother, family.father, family.caregiver] {
+        for parent in [family.mother, family.father, family.attendant] {
             if game_transport::area(tx.get()?, parent).ok()
                 == game_transport::area(tx.get()?, r.child).ok()
             {

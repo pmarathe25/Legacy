@@ -318,3 +318,55 @@ fn bounded_search_keeps_the_real_continuation_available_without_forcing_it_to_wi
     .unwrap();
     assert_ne!(chosen.id, current.motive.id);
 }
+
+#[derive(Clone, Serialize, Deserialize)]
+struct Scores;
+impl Request for Scores {
+    const KEY: &'static str = "test.choice-scores";
+    type Response = Vec<(String, i64)>;
+}
+#[test]
+fn rigidity_does_not_penalize_changing_ordinary_activities_or_care_recipients() {
+    let mut b = builder(false, false);
+    game_traits::plugin(&mut b).unwrap();
+    b.request::<Scores>(|tx, _| {
+        let mut offers = tx.call(Collect {
+            person: PersonId(1),
+        })?;
+        reweight(tx, PersonId(1), &mut offers);
+        Ok(offers
+            .into_iter()
+            .map(|o| (o.key, o.motive.score()))
+            .collect())
+    })
+    .unwrap();
+    let mut h = b.build(4, 1).unwrap();
+    let mut catalog = game_traits::Traits::default();
+    catalog.definitions.insert(
+        "rigidity".into(),
+        game_traits::Trait {
+            name: "Rigidity".into(),
+            minimum: 0,
+            maximum: 1000,
+            default: 500,
+            founder_spread: 65535,
+            weights: Default::default(),
+        },
+    );
+    h.dispatch(game_traits::Install(catalog)).unwrap();
+    h.dispatch(game_traits::Set {
+        person: PersonId(1),
+        profile: [("rigidity".into(), 1000)].into(),
+    })
+    .unwrap();
+    let before = h.dispatch(Scores).unwrap();
+    for _ in 0..20 {
+        h.dispatch(game_identity::Commit {
+            person: PersonId(1),
+            domain: "act".into(),
+            preference: "act:100".into(),
+        })
+        .unwrap();
+    }
+    assert_eq!(h.dispatch(Scores).unwrap(), before);
+}

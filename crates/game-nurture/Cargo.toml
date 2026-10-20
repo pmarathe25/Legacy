@@ -6,7 +6,7 @@ license.workspace = true
 [dependencies]
 game-search.workspace = true
 game-signals.workspace = true
-game-family-life.workspace = true
+game-social-life.workspace = true
 game-choice.workspace = true
 game-communication.workspace = true
 game-nutrition.workspace = true

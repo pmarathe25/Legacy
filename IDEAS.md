@@ -13,7 +13,7 @@ Completed items should be marked `[DONE]` after they have been verified.
 
 ## Implementation notes
 
-The communication and naming work was initially verified with 383 workspace tests, strict Clippy, formatting, and a fresh 20-year history. Language currently uses procedural phonetic vocabularies, local demonstrations, simple explanations, and personal decoding. Human grammar and fluent prose remain future extensions. Poems, songs, and books are procedural compositions.
+The communication and naming work was initially verified with 383 workspace tests, strict Clippy, formatting, and a fresh 20-year history. Language currently uses procedural phonetic vocabularies, local demonstrations, simple explanations, and personal decoding. Relational grammar now has personal construction learning, role-particle experiments, and embedded-clause support through `game-grammar` and `game-syntax`; fluent prose remains a future extension. Poems, songs, and books are procedural compositions.
 
 See [communication](crates/game-communication/README.md), [naming](crates/game-naming/README.md), [creative works](crates/game-works/README.md), and the [feature ownership review](docs/design/feature-ownership.md) for behavior and boundaries. Transient run evidence stays under `target/history/ideas-2026-10-17/`.
 
@@ -28,3 +28,10 @@ observations. See [physics](crates/game-physics/README.md),
 [mechanics](crates/game-mechanics/README.md), and
 [invention](crates/game-invention/README.md). Further attention and invention policy
 work is tracked in [the autonomy follow-up](plans/implemented/character-autonomy-followup.md).
+
+Writing media now use material affordances: pigment, incision, or impressions on
+stone, clay, fabric, wood, bark, paper, and other authored surfaces. Elementary
+machines now include levers, gear pairs, pulley tackles, wheels/axles, ramps,
+wedges, screws, cranks, and drums, with compatible linear/rotary ports. Validation
+for these follow-ups is recorded with their tests; long natural histories still
+measure whether people discover and adopt them.

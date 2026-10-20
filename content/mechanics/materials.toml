@@ -28,3 +28,19 @@ efficiency = 900
 span = 24
 limit = 12000
 efficiency = 900
+
+[data.supports.gear]
+wooden-pegs = 1
+[data.supports.pulley]
+rope = 2
+wooden-pegs = 1
+[data.supports.wheel-and-axle]
+rope = 1
+wooden-pegs = 1
+[data.supports.crank]
+wooden-pegs = 1
+[data.supports.drum]
+rope = 1
+wooden-pegs = 1
+[data.supports.screw]
+wooden-pegs = 1

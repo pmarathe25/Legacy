@@ -4,6 +4,7 @@ use game_households::Households;
 use game_sim::*;
 mod bonds;
 pub use bonds::{Bond, Bonds, Kind, Separate, ShareCare};
+pub use game_attraction::attraction;
 fn mobile(tx: &Transaction<'_>, child: PersonId) -> bool {
     if tx
         .get::<game_vitality::Vitality>()
@@ -52,7 +53,8 @@ pub fn dependence(tx: &Transaction<'_>, child: PersonId) -> i64 {
     vulnerability * (1000 + foresight) / (2000 + foresight)
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("family-life", 1)?;
+    b.plugin("family-life", 2)?;
+    game_attraction::plugin(b)?;
     bonds::register(b)?;
     b.subscribe::<game_lifecycle::Born>("c.family-life.provision", |tx, e| {
         if !tx.get::<Households>()?.enabled {
@@ -87,7 +89,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             let name = tx
                 .get::<game_social_life::SocialLife>()?
                 .people
-                .get(&f.caregiver)
+                .get(&f.attendant)
                 .map_or("Kin", |p| p.name.as_str())
                 .to_owned();
             tx.call(game_social_life::Register {
@@ -114,7 +116,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.subscribe::<game_transport::Departed>("households.carry", |tx, r| {
-        let mut children: Vec<_> = tx.get::<Households>()?.dependents_of(r.person).collect();
+        let households = tx.get::<Households>()?;
+        let mut children: Vec<_> = households
+            .beneficiaries_of(r.person)
+            .chain(
+                households
+                    .children
+                    .get(&r.person)
+                    .into_iter()
+                    .flatten()
+                    .copied(),
+            )
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         children.sort_by_key(|child| {
             (
                 mobile(tx, *child),

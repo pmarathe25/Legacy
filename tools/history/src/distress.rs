@@ -71,7 +71,7 @@ impl Watch {
                     Some(json!({"patch":id,"good":patch.good,"name":item.name,"stock":patch.stock,"available":h.get::<game_ecology::Ecology>().unwrap().available(id).ok()}))
                 }).take(12).collect();
             let households = h.get::<game_households::Households>()?;
-            let caregiver = households.dependents.get(person).copied();
+            let caregiver = households.carers_of(*person).collect::<Vec<_>>();
             let traits = h.get::<game_traits::Traits>()?;
             let nutrition = h.get::<game_nutrition::Nutrition>()?;
             let mut row = intention(h, *person)?;
@@ -88,11 +88,13 @@ impl Watch {
                     .get(person)
                     .map(|d| d.status(&nutrition.needs, h.now()))
             );
-            row["caregiver"] = caregiver
-                .map(|p| intention(h, p))
-                .transpose()?
-                .unwrap_or(Value::Null);
-            row["dependents"]=json!(households.dependents_of(*person).map(|child|json!({"child":child,"last_seen":households.nursery.get(&child),"position":h.get::<game_transport::Positions>().unwrap().0.get(&child)})).collect::<Vec<_>>());
+            row["caregivers"] = json!(
+                caregiver
+                    .into_iter()
+                    .map(|p| intention(h, p))
+                    .collect::<Result<Vec<_>>>()?
+            );
+            row["dependents"]=json!(households.beneficiaries_of(*person).map(|child|json!({"child":child,"last_seen":households.nursery.get(&child),"position":h.get::<game_transport::Positions>().unwrap().0.get(&child)})).collect::<Vec<_>>());
             serde_json::to_writer(&mut *out, &row)?;
             writeln!(out)?;
         }

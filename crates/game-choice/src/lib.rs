@@ -278,6 +278,7 @@ pub fn provider(
     })
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
+    game_identity::plugin(b)?;
     b.plugin("choice", 1)?;
     b.resource::<Offers>()?;
     undertaking::register(b)?;

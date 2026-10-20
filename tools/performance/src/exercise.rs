@@ -39,7 +39,7 @@ pub fn prepare(sim: &mut Simulation, population: usize) -> FollowUp {
         h.dispatch(game_lifecycle::Birth {
             mother: ruler,
             father,
-            caregiver,
+            attendant: caregiver,
             area: village,
         })
         .unwrap();

@@ -1,8 +1,7 @@
 //! Invented symbol systems and physical notes preserve personally held claims.
-use game_core::*;
-use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
+use {game_core::*, game_sim::*};
 mod choices;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Script {
@@ -18,6 +17,7 @@ pub struct Document {
     pub sounds: Vec<u8>,
     pub glyphs: Vec<u64>,
     pub fact: game_knowledge::Fact,
+    pub imprint: game_inscription::Imprint,
 }
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Literacy {
@@ -25,7 +25,6 @@ pub struct Literacy {
     pub known: Table<PersonId, Table<u64, u8>>,
     pub documents: Table<u64, Document>,
     pub seen: Table<PersonId, Table<u64, ()>>,
-    #[serde(default)]
     pub shown: Table<u64, PersonId>,
 }
 impl Literacy {
@@ -90,6 +89,7 @@ struct Write {
     key: String,
     script: u64,
     fact: game_knowledge::Fact,
+    imprint: game_inscription::Imprint,
 }
 impl Request for Write {
     const KEY: &'static str = "literacy.write";
@@ -133,36 +133,13 @@ pub struct Recorded {
 impl Event for Recorded {
     const KEY: &'static str = "literacy.recorded";
 }
-fn local(tx: &Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
-    require(
-        game_transport::area(tx.get()?, a)? == game_transport::area(tx.get()?, b)?,
-        "instruction needs contact",
-    )
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Developed {
+    pub person: PersonId,
+    pub script: u64,
 }
-fn paper(tx: &mut Transaction<'_>, p: PersonId, inventory: InventoryId) -> Result<()> {
-    game_physiology::capable(tx, p)?;
-    require(
-        game_vitality::can_converse(tx, p),
-        "cannot formulate a written statement",
-    )?;
-    require(
-        game_cargo::locality(tx, inventory)? == game_transport::area(tx.get()?, p)?,
-        "writing materials are elsewhere",
-    )?;
-    tx.call(game_property::Use {
-        actor: p,
-        inventory,
-        purpose: "writing".into(),
-    })?;
-    for key in ["paper", "ink"] {
-        let good = tx.get::<game_objects::Objects>()?.resolve(key)?;
-        tx.call(game_cargo::Consume {
-            inventory,
-            good,
-            quantity: 1,
-        })?;
-    }
-    Ok(())
+impl Event for Developed {
+    const KEY: &'static str = "literacy.developed";
 }
 fn exposed(tx: &Transaction<'_>, p: PersonId, d: &Document) -> bool {
     let literacy = tx.get::<Literacy>().unwrap();
@@ -191,6 +168,7 @@ fn proficiency(literacy: &Literacy, person: PersonId, script: u64) -> u8 {
     let row = literacy.known.get(&person);
     row.and_then(|r| r.get(&script)).copied().unwrap_or(0)
 }
+
 #[derive(Clone, Serialize, Deserialize)]
 pub struct WritingModel {
     pub person: PersonId,
@@ -204,7 +182,8 @@ pub fn understands(literacy: Option<&Literacy>, person: PersonId, script: Option
     script.is_none_or(|s| literacy.is_some_and(|l| proficiency(l, person, s) >= 40))
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("literacy", 1)?;
+    game_inscription::plugin(b)?;
+    b.plugin("literacy", 2)?;
     b.resource::<Literacy>()?;
     b.request::<Practice>(|tx, r| {
         if let Some(script) = first_script(tx, r.person) {
@@ -215,11 +194,19 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     choices::register(b)?;
     b.request::<Develop>(|tx, r| {
-        paper(tx, r.person, r.inventory)?;
+        require(
+            game_vitality::can_converse(tx, r.person),
+            "cannot formulate written language",
+        )?;
+        let imprint = tx.call(game_inscription::Make {
+            person: r.person,
+            inventory: r.inventory,
+            label: "Writing practice".into(),
+        })?;
         tx.call(game_choice::Undertake {
             person: r.person,
             kind: "develop-writing".into(),
-            duration: SimDuration(4 * HOUR.0),
+            duration: SimDuration(4 * HOUR.0 * imprint.time_factor),
             request: Pending::new(Invent { person: r.person })?,
         })
     })?;
@@ -248,9 +235,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .entry(r.person)
             .or_default()
             .insert(script, 100);
+        tx.emit(
+            Developed {
+                person: r.person,
+                script,
+            },
+            vec![r.person],
+        )?;
         Ok(true)
     })?;
     b.request::<Inscribe>(|tx, r| {
+        require(
+            game_vitality::can_converse(tx, r.person),
+            "cannot formulate written language",
+        )?;
         require(
             proficiency(tx.get()?, r.person, r.script) >= 40,
             "writing system is unfamiliar",
@@ -262,17 +260,22 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .and_then(|k| k.get(r.key.as_str()))
             .map(|f| f.to_owned())
             .ok_or_else(|| Error::Rejected("writer does not know this claim".into()))?;
-        paper(tx, r.person, r.inventory)?;
+        let imprint = tx.call(game_inscription::Make {
+            person: r.person,
+            inventory: r.inventory,
+            label: "Inscription".into(),
+        })?;
         tx.call(game_choice::Undertake {
             person: r.person,
             kind: "write-note".into(),
-            duration: HOUR,
+            duration: SimDuration(HOUR.0 * imprint.time_factor),
             request: Pending::new(Write {
                 person: r.person,
                 inventory: r.inventory,
                 key: r.key,
                 script: r.script,
                 fact,
+                imprint,
             })?,
         })
     })?;
@@ -286,23 +289,13 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             concept: r.key.clone(),
         })?;
         let alphabet = &tx.get::<Literacy>()?.scripts[&r.script].glyphs;
-        let encoded = serde_json::to_vec(&(r.person, r.key.clone(), r.fact.clone())).unwrap();
-        let glyphs = encoded
-            .iter()
-            .map(|byte| alphabet[usize::from(*byte)])
-            .collect();
-        let good = tx.get::<game_objects::Objects>()?.resolve("written-page")?;
-        tx.call(game_cargo::Deposit {
-            inventory: r.inventory,
-            good,
-            quantity: 1,
-        })?;
-        let item = tx.call(game_items::Mark {
-            person: r.person,
-            inventory: r.inventory,
-            good,
-            label: game_communication::render(&sounds),
-        })?;
+        let glyphs = game_orthography::write(alphabet, &(r.person, r.key.clone(), r.fact.clone()))
+            .ok_or_else(|| Error::Rejected("incomplete alphabet".into()))?;
+        require(
+            game_inscription::intact(tx, r.person, &r.imprint),
+            "inscribed surface is no longer available",
+        )?;
+        let item = r.imprint.item;
         tx.edit::<Literacy>()?.documents.insert(
             item,
             Document {
@@ -313,6 +306,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 sounds,
                 glyphs,
                 fact: r.fact,
+                imprint: r.imprint,
             },
         );
         tx.edit::<Literacy>()?.notice(r.person, item);
@@ -327,7 +321,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(item)
     })?;
     b.request::<Show>(|tx, r| {
-        local(tx, r.person, r.listener)?;
+        require(
+            game_transport::together(tx.get()?, r.person, r.listener),
+            "instruction needs contact",
+        )?;
         let document = tx
             .get::<Literacy>()?
             .documents
@@ -404,27 +401,17 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             return Ok(false);
         }
         let alphabet = &tx.get::<Literacy>()?.scripts[&d.script].glyphs;
-        let bytes = d
-            .glyphs
-            .iter()
-            .map(|glyph| {
-                alphabet
-                    .iter()
-                    .position(|g| g == glyph)
-                    .and_then(|i| u8::try_from(i).ok())
-            })
-            .collect::<Option<Vec<_>>>()
-            .ok_or_else(|| Error::Rejected("unreadable glyphs".into()))?;
         let (author, key, mut fact): (PersonId, String, game_knowledge::Fact) =
-            serde_json::from_slice(&bytes)
-                .map_err(|_| Error::Rejected("damaged assertion".into()))?;
-        if let Some(claim) = fact.value.decode::<game_reasoning::Claim>() {
-            let understanding = game_vitality::ability(tx, r.person, "intelligence")
-                .saturating_mul(1000 + game_vitality::ability(tx, r.person, "learning") / 8)
-                / 1000;
-            if understanding < 100 + u64::from(claim.complexity) * 75 {
-                return Ok(false);
-            }
+            game_orthography::read(alphabet, &d.glyphs)
+                .ok_or_else(|| Error::Rejected("damaged assertion".into()))?;
+        if tx.registered::<game_testimony::Comprehend>()
+            && !tx.call(game_testimony::Comprehend {
+                person: r.person,
+                fact: fact.clone(),
+                support: 0,
+            })?
+        {
+            return Ok(false);
         }
         fact.source = author;
         fact.confidence = fact

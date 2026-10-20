@@ -8,6 +8,16 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-simple-machines = { path = "crates/game-simple-machines" }
+game-inscription = { path = "crates/game-inscription" }
+game-violence = { path = "crates/game-violence" }
+game-orthography = { path = "crates/game-orthography" }
+game-recollection = { path = "crates/game-recollection" }
+game-attraction = { path = "crates/game-attraction" }
+game-phonology = { path = "crates/game-phonology" }
+game-identity = { path = "crates/game-identity" }
+game-grammar = { path = "crates/game-grammar" }
+game-syntax = { path = "crates/game-syntax" }
 game-work-planning = { path = "crates/game-work-planning" }
 game-diet = { path = "crates/game-diet" }
 game-contracts = { path = "crates/game-contracts" }

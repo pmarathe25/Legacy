@@ -84,6 +84,7 @@ fn setup_seed(limit: u64, seed: u64) -> (Host, PersonId, InventoryId, GoodId) {
     })
     .unwrap();
     h.dispatch(Install(Config {
+        supports: Default::default(),
         materials: [(
             good,
             Material {
@@ -106,6 +107,7 @@ fn device(h: &mut Host, p: PersonId, inventory: InventoryId, good: GoodId) -> u6
         person: p,
         inventory,
         parts: vec![Part {
+            mechanism: game_physics::Mechanism::Lever,
             good,
             input: None,
             drive: 2,
@@ -235,6 +237,7 @@ fn a_newborn_cannot_assemble_or_operate_even_with_extreme_potential() {
             person: child,
             inventory,
             parts: vec![Part {
+                mechanism: game_physics::Mechanism::Lever,
                 good,
                 input: None,
                 drive: 2,
@@ -568,6 +571,7 @@ fn seeded_apparatus_simulations_conserve_material_and_work_across_breakage_inter
                 .map(|i| {
                     let r = random(seed, trial, 10 + i as u64);
                     Part {
+                        mechanism: game_physics::Mechanism::Lever,
                         good,
                         input: if i == 0 || r.is_multiple_of(3) {
                             None
@@ -663,4 +667,71 @@ fn seeded_apparatus_simulations_conserve_material_and_work_across_breakage_inter
     assert_eq!(trials, 256);
     assert_eq!(replays, 64);
     assert!(breaks > 0);
+}
+
+#[test]
+fn an_observed_machine_processes_real_food_that_manual_strength_cannot_process() {
+    let (mut h, p, stock, material) = setup(4000);
+    let id = device(&mut h, p, stock, material);
+    let recipes =
+        game_workshop::load(&mut game_content::Store::standard(), h.get().unwrap()).unwrap();
+    h.dispatch(recipes).unwrap();
+    let grain = h
+        .get::<game_objects::Objects>()
+        .unwrap()
+        .resolve("grain")
+        .unwrap();
+    let meal = h
+        .get::<game_objects::Objects>()
+        .unwrap()
+        .resolve("pressed-grain-meal")
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory: stock,
+        good: grain,
+        quantity: 80,
+    })
+    .unwrap();
+    let mut unaided = builder().load(&h.save().unwrap(), 1).unwrap();
+    let until = unaided
+        .dispatch(game_workshop::Craft {
+            person: p,
+            inventory: stock,
+            recipe: "press-grain-meal".into(),
+        })
+        .unwrap();
+    run(&mut unaided, until);
+    assert_eq!(
+        unaided.get::<game_cargo::Cargo>().unwrap().0[&stock].amount(meal),
+        0
+    );
+    let until = h
+        .dispatch(Experiment {
+            person: p,
+            device: id,
+            weights: stock,
+            load: 1500,
+            outlet: 0,
+        })
+        .unwrap();
+    run(&mut h, until);
+    let until = h
+        .dispatch(game_workshop::Craft {
+            person: p,
+            inventory: stock,
+            recipe: "press-grain-meal".into(),
+        })
+        .unwrap();
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for world in [&mut h, &mut loaded] {
+        run(world, until);
+        assert_eq!(
+            world.get::<game_cargo::Cargo>().unwrap().0[&stock].amount(meal),
+            32
+        );
+        assert!(world.notices().any(|e| e.kind == Tested::KEY
+            && e.data["device"] == id
+            && e.data["task"][0] == "press-grain-meal"));
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }

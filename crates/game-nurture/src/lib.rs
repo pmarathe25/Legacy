@@ -46,23 +46,54 @@ fn concern(tx: &Transaction<'_>, p: PersonId, other: PersonId, need: u64) -> i64
         .get::<game_characters::Minds>()
         .map_or(100, |m| m.rules.urgent_hunger.clamp(1, 10000)) as i64;
     // Concern includes anticipated consequences of the perceived need, not remote bodily truth.
-    let severity = need + need * need * awareness / (urgent * (1000 + awareness));
+    let visible_immaturity = if local(tx, p, other) {
+        tx.get::<game_physiology::Bodies>()
+            .ok()
+            .and_then(|b| b.people.get(&other))
+            .map_or(0, |b| {
+                1000 - game_vitality::maturation(b.born, tx.now(), "constitution")
+            }) as i64
+    } else {
+        0
+    };
+    let fragility = visible_immaturity * awareness / (1000 + awareness);
+    let severity = (need + need * need * awareness / (urgent * (1000 + awareness)))
+        * (1000 + fragility)
+        / 1000;
     let perceived = severity * (500 + empathy / 4 + compassion / 4) / 1000;
     perceived * altruism / 200 + attachment + i64::from(moral) * 3
         - body.hunger.min(1000) as i64 * 2
         - body.fatigue.min(1000) as i64
         - 30
 }
-fn candidates(h: &Households, p: PersonId) -> impl Iterator<Item = PersonId> + '_ {
-    // Primary responsibility does not exclude another parent's voluntary help.
-    h.dependents_of(p).chain(
-        h.children
-            .get(&p)
-            .into_iter()
-            .flatten()
-            .copied()
-            .filter(move |child| h.dependents.get(child) != Some(&p)),
-    )
+fn candidates(tx: &Transaction<'_>, p: PersonId) -> Vec<PersonId> {
+    let Ok(h) = tx.get::<Households>() else {
+        return vec![];
+    };
+    let mut known = std::collections::BTreeSet::new();
+    known.extend(h.beneficiaries_of(p));
+    known.extend(h.children.get(&p).into_iter().flatten().copied());
+    // A perceived need can motivate help without kinship or a prior commitment.
+    if let Ok(area) = game_transport::area(tx.get().unwrap(), p)
+        && let Ok(social) = tx.get::<game_social_life::SocialLife>()
+        && let Some(peers) = social.residents.get(&area)
+    {
+        let mut peers: Vec<_> = peers.keys().copied().collect();
+        if !peers.is_empty() {
+            let encounters = social.people.get(&p).map_or(0, |s| s.encounters);
+            let start = p.0.wrapping_add(encounters) as usize % peers.len();
+            peers.rotate_left(start);
+            known.extend(peers.into_iter().take(32));
+        }
+    }
+    known.remove(&p);
+    known
+        .into_iter()
+        .filter(|other| {
+            tx.get::<game_physiology::Bodies>()
+                .is_ok_and(|b| b.people.get(other).is_some_and(|b| b.alive))
+        })
+        .collect()
 }
 fn local(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> bool {
     game_transport::area(tx.get().unwrap(), p)
@@ -389,7 +420,8 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     if !h.enabled {
         return Ok(());
     }
-    let local_children: Vec<_> = candidates(h, p)
+    let local_children: Vec<_> = candidates(tx, p)
+        .into_iter()
         .filter(|child| !local(tx, p, *child) || game_physiology::capable(tx, *child).is_ok())
         .collect();
     let mut children = vec![];
@@ -408,7 +440,7 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
 fn prompt(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     if tx
         .get::<Households>()
-        .is_ok_and(|h| h.food_care.contains_key(&p) || candidates(h, p).next().is_some())
+        .is_ok_and(|h| h.food_care.contains_key(&p) || !candidates(tx, p).is_empty())
     {
         if tx
             .get::<game_characters::Minds>()
@@ -423,21 +455,28 @@ fn prompt(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
 /// Registers inside the care owner; household commitments use receiver-owned requests.
 pub fn register(b: &mut Builder) -> Result<()> {
     b.subscribe::<game_communication::Signalled>("nurture.heard-need", |tx, e| {
-        let caregivers: Vec<_> = tx
-            .get::<Households>()
+        let mut caregivers = game_transport::area(tx.get()?, e.person)
             .ok()
-            .into_iter()
-            .flat_map(|h| {
-                h.dependents.get(&e.person).copied().into_iter().chain(
-                    h.children
-                        .iter()
-                        .filter(|(_, c)| c.contains(&e.person))
-                        .map(|(p, _)| *p),
-                )
+            .and_then(|area| {
+                tx.get::<game_social_life::SocialLife>()
+                    .ok()?
+                    .residents
+                    .get(&area)
             })
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .collect();
+            .map(|peers| {
+                peers
+                    .keys()
+                    .copied()
+                    .filter(|p| *p != e.person)
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+        // Rotate local attention without interrupting an entire growing settlement.
+        if !caregivers.is_empty() {
+            let start = e.person.0.wrapping_add(tx.now().0 / HOUR.0) as usize % caregivers.len();
+            caregivers.rotate_left(start);
+            caregivers.truncate(32);
+        }
         for person in caregivers {
             if local(tx, person, e.person) && game_vitality::ability(tx, person, "hearing") > 0 {
                 let _ = tx.attempt(game_communication::Notice {
@@ -486,21 +525,7 @@ pub fn register(b: &mut Builder) -> Result<()> {
                 },
             )?;
         }
-        let helpers: Vec<_> = tx
-            .get::<game_family_life::Bonds>()
-            .ok()
-            .into_iter()
-            .flat_map(|b| b.caregivers.iter())
-            .filter(|(_, r)| r.contains_key(&e.person))
-            .map(|(c, _)| *c)
-            .collect();
-        let children: Vec<_> = candidates(tx.get()?, e.person)
-            .chain(helpers)
-            .collect::<std::collections::BTreeSet<_>>()
-            .into_iter()
-            .filter(|c| !local(tx, e.person, *c) || game_physiology::capable(tx, *c).is_ok())
-            .take(32)
-            .collect();
+        let children = candidates(tx, e.person);
         for child in children {
             if intent.as_ref().is_some_and(|i| i.beneficiary == child) {
                 continue;

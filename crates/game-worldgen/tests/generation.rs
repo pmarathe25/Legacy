@@ -9,7 +9,10 @@ fn seeds_generate_only_physical_and_individual_initial_conditions() {
     assert!(first.institutions.is_empty());
     assert!(first.bonds.is_empty());
     assert!(first.plots.is_empty());
-    assert_eq!(first.actors().len(), settings.population + 2);
+    assert_eq!(
+        first.actors().len(),
+        settings.population + settings.guardians
+    );
     assert_eq!(first.links.len(), settings.areas - 1);
     assert!(first.people.iter().all(|p| p.count == 1));
     assert!(
@@ -50,4 +53,19 @@ fn generated_individuals_use_new_authored_traits_and_their_actual_ranges() {
     );
     catalog.definitions.get_mut("curiosity").unwrap().maximum = -20;
     assert!(generate(&settings, 1, &catalog).is_err());
+}
+
+#[test]
+fn headless_physical_conditions_can_omit_immortal_guardians() {
+    let mut settings = load(&mut game_content::Store::standard()).unwrap();
+    settings.guardians = 0;
+    let catalog = game_traits::load(&mut game_content::Store::standard()).unwrap();
+    let generated = generate(&settings, 7, &catalog).unwrap();
+    assert_eq!(generated.people.len(), settings.population);
+    assert!(
+        generated
+            .people
+            .iter()
+            .all(|p| p.kind == game_physiology::Kind::Mortal)
+    );
 }

@@ -104,3 +104,10 @@ Replay comparison supports `--start-temperature 72 --maximum-temperature 88`
 maximum aborts the replay, discards its timing and terminates the measured process
 group, including descendants of an exited timing wrapper. Affinity and CPU/memory
 limits must also be applied externally on thermally constrained machines.
+
+Compact journals retain first maker/design constructions and coarse capacity or
+practical-use milestones (`mechanics.built`, `mechanics.tested`), including actual
+geometry, mechanism kinds, observed effort, moved load, and task. Repeated trials
+remain aggregate counts. Script development and voluntary care changes are also
+retained. Research overlays may set `guardians = 0`; all reports must distinguish
+mortals, guardians, actual ancestry depth, and years elapsed.

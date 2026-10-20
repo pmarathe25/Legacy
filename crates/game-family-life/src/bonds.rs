@@ -10,7 +10,6 @@ pub enum Kind {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Bonds {
     pub partners: Table<PersonId, Table<PersonId, Kind>>,
-    pub caregivers: Table<PersonId, Table<PersonId, ()>>,
 }
 impl Resource for Bonds {
     const KEY: &'static str = "family-life.bonds";
@@ -61,16 +60,19 @@ pub(super) fn value(tx: &Transaction<'_>, p: PersonId, concept: &str) -> i64 {
         .map_or(0, i64::from)
 }
 fn attraction(tx: &Transaction<'_>, p: PersonId, q: PersonId, kind: Kind) -> i64 {
-    let r = tx
-        .get::<game_relationships::Social>()
-        .ok()
-        .and_then(|s| s.relationships.get(&p)?.get(&q))
-        .cloned()
-        .unwrap_or_default();
-    i64::from(r.affection * 2 + r.trust - r.fear * 3 - r.grievance * 3)
+    let personal = if kind == Kind::Companion {
+        game_attraction::companionship(tx, p, q)
+    } else {
+        super::attraction(tx, p, q)
+    };
+    personal
         + match kind {
             Kind::Exclusive => value(tx, p, "exclusivity"),
-            Kind::CoParent => value(tx, p, "kinship"),
+            Kind::CoParent => {
+                value(tx, p, "kinship")
+                    + game_vitality::disposition(tx, p, "reproductive-drive") / 20
+                    + game_vitality::disposition(tx, p, "empathy") / 20
+            }
             Kind::Companion => value(tx, p, "companionship"),
         }
 }
@@ -94,7 +96,13 @@ fn assent(tx: &Transaction<'_>, p: PersonId, q: PersonId, kind: Kind) -> bool {
             .families
             .get(&q)
             .is_some_and(|f| [f.mother, f.father].contains(&p));
-    adult && !exclusive && !related && attraction(tx, p, q, kind) > 40
+    let desired = attraction(tx, p, q, kind);
+    let change_is_wanted = existing.and_then(|row| row.get(&q)).is_none_or(|old| {
+        *old == kind
+            || desired
+                > attraction(tx, p, q, *old) + game_vitality::disposition(tx, p, "rigidity") / 20
+    });
+    adult && !exclusive && !related && desired > 40 && change_is_wanted
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.resource::<Bonds>()?;
@@ -114,6 +122,14 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             })?
         {
             return Ok(false);
+        }
+        if r.kind != Kind::Exclusive
+            && tx.get::<Households>()?.partners.get(&r.person) == Some(&r.other)
+        {
+            tx.call(game_households::Separate {
+                person: r.person,
+                other: r.other,
+            })?;
         }
         for (p, q) in [(r.person, r.other), (r.other, r.person)] {
             tx.edit::<Bonds>()?
@@ -149,14 +165,12 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             {
                 return Ok(false);
             }
-            tx.edit::<Bonds>()?
-                .caregivers
-                .entry(r.child)
-                .or_default()
-                .insert(r.caregiver, ());
-        } else if let Some(row) = tx.edit::<Bonds>()?.caregivers.get_mut(&r.child) {
-            row.remove(&r.caregiver);
         }
+        tx.call(game_households::CommitCare {
+            caregiver: r.caregiver,
+            beneficiary: r.child,
+            accept: r.accept,
+        })?;
         Ok(true)
     })?;
     b.subscribe::<game_households::Formed>("family-life.record", |tx, e| {
@@ -166,6 +180,23 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 .entry(p)
                 .or_default()
                 .insert(q, Kind::Exclusive);
+        }
+        Ok(())
+    })?;
+    b.subscribe::<game_physiology::Died>("family-life.bereavement", |tx, e| {
+        let peers: Vec<_> = tx
+            .get::<Bonds>()?
+            .partners
+            .get(&e.person)
+            .into_iter()
+            .flat_map(|r| r.keys())
+            .copied()
+            .collect();
+        for other in peers {
+            tx.call(Separate {
+                person: e.person,
+                other,
+            })?;
         }
         Ok(())
     })?;
@@ -207,17 +238,21 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 Separate { person: p, other },
             )?;
         }
-        if tx.get::<Households>()?.dependents.contains_key(&p) && game_vitality::can_walk(tx, p) {
+        if tx.get::<Households>()?.caregivers.contains_key(&p)
+            && !tx.get::<Households>()?.self_reliant.contains_key(&p)
+            && game_vitality::can_walk(tx, p)
+        {
             let desire = value(tx, p, "independence")
                 + game_vitality::disposition(tx, p, "risk-tolerance") / 20
                 - super::dependence(tx, p)
                 - tx.get::<Households>()?
-                    .dependents
-                    .get(&p)
-                    .map_or(0, |parent| {
+                    .carers_of(p)
+                    .map(|parent| {
                         tx.get::<game_relationships::Social>()
-                            .map_or(0, |s| s.regard(p, *parent))
+                            .map_or(0, |s| s.regard(p, parent))
                     })
+                    .max()
+                    .unwrap_or(0)
                 - 50;
             game_choice::offer(
                 tx,
@@ -227,10 +262,29 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 game_households::Independent { person: p },
             )?;
         }
+        let cared_for: Vec<_> = tx.get::<Households>()?.beneficiaries_of(p).collect();
+        for other in cared_for {
+            let desire = -attraction(tx, p, other, Kind::Companion)
+                + tx.get::<game_physiology::Bodies>()?.people[&p]
+                    .hunger
+                    .min(1000) as i64
+                - game_vitality::disposition(tx, p, "altruism") / 5;
+            game_choice::offer(
+                tx,
+                p,
+                format!("family:withdraw-care:{}", other.0),
+                game_choice::motive(0, 0, desire, 1, 0),
+                ShareCare {
+                    caregiver: p,
+                    child: other,
+                    accept: false,
+                },
+            )?;
+        }
         let Ok(area) = game_transport::area(tx.get()?, p) else {
             return Ok(());
         };
-        let peers: Vec<_> = tx
+        let mut peers: Vec<_> = tx
             .get::<game_social_life::SocialLife>()?
             .residents
             .get(&area)
@@ -238,23 +292,30 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .flat_map(|r| r.keys())
             .copied()
             .filter(|q| *q != p)
-            .take(16)
             .collect();
+        if !peers.is_empty() {
+            let encounters = tx
+                .get::<game_social_life::SocialLife>()?
+                .people
+                .get(&p)
+                .map_or(0, |s| s.encounters);
+            let start = p.0.wrapping_add(encounters) as usize % peers.len();
+            peers.rotate_left(start);
+            peers.truncate(16);
+        }
         for other in peers {
-            if tx
+            let current = tx
                 .get::<Bonds>()?
                 .partners
                 .get(&p)
-                .is_some_and(|r| r.contains_key(&other))
-            {
-                continue;
-            }
+                .and_then(|row| row.get(&other))
+                .copied();
             for (name, kind) in [
                 ("exclusive", Kind::Exclusive),
                 ("companion", Kind::Companion),
                 ("coparent", Kind::CoParent),
             ] {
-                if !assent(tx, p, other, kind) {
+                if current == Some(kind) || !assent(tx, p, other, kind) {
                     continue;
                 }
                 let score = attraction(tx, p, other, kind) / 2;
@@ -275,12 +336,8 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     },
                 )?;
             }
-            if tx.get::<Households>()?.dependents.contains_key(&other)
-                && !tx
-                    .get::<Bonds>()?
-                    .caregivers
-                    .get(&other)
-                    .is_some_and(|r| r.contains_key(&p))
+            if !game_vitality::can_manipulate(tx, other)
+                && !tx.get::<Households>()?.committed(p, other)
             {
                 let desire = game_vitality::disposition(tx, p, "altruism")
                     * game_vitality::disposition(tx, p, "empathy")

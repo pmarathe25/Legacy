@@ -12,3 +12,5 @@ and attention bound design search, which can mix materials, vary transmission ra
 and connect stages or branches. Familiar designs and measured devices remain available
 for copying and retesting. Capacity records include the observed load and input effort;
 material breaking limits stay private to physics.
+
+Prototype search samples compatible elementary mechanisms and their dimensions. It can compose cranks, gear pairs, drums, and linear aids, subject to actual construction materials. Retained designs include mechanism kinds; transmitted evidence can support copying. Raw material limits remain private to physics.

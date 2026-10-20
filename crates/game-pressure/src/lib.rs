@@ -132,6 +132,7 @@ fn yield_to(
     )
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
+    game_violence::plugin(b)?;
     b.plugin("pressure", 1)?;
     b.resource::<Pressure>()?;
     retreat::register(b)?;

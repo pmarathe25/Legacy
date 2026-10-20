@@ -84,6 +84,7 @@ impl Event for Created {
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     game_literacy::plugin(b)?;
+    game_recollection::plugin(b)?;
     b.plugin("works", 1)?;
     b.resource::<Works>()?;
     literature::register(b)?;
@@ -103,34 +104,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let Ok(area) = game_transport::area(tx.get()?, e.person) else {
             return Ok(());
         };
-        let mut evidence: Vec<_> = tx
-            .get::<game_knowledge::Knowledge>()?
-            .0
-            .get(&e.person)
-            .into_iter()
-            .flat_map(|f| f.iter())
-            .filter(|(k, _)| {
-                k.split_once(':').is_some_and(|(kind, _)| {
-                    matches!(
-                        kind,
-                        "theory" | "mechanics" | "measured" | "memory" | "roads" | "patch"
-                    )
-                })
-            })
-            .map(|(k, f)| (k.to_string(), f.to_owned()))
-            .collect();
-        evidence.sort_by_key(|(key, f)| {
-            (
-                !key.starts_with("theory:") && !key.starts_with("memory:"),
-                std::cmp::Reverse(f.observed),
-                key.clone(),
-            )
-        });
-        evidence.truncate(8);
+        let evidence = game_recollection::inspiration(tx, e.person);
         if evidence.is_empty() {
             return Ok(());
         }
-        let composition = literature::compose(tx, e.person, &activity, &evidence)?;
+        let composition =
+            literature::compose(tx, e.person, &activity, &evidence, e.inscription.as_ref())?;
         if composition.as_ref().is_some_and(|c| c.item.is_none())
             && tx
                 .get::<Works>()?

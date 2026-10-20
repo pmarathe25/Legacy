@@ -263,7 +263,7 @@ pub(super) fn initialize(
         let successor = host.dispatch(game_lifecycle::Birth {
             mother: people[&r.mother],
             father: people[&r.father],
-            caregiver: people[&r.caregiver],
+            attendant: people[&r.attendant],
             area: areas[&r.area],
         })?;
         names.insert(d.ruler.clone(), successor.0);

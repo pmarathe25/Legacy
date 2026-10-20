@@ -38,3 +38,8 @@ index-data budget. Compact sound keys and pooled text preserve strongest-associa
 and lexical ties. Weak versions invalidate edits, rollback and loading. Oversized
 inputs keep the complete scan. `shared_meaning` checks understood titles without
 building a translation surface or copying the matched text.
+
+Sound IDs and player transcription now belong to `game-phonology`. Its IAST-based
+inventory distinguishes long vowels, nasals, retroflexes, sibilants, and selected
+aspirates. This replaces the earlier sound IDs; existing saves need not migrate.
+`game-syntax` composes the personally learned words into grounded relational speech.

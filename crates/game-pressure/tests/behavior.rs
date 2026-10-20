@@ -442,3 +442,39 @@ fn a_newborn_with_exceptional_genes_cannot_threaten_or_enlist_as_a_fighter() {
         .unwrap()
     );
 }
+
+#[test]
+fn learned_peace_or_violence_can_outweigh_the_same_inherited_aggression() {
+    for (aggression, peace, violence, fights) in
+        [(1000, 100, 0, false), (1000, 0, 0, true), (0, 0, 100, true)]
+    {
+        let (mut h, p, _) = setup();
+        h.dispatch(game_traits::Set {
+            person: p[0],
+            profile: [
+                ("aggression".into(), aggression),
+                ("ambition".into(), 1000),
+                ("patience".into(), 0),
+            ]
+            .into(),
+        })
+        .unwrap();
+        h.dispatch(game_traits::Set {
+            person: p[1],
+            profile: [("risk-tolerance".into(), 1000), ("aggression".into(), 1000)].into(),
+        })
+        .unwrap();
+        h.dispatch(game_relationships::Initialize {
+            person: p[0],
+            beliefs: Default::default(),
+            values: [("peace".into(), peace), ("violence".into(), violence)].into(),
+        })
+        .unwrap();
+        h.dispatch(DemandSubmission {
+            leader: p[0],
+            subject: p[1],
+        })
+        .unwrap();
+        assert_eq!(!h.get::<Pressure>().unwrap().active.is_empty(), fights);
+    }
+}

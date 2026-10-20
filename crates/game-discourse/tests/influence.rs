@@ -356,3 +356,34 @@ fn direct_pressure_cannot_manufacture_speech_without_comprehension_and_expressio
         assert_eq!(value(&h, p[1]), 0);
     }
 }
+
+#[test]
+fn extreme_rigidity_can_reject_admired_information_while_low_rigidity_revises() {
+    let (mut h, p, _) = setup();
+    for (listener, rigidity) in [(p[1], 0), (p[2], 1000)] {
+        profile(
+            &mut h,
+            listener,
+            &[
+                ("rigidity", rigidity),
+                ("openness", 1000),
+                ("conviction", 1000),
+            ],
+        );
+        stance(&mut h, listener, -20);
+        h.dispatch(SetRelationship {
+            observer: listener,
+            other: p[0],
+            relationship: Relationship {
+                trust: 100,
+                respect: 100,
+                admiration: 100,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+        say(&mut h, p[0], listener, 80, Approach::Persuade);
+    }
+    assert!(value(&h, p[1]) > -20);
+    assert_eq!(value(&h, p[2]), -20);
+}

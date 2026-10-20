@@ -9,6 +9,7 @@ game-family-life.workspace = true
 game-choice.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
+game-transport.workspace = true
 game-households.workspace = true
 game-lifecycle.workspace = true
 game-physiology.workspace = true

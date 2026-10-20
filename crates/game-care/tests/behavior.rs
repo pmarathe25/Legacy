@@ -81,7 +81,7 @@ fn local_care_consumes_medicine_and_changes_the_patients_own_impression() {
                 .affection,
             3
         );
-        assert!(host.get::<Care>().unwrap().assigned.is_empty());
+        assert!(host.get::<Care>().unwrap().ongoing.is_empty());
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
@@ -98,7 +98,7 @@ fn cancellation_frees_the_patient_without_healing_or_gratitude() {
         70
     );
     assert_eq!(amount(&h, i, "medicine"), 2);
-    assert!(h.get::<Care>().unwrap().assigned.is_empty());
+    assert!(h.get::<Care>().unwrap().ongoing.is_empty());
     assert!(h.get::<Care>().unwrap().treated.is_empty());
 }
 #[test]
@@ -177,7 +177,7 @@ fn a_second_automatic_caregiver_does_not_duplicate_an_assignment() {
     .unwrap();
     assert!(h.dispatch(Consider { person: p }).unwrap());
     assert!(!h.dispatch(Consider { person: second }).unwrap());
-    assert_eq!(h.get::<Care>().unwrap().assigned[&patient], p);
+    assert_eq!(h.get::<Care>().unwrap().ongoing[&patient], p);
     assert_eq!(amount(&h, i, "medicine"), 3);
 }
 #[test]

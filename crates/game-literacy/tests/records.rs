@@ -336,3 +336,165 @@ fn unchanged_saved_notes_are_not_rewritten_and_keep_their_original_symbols() {
             .any(|p| p.key.starts_with("literacy:write:"))
     );
 }
+
+#[test]
+fn local_regional_paper_and_ink_can_support_paid_script_development() {
+    let (mut h, people, inventory) = setup();
+    for key in ["paper", "ink"] {
+        let good = h
+            .get::<game_objects::Objects>()
+            .unwrap()
+            .resolve(key)
+            .unwrap();
+        let quantity = h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(good);
+        h.dispatch(game_cargo::Consume {
+            inventory,
+            good,
+            quantity,
+        })
+        .unwrap();
+    }
+    for key in ["moss-paper", "berry-ink"] {
+        let good = h
+            .get::<game_objects::Objects>()
+            .unwrap()
+            .resolve(key)
+            .unwrap();
+        h.dispatch(game_cargo::Deposit {
+            inventory,
+            good,
+            quantity: 2,
+        })
+        .unwrap();
+    }
+    let before = h.get::<Literacy>().unwrap().scripts.len();
+    let until = h
+        .dispatch(Develop {
+            person: people[0],
+            inventory,
+        })
+        .unwrap();
+    support::run(&mut h, until);
+    assert!(h.get::<Literacy>().unwrap().scripts.len() > before);
+    let saved = h.save().unwrap();
+    let mut b = support::builder();
+    game_items::plugin(&mut b).unwrap();
+    plugin(&mut b).unwrap();
+    assert_eq!(b.load(&saved, 4).unwrap().save().unwrap(), saved);
+}
+
+#[test]
+fn writing_can_be_carved_painted_or_impressed_on_real_nonpaper_surfaces() {
+    for (surface, tool, method) in [
+        (
+            "stone",
+            Some("stone-tools"),
+            game_inscription::Method::Incision,
+        ),
+        ("cloth", Some("charcoal"), game_inscription::Method::Pigment),
+        ("clay", None, game_inscription::Method::Impression),
+    ] {
+        let (mut h, people, old) = setup();
+        let inventory = h
+            .dispatch(game_cargo::Create {
+                custody: game_cargo::Custody::Carried(people[0]),
+                capacity: 1000,
+            })
+            .unwrap();
+        // Remove the initial ink so that each alternative method is actually exercised.
+        let ink = h
+            .get::<game_objects::Objects>()
+            .unwrap()
+            .resolve("ink")
+            .unwrap();
+        let quantity = h.get::<game_cargo::Cargo>().unwrap().0[&old].amount(ink);
+        h.dispatch(game_cargo::Consume {
+            inventory: old,
+            good: ink,
+            quantity,
+        })
+        .unwrap();
+        let good = h
+            .get::<game_objects::Objects>()
+            .unwrap()
+            .resolve(surface)
+            .unwrap();
+        h.dispatch(game_cargo::Deposit {
+            inventory,
+            good,
+            quantity: 2,
+        })
+        .unwrap();
+        if let Some(tool) = tool {
+            let good = h
+                .get::<game_objects::Objects>()
+                .unwrap()
+                .resolve(tool)
+                .unwrap();
+            h.dispatch(game_cargo::Deposit {
+                inventory,
+                good,
+                quantity: 1,
+            })
+            .unwrap();
+        }
+        let item = write(&mut h, people[0], inventory, 100);
+        let document = &h.get::<Literacy>().unwrap().documents[&item];
+        assert_eq!(document.imprint.method, method);
+        assert_eq!(
+            h.get::<game_items::Items>().unwrap().objects[&item].good,
+            good
+        );
+        assert_eq!(
+            h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(good),
+            2
+        );
+        let saved = h.save().unwrap();
+        let mut b = support::builder();
+        game_items::plugin(&mut b).unwrap();
+        plugin(&mut b).unwrap();
+        assert_eq!(b.load(&saved, 4).unwrap().save().unwrap(), saved);
+    }
+}
+#[test]
+fn an_incompatible_marker_cannot_carve_stone_and_failure_rolls_back() {
+    let (mut h, people, old) = setup();
+    let inventory = h
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(people[0]),
+            capacity: 1000,
+        })
+        .unwrap();
+    let ink = h
+        .get::<game_objects::Objects>()
+        .unwrap()
+        .resolve("ink")
+        .unwrap();
+    let quantity = h.get::<game_cargo::Cargo>().unwrap().0[&old].amount(ink);
+    h.dispatch(game_cargo::Consume {
+        inventory: old,
+        good: ink,
+        quantity,
+    })
+    .unwrap();
+    let stone = h
+        .get::<game_objects::Objects>()
+        .unwrap()
+        .resolve("stone")
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory,
+        good: stone,
+        quantity: 1,
+    })
+    .unwrap();
+    let before = h.save().unwrap();
+    assert!(
+        h.dispatch(Develop {
+            person: people[0],
+            inventory
+        })
+        .is_err()
+    );
+    assert_eq!(h.save().unwrap(), before);
+}

@@ -30,3 +30,11 @@ Invented writing scripts, personal reading/writing proficiency, and physical wri
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-choice`, `game-reasoning`, `game-knowledge`, `game-communication`, `game-items`, `game-cargo`, `game-objects`, `game-property`, `game-transport`, `game-physiology`, `game-vitality`, `game-relationships`, `game-social-life`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-literacy`) cover script invention, distinct encoded assertions, unreadability of unknown scripts, physical access rules, and save/load consistency.
+
+Writing uses `game-inscription` for pigment, carving, or impression on actual
+physical materials. `Develop` charges practice time; `Inscribe` retains the marked
+item and method in its document. Stone, fabric, clay, bark, wood, and regional
+materials can support writing. Tool compatibility is checked when marking begins; incision tools and the physical surface must remain available at completion;
+interrupted work does not create a finished document. Reading still requires
+script proficiency, understandable language, and sufficient cognitive capacity.
+Rigidity can reject a comprehensible contradictory explanation.

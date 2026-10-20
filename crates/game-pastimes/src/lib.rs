@@ -11,6 +11,8 @@ use std::{collections::BTreeMap, sync::Arc};
 pub struct Activity {
     pub name: String,
     pub inputs: BTreeMap<GoodId, u64>,
+    #[serde(default)]
+    pub marks: bool,
     pub requires: BTreeMap<GoodId, u64>,
     #[serde(default)]
     pub abilities: BTreeMap<String, u64>,
@@ -34,6 +36,7 @@ pub struct Pastimes {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Work {
     activity: String,
+    inscription: Option<game_inscription::Imprint>,
     inventory: InventoryId,
     job: ScheduleId,
     area: AreaId,
@@ -109,6 +112,7 @@ pub struct Experienced {
     pub person: PersonId,
     pub activity: String,
     pub completed: bool,
+    pub inscription: Option<game_inscription::Imprint>,
 }
 impl Event for Experienced {
     const KEY: &'static str = "pastimes.experienced";
@@ -119,6 +123,8 @@ struct Spec {
     name: String,
     #[serde(default)]
     inputs: BTreeMap<String, u64>,
+    #[serde(default)]
+    marks: bool,
     #[serde(default)]
     requires: BTreeMap<String, u64>,
     #[serde(default)]
@@ -150,6 +156,7 @@ pub fn load(store: &mut game_content::Store, objects: &game_objects::Objects) ->
             let a = Activity {
                 name: s.name,
                 inputs: resolve(s.inputs)?,
+                marks: s.marks,
                 requires: resolve(s.requires)?,
                 abilities: s.abilities,
                 duration: s.duration,
@@ -173,6 +180,9 @@ fn available(tx: &Transaction<'_>, person: PersonId, inventory: InventoryId, a: 
         return false;
     };
     game_vitality::can_manipulate(tx, person)
+        && (!a.marks
+            || tx.registered::<game_inscription::Make>()
+                && game_inscription::supplies(tx, person, inventory).is_some())
         && a.abilities
             .iter()
             .all(|(key, minimum)| game_vitality::ability(tx, person, key) >= *minimum)
@@ -237,7 +247,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     Ok(())
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("pastimes", 1)?;
+    b.plugin("pastimes", 2)?;
     b.resource::<Pastimes>()?;
     b.request::<Install>(|tx, r| {
         require(
@@ -309,6 +319,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                             person: r.person,
                             activity: r.activity.clone(),
                             completed: false,
+                            inscription: None,
                         },
                         vec![r.person],
                     )?;
@@ -322,7 +333,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 })?;
             }
         }
-        let until = tx.now().after(a.duration)?;
+        let inscription = if a.marks {
+            Some(tx.call(game_inscription::Make {
+                person: r.person,
+                inventory: r.inventory,
+                label: "Composition".into(),
+            })?)
+        } else {
+            None
+        };
+        let until = tx.now().after(SimDuration(
+            a.duration
+                .0
+                .saturating_mul(inscription.as_ref().map_or(1, |i| i.time_factor)),
+        ))?;
         tx.start_action(
             r.person,
             "pastime",
@@ -336,6 +360,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             r.person,
             Work {
                 activity: r.activity,
+                inscription,
                 inventory: r.inventory,
                 job,
                 area,
@@ -346,8 +371,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.request::<Finish>(|tx, r| {
         let work = tx.edit::<Pastimes>()?.work.remove(&r.person).unwrap();
         let a = tx.get::<Pastimes>()?.activities[&work.activity].clone();
-        let completed = game_transport::area(tx.get()?, r.person)
-            .is_ok_and(|area| area == work.area)
+        let completed = work
+            .inscription
+            .as_ref()
+            .is_none_or(|i| game_inscription::intact(tx, r.person, i))
+            && game_transport::area(tx.get()?, r.person).is_ok_and(|area| area == work.area)
             && game_cargo::locality(tx, work.inventory).is_ok_and(|area| area == work.area)
             && tx
                 .get::<game_cargo::Cargo>()?
@@ -400,6 +428,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 person: r.person,
                 activity: work.activity,
                 completed,
+                inscription: work.inscription,
             },
             vec![r.person],
         )

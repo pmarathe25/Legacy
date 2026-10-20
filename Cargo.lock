@@ -223,6 +223,7 @@ dependencies = [
  "game-choice",
  "game-communities",
  "game-core",
+ "game-identity",
  "game-institutions",
  "game-lineage",
  "game-physiology",
@@ -408,6 +409,7 @@ dependencies = [
  "game-skills",
  "game-social-life",
  "game-stockpiles",
+ "game-syntax",
  "game-testimony",
  "game-traits",
  "game-transport",
@@ -440,6 +442,20 @@ dependencies = [
  "game-transport",
  "game-vitality",
  "serde",
+]
+
+[[package]]
+name = "game-attraction"
+version = "0.2.0"
+dependencies = [
+ "game-choice",
+ "game-communication",
+ "game-core",
+ "game-relationships",
+ "game-sim",
+ "game-social-life",
+ "game-transport",
+ "game-vitality",
 ]
 
 [[package]]
@@ -485,6 +501,7 @@ dependencies = [
  "game-care",
  "game-cargo",
  "game-characters",
+ "game-choice",
  "game-comfort",
  "game-communication",
  "game-communities",
@@ -639,6 +656,7 @@ version = "0.2.0"
 dependencies = [
  "game-core",
  "game-diagnostics",
+ "game-identity",
  "game-sim",
  "game-storage",
  "game-traits",
@@ -694,6 +712,7 @@ dependencies = [
  "game-land",
  "game-lexicon",
  "game-objects",
+ "game-phonology",
  "game-physiology",
  "game-property",
  "game-signals",
@@ -1108,6 +1127,7 @@ dependencies = [
 name = "game-family-life"
 version = "0.2.0"
 dependencies = [
+ "game-attraction",
  "game-cargo",
  "game-characters",
  "game-choice",
@@ -1243,6 +1263,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-grammar"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "game-grievances"
 version = "0.2.0"
 dependencies = [
@@ -1263,6 +1290,7 @@ dependencies = [
  "game-storage",
  "game-traits",
  "game-transport",
+ "game-violence",
  "game-vitality",
  "serde",
 ]
@@ -1356,10 +1384,12 @@ dependencies = [
  "game-land",
  "game-lifecycle",
  "game-livelihoods",
+ "game-mechanics",
  "game-nutrition",
  "game-objects",
  "game-openings",
  "game-pastimes",
+ "game-physics",
  "game-physiology",
  "game-preservation",
  "game-relationships",
@@ -1438,6 +1468,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-identity"
+version = "0.2.0"
+dependencies = [
+ "game-content",
+ "game-core",
+ "game-sim",
+ "game-storage",
+ "game-traits",
+ "game-vitality",
+ "serde",
+]
+
+[[package]]
 name = "game-information"
 version = "0.2.0"
 dependencies = [
@@ -1492,6 +1535,23 @@ dependencies = [
  "game-vitality",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-inscription"
+version = "0.2.0"
+dependencies = [
+ "game-cargo",
+ "game-core",
+ "game-items",
+ "game-objects",
+ "game-physiology",
+ "game-property",
+ "game-sim",
+ "game-storage",
+ "game-transport",
+ "game-vitality",
+ "serde",
 ]
 
 [[package]]
@@ -1688,10 +1748,12 @@ dependencies = [
  "game-communication",
  "game-content",
  "game-core",
+ "game-inscription",
  "game-items",
  "game-knowledge",
  "game-land",
  "game-objects",
+ "game-orthography",
  "game-physiology",
  "game-property",
  "game-reasoning",
@@ -1900,7 +1962,6 @@ dependencies = [
  "game-choice",
  "game-communication",
  "game-core",
- "game-family-life",
  "game-households",
  "game-knowledge",
  "game-lineage",
@@ -1913,6 +1974,7 @@ dependencies = [
  "game-search",
  "game-signals",
  "game-sim",
+ "game-social-life",
  "game-traits",
  "game-transport",
  "game-vitality",
@@ -2062,6 +2124,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-orthography"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-packed"
 version = "0.2.0"
 dependencies = [
@@ -2086,6 +2156,7 @@ dependencies = [
  "game-physiology",
  "game-relationships",
  "game-sim",
+ "game-transport",
  "game-vitality",
  "serde",
 ]
@@ -2100,6 +2171,7 @@ dependencies = [
  "game-content",
  "game-core",
  "game-diagnostics",
+ "game-inscription",
  "game-land",
  "game-lineage",
  "game-nutrition",
@@ -2154,12 +2226,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-phonology"
+version = "0.2.0"
+
+[[package]]
 name = "game-physics"
 version = "0.2.0"
 dependencies = [
  "game-content",
  "game-core",
  "game-objects",
+ "game-simple-machines",
  "serde",
  "serde_json",
 ]
@@ -2232,6 +2309,7 @@ dependencies = [
  "game-testimony",
  "game-traits",
  "game-transport",
+ "game-violence",
  "game-vitality",
  "serde",
  "serde_json",
@@ -2328,6 +2406,26 @@ version = "0.2.0"
 dependencies = [
  "game-core",
  "serde",
+]
+
+[[package]]
+name = "game-recollection"
+version = "0.2.0"
+dependencies = [
+ "game-conflict",
+ "game-core",
+ "game-knowledge",
+ "game-lifecycle",
+ "game-physiology",
+ "game-relationships",
+ "game-sim",
+ "game-social-life",
+ "game-storage",
+ "game-syntax",
+ "game-transport",
+ "game-vitality",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -2509,6 +2607,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-simple-machines"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "game-skills"
 version = "0.2.0"
 dependencies = [
@@ -2622,6 +2727,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-syntax"
+version = "0.2.0"
+dependencies = [
+ "game-cargo",
+ "game-communication",
+ "game-content",
+ "game-core",
+ "game-grammar",
+ "game-heredity",
+ "game-land",
+ "game-lifecycle",
+ "game-objects",
+ "game-physiology",
+ "game-property",
+ "game-sim",
+ "game-social-life",
+ "game-storage",
+ "game-traits",
+ "game-transport",
+ "game-vitality",
+ "serde",
+]
+
+[[package]]
 name = "game-testimony"
 version = "0.2.0"
 dependencies = [
@@ -2670,6 +2799,18 @@ name = "game-utility"
 version = "0.2.0"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "game-violence"
+version = "0.2.0"
+dependencies = [
+ "game-conflict",
+ "game-core",
+ "game-physiology",
+ "game-relationships",
+ "game-sim",
+ "game-vitality",
 ]
 
 [[package]]
@@ -2761,6 +2902,7 @@ dependencies = [
  "game-content",
  "game-core",
  "game-inquiry",
+ "game-inscription",
  "game-items",
  "game-knowledge",
  "game-land",
@@ -2772,6 +2914,7 @@ dependencies = [
  "game-poetics",
  "game-property",
  "game-reasoning",
+ "game-recollection",
  "game-relationships",
  "game-sim",
  "game-skills",

@@ -63,6 +63,8 @@ def run(plan_path):
     if digest(executable)!=plan['binary_sha256']: raise ValueError('frozen executable differs from plan')
     days=int(plan.get('days',365000));target=int(plan.get('generations',20));chunk=int(plan.get('chunk_days',int(plan.get('chunk_years',20))*365))
     if chunk<=0: raise ValueError('chunk_years must be positive')
+    first=int(plan.get('initial_chunk_days',chunk))
+    if first<=0 or first>chunk: raise ValueError('initial_chunk_days must be within the normal chunk size')
     limit=plan.get('chunks_per_invocation');completed_chunks=0
     if limit is not None and int(limit)<=0: raise ValueError('chunks_per_invocation must be positive')
     state_path=artifacts/'study.json'
@@ -84,7 +86,7 @@ def run(plan_path):
         for old in range(1,row['chunks']+1):prune(output_root/f'chunk-{old:04d}',checkpoint=old<row['chunks'])
         while row['days']<days:
             if (artifacts/'stop-request').exists(): row['state']='stopped between chunks';publish(artifacts,state);return
-            index=row['chunks']+1;end=min(days,row['days']+chunk);output=output_root/f'chunk-{index:04d}'
+            index=row['chunks']+1;end=min(days,row['days']+(first if row['chunks']==0 else chunk));output=output_root/f'chunk-{index:04d}'
             owner={'job':job['name'],'seed':job['seed'],'binary_sha256':plan['binary_sha256']}
             if output.exists() and (not (output/'owner.json').exists() or json.loads((output/'owner.json').read_text())!=owner):
                 raise ValueError(f'refusing to reuse an unrelated output: {output}')
@@ -98,6 +100,7 @@ def run(plan_path):
             if shutil.disk_usage(output_root.parent if output_root.parent.exists() else root).free<2*1024**3: raise ValueError('less than 2GiB free before starting a chunk')
             output.mkdir(parents=True,exist_ok=True);write_json(output/'owner.json',owner);stop=output/'stop-request';stop.unlink(missing_ok=True)
             args=[str(executable),'--days',str(end),'--generations',str(target),'--sample-days','365','--checkpoint-days',str(chunk),'--journal','notable','--final-save','false','--stop-file',str(stop),'--output',str(output)]
+            if plan.get('content'): args+=['--content',str(root/plan['content'])]
             if plan.get('continue_after_extinction',False): args+=['--continue-after-extinction','true']
             if row.get('checkpoint'): args+=['--resume',row['checkpoint']]
             else:

@@ -129,6 +129,7 @@ fn respond(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
         let patience = game_vitality::disposition(tx, person, "patience");
         let empathy = game_vitality::disposition(tx, person, "empathy");
         let aggression = game_vitality::disposition(tx, person, "aggression");
+        let ethics = game_violence::ethics(tx, person);
         let local = game_transport::area(tx.get()?, other).ok() == Some(area);
         let mut options = vec![(
             "forgive",
@@ -150,7 +151,7 @@ fn respond(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
                 (
                     "retaliate",
                     Resolution::Retaliate,
-                    aggression / 5 + i64::from(r.grievance) * 3
+                    ethics + aggression / 5 + i64::from(r.grievance) * 3
                         - patience / 10
                         - i64::from(r.fear) * 3,
                 ),

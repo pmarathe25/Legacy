@@ -137,7 +137,25 @@ fn evidence(tx: &Transaction<'_>, p: PersonId) -> (usize, u64) {
         (count + 1, hash ^ signature(&c, confidence))
     })
 }
+fn accepts(tx: &Transaction<'_>, p: PersonId, claim: &Claim) -> bool {
+    let Some(old) = tx
+        .get::<game_knowledge::Knowledge>()
+        .ok()
+        .and_then(|k| k.0.get(&p))
+        .and_then(|f| game_knowledge::known::<Claim>(f, &claim.key()))
+    else {
+        return true;
+    };
+    if old.effect.signum() == claim.effect.signum() {
+        return true;
+    }
+    let rigidity = game_vitality::disposition(tx, p, "rigidity");
+    i64::from(claim.confidence) * (1000 - rigidity) > i64::from(old.confidence) * rigidity
+}
 fn retain(tx: &mut Transaction<'_>, p: PersonId, c: Claim, deduction: bool) -> Result<()> {
+    if !accepts(tx, p, &c) {
+        return Ok(());
+    }
     let key = c.key();
     let confidence = c.confidence;
     let previous = tx
@@ -178,6 +196,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let Some(claim) = r.fact.value.decode::<Claim>() else {
             return Ok(true);
         };
+        if !accepts(tx, r.person, &claim) {
+            return Ok(false);
+        }
         let ability = game_vitality::ability(tx, r.person, "intelligence");
         Ok(ability.saturating_mul(1000 + r.support.min(16000)) / 1000
             >= u64::from(claim.complexity) * 250)

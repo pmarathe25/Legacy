@@ -7,15 +7,12 @@ use serde::{Deserialize, Serialize};
 mod decoding;
 pub use decoding::shared_meaning;
 mod sounds;
+pub use game_lexicon::Association;
+pub use game_phonology::PHONEMES;
 pub use game_signals::{Notice, Perception, Signalled, estimated_hunger};
 pub use sounds::{
     Coin, Convey, Reception, Translation, WordFor, decode, illustrate, phonetic, render,
 };
-pub const PHONEMES: &[&str] = &[
-    "a", "e", "i", "o", "u", "m", "n", "p", "t", "k", "s", "l", "r", "v", "h", "sh", "f", "b", "d",
-    "g", "w", "y",
-];
-pub use game_lexicon::Association;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Communication {
     pub enabled: bool,
@@ -90,7 +87,7 @@ pub fn active(tx: &Transaction<'_>) -> bool {
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     game_signals::plugin(b)?;
-    b.plugin("communication", 1)?;
+    b.plugin("communication", 2)?;
     b.resource::<Communication>()?;
     b.request::<Enable>(|tx, _| {
         tx.call(game_signals::Enable)?;

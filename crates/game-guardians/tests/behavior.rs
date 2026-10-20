@@ -29,7 +29,7 @@ fn guardians_travel_to_actual_successor_and_can_refuse() {
         .dispatch(game_lifecycle::Birth {
             mother: f.other,
             father: f.guardian,
-            caregiver: f.other,
+            attendant: f.other,
             area: f.away,
         })
         .unwrap();

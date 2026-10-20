@@ -75,10 +75,6 @@ pub(super) fn propose(
     for index in 0..count {
         let draw = random(seed, index as u64, 19);
         let (good, material) = candidates[draw as usize % candidates.len()];
-        let drive = (1 + draw as u32 % (material.span - 1))
-            .max(ratio)
-            .min(material.span - 1);
-        let load = 1 + (draw >> 32) as u32 % (material.span - drive);
         let input = if index == 0 {
             None
         } else if draw.is_multiple_of(5) {
@@ -86,7 +82,27 @@ pub(super) fn propose(
         } else {
             Some(index - 1)
         };
+        let motion = input.map_or(game_physics::Motion::Linear, |i| {
+            parts[i].mechanism.output()
+        });
+        let kinds: Vec<_> = game_physics::Mechanism::ALL
+            .into_iter()
+            .filter(|kind| {
+                kind.input() == motion
+                    && (index + 1 < count || kind.output() == game_physics::Motion::Linear)
+            })
+            .collect();
+        let mechanism = kinds[(draw >> 16) as usize % kinds.len()];
+        let (mut drive, mut load) = mechanism.geometry(draw, material.span);
+        if mechanism == game_physics::Mechanism::Lever {
+            drive = drive.max(ratio).min(material.span - 1);
+            load = load.min(material.span - drive);
+        }
+        if mechanism.ratio(drive, load, material.span).is_none() {
+            break;
+        }
         parts.push(Part {
+            mechanism,
             good: *good,
             input,
             drive,

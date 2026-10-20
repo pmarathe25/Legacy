@@ -261,6 +261,7 @@ fn lethal_consumption_cannot_start_a_posthumous_pastime() {
         .unwrap();
     deposit(&mut h, inventory, "grain", 20);
     let activity = game_pastimes::Activity {
+        marks: false,
         abilities: Default::default(),
         name: "Try a dangerous meal".into(),
         inputs: [(game_cargo::FOOD, 10)].into(),

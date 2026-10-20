@@ -330,3 +330,41 @@ fn pain_does_not_erase_food_evidence_and_forecasts_survive_loading() {
         hurt
     );
 }
+
+#[test]
+fn observing_an_incapacitated_survivor_does_not_require_them_to_act() {
+    let (mut h, people, area) = setup();
+    let survivor = h
+        .dispatch(game_physiology::Create {
+            kind: game_physiology::Kind::Guardian,
+            born: SimTime(0),
+        })
+        .unwrap();
+    h.dispatch(game_transport::Place {
+        person: survivor,
+        area,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Damage {
+        person: survivor,
+        amount: u64::MAX,
+    })
+    .unwrap();
+    let body = h.get::<game_physiology::Bodies>().unwrap().people[&survivor];
+    assert!(body.alive);
+    assert_eq!(body.health, 0);
+    h.dispatch(Notice {
+        observer: people[0],
+        person: survivor,
+    })
+    .unwrap();
+    assert!(
+        h.dispatch(Notice {
+            observer: survivor,
+            person: people[0]
+        })
+        .is_err()
+    );
+    let saved = h.save().unwrap();
+    assert_eq!(builder().load(&saved, 4).unwrap().save().unwrap(), saved);
+}

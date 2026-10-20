@@ -30,3 +30,5 @@
 
 - **Dependencies:** [`game-core`](../game-core/README.md), [`game-content`](../game-content/README.md), [`game-scenarios`](../game-scenarios/README.md), [`game-physiology`](../game-physiology/README.md), [`game-relationships`](../game-relationships/README.md), [`game-traits`](../game-traits/README.md), [`game-communication`](../game-communication/README.md).
 - **Testing:** `cargo test -p game-worldgen` verifies seed determinism, biome resource scaling, trait bounds, and the absence of preconstructed institutions or bonds.
+
+The optional `guardians` setting accepts 0–2 and defaults to two. Research worlds can explicitly omit immortal guardians so surviving human lineages and post-extinction ecology are unambiguous.

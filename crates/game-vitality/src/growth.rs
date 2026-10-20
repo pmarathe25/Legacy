@@ -102,7 +102,7 @@ impl Life {
     pub fn disposition(&self, raw: i64, key: &str, at: SimTime) -> i64 {
         if !matches!(
             key,
-            "patience" | "risk-tolerance" | "sociability" | "empathy" | "compassion"
+            "patience" | "risk-tolerance" | "sociability" | "empathy" | "compassion" | "rigidity"
         ) {
             return raw;
         }
@@ -112,6 +112,10 @@ impl Life {
             "patience" => (raw * (500 + regulation / 2) / 1000 - adversity / 5).clamp(0, 1000),
             "risk-tolerance" => (raw + (1000 - regulation) / 5 - adversity / 4).clamp(0, 1000),
             "sociability" => (raw - adversity / 5).clamp(0, 1000),
+            "rigidity" => (raw * (500 + regulation / 2) / 1000
+                - i64::from(self.condition(at).0) / 4
+                - adversity / 10)
+                .clamp(0, 1000),
             "empathy" | "compassion" => {
                 (raw * (500 + regulation / 2) / 1000 - adversity / 10).clamp(0, 1000)
             }

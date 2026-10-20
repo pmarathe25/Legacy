@@ -150,7 +150,7 @@ fn poems_books_and_music_use_the_creators_language_and_ordinary_materials_and_ti
             .unwrap();
         assert_eq!(
             h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(paper),
-            20 - material
+            20
         );
         assert_eq!(text.item.is_some(), material > 0);
         if genre == Genre::Song {
@@ -199,7 +199,7 @@ fn a_text_does_not_teach_unknown_meanings_and_follows_its_physical_item() {
     let good = h
         .get::<game_objects::Objects>()
         .unwrap()
-        .resolve("bound-book")
+        .resolve("paper")
         .unwrap();
     let item = h.get::<Works>().unwrap().pieces[&id]
         .composition
@@ -214,7 +214,7 @@ fn a_text_does_not_teach_unknown_meanings_and_follows_its_physical_item() {
     h.dispatch(game_cargo::Consume {
         inventory,
         good,
-        quantity: 1,
+        quantity: h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(good),
     })
     .unwrap();
     let before = h.save().unwrap();
@@ -481,12 +481,12 @@ fn conversations_can_show_a_real_book_without_teaching_its_private_gloss() {
     let good = h
         .get::<game_objects::Objects>()
         .unwrap()
-        .resolve("bound-book")
+        .resolve("paper")
         .unwrap();
     h.dispatch(game_cargo::Consume {
         inventory,
         good,
-        quantity: 1,
+        quantity: h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(good),
     })
     .unwrap();
     talk(&mut h, author, third);
@@ -537,7 +537,7 @@ fn paid_writing_creates_each_copy_without_an_annual_or_creativity_gate() {
                 .resolve("paper")
                 .unwrap()
         ),
-        4
+        20
     );
     builder().load(&h.save().unwrap(), 4).unwrap();
 }
@@ -674,4 +674,52 @@ fn a_care_manual_preserves_understood_lessons_after_its_author_dies() {
         assert!(host.get::<game_skills::Skills>().unwrap().levels[&reader]["child-care"] > 0);
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn personal_care_can_become_a_song_without_teaching_bystanders_the_memory() {
+    let (mut h, author, patient, pack) = setup();
+    let good = h
+        .get::<game_objects::Objects>()
+        .unwrap()
+        .resolve("grain")
+        .unwrap();
+    h.dispatch(game_cargo::Deposit {
+        inventory: pack,
+        good,
+        quantity: 100,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Start).unwrap();
+    let at = h.now().after(SimDuration(35 * MINUTE.0)).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    h.dispatch(game_physiology::Feed {
+        caregiver: author,
+        patient,
+        inventory: pack,
+    })
+    .unwrap();
+    let memory = game_knowledge::with_prefix(
+        &h.get::<game_knowledge::Knowledge>().unwrap().0[&author],
+        "memory:episode:",
+    )
+    .next()
+    .unwrap()
+    .0
+    .to_string();
+    let until = h
+        .dispatch(game_pastimes::Pursue {
+            person: author,
+            activity: "compose-song".into(),
+            inventory: pack,
+        })
+        .unwrap();
+    while h.advance(until, 128).unwrap().stop == Stop::Budget {}
+    let work = h.get::<Works>().unwrap().pieces.values().last().unwrap();
+    assert!(work.evidence.iter().any(|(key, _)| key == &memory));
+    let text = work.composition.as_ref().unwrap();
+    assert!(text.gloss.iter().any(|s| s == "relation:fed"));
+    assert!(text.gloss.contains(&format!("person:{}", patient.0)));
+    let saved = h.save().unwrap();
+    assert_eq!(builder().load(&saved, 4).unwrap().save().unwrap(), saved);
 }

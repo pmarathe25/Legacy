@@ -3,7 +3,8 @@ version = 1
 [data.activities.compose-poem]
 abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Compose a poem"
-inputs = { paper = 1, ink = 1 }
+inputs = {}
+marks = true
 requires = {}
 duration = 1800000
 satisfaction_span = 21600000
@@ -13,7 +14,8 @@ skill = "writing"
 [data.activities.write-book]
 abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Write a book"
-inputs = { paper = 8, ink = 2 }
+inputs = {}
+marks = true
 requires = {}
 duration = 43200000
 satisfaction_span = 259200000

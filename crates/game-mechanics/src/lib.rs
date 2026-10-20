@@ -1,7 +1,8 @@
 //! Finite physical apparatus, manual power and personally observed mechanical behavior.
 use game_core::*;
 pub use game_physics::{
-    Config, Effort, Material, Part, Resolution, Task, Transmission, resolve, resolve_loaded,
+    Config, Effort, Material, Mechanism, Part, Resolution, Task, Transmission, resolve,
+    resolve_loaded,
 };
 use game_sim::*;
 use game_storage::{Records, Table};
@@ -178,7 +179,7 @@ pub fn busy(tx: &Transaction<'_>, device: u64) -> bool {
         .any(|w| w.device == Some(device))
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("mechanics", 1)?;
+    b.plugin("mechanics", 2)?;
     b.resource::<Machines>()?;
     catalog::register(b)?;
     operation::register(b)?;

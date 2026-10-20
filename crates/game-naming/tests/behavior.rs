@@ -100,7 +100,7 @@ fn parent_honors_a_loved_person_heard_locally_instead_of_using_an_identity_numbe
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -239,68 +239,84 @@ fn a_person_can_adopt_a_nickname_they_heard_from_someone_they_like() {
 
 #[test]
 fn equal_name_offers_do_not_oscillate_but_changed_regard_can_change_the_choice() {
-    let (mut h, area) = setup();
-    let subject = person(
-        &mut h,
-        area,
-        "Toren",
-        &[("creativity", 1000), ("ambition", 1000), ("patience", 0)],
-    );
-    let first = person(&mut h, area, "Mariel", &[]);
-    let second = person(&mut h, area, "Mave", &[]);
-    for friend in [first, second] {
-        fond(&mut h, subject, friend, 80);
-        h.dispatch(LearnName {
-            listener: friend,
+    for rigidity in [0, 1000] {
+        let (mut h, area) = setup();
+        let subject = person(
+            &mut h,
+            area,
+            "Toren",
+            &[
+                ("creativity", 1000),
+                ("ambition", 1000),
+                ("patience", 0),
+                ("rigidity", rigidity),
+            ],
+        );
+        let first = person(&mut h, area, "Mariel", &[]);
+        let second = person(&mut h, area, "Mave", &[]);
+        for friend in [first, second] {
+            fond(&mut h, subject, friend, 80);
+            h.dispatch(LearnName {
+                listener: friend,
+                person: subject,
+            })
+            .unwrap();
+        }
+        h.dispatch(Label {
+            speaker: first,
             person: subject,
+            name: "Ash".into(),
+            kind: Kind::Nickname,
         })
         .unwrap();
-    }
-    h.dispatch(Label {
-        speaker: first,
-        person: subject,
-        name: "Ash".into(),
-        kind: Kind::Nickname,
-    })
-    .unwrap();
-    assert!(
-        h.dispatch(game_naming::Reconsider { person: subject })
-            .unwrap()
-    );
-    h.dispatch(Label {
-        speaker: second,
-        person: subject,
-        name: "Oak".into(),
-        kind: Kind::Nickname,
-    })
-    .unwrap();
-    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
-    for host in [&mut h, &mut loaded] {
-        for _ in 0..20 {
-            assert!(
-                !host
-                    .dispatch(game_naming::Reconsider { person: subject })
-                    .unwrap()
-            );
-        }
-        fond(host, subject, second, 100);
         assert!(
-            host.dispatch(game_naming::Reconsider { person: subject })
+            h.dispatch(game_naming::Reconsider { person: subject })
                 .unwrap()
         );
-        assert_eq!(
-            host.get::<game_social_life::SocialLife>().unwrap().people[&subject].name,
-            "Oak"
-        );
-        assert_eq!(
-            host.get::<Names>().unwrap().identities[&subject]
-                .changes
-                .len(),
-            3
-        );
+        h.dispatch(Label {
+            speaker: second,
+            person: subject,
+            name: "Oak".into(),
+            kind: Kind::Nickname,
+        })
+        .unwrap();
+        let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+        for host in [&mut h, &mut loaded] {
+            for _ in 0..20 {
+                assert!(
+                    !host
+                        .dispatch(game_naming::Reconsider { person: subject })
+                        .unwrap()
+                );
+            }
+            fond(host, subject, second, 100);
+            let changed = host
+                .dispatch(game_naming::Reconsider { person: subject })
+                .unwrap();
+            assert_eq!(changed, rigidity == 0);
+            if !changed {
+                // Stronger new evidence can outweigh even a persistent identity.
+                fond(host, subject, first, 20);
+                assert!(
+                    host.dispatch(game_naming::Reconsider { person: subject })
+                        .unwrap()
+                );
+            }
+            assert_eq!(
+                host.get::<game_social_life::SocialLife>().unwrap().people[&subject].name,
+                "Oak"
+            );
+            assert_eq!(
+                host.get::<Names>().unwrap().identities[&subject]
+                    .changes
+                    .len(),
+                3
+            );
+        }
+        assert_eq!(h.save().unwrap(), loaded.save().unwrap());
     }
-    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
+
 #[test]
 fn successful_treatment_earns_a_personal_epithet_without_a_global_reputation_assignment() {
     let (mut h, area) = setup();
@@ -403,7 +419,7 @@ fn childhood_attitudes_develop_through_trusted_conversation_rather_than_birth() 
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -465,7 +481,7 @@ fn repeated_homonyms_raise_confusion_cost_without_forbidding_a_tribute() {
             .dispatch(game_lifecycle::Birth {
                 mother,
                 father,
-                caregiver: mother,
+                attendant: mother,
                 area,
             })
             .unwrap();
@@ -551,7 +567,7 @@ fn silent_names_stay_private_but_a_naming_parent_knows_their_own_choice() {
         .dispatch(game_lifecycle::Birth {
             mother: speaker,
             father: listener,
-            caregiver: speaker,
+            attendant: speaker,
             area,
         })
         .unwrap();

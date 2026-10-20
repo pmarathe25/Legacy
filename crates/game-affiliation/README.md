@@ -30,3 +30,9 @@ Recruiting newcomers into existing communities, voluntary or coerced admission, 
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-property`, `game-transport`, `game-physiology`, `game-traits`, `game-relationships`, `game-institutions`, `game-communities`, `game-pressure`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-affiliation`) verify newcomer recruitment, ballot vs. leader admission, permission withdrawal on departure, and leader death fallback.
+
+A proposed procedure is compared against each participant's current arrangement,
+using that participant's preferences and acquired commitments. Liking two potential
+leaders no longer implies accepting repeated reversals between them. Inherited
+rigidity changes resistance; a sufficiently strong preference change can still
+outweigh it. The policy grants no privileged status to voting or any other procedure.

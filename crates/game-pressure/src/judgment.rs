@@ -67,12 +67,7 @@ pub(super) fn submission(
 ) -> Result<i64> {
     let r = relation(tx, person, other);
     let social = tx.get::<game_relationships::Social>()?;
-    let independence = social
-        .values
-        .get(&person)
-        .and_then(|v| v.get("independence"))
-        .copied()
-        .unwrap_or(0);
+    let independence = social.opinion(person, "independence");
     let authority = social
         .beliefs
         .get(&person)
@@ -98,7 +93,8 @@ pub(super) fn submission(
 pub(super) fn escalate(tx: &Transaction<'_>, leader: PersonId, subject: PersonId) -> Result<bool> {
     let r = relation(tx, leader, subject);
     let body = &tx.get::<game_physiology::Bodies>()?.people[&leader];
-    let motive = disposition(tx, leader, "aggression") / 4
+    let motive = game_violence::ethics(tx, leader)
+        + disposition(tx, leader, "aggression") / 4
         + disposition(tx, leader, "ambition") / 10
         + i64::from(r.grievance) * 3;
     let cost = disposition(tx, leader, "patience") / 5

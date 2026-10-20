@@ -1,0 +1,23 @@
+id = "workshop/mechanical-uses"
+version = 1
+[data.recipes.press-grain-meal]
+inputs = { grain = 40 }
+output = "pressed-grain-meal"
+quantity = 32
+duration = 1800000
+skill = "milling"
+work = { force = 1400, travel = 160 }
+[data.recipes.press-bark-paper]
+inputs = { bark = 16, fresh-water = 8 }
+output = "paper"
+quantity = 16
+duration = 3600000
+skill = "papermaking"
+work = { force = 1600, travel = 200 }
+[data.recipes.crush-charcoal-ink]
+inputs = { charcoal = 8, resin = 4 }
+output = "ink"
+quantity = 24
+duration = 1800000
+skill = "writing"
+work = { force = 1200, travel = 100 }

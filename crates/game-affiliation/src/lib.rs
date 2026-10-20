@@ -163,6 +163,42 @@ fn assent(tx: &Transaction<'_>, p: PersonId, procedure: &Procedure) -> bool {
         Procedure::Personal => social.beliefs.get(&p).is_none_or(|b| b.authority <= 0),
     }
 }
+fn preference(tx: &Transaction<'_>, p: PersonId, procedure: &Procedure) -> i64 {
+    let social = tx.get::<game_relationships::Social>().unwrap();
+    let values = social.values.get(&p);
+    let value = |key: &str| {
+        values
+            .and_then(|v| v.get(key))
+            .copied()
+            .map_or(0, i64::from)
+    };
+    let authority = social.beliefs.get(&p).map_or(0, |b| i64::from(b.authority));
+    match procedure {
+        Procedure::Personal => value("independence") * 3 - authority * 3,
+        Procedure::Majority => value("shared-decisions") * 4,
+        Procedure::Unanimity => {
+            value("shared-decisions") * 3 + game_vitality::disposition(tx, p, "patience") / 100
+        }
+        Procedure::Leader(l) if *l == p => {
+            game_vitality::disposition(tx, p, "ambition") / 10 - 50 + authority * 3
+        }
+        Procedure::Leader(l) => social.regard(p, *l) / 3 + authority * 3,
+    }
+}
+fn change_cost(
+    tx: &Transaction<'_>,
+    p: PersonId,
+    id: InstitutionId,
+    alternative: &Procedure,
+) -> i64 {
+    game_vitality::disposition(tx, p, "rigidity") / 50
+        + game_identity::resistance(
+            tx,
+            p,
+            &format!("institution:{}", id.0),
+            &format!("{alternative:?}"),
+        )
+}
 fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     if !game_vitality::can_converse(tx, p)
         || !tx.get::<game_communities::Communities>()?.enabled
@@ -195,44 +231,24 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     {
         leave(tx, p, id)?;
     }
-    let own = tx.get::<game_relationships::Social>()?;
-    let voice = own
-        .values
-        .get(&p)
-        .and_then(|v| v.get("shared-decisions"))
-        .copied()
-        .unwrap_or(0);
-    let independence = own
-        .values
-        .get(&p)
-        .and_then(|v| v.get("independence"))
-        .copied()
-        .unwrap_or(0);
-    for (name, procedure, value) in [
-        ("majority", Procedure::Majority, i64::from(voice) * 4),
-        (
-            "unanimity",
-            Procedure::Unanimity,
-            i64::from(voice) * 3 + game_vitality::disposition(tx, p, "patience") / 100,
-        ),
-        ("personal", Procedure::Personal, i64::from(independence) * 3),
-        (
-            "lead",
-            Procedure::Leader(p),
-            game_vitality::disposition(tx, p, "ambition") / 10 - 50,
-        ),
+    for (name, procedure) in [
+        ("majority", Procedure::Majority),
+        ("unanimity", Procedure::Unanimity),
+        ("personal", Procedure::Personal),
+        ("lead", Procedure::Leader(p)),
     ] {
         if procedure == group.procedure || group.members.len() < 2 {
             continue;
         }
-        let recent = tx.get::<Affiliation>()?.next.get(&p).map_or(0, |at| {
-            60i64.saturating_sub((tx.now().0.saturating_sub(at.0) / HOUR.0).min(60) as i64)
-        });
+        let value = preference(tx, p, &procedure) - preference(tx, p, &group.procedure);
+        if !assent(tx, p, &procedure) || value <= change_cost(tx, p, id, &procedure) {
+            continue;
+        }
         game_choice::offer(
             tx,
             p,
             format!("affiliation:{name}:{}", id.0),
-            game_choice::motive(0, 0, value, 5 + recent, 0),
+            game_choice::motive(0, 0, value, 5 + change_cost(tx, p, id, &procedure), 0),
             Discuss {
                 person: p,
                 institution: id,
@@ -256,6 +272,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             if Some(*p) == tx.get::<game_lineage::Lineage>()?.current
                 || game_transport::area(tx.get()?, *p).ok() != Some(area)
                 || !assent(tx, *p, &r.procedure)
+                || preference(tx, *p, &r.procedure)
+                    <= preference(tx, *p, &group.procedure)
+                        + change_cost(tx, *p, r.institution, &r.procedure)
             {
                 return Ok(false);
             }
@@ -266,6 +285,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             responses: group.members.clone(),
         })?;
         for p in group.members {
+            tx.call(game_identity::Commit {
+                person: p,
+                domain: format!("institution:{}", r.institution.0),
+                preference: format!("{:?}", r.procedure),
+            })?;
             let attachment = match r.procedure {
                 Procedure::Leader(l) if l != p => Attachment::Loyalty(l),
                 Procedure::Majority | Procedure::Unanimity => Attachment::Voice,

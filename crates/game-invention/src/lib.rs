@@ -38,10 +38,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 continue;
             }
             for outlet in 0..n {
-                if tx.get::<Machines>()?.devices[&device]
-                    .parts
-                    .iter()
-                    .any(|p| p.input == Some(outlet))
+                if tx.get::<Machines>()?.devices[&device].parts[outlet]
+                    .mechanism
+                    .output()
+                    != game_physics::Motion::Linear
+                    || tx.get::<Machines>()?.devices[&device]
+                        .parts
+                        .iter()
+                        .any(|p| p.input == Some(outlet))
                 {
                     continue;
                 }

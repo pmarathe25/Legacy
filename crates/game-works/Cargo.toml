@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-inscription.workspace = true
+game-recollection.workspace = true
 game-testimony.workspace = true
 game-poetics.workspace=true
 game-literacy.workspace = true

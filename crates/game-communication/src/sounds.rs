@@ -52,23 +52,17 @@ pub struct Translation {
     pub meaning: Option<String>,
     pub confidence: u16,
 }
-pub fn render(sounds: &[u8]) -> String {
-    sounds
-        .iter()
-        .filter_map(|p| PHONEMES.get(usize::from(*p)))
-        .copied()
-        .collect()
-}
+pub use game_phonology::render;
 pub fn phonetic(seed: u64, salt: u64) -> String {
     render(&invent(seed, PersonId(salt), salt, &[]))
 }
 fn invent(seed: u64, person: PersonId, salt: u64, familiar: &[u8]) -> Vec<u8> {
-    let vowels = [0, 1, 2, 3, 4];
-    let consonants: Vec<_> = (5..PHONEMES.len() as u8)
-        .filter(|n| familiar.is_empty() || familiar.contains(n))
+    let vowels = game_phonology::VOWELS;
+    let consonants: Vec<_> = (0..PHONEMES.len() as u8)
+        .filter(|n| !game_phonology::vowel(*n) && (familiar.is_empty() || familiar.contains(n)))
         .collect();
     let consonants = if consonants.is_empty() {
-        vec![5, 6]
+        vec![11, 31]
     } else {
         consonants
     };
@@ -77,7 +71,7 @@ fn invent(seed: u64, person: PersonId, salt: u64, familiar: &[u8]) -> Vec<u8> {
             let draw = random(seed, person.0.wrapping_add(i), salt.wrapping_add(79));
             [
                 consonants[(draw % consonants.len() as u64) as usize],
-                vowels[((draw / 31) % 5) as usize],
+                vowels[((draw / 31) % vowels.len() as u64) as usize],
             ]
         })
         .collect()

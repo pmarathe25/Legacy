@@ -30,29 +30,22 @@ pub(super) fn compose(
     creator: PersonId,
     activity: &game_pastimes::Activity,
     evidence: &[(String, game_knowledge::Fact)],
+    inscription: Option<&game_inscription::Imprint>,
 ) -> Result<Option<Composition>> {
     if !language::active(tx) {
         return Ok(None);
     }
-    let paper = tx.get::<game_objects::Objects>().ok().map_or(0, |objects| {
-        activity
-            .inputs
-            .iter()
-            .filter(|(g, _)| objects.by_id(**g).is_ok_and(|o| o.tags.contains("paper")))
-            .map(|(_, q)| *q)
-            .sum::<u64>()
-    });
-    let script = if paper > 0 {
+    let script = if inscription.is_some() {
         tx.call(game_literacy::Practice { person: creator })?
     } else {
         None
     };
-    if paper > 0 && script.is_none() {
+    if inscription.is_some() && script.is_none() {
         return Ok(None);
     }
     let genre = match activity.skill.as_str() {
         "music" => Genre::Song,
-        "writing" if paper >= 4 => Genre::Book,
+        "writing" if activity.duration.0 >= 8 * HOUR.0 => Genre::Book,
         "writing" => Genre::Poem,
         _ => Genre::Story,
     };
@@ -68,33 +61,23 @@ pub(super) fn compose(
             concept: key.clone(),
         })?);
     }
-    let phrasing = game_poetics::arrange(&genre, &mut sounds, &mut gloss);
-    let mut item = None;
-    if paper > 0 && tx.registered::<game_items::Mark>() {
-        let key = if genre == Genre::Book {
-            "bound-book"
-        } else {
-            "written-page"
-        };
-        let good = tx.get::<game_objects::Objects>()?.resolve(key)?;
-        let inventory = tx.get::<Cargo>()?.carried(creator).next();
-        if let Some(inventory) = inventory
-            && tx
-                .attempt(game_cargo::Deposit {
-                    inventory,
-                    good,
-                    quantity: 1,
-                })
-                .is_ok()
+    for (_, fact) in evidence.iter().take(2) {
+        if let Some(scene) = fact
+            .value
+            .decode::<std::collections::BTreeMap<String, String>>()
+            && scene.contains_key("@predicate")
         {
-            item = Some(tx.call(game_items::Mark {
-                person: creator,
-                inventory,
-                good,
-                label: language::render(&sounds[0]),
-            })?);
+            for concept in scene.values() {
+                sounds.push(tx.call(language::WordFor {
+                    person: creator,
+                    concept: concept.clone(),
+                })?);
+                gloss.push(concept.clone());
+            }
         }
     }
+    let phrasing = game_poetics::arrange(&genre, &mut sounds, &mut gloss);
+    let item = inscription.map(|i| i.item);
     Ok(Some(Composition {
         genre,
         script,

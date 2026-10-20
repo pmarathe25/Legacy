@@ -31,3 +31,5 @@ Coercive demands (`DemandSubmission`, `Press`), refusal escalation into combat, 
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-physiology`, `game-transport`, `game-conflict`, `game-relationships`, `game-traits`, `game-lineage`, `game-knowledge`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-pressure`) cover anticipated force, refused escalation, fatal resistance, road escape, closed-road rollback, friend intervention, endorsement coercion, and save/load consistency.
+
+`game-violence` supplies learned moral costs and experience-driven attitude changes. Personal peaceful convictions can outweigh inherited aggression; learned violent convictions can encourage force. These remain competing motives, without a compulsory peaceful or violent social system.

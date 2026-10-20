@@ -28,7 +28,7 @@ fn no_birth_means_no_successor_and_no_skill_inheritance() {
         .dispatch(game_lifecycle::Birth {
             mother: f.other,
             father: f.guardian,
-            caregiver: f.other,
+            attendant: f.other,
             area: f.home,
         })
         .unwrap();

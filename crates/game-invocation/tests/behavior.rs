@@ -19,7 +19,7 @@ fn prepare(f: &mut Fixture) -> LifeId {
         .dispatch(game_lifecycle::Birth {
             mother: f.other,
             father: f.guardian,
-            caregiver: f.other,
+            attendant: f.other,
             area: f.home,
         })
         .unwrap();

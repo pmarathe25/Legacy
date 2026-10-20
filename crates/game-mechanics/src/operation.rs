@@ -120,6 +120,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             area == device.area
                 && !busy(tx, r.device)
                 && r.outlet < device.parts.len()
+                && device.parts[r.outlet].linear()
                 && !device.parts.iter().any(|p| p.input == Some(r.outlet)),
             "apparatus is inaccessible or occupied",
         )?;
@@ -207,6 +208,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 device.area == area
                     && !busy(tx, id)
                     && outlet < device.parts.len()
+                    && device.parts[outlet].linear()
                     && !device.parts.iter().any(|p| p.input == Some(outlet)),
                 "apparatus unavailable",
             )?;

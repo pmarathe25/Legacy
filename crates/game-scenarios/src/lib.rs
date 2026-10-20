@@ -119,7 +119,7 @@ pub struct Combat {
 pub struct Reincarnation {
     pub mother: String,
     pub father: String,
-    pub caregiver: String,
+    pub attendant: String,
     pub area: String,
     pub delay: SimDuration,
     pub access: Vec<String>,
@@ -333,7 +333,7 @@ impl Definition {
         }
         if let Some(r) = &self.reincarnation {
             require(
-                [&r.mother, &r.father, &r.caregiver]
+                [&r.mother, &r.father, &r.attendant]
                     .iter()
                     .all(|p| people.contains(*p))
                     && areas.contains(&r.area)

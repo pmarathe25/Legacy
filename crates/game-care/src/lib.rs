@@ -15,7 +15,7 @@ pub struct Care {
     pub received: Table<PersonId, Table<PersonId, (SimTime, u64)>>,
     #[serde(default)]
     pub request_cursor: Table<PersonId, PersonId>,
-    pub assigned: Table<PersonId, PersonId>,
+    pub ongoing: Table<PersonId, PersonId>,
     pub helping: Table<PersonId, PersonId>,
     pub treated: Table<PersonId, u64>,
     pub cursor: Table<PersonId, PersonId>,
@@ -73,7 +73,7 @@ impl Request for Appeal {
 }
 fn release(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     if let Some(patient) = tx.edit::<Care>()?.helping.remove(&person) {
-        tx.edit::<Care>()?.assigned.remove(&patient);
+        tx.edit::<Care>()?.ongoing.remove(&patient);
     }
     Ok(())
 }
@@ -137,12 +137,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     let empathy = game_vitality::disposition(tx, person, "empathy");
     let altruism = game_vitality::disposition(tx, person, "altruism");
     let social = tx.get::<game_relationships::Social>()?;
-    let duty = social
-        .values
-        .get(&person)
-        .and_then(|v| v.get("care"))
-        .copied()
-        .unwrap_or(0);
+    let duty = social.opinion(person, "care");
     // Wounds are locally observable; other people's beliefs, needs, and private inventories are not read.
     let peers: Vec<_> = tx
         .get::<game_social_life::SocialLife>()?
@@ -165,7 +160,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
     let mut patients: Vec<_> = std::iter::once(&person)
         .chain(peers.iter().filter(|p| **p != person))
         .filter_map(|p| {
-            if tx.get::<Care>().unwrap().assigned.contains_key(p) {
+            if tx.get::<Care>().unwrap().ongoing.contains_key(p) {
                 return None;
             }
             let body = tx.get::<game_physiology::Bodies>().ok()?.people.get(p)?;
@@ -207,7 +202,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
             .is_ok()
         {
             let s = tx.edit::<Care>()?;
-            s.assigned.insert(patient, person);
+            s.ongoing.insert(patient, person);
             s.helping.insert(person, patient);
             return Ok(true);
         }
@@ -225,7 +220,7 @@ impl Request for Treatment {
     type Response = game_choice::Outcome;
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("care", 1)?;
+    b.plugin("care", 2)?;
     b.resource::<Care>()?;
     b.request::<Appeal>(|tx, r| {
         let need = injury(tx, r.0.patient)?;
@@ -245,7 +240,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Treatment>(|tx, r| {
         require(
-            !tx.get::<Care>()?.assigned.contains_key(&r.patient),
+            !tx.get::<Care>()?.ongoing.contains_key(&r.patient),
             "patient already has a caregiver",
         )?;
         if tx
@@ -262,7 +257,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             });
             return Ok(game_choice::Outcome::Reconsider);
         }
-        tx.edit::<Care>()?.assigned.insert(r.patient, r.caregiver);
+        tx.edit::<Care>()?.ongoing.insert(r.patient, r.caregiver);
         tx.edit::<Care>()?.helping.insert(r.caregiver, r.patient);
         Ok(game_choice::Outcome::Performed)
     })?;
@@ -421,7 +416,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                     .maximum(&tx.get::<game_physiology::Bodies>()?.rules)
                     .saturating_sub(body.health)
                     .min(100) as i64;
-                if !body.alive || injury == 0 || tx.get::<Care>()?.assigned.contains_key(&patient) {
+                if !body.alive || injury == 0 || tx.get::<Care>()?.ongoing.contains_key(&patient) {
                     continue;
                 }
                 let tie = tx
@@ -431,13 +426,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                     .and_then(|r| r.get(&patient))
                     .cloned()
                     .unwrap_or_default();
-                let duty = tx
-                    .get::<game_relationships::Social>()?
-                    .values
-                    .get(&p)
-                    .and_then(|v| v.get("care"))
-                    .copied()
-                    .unwrap_or(0);
+                let duty = tx.get::<game_relationships::Social>()?.opinion(p, "care");
                 let mut concern = if patient == p {
                     injury * 3
                 } else {
@@ -523,9 +512,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.validate_save(|h| {
         let s = h.get::<Care>()?;
         require(
-            s.assigned.len() == s.helping.len()
+            s.ongoing.len() == s.helping.len()
                 && s.helping.iter().all(|(carer, patient)| {
-                    s.assigned.get(patient) == Some(carer)
+                    s.ongoing.get(patient) == Some(carer)
                         && h.get::<Actions>()
                             .is_ok_and(|a| a.0.get(carer).is_some_and(|w| w.kind == "treat"))
                 }),

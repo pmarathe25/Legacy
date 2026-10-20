@@ -4,9 +4,9 @@ version = 1
 id = 9401
 name = "Pressed fiberboard"
 mass = 1
-tags = ["crafted", "construction", "mechanical-material"]
+tags = ["crafted", "construction", "mechanical-material", "mark-surface:250"]
 [data.objects.laminated-beam]
 id = 9402
 name = "Laminated beam"
 mass = 2
-tags = ["crafted", "construction", "mechanical-material"]
+tags = ["crafted", "construction", "mechanical-material", "mark-surface:400"]

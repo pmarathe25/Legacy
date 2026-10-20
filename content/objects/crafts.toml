@@ -11,19 +11,19 @@ tags = ["crafted", "household"]
 id = 183
 name = "Wooden bowl"
 mass = 1
-tags = ["crafted", "household"]
+tags = ["crafted", "household", "mark-surface:300"]
 
 [data.objects.wooden-spoon]
 id = 184
 name = "Wooden spoon"
 mass = 1
-tags = ["crafted", "household"]
+tags = ["crafted", "household", "mark-surface:300"]
 
 [data.objects.clay-cup]
 id = 185
 name = "Clay cup"
 mass = 1
-tags = ["crafted", "household"]
+tags = ["crafted", "household", "mark-surface:500"]
 
 [data.objects.clay-lamp]
 id = 186
@@ -83,13 +83,13 @@ tags = ["crafted", "instrument"]
 id = 195
 name = "Carved wooden token"
 mass = 1
-tags = ["crafted", "art"]
+tags = ["crafted", "art", "mark-surface:300"]
 
 [data.objects.painted-tile]
 id = 196
 name = "Painted tile"
 mass = 2
-tags = ["crafted", "art"]
+tags = ["crafted", "art", "mark-surface:600"]
 
 [data.objects.woven-ribbon]
 id = 197
@@ -101,19 +101,19 @@ tags = ["crafted", "art"]
 id = 199
 name = "Linen tunic"
 mass = 2
-tags = ["warmth:7", "crafted", "clothing"]
+tags = ["warmth:7", "crafted", "clothing", "mark-surface:40"]
 
 [data.objects.cotton-tunic]
 id = 200
 name = "Cotton tunic"
 mass = 2
-tags = ["warmth:7", "crafted", "clothing"]
+tags = ["warmth:7", "crafted", "clothing", "mark-surface:40"]
 
 [data.objects.cloak]
 id = 201
 name = "Canvas cloak"
 mass = 3
-tags = ["warmth:7", "crafted", "clothing"]
+tags = ["warmth:7", "crafted", "clothing", "mark-surface:40"]
 
 [data.objects.sandals]
 id = 202
@@ -125,7 +125,7 @@ tags = ["crafted", "clothing"]
 id = 203
 name = "Woven blanket"
 mass = 3
-tags = ["warmth:7", "crafted", "household"]
+tags = ["warmth:7", "crafted", "household", "mark-surface:50"]
 
 [data.objects.bandages]
 id = 204
@@ -149,13 +149,13 @@ tags = ["crafted", "household"]
 id = 209
 name = "Bronze tools"
 mass = 3
-tags = ["crafted", "tool"]
+tags = ["crafted", "tool", "mark-cutting:1100"]
 
 [data.objects.stone-tools]
 id = 210
 name = "Knapped stone tools"
 mass = 2
-tags = ["crafted", "tool"]
+tags = ["crafted", "tool", "mark-cutting:950"]
 
 [data.objects.copper-wire]
 id = 211
@@ -173,13 +173,13 @@ tags = ["crafted", "instrument"]
 id = 213
 name = "Roof tile"
 mass = 3
-tags = ["crafted", "material"]
+tags = ["crafted", "material", "mark-surface:600"]
 
 [data.objects.slate-shingle]
 id = 214
 name = "Slate shingle"
 mass = 3
-tags = ["crafted", "material"]
+tags = ["crafted", "material", "mark-surface:600"]
 
 [data.objects.mosaic]
 id = 215

@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 mod engine;
 pub use engine::*;
+pub use game_simple_machines::{Mechanism, Motion};
 mod catalog;
 pub use catalog::{load, needs, validate};
 mod transmissions;
@@ -24,13 +25,21 @@ pub struct Task {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Config {
     pub materials: BTreeMap<GoodId, Material>,
+    pub supports: BTreeMap<Mechanism, BTreeMap<GoodId, u64>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Part {
+    pub mechanism: Mechanism,
     pub good: GoodId,
     pub input: Option<usize>,
     pub drive: u32,
     pub load: u32,
+}
+
+impl Part {
+    pub fn linear(&self) -> bool {
+        self.mechanism.output() == Motion::Linear
+    }
 }
 
 /// Stable identity of a visible arrangement, independent of a particular apparatus instance.
@@ -39,6 +48,7 @@ pub fn design_key(parts: &[Part]) -> u64 {
     for p in parts {
         for n in [
             p.good.0,
+            p.mechanism as u64,
             p.input.map_or(0, |i| i as u64 + 1),
             u64::from(p.drive),
             u64::from(p.load),
@@ -54,13 +64,17 @@ pub fn design_key(parts: &[Part]) -> u64 {
 impl Config {
     pub fn validate(&self) -> Result<()> {
         require(
-            self.materials.values().all(|m| {
-                m.span >= 2
-                    && m.span <= 1000
-                    && m.limit > 0
-                    && m.efficiency <= 1000
-                    && m.supports.values().all(|n| *n > 0 && *n <= 32)
-            }),
+            self.supports
+                .values()
+                .flat_map(|r| r.values())
+                .all(|n| *n > 0 && *n <= 32)
+                && self.materials.values().all(|m| {
+                    m.span >= 2
+                        && m.span <= 1000
+                        && m.limit > 0
+                        && m.efficiency <= 1000
+                        && m.supports.values().all(|n| *n > 0 && *n <= 32)
+                }),
             "invalid mechanical materials",
         )
     }
@@ -69,6 +83,11 @@ impl Config {
 impl Config {
     pub fn validate_objects(&self, objects: &game_objects::Objects) -> Result<()> {
         self.validate()?;
+        for needs in self.supports.values() {
+            for good in needs.keys() {
+                objects.by_id(*good)?;
+            }
+        }
         for (good, m) in &self.materials {
             objects.by_id(*good)?;
             for good in m.supports.keys() {

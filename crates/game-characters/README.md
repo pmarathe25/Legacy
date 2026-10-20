@@ -42,3 +42,7 @@ retain the evidence; successful progress revises it. The legacy `retry_after`
 save field bounds fading failure memory rather than imposing an action cooldown.
 Attention uses a minute-based horizon bounded by urgent hunger forecasts and the
 authored review cadence, including coarse history profiles.
+
+Task persistence depends on attention and ongoing work costs. The inherited
+rigidity trait concerns convictions and preferences, rather than every change of
+activity or care recipient; those decisions remain with their context owners.

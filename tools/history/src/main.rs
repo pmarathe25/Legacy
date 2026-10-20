@@ -166,7 +166,26 @@ fn run() -> Result<()> {
                 .ok_or("time overflow")?,
         );
         loop {
-            match advance_commits(&mut sim, target, advance_budget, &mut ledger, &mut journal)? {
+            let progress = match advance_commits(
+                &mut sim,
+                target,
+                advance_budget,
+                &mut ledger,
+                &mut journal,
+            ) {
+                Ok(progress) => progress,
+                Err(error) => {
+                    journal.flush()?;
+                    save_checkpoint(&output, &sim, &ledger)?;
+                    write_json(
+                        output.join("execution-error.json"),
+                        &json!({"error":error.to_string(),"day":sim.now().0.saturating_sub(epoch) as f64 / DAY.0 as f64,"sequence":ledger.sequence}),
+                        true,
+                    )?;
+                    return Err(error);
+                }
+            };
+            match progress {
                 game_sim::Stop::Budget => {}
                 game_sim::Stop::Target => break,
                 game_sim::Stop::Choice(s) => {

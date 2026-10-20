@@ -40,7 +40,7 @@ fn birth_is_actual_and_death_conserves_carried_possessions() {
         .dispatch(Birth {
             mother: f.other,
             father: f.guardian,
-            caregiver: f.other,
+            attendant: f.other,
             area: f.home,
         })
         .unwrap();
@@ -49,7 +49,7 @@ fn birth_is_actual_and_death_conserves_carried_possessions() {
         SimTime(30_000)
     );
     assert_eq!(
-        f.host.get::<Population>().unwrap().families[&child].caregiver,
+        f.host.get::<Population>().unwrap().families[&child].attendant,
         f.other
     );
 }
@@ -70,7 +70,7 @@ fn a_fathers_death_does_not_cancel_an_existing_pregnancy() {
         .dispatch(Conceive {
             mother: f.other,
             father: f.ruler,
-            caregiver: f.other,
+            attendant: f.other,
         })
         .unwrap();
     let due = f.host.get::<Population>().unwrap().pregnancies[&id].due;
@@ -110,7 +110,7 @@ fn travelling_at_the_due_time_does_not_erase_a_pregnancy() {
         .dispatch(Conceive {
             mother: f.other,
             father: f.ruler,
-            caregiver: f.other,
+            attendant: f.other,
         })
         .unwrap();
     let due = f.host.get::<Population>().unwrap().pregnancies[&id].due;
@@ -129,4 +129,39 @@ fn travelling_at_the_due_time_does_not_erase_a_pregnancy() {
     run(&mut f.host, due.after(SimDuration(3 * MINUTE.0)).unwrap());
     assert!(f.host.get::<Population>().unwrap().pregnancies.is_empty());
     assert_eq!(f.host.get::<Population>().unwrap().families.len(), 1);
+}
+
+#[test]
+fn birth_provenance_records_a_present_attendant_when_a_parent_has_died() {
+    let mut f = setup();
+    run(&mut f.host, SimTime(DAY.0 * 365 * 18));
+    let id = f
+        .host
+        .dispatch(Conceive {
+            mother: f.other,
+            father: f.ruler,
+            attendant: f.ruler,
+        })
+        .unwrap();
+    let due = f.host.get::<Population>().unwrap().pregnancies[&id].due;
+    f.host
+        .dispatch(game_physiology::Damage {
+            person: f.ruler,
+            amount: 100,
+        })
+        .unwrap();
+    let mut loaded = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    for host in [&mut f.host, &mut loaded] {
+        run(host, due);
+        let family = host
+            .get::<Population>()
+            .unwrap()
+            .families
+            .values()
+            .next()
+            .unwrap();
+        assert_eq!(family.father, f.ruler);
+        assert_eq!(family.attendant, f.other);
+    }
+    assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
 }

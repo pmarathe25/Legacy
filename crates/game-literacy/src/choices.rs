@@ -6,17 +6,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         }
         let p = e.person;
         let known = first_script(tx, p);
-        let objects = tx.get::<game_objects::Objects>()?;
         let cargo = tx.get::<game_cargo::Cargo>()?;
         let materials: Vec<_> = cargo
             .carried(p)
-            .filter(|id| {
-                ["paper", "ink"].iter().all(|key| {
-                    objects
-                        .resolve(key)
-                        .is_ok_and(|g| cargo.0[id].amount(g) > 0)
-                })
-            })
+            .filter(|id| game_inscription::supplies(tx, p, *id).is_some())
             .collect();
         for inventory in materials {
             let curiosity = game_vitality::disposition(tx, p, "openness") / 10

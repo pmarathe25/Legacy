@@ -20,6 +20,11 @@ impl Request for Cancel {
     const KEY: &'static str = "test.distraction-cancel";
     type Response = ();
 }
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct Meals(std::collections::BTreeMap<PersonId, u64>);
+impl Resource for Meals {
+    const KEY: &'static str = "test.parental-meals";
+}
 fn builder() -> Builder {
     let mut b = support::builder();
     game_traits::plugin(&mut b).unwrap();
@@ -31,6 +36,14 @@ fn builder() -> Builder {
     game_health::plugin(&mut b).unwrap();
     game_care::plugin(&mut b).unwrap();
     b.plugin("distraction", 1).unwrap();
+    b.resource::<Meals>().unwrap();
+    b.subscribe::<game_physiology::Fed>("test.parental-meals", |tx, e| {
+        if e.caregiver != e.patient {
+            *tx.edit::<Meals>()?.0.entry(e.patient).or_default() += 1;
+        }
+        Ok(())
+    })
+    .unwrap();
     b.request::<Distraction>(|tx, r| {
         let until = tx.now().after(HOUR)?;
         let job = tx.schedule(until, 20, Done(r.0))?;
@@ -150,7 +163,7 @@ fn setup(altruism: i32) -> (Host, PersonId, PersonId) {
         .dispatch(game_lifecycle::Birth {
             mother: parent,
             father: parents[1],
-            caregiver: parent,
+            attendant: parent,
             area,
         })
         .unwrap();
@@ -181,11 +194,90 @@ fn a_concerned_parent_can_choose_food_care_over_an_absorbing_interest() {
         "a capable motivated parent never completed a meal for the child"
     );
     assert!(body.hunger < 120);
+    assert!(
+        h.get::<Meals>()
+            .unwrap()
+            .0
+            .get(&child)
+            .copied()
+            .unwrap_or(0)
+            > 0,
+        "survival alone does not prove the parent delivered any food"
+    );
 }
 #[test]
 fn an_indifferent_parent_can_keep_the_interest_and_neglect_the_child() {
     let (mut h, _, child) = setup(0);
     let target = h.now().after(SimDuration(2 * DAY.0)).unwrap();
     support::run(&mut h, target);
+    assert_eq!(
+        h.get::<Meals>()
+            .unwrap()
+            .0
+            .get(&child)
+            .copied()
+            .unwrap_or(0),
+        0
+    );
     assert!(!h.get::<game_physiology::Bodies>().unwrap().people[&child].alive);
+}
+
+#[test]
+fn an_incapable_but_selfless_parent_does_not_receive_a_food_hypothesis_for_free() {
+    let (mut h, parent, child) = setup(1000);
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&parent].clone();
+    profile.extend([
+        ("intelligence".into(), 0),
+        ("interpretation".into(), 0),
+        ("foresight".into(), 0),
+    ]);
+    h.dispatch(game_traits::Set {
+        person: parent,
+        profile,
+    })
+    .unwrap();
+    let target = h.now().after(SimDuration(6 * DAY.0)).unwrap();
+    support::run(&mut h, target);
+    assert!(
+        !h.notices()
+            .any(|n| n.kind == "physiology.fed" && n.data["patient"].as_u64() == Some(child.0))
+    );
+    assert_eq!(
+        h.get::<Meals>()
+            .unwrap()
+            .0
+            .get(&child)
+            .copied()
+            .unwrap_or(0),
+        0
+    );
+    assert!(!h.get::<game_physiology::Bodies>().unwrap().people[&child].alive);
+}
+
+#[test]
+fn ordinary_reasoning_can_support_care_but_does_not_guarantee_it_for_every_personality() {
+    let (mut h, parent, child) = setup(1000);
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&parent].clone();
+    profile.extend([
+        ("intelligence".into(), 1000),
+        ("interpretation".into(), 1000),
+        ("foresight".into(), 1000),
+    ]);
+    h.dispatch(game_traits::Set {
+        person: parent,
+        profile,
+    })
+    .unwrap();
+    let target = h.now().after(SimDuration(6 * DAY.0)).unwrap();
+    support::run(&mut h, target);
+    assert!(h.get::<game_physiology::Bodies>().unwrap().people[&child].alive);
+    assert!(
+        h.get::<Meals>()
+            .unwrap()
+            .0
+            .get(&child)
+            .copied()
+            .unwrap_or(0)
+            > 0
+    );
 }

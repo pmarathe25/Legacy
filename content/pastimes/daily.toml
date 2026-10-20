@@ -58,8 +58,9 @@ skill = "music"
 
 [data.activities.sketch]
 abilities = { agility = 100, gesturing = 200 }
-name = "Sketch on paper"
-inputs = { paper = 1, ink = 1 }
+name = "Sketch a design"
+inputs = {}
+marks = true
 requires = {  }
 duration = 900000
 satisfaction_span = 14400000
@@ -70,7 +71,8 @@ skill = "painting"
 [data.activities.write]
 abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Write a personal reflection"
-inputs = { paper = 1, ink = 1 }
+inputs = {}
+marks = true
 requires = {  }
 duration = 1200000
 satisfaction_span = 14400000
@@ -224,7 +226,8 @@ skill = "weaving"
 [data.activities.nature-journal]
 abilities = { intelligence = 150, interpretation = 400, gesturing = 200 }
 name = "Keep a nature journal"
-inputs = { moss-paper = 1, berry-ink = 1 }
+inputs = {}
+marks = true
 requires = {  }
 duration = 900000
 satisfaction_span = 14400000

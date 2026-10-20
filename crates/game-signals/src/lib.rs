@@ -24,7 +24,13 @@ fn active(tx: &Transaction<'_>) -> bool {
 }
 fn local(tx: &Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
     game_physiology::capable(tx, a)?;
-    game_physiology::capable(tx, b)?;
+    require(
+        tx.get::<game_physiology::Bodies>()?
+            .people
+            .get(&b)
+            .is_some_and(|body| body.alive),
+        "signal subject is dead or unknown",
+    )?;
     require(
         game_transport::together(tx.get()?, a, b),
         "signal is not local",

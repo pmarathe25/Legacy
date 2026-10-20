@@ -3,7 +3,9 @@ use game_core::*;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
+mod care;
 mod index;
+pub use care::{CareChanged, CommitCare};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(from = "index::Saved")]
 pub struct Households {
@@ -12,7 +14,8 @@ pub struct Households {
     pub partners: Table<PersonId, PersonId>,
     pub children: Table<PersonId, Vec<PersonId>>,
     pub next: Table<PersonId, SimTime>,
-    pub dependents: Table<PersonId, PersonId>,
+    pub caregivers: Table<PersonId, Table<PersonId, ()>>,
+    pub self_reliant: Table<PersonId, ()>,
     pub review: Option<ScheduleId>,
     #[serde(default, skip_serializing_if = "Table::is_empty")]
     pub food_care: Table<PersonId, FoodCare>,
@@ -113,7 +116,7 @@ fn tend(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     for child in children {
         let body = tx.get::<game_physiology::Bodies>()?.people[&child];
         if !body.alive {
-            tx.edit::<Households>()?.assign(child, None);
+            tx.edit::<Households>()?.set_care(person, child, false);
             support(tx, person)?;
             continue;
         }
@@ -174,7 +177,7 @@ impl Request for Tend {
     const KEY: &'static str = "households.tend";
     type Response = ();
 }
-/// Accept responsibility for a local dependent whose previous caregiver has died.
+/// Freely offer care; another person's existing commitment does not exclude help.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Foster {
     pub caregiver: PersonId,
@@ -210,7 +213,7 @@ impl Request for Independent {
     type Response = ();
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("households", 1)?;
+    b.plugin("households", 2)?;
     b.resource::<Households>()?;
     b.request::<Separate>(|tx, r| {
         if tx.get::<Households>()?.partners.get(&r.person) == Some(&r.other) {
@@ -225,9 +228,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             game_vitality::can_walk(tx, r.person),
             "cannot travel independently",
         )?;
-        if let Some(old) = tx.edit::<Households>()?.assign(r.person, None) {
-            support(tx, old)?;
-        }
+        // A personal declaration grants no power to rewrite another person's intentions.
+        tx.edit::<Households>()?.self_reliant.insert(r.person, ());
         Ok(())
     })?;
     b.request::<RememberFoodCare>(|tx, r| {
@@ -268,40 +270,13 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
+    care::register(b)?;
     b.request::<Foster>(|tx, r| {
-        require(r.caregiver != r.child, "cannot care for oneself")?;
-        game_physiology::capable(tx, r.caregiver)?;
-        game_physiology::capable(tx, r.child)?;
-        let bodies = tx.get::<game_physiology::Bodies>()?;
-        require(
-            tx.now()
-                .0
-                .saturating_sub(bodies.people[&r.caregiver].born.0)
-                >= 18 * 365 * DAY.0,
-            "caregiver is immature",
-        )?;
-        require(
-            tx.get::<Households>()?
-                .dependents
-                .get(&r.child)
-                .is_some_and(|p| bodies.people.get(p).is_some_and(|b| !b.alive)),
-            "dependent already has a caregiver",
-        )?;
-        let area = game_transport::area(tx.get()?, r.caregiver)?;
-        require(
-            game_transport::area(tx.get()?, r.child)? == area,
-            "dependent is elsewhere",
-        )?;
-        require(
-            tx.now().0.saturating_sub(bodies.people[&r.child].born.0) < 18 * 365 * DAY.0,
-            "dependent is already an adult",
-        )?;
-        let old = tx.edit::<Households>()?.assign(r.child, Some(r.caregiver));
-        if let Some(old) = old {
-            support(tx, old)?;
-        }
-        tx.edit::<Households>()?.nursery.insert(r.child, area);
-        support(tx, r.caregiver)?;
+        tx.call(CommitCare {
+            caregiver: r.caregiver,
+            beneficiary: r.child,
+            accept: true,
+        })?;
         tx.emit(
             Fostered {
                 caregiver: r.caregiver,
@@ -397,12 +372,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         }
         let f = tx.get::<game_lifecycle::Population>()?.families[&e.person].clone();
         let s = tx.edit::<Households>()?;
-        s.assign(e.person, Some(f.caregiver));
         s.nursery.insert(e.person, e.area);
         for p in [f.mother, f.father] {
             s.children.entry(p).or_default().push(e.person);
         }
-        support(tx, f.caregiver)?;
         Ok(())
     })?;
     b.subscribe::<game_transport::Arrived>("households.locations", |tx, e| {
@@ -421,30 +394,31 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.subscribe::<game_physiology::Died>("households.bereavement", |tx, e| {
-        if let Some(carer) = tx.edit::<Households>()?.assign(e.person, None) {
-            support(tx, carer)?;
+        let carers: Vec<_> = tx.get::<Households>()?.carers_of(e.person).collect();
+        let beneficiaries: Vec<_> = tx.get::<Households>()?.beneficiaries_of(e.person).collect();
+        for carer in carers {
+            tx.call(CommitCare {
+                caregiver: carer,
+                beneficiary: e.person,
+                accept: false,
+            })?;
+        }
+        for beneficiary in beneficiaries {
+            tx.call(CommitCare {
+                caregiver: e.person,
+                beneficiary,
+                accept: false,
+            })?;
         }
         if let Some(partner) = tx.edit::<Households>()?.partners.remove(&e.person) {
             tx.edit::<Households>()?.partners.remove(&partner);
-            let children: Vec<_> = tx
-                .get::<Households>()?
-                .wards
-                .get(&e.person)
-                .into_iter()
-                .flat_map(|s| s.keys().copied())
-                .collect();
-            for child in children {
-                tx.edit::<Households>()?.assign(child, Some(partner));
-            }
-            support(tx, partner)?;
-            support(tx, e.person)?;
         }
         Ok(())
     })?;
     b.validate_save(|h| {
         let s = h.get::<Households>()?;
         require(
-            s.wards == index::build(&s.dependents),
+            s.wards == index::build(&s.caregivers),
             "invalid dependent index",
         )?;
         require(
@@ -454,10 +428,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             "asymmetric partnership",
         )?;
         require(
-            s.dependents.iter().all(|(c, p)| {
-                c != p
-                    && h.get::<game_lifecycle::Population>()
-                        .is_ok_and(|s| s.families.contains_key(c))
+            s.caregivers.iter().all(|(person, carers)| {
+                !carers.is_empty() && carers.keys().all(|carer| person != carer)
             }),
             "invalid dependent",
         )

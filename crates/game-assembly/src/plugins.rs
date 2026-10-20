@@ -15,6 +15,7 @@ pub fn builder() -> Result<Builder> {
     game_environment::plugin(&mut b)?;
     game_physiology::plugin(&mut b)?;
     game_communication::plugin(&mut b)?;
+    game_syntax::plugin(&mut b)?;
     game_knowledge::plugin(&mut b)?;
     game_testimony::plugin(&mut b)?;
     game_information::plugin(&mut b)?;

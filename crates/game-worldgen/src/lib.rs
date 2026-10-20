@@ -8,6 +8,8 @@ use std::collections::BTreeMap;
 #[serde(deny_unknown_fields)]
 pub struct Settings {
     pub population: usize,
+    #[serde(default = "default_guardians")]
+    pub guardians: usize,
     pub areas: usize,
     pub history: SimDuration,
     pub physiology: String,
@@ -48,10 +50,14 @@ pub struct Deposit {
     #[serde(default)]
     pub minimum_rain: u32,
 }
+fn default_guardians() -> usize {
+    2
+}
 impl Settings {
     pub fn validate(&self) -> Result<()> {
         require(
             (4..=9_998).contains(&self.population)
+                && self.guardians <= 2
                 && (1..=128).contains(&self.areas)
                 && self.areas <= self.population / 2
                 && !self.biomes.is_empty()
@@ -189,7 +195,7 @@ pub fn generate(
             });
         }
     }
-    for index in 0..settings.population + 2 {
+    for index in 0..settings.population + settings.guardians {
         let guardian = index >= settings.population;
         let key = if guardian {
             format!("guardian-{}", index - settings.population + 1)

@@ -1,0 +1,8 @@
+id = "objects/mechanical-food"
+version = 1
+[data.objects.pressed-grain-meal]
+id = 900
+name = "Pressed grain meal"
+mass = 1
+tags = ["food", "crafted"]
+food = { portion = 8, relief = 60, shelf_days = 180, nutrients = { energy = 60, protein = 8, fat = 2, fibre = 4, vitamins = 1, minerals = 3 }, effects = { health = 0, mood = 2, alertness = 0 } }

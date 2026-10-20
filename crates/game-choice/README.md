@@ -65,3 +65,8 @@ action wrappers. Chosen work passes through the ordinary schedule/action boundar
 which validates nested payloads before commit. This avoids serializing discarded
 options. Tests cover deferred serialization, scheduled completion and cross-worker
 save/load.
+
+Ordinary actions are scored through their explicit motives. Rigidity is not an
+extra penalty for changing activities or care recipients. Context owners apply
+rigidity when revising convictions, names, relationship preferences, or political
+commitments. Attention and ongoing work costs support task persistence.

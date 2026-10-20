@@ -83,3 +83,32 @@ name = "Assertiveness"
 minimum = 0
 maximum = 1000
 default = 500
+
+[data.traits.rigidity]
+name = "Rigidity"
+minimum = 0
+maximum = 1000
+default = 500
+
+[data.traits.reproductive-drive]
+name = "Reproductive drive"
+minimum = 0
+maximum = 1000
+default = 500
+
+# Inherited predispositions shape individual tastes; learned beauty ideals can shift them.
+[data.traits.taste-size]
+name = "Preferred apparent size"
+minimum = 0
+maximum = 1000
+default = 500
+[data.traits.taste-build]
+name = "Preferred apparent build"
+minimum = 0
+maximum = 1000
+default = 500
+[data.traits.aesthetic-sensitivity]
+name = "Sensitivity to physical attraction"
+minimum = 0
+maximum = 1000
+default = 500

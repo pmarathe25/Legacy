@@ -53,7 +53,7 @@ fn wounded_neighbors_remember_all_their_appeals_and_do_not_request_aid_forever_a
     );
     let care = h.get::<game_care::Care>().unwrap();
     assert_eq!(care.sought.values().map(|r| r.len()).sum::<usize>(), 12);
-    assert!(care.assigned.is_empty());
+    assert!(care.ongoing.is_empty());
     let saved = h.save().unwrap();
     let mut loaded = builder().load(&saved, 4).unwrap();
     for host in [&mut h, &mut loaded] {
@@ -147,7 +147,7 @@ fn a_received_appeal_does_not_make_a_person_care_against_their_own_morality() {
         h.get::<game_cargo::Cargo>().unwrap().0[&pack].amount(medicine),
         3
     );
-    assert!(h.get::<game_care::Care>().unwrap().assigned.is_empty());
+    assert!(h.get::<game_care::Care>().unwrap().ongoing.is_empty());
     h.dispatch(game_traits::Set {
         person: doctor,
         profile: [("empathy".into(), 1000), ("altruism".into(), 1000)].into(),

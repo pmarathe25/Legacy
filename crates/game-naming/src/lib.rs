@@ -152,7 +152,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .max()
             .unwrap_or(0);
         // Compare the present name too: equally appealing offers need not cause oscillation.
-        let switching_cost = 25 + disposition(tx, r.person, "patience") / 10;
+        let switching_cost = 25
+            + disposition(tx, r.person, "patience") / 10
+            + disposition(tx, r.person, "rigidity") / 5;
         let mut candidate = names
             .offers
             .get(&r.person)

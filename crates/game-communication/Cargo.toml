@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-phonology.workspace = true
 game-lexicon.workspace = true
 game-signals.workspace = true
 game-core.workspace = true

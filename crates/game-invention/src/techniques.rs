@@ -14,7 +14,9 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 continue;
             }
             for outlet in 0..d.parts.len() {
-                if d.parts.iter().any(|p| p.input == Some(outlet)) {
+                if d.parts[outlet].mechanism.output() != game_physics::Motion::Linear
+                    || d.parts.iter().any(|p| p.input == Some(outlet))
+                {
                     continue;
                 }
                 let Some(m) = known(tx, r.person, *id, outlet) else {

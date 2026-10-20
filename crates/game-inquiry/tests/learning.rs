@@ -576,3 +576,54 @@ fn retained_empirical_episodes_survive_new_witnesses_and_invalid_episode_rollbac
         h.get::<Inquiry>().unwrap()
     );
 }
+
+#[test]
+fn rigidity_can_reject_a_comprehensible_contradiction_without_changing_inference_capacity() {
+    let mut b = support::builder();
+    plugin(&mut b).unwrap();
+    let (mut h, p, _) = support::people(b);
+    let mut claim = Claim {
+        subject: "food".into(),
+        factor: "heat".into(),
+        outcome: "spoilage".into(),
+        complexity: 1,
+        context: Default::default(),
+        effect: 100,
+        confidence: 80,
+        comparisons: 8,
+    };
+    for (person, rigidity) in [(p[0], 0), (p[1], 1000)] {
+        h.dispatch(game_traits::Set {
+            person,
+            profile: [("rigidity".into(), rigidity), ("intelligence".into(), 4000)].into(),
+        })
+        .unwrap();
+        h.dispatch(game_knowledge::Conclude {
+            person,
+            key: claim.key(),
+            value: serde_json::to_value(&claim).unwrap(),
+            confidence: 80,
+        })
+        .unwrap();
+    }
+    claim.effect = -100;
+    for (person, expected) in [(p[0], true), (p[1], false)] {
+        assert_eq!(
+            h.dispatch(game_testimony::Comprehend {
+                person,
+                fact: game_knowledge::Fact {
+                    value: std::sync::Arc::new(game_knowledge::FactValue::Other(
+                        serde_json::to_value(&claim).unwrap()
+                    )),
+                    source: p[2],
+                    observed: h.now(),
+                    revision: h.revision(),
+                    confidence: 80
+                },
+                support: 0
+            })
+            .unwrap(),
+            expected
+        );
+    }
+}

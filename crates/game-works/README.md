@@ -7,7 +7,7 @@ Procedural cultural compositions (poems, songs, books), physical manuscript crea
 ## Responsibilities
 
 - **Work Composition:** Turns completed creative `game-pastimes` (`compose-poem`, `compose-song`, `write-book`) into distinct cultural work records capturing creator, place, time, phonetic tokens (`game-communication`), intended glosses, line structure (`game-poetics`), and musical notes.
-- **Physical Manuscripts:** Converts consumed paper into tracked `game-items` pages or bound books in `game-cargo` whose identity persists across transfers and destruction.
+- **Physical Manuscripts:** Attaches a completed composition to its actual `game-inscription` surface; its material, mass, custody, and destruction remain ordinary physical state.
 - **Oral & Written Sharing (`Present`, `Shared`):** Allows participants in completed `game-social-life` conversations to perform a remembered oral work or present an accessible text (evaluating up to eight known works per encounter).
 - **Reader-Relative Decoding (`Read`):** Decodes a read or heard work strictly through the audience's own learned vocabulary (`game-communication`), leaving unfamiliar words untranslated rather than leaking the author's private gloss.
 
@@ -36,3 +36,10 @@ Works can preserve personally known theories and memories. Reading or hearing
 understood meanings transmits their retained evidence through `game-testimony`;
 untranslated tokens grant no facts. A physical care manual can therefore teach
 future caregivers after its author dies, subject to language and comprehension.
+
+Authored literary writing activities require a markable surface rather than
+specific paper and ink inputs. The pastime reserves that physical unit and pays
+method-dependent time; completed work retains its original material identity.
+`game-recollection` supplies bounded personal episodes and varied inspiration,
+including care, birth, conflict, and loss. Compositions can include remembered
+actions and participants; this does not yet provide fluent narrative grammar.

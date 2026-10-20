@@ -1,140 +1,8 @@
+mod support;
 use game_core::*;
 use game_sim::*;
 use std::collections::{BTreeMap, BTreeSet};
-fn builder() -> Builder {
-    let mut b = Builder::new();
-    game_land::plugin(&mut b).unwrap();
-    game_transport::plugin(&mut b).unwrap();
-    game_vitality::plugin(&mut b).unwrap();
-    game_objects::plugin(&mut b).unwrap();
-    game_traits::plugin(&mut b).unwrap();
-    game_cargo::plugin(&mut b).unwrap();
-    game_property::plugin(&mut b).unwrap();
-    game_environment::plugin(&mut b).unwrap();
-    game_physiology::plugin(&mut b).unwrap();
-    game_communication::plugin(&mut b).unwrap();
-    game_knowledge::plugin(&mut b).unwrap();
-    game_testimony::plugin(&mut b).unwrap();
-    game_search::plugin(&mut b).unwrap();
-    game_skills::plugin(&mut b).unwrap();
-    game_ecology::plugin(&mut b).unwrap();
-    game_agriculture::plugin(&mut b).unwrap();
-    game_workshop::plugin(&mut b).unwrap();
-    game_health::plugin(&mut b).unwrap();
-    game_relationships::plugin(&mut b).unwrap();
-    game_agreements::plugin(&mut b).unwrap();
-    game_institutions::plugin(&mut b).unwrap();
-    game_lifecycle::plugin(&mut b).unwrap();
-    game_lineage::plugin(&mut b).unwrap();
-    game_guardians::plugin(&mut b).unwrap();
-    game_invocation::plugin(&mut b).unwrap();
-    game_social_life::plugin(&mut b).unwrap();
-    game_characters::plugin(&mut b).unwrap();
-    game_conflict::plugin(&mut b).unwrap();
-    game_pressure::plugin(&mut b).unwrap();
-    game_communities::plugin(&mut b).unwrap();
-    game_stockpiles::plugin(&mut b).unwrap();
-    game_wayfaring::plugin(&mut b).unwrap();
-    game_horticulture::plugin(&mut b).unwrap();
-    game_care::plugin(&mut b).unwrap();
-    game_livelihoods::plugin(&mut b).unwrap();
-    game_pastimes::plugin(&mut b).unwrap();
-    game_heredity::plugin(&mut b).unwrap();
-    game_households::plugin(&mut b).unwrap();
-    game_family_life::plugin(&mut b).unwrap();
-    game_parenthood::plugin(&mut b).unwrap();
-    game_exchange::plugin(&mut b).unwrap();
-    game_works::plugin(&mut b).unwrap();
-    game_preservation::plugin(&mut b).unwrap();
-    game_equipment::plugin(&mut b).unwrap();
-    game_comfort::plugin(&mut b).unwrap();
-    game_grievances::plugin(&mut b).unwrap();
-    game_affiliation::plugin(&mut b).unwrap();
-    b
-}
-fn world() -> (Host, AreaId) {
-    world_with_spread(u16::MAX)
-}
-fn world_with_spread(intelligence_spread: u16) -> (Host, AreaId) {
-    let mut h = builder().build(9, 1).unwrap();
-    h.advance(SimTime(50 * 365 * DAY.0), 1).unwrap();
-    h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
-        .unwrap();
-    let mut traits = game_traits::load(&mut game_content::Store::standard()).unwrap();
-    traits
-        .definitions
-        .get_mut("intelligence")
-        .unwrap()
-        .founder_spread = intelligence_spread;
-    if intelligence_spread != u16::MAX {
-        traits.stamps.clear();
-    }
-    h.dispatch(game_traits::Install(traits)).unwrap();
-    h.dispatch(game_environment::Configure(game_environment::Climate {
-        seasons: vec![game_environment::Season {
-            duration: DAY,
-            warmth: 10,
-            rain: 20,
-        }],
-    }))
-    .unwrap();
-    let area = h
-        .dispatch(game_land::CreateArea {
-            name: "Clearing".into(),
-        })
-        .unwrap();
-    (h, area)
-}
-fn person(h: &mut Host, area: AreaId) -> (PersonId, InventoryId) {
-    let person = h
-        .dispatch(game_physiology::Create {
-            kind: game_physiology::Kind::Mortal,
-            born: SimTime(0),
-        })
-        .unwrap();
-    h.dispatch(game_transport::Place { person, area }).unwrap();
-    h.dispatch(game_social_life::Register {
-        person,
-        name: format!("Person {}", person.0),
-    })
-    .unwrap();
-    h.dispatch(game_traits::Set {
-        person,
-        profile: BTreeMap::from([
-            ("empathy".into(), 900),
-            ("patience".into(), 900),
-            ("intelligence".into(), 12000),
-            ("learning".into(), 4000),
-        ]),
-    })
-    .unwrap();
-    h.dispatch(game_relationships::Initialize {
-        person,
-        beliefs: Default::default(),
-        values: Default::default(),
-    })
-    .unwrap();
-    let inventory = h
-        .dispatch(game_cargo::Create {
-            custody: game_cargo::Custody::Carried(person),
-            capacity: 2000,
-        })
-        .unwrap();
-    h.dispatch(game_property::ClaimInventory {
-        claimant: person,
-        inventory,
-        recognized_by: BTreeSet::from([person]),
-    })
-    .unwrap();
-    h.dispatch(game_property::Permit {
-        issuer: person,
-        person,
-        inventory,
-        allow: true,
-    })
-    .unwrap();
-    (person, inventory)
-}
+use support::*;
 #[test]
 fn inherited_characteristics_are_expressed_without_inheriting_skills_or_knowledge() {
     // Isolate high expressed inheritance with homozygous intelligence.
@@ -199,6 +67,10 @@ fn inherited_characteristics_are_expressed_without_inheriting_skills_or_knowledg
     while h.advance(at, 128).unwrap().stop == Stop::Budget {}
     let population = h.get::<game_lifecycle::Population>().unwrap();
     let child = *population.families.keys().next().unwrap();
+    for key in ["rigidity", "reproductive-drive"] {
+        assert!(h.get::<game_heredity::Heredity>().unwrap().loci[&child].contains_key(key));
+        assert!(h.get::<game_traits::Traits>().unwrap().people[&child].contains_key(key));
+    }
     assert_eq!(
         h.get::<game_heredity::Heredity>().unwrap().generation[&child],
         1
@@ -400,7 +272,7 @@ fn dependent_care_consumes_food_and_travels_with_the_caregiver() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -463,7 +335,7 @@ fn local_children_can_be_fed_without_mandating_a_reunion_journey() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -500,7 +372,14 @@ fn local_children_can_be_fed_without_mandating_a_reunion_journey() {
         duration: MINUTE,
     })
     .unwrap();
-    for (person, destination) in [(older, away), (mother, away), (mother, area)] {
+    // Keep the older child's other parent with them. Their delayed six-year
+    // physiology is not a competing local patient in this ordering fixture.
+    for (person, destination) in [
+        (older, away),
+        (father, away),
+        (mother, away),
+        (mother, area),
+    ] {
         h.dispatch(game_transport::Move {
             person,
             destination,
@@ -525,7 +404,7 @@ fn local_children_can_be_fed_without_mandating_a_reunion_journey() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -545,7 +424,17 @@ fn local_children_can_be_fed_without_mandating_a_reunion_journey() {
             .unwrap();
         assert_eq!(
             host.get::<game_physiology::Bodies>().unwrap().people[&younger].hunger,
-            0
+            0,
+            "mother={:?}, patient={:?}, care={:?}, action={:?}, positions={:?}/{:?}",
+            host.get::<game_physiology::Bodies>().unwrap().people[&mother],
+            host.get::<game_physiology::Bodies>().unwrap().people[&younger],
+            host.get::<game_households::Households>()
+                .unwrap()
+                .food_care
+                .get(&mother),
+            host.get::<Actions>().unwrap().0.get(&mother),
+            game_transport::area(host.get().unwrap(), mother),
+            game_transport::area(host.get().unwrap(), younger)
         );
         assert_eq!(
             host.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(game_cargo::FOOD),
@@ -648,7 +537,7 @@ fn older_partners_with_independent_children_can_choose_more_children_without_a_p
         h.dispatch(game_lifecycle::Birth {
             mother: parents[0],
             father: parents[1],
-            caregiver: parents[0],
+            attendant: parents[0],
             area,
         })
         .unwrap();
@@ -695,7 +584,7 @@ fn current_care_demands_can_outweigh_a_parents_desire_for_another_child() {
         h.dispatch(game_lifecycle::Birth {
             mother: a,
             father: b,
-            caregiver: a,
+            attendant: a,
             area,
         })
         .unwrap();
@@ -739,7 +628,7 @@ fn a_local_adult_can_decline_or_accept_care_for_an_orphan_and_feed_them() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -755,9 +644,12 @@ fn a_local_adult_can_decline_or_accept_care_for_an_orphan_and_feed_them() {
     .unwrap();
     h.dispatch(game_care::Consider { person: volunteer })
         .unwrap();
-    assert_eq!(
-        h.get::<game_households::Households>().unwrap().dependents[&child],
-        mother
+    assert!(
+        h.get::<game_households::Households>()
+            .unwrap()
+            .carers_of(child)
+            .next()
+            .is_none()
     );
     h.dispatch(game_traits::Set {
         person: volunteer,
@@ -766,9 +658,10 @@ fn a_local_adult_can_decline_or_accept_care_for_an_orphan_and_feed_them() {
     .unwrap();
     h.dispatch(game_care::Consider { person: volunteer })
         .unwrap();
-    assert_eq!(
-        h.get::<game_households::Households>().unwrap().dependents[&child],
-        volunteer
+    assert!(
+        h.get::<game_households::Households>()
+            .unwrap()
+            .committed(volunteer, child)
     );
     h.dispatch(game_cargo::Deposit {
         inventory: pack,
@@ -803,7 +696,7 @@ fn an_orphan_enrolls_in_autonomy_even_when_no_adult_has_adopted_them() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -820,9 +713,12 @@ fn an_orphan_enrolls_in_autonomy_even_when_no_adult_has_adopted_them() {
             .people
             .contains_key(&child)
     );
-    assert_eq!(
-        h.get::<game_households::Households>().unwrap().dependents[&child],
-        mother
+    assert!(
+        h.get::<game_households::Households>()
+            .unwrap()
+            .carers_of(child)
+            .next()
+            .is_none()
     );
     h.save().unwrap();
 }
@@ -840,7 +736,7 @@ fn foster_children_also_count_when_a_person_considers_another_child() {
             h.dispatch(game_lifecycle::Birth {
                 mother,
                 father,
-                caregiver: mother,
+                attendant: mother,
                 area,
             })
             .unwrap()
@@ -870,6 +766,14 @@ fn foster_children_also_count_when_a_person_considers_another_child() {
         })
         .unwrap();
     }
+    // Isolate care burden from the additional physiological incentive.
+    let mut profile = h.get::<game_traits::Traits>().unwrap().people[&carer].clone();
+    profile.insert("reproductive-drive".into(), 0);
+    h.dispatch(game_traits::Set {
+        person: carer,
+        profile,
+    })
+    .unwrap();
     assert!(
         h.dispatch(game_households::Form {
             first: carer,
@@ -888,7 +792,12 @@ fn foster_children_also_count_when_a_person_considers_another_child() {
         5
     );
     assert_eq!(
-        h.get::<game_provisioning::Reserves>().unwrap().dependents[&mother],
+        h.get::<game_provisioning::Reserves>()
+            .unwrap()
+            .dependents
+            .get(&mother)
+            .copied()
+            .unwrap_or(0),
         0
     );
 }
@@ -978,7 +887,7 @@ fn a_distant_caregivers_death_does_not_become_a_local_adults_knowledge() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1009,9 +918,12 @@ fn a_distant_caregivers_death_does_not_become_a_local_adults_knowledge() {
     .unwrap();
     h.dispatch(game_care::Consider { person: volunteer })
         .unwrap();
-    assert_eq!(
-        h.get::<game_households::Households>().unwrap().dependents[&child],
-        mother
+    assert!(
+        h.get::<game_households::Households>()
+            .unwrap()
+            .carers_of(child)
+            .next()
+            .is_none()
     );
 }
 
@@ -1025,7 +937,7 @@ fn routine_reunion_does_not_preempt_a_caregivers_committed_food_plan() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1042,6 +954,8 @@ fn routine_reunion_does_not_preempt_a_caregivers_committed_food_plan() {
         duration: MINUTE,
     })
     .unwrap();
+    // The child chooses to remain rather than accompanying the parent back.
+    set_opinion(&mut h, child, "independence", 100);
     for (person, destination) in [(child, away), (mother, away), (mother, area)] {
         h.dispatch(game_transport::Move {
             person,
@@ -1051,10 +965,7 @@ fn routine_reunion_does_not_preempt_a_caregivers_committed_food_plan() {
         let at = h.now().after(MINUTE).unwrap();
         while h.advance(at, 128).unwrap().stop == Stop::Budget {}
     }
-    assert_eq!(
-        h.get::<game_households::Households>().unwrap().nursery[&child],
-        away
-    );
+    assert_eq!(game_transport::area(h.get().unwrap(), child).unwrap(), away);
     let _patch = h
         .dispatch(game_ecology::Create(game_ecology::Patch {
             area,
@@ -1119,7 +1030,7 @@ fn a_caregiver_accounts_for_harvest_time_when_food_is_already_carried() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1175,7 +1086,7 @@ fn a_caregiver_can_harvest_less_than_a_portion_and_finish_delivery_after_reload(
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1256,7 +1167,7 @@ fn identical_care_perceptions_choose_the_same_serving_despite_hidden_hunger() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1317,7 +1228,7 @@ fn another_parent_can_choose_to_feed_a_child_without_replacing_the_primary_careg
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1378,11 +1289,12 @@ fn another_parent_can_choose_to_feed_a_child_without_replacing_the_primary_careg
         host.dispatch(game_households::Tend { person: father })
             .unwrap();
         assert!(host.get::<game_physiology::Bodies>().unwrap().people[&child].hunger < hungry);
-        assert_eq!(
+        assert!(
             host.get::<game_households::Households>()
                 .unwrap()
-                .dependents[&child],
-            mother
+                .carers_of(child)
+                .next()
+                .is_none()
         );
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
@@ -1404,7 +1316,7 @@ fn independence_does_not_erase_a_parents_voluntary_food_help() {
         .dispatch(game_lifecycle::Birth {
             mother,
             father,
-            caregiver: mother,
+            attendant: mother,
             area,
         })
         .unwrap();
@@ -1454,7 +1366,7 @@ fn independence_does_not_erase_a_parents_voluntary_food_help() {
     assert!(
         !h.get::<game_households::Households>()
             .unwrap()
-            .dependents
+            .caregivers
             .contains_key(&child)
     );
 }
@@ -1469,7 +1381,7 @@ fn foresight_can_support_safe_accompaniment_and_relationships_still_allow_refusa
             .dispatch(game_lifecycle::Birth {
                 mother: parent,
                 father: other,
-                caregiver: parent,
+                attendant: parent,
                 area,
             })
             .unwrap();

@@ -63,13 +63,18 @@ pub(super) fn revision(tx: &Transaction<'_>, e: &Spoken) -> i32 {
             - i64::from(r.grievance)
     });
     let openness = game_vitality::disposition(tx, e.listener, "openness");
-    let conviction = game_vitality::disposition(tx, e.listener, "conviction");
+    let rigidity = game_vitality::disposition(tx, e.listener, "rigidity");
+    if rigidity >= 1000 {
+        return 0;
+    }
+    let conviction = game_vitality::disposition(tx, e.listener, "conviction") * rigidity / 500;
     let foresight = game_vitality::ability(tx, e.listener, "foresight").min(16000);
     let argument = (u64::from(e.quality) * foresight / (1000 + foresight)) as i64;
     let independent = social.opinion(e.listener, "independence").max(0);
     let resistance = (i64::from(e.stance) - i64::from(own)).abs() / 2
         + conviction * i64::from(own).abs() / 1000
-        + i64::from(independent) / 2;
+        + i64::from(independent) / 2
+        + rigidity * i64::from(own).abs() / 1000;
     let strength = openness / 10
         + match e.approach {
             Approach::Explain => argument + appeal / 4,

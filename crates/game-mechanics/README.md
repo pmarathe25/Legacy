@@ -22,3 +22,5 @@ breakage, finite materials, and 64 mid-trial cross-worker replays. Set
 `LEGACY_PHYSICS_REPORT_DIR` to an absolute path under `target/` when running
 `cargo test -p game-physics -p game-mechanics` to save compact JSON summaries.
 These are physical stress simulations, not population-history evidence.
+
+Elementary mechanisms now have explicit kinds and compatible linear/rotary ports. Gear trains can be driven through a crank and connected to drums, pulleys, levers, wedges, ramps, wheels/axles, and screws. Authored supports require finite rope and axle/peg materials. Production can use personally measured apparatus for food milling and paper/ink production as well as building materials. See `game-simple-machines` for dimensions and current physical limits.

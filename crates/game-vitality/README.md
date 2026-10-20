@@ -31,3 +31,7 @@
 - **Testing:** `cargo test -p game-vitality` verifies childhood growth trajectories, formative distress effects, aging onset, health-fraction preservation during growth, and guardian immortality.
 
 Sustained attention has inherited potential and follows cognitive development, stress, aging, and childhood conditions. It affects switching costs and retained observations rather than imposing a fixed activity cooldown. Empathy and compassion have inherited baselines, with expression shaped by development and upbringing; learned values and individual relationships remain separate. Deliberate manipulation and independent walking use expressed motor readiness. A newborn can be a victim without receiving adult physical capabilities.
+
+The inherited `rigidity` disposition affects commitment switching and is modulated
+by psychological development, accumulated childhood distress, and current stress.
+It describes persistence, not a favored identity, belief, or political procedure.

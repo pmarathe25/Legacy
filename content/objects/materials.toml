@@ -23,7 +23,7 @@ tags = ["fiber", "crop"]
 id = 136
 name = "Tree bark"
 mass = 1
-tags = ["material", "wild", "plant", "woody", "fuel-hours:1"]
+tags = ["material", "wild", "plant", "woody", "fuel-hours:1", "mark-surface:120"]
 
 [data.objects.resin]
 id = 137
@@ -83,7 +83,7 @@ tags = ["mineral", "material"]
 id = 146
 name = "Slate"
 mass = 4
-tags = ["mineral", "material"]
+tags = ["mineral", "material", "mark-surface:600"]
 
 [data.objects.copper-ore]
 id = 147
@@ -101,7 +101,7 @@ tags = ["mineral", "material"]
 id = 149
 name = "Ochre earth"
 mass = 1
-tags = ["mineral", "pigment"]
+tags = ["mineral", "pigment", "mark-pigment"]
 
 [data.objects.woad]
 id = 150
@@ -203,43 +203,43 @@ tags = ["textile", "material"]
 id = 166
 name = "Cotton cloth"
 mass = 1
-tags = ["repair-cloth", "textile", "material"]
+tags = ["repair-cloth", "textile", "material", "mark-surface:40"]
 
 [data.objects.nettle-cloth]
 id = 167
 name = "Nettle cloth"
 mass = 1
-tags = ["textile", "material"]
+tags = ["textile", "material", "mark-surface:40"]
 
 [data.objects.canvas]
 id = 168
 name = "Canvas"
 mass = 1
-tags = ["textile", "material"]
+tags = ["textile", "material", "mark-surface:50"]
 
 [data.objects.blue-dye]
 id = 169
 name = "Blue dye"
 mass = 1
-tags = ["pigment", "material"]
+tags = ["pigment", "material", "mark-pigment"]
 
 [data.objects.red-dye]
 id = 170
 name = "Red dye"
 mass = 1
-tags = ["pigment", "material"]
+tags = ["pigment", "material", "mark-pigment"]
 
 [data.objects.pigment]
 id = 171
 name = "Ground ochre pigment"
 mass = 1
-tags = ["pigment", "material"]
+tags = ["pigment", "material", "mark-pigment"]
 
 [data.objects.planks]
 id = 172
 name = "Sawn planks"
 mass = 2
-tags = ["material"]
+tags = ["material", "mark-surface:300"]
 
 [data.objects.wooden-pegs]
 id = 173
@@ -251,7 +251,7 @@ tags = ["material"]
 id = 174
 name = "Copper ingot"
 mass = 3
-tags = ["metal", "material"]
+tags = ["metal", "material", "mark-surface:700"]
 
 [data.objects.tin]
 id = 175
@@ -263,7 +263,7 @@ tags = ["metal", "material"]
 id = 176
 name = "Bronze ingot"
 mass = 3
-tags = ["metal", "material"]
+tags = ["metal", "material", "mark-surface:850"]
 
 [data.objects.lime]
 id = 177
@@ -287,19 +287,19 @@ tags = ["material"]
 id = 180
 name = "Paper"
 mass = 1
-tags = ["material", "writing", "paper"]
+tags = ["material", "writing", "paper", "mark-surface:10"]
 
 [data.objects.ink]
 id = 181
 name = "Soot ink"
 mass = 1
-tags = ["material", "writing"]
+tags = ["material", "writing", "ink", "mark-pigment"]
 
 [data.objects.dyed-cloth]
 id = 198
 name = "Dyed cloth"
 mass = 1
-tags = ["textile", "material"]
+tags = ["textile", "material", "mark-surface:40"]
 
 [data.objects.wood-ash]
 id = 207

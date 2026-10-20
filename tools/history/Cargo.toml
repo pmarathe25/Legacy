@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 publish = false
 [dependencies]
+game-mechanics.workspace = true
+game-physics.workspace = true
 game-communication.workspace = true
 game-characters.workspace = true
 game-ecology.workspace = true
