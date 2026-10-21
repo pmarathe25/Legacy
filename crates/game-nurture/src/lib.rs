@@ -4,6 +4,8 @@ use game_households::{FoodCare, Households, RememberFoodCare, TendFood};
 use game_provisioning::Plan;
 use game_sim::*;
 use serde::{Deserialize, Serialize};
+mod delivery;
+use delivery::advance;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Assist {
     pub caregiver: PersonId,
@@ -19,7 +21,25 @@ struct Review {
 }
 impl Request for Review {
     const KEY: &'static str = "care.food-review";
-    type Response = ();
+    type Response = game_choice::Outcome;
+}
+// Choice outcomes retain observed failure evidence while trying another offer.
+#[derive(Clone, Serialize, Deserialize)]
+struct TryAssist(Assist);
+impl Request for TryAssist {
+    const KEY: &'static str = "care.food-choice";
+    type Response = game_choice::Outcome;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct FeedingFailed {
+    pub caregiver: PersonId,
+    pub patient: PersonId,
+    pub good: GoodId,
+    pub quantity: u64,
+    pub reason: String,
+}
+impl Event for FeedingFailed {
+    const KEY: &'static str = "care.feeding-failed";
 }
 fn remember(tx: &mut Transaction<'_>, caregiver: PersonId, intent: Option<FoodCare>) -> Result<()> {
     tx.call(RememberFoodCare { caregiver, intent })
@@ -129,197 +149,6 @@ fn predicted(tx: &Transaction<'_>, p: PersonId, intent: &FoodCare) -> u64 {
             as u64,
     )
 }
-fn available_pack(tx: &Transaction<'_>, p: PersonId) -> Option<InventoryId> {
-    tx.get::<game_cargo::Cargo>().ok()?.carried(p).next()
-}
-fn advance(tx: &mut Transaction<'_>, p: PersonId, mut intent: FoodCare) -> Result<()> {
-    if tx.get::<Actions>()?.0.contains_key(&p) {
-        return Ok(());
-    }
-    if local(tx, p, intent.beneficiary) {
-        let body = &tx.get::<game_physiology::Bodies>()?.people[&intent.beneficiary];
-        if !body.alive {
-            return remember(tx, p, None);
-        }
-        intent.observed_need = observed_need(tx, p, intent.beneficiary)?;
-        intent.observed_at = tx.now();
-        intent.home = game_transport::area(tx.get()?, p)?;
-    }
-    if concern(tx, p, intent.beneficiary, predicted(tx, p, &intent)) <= 0 {
-        return remember(tx, p, None);
-    }
-    if !intent.returning {
-        match game_provisioning::acquire(tx, p, &mut intent.plan) {
-            Ok(false) => return remember(tx, p, Some(intent)),
-            Err(_) => {
-                game_provisioning::learn_failure(tx, p, &intent.plan);
-                return remember(tx, p, None);
-            }
-            Ok(true) => {}
-        }
-        let Some(source) = intent.plan.inventory() else {
-            remember(tx, p, None)?;
-            return prompt(tx, p);
-        };
-        if !local(tx, p, intent.beneficiary) {
-            let Some(pack) = available_pack(tx, p) else {
-                return remember(tx, p, None);
-            };
-            if pack != source {
-                let Some((good, food)) = intended_food(tx, p, &intent.plan, source) else {
-                    return remember(tx, p, None);
-                };
-                if tx
-                    .attempt(game_property::Take {
-                        actor: p,
-                        transfer: game_cargo::Transfer {
-                            from: source,
-                            to: pack,
-                            good,
-                            quantity: food
-                                .portion
-                                .min(tx.get::<game_cargo::Cargo>()?.0[&source].amount(good)),
-                        },
-                        unauthorized: true,
-                    })
-                    .is_err()
-                {
-                    return remember(tx, p, None);
-                }
-                intent.plan = Plan::Meal {
-                    inventory: pack,
-                    good: Some(good),
-                };
-                tx.call(game_knowledge::ObserveStore {
-                    person: p,
-                    inventory: pack,
-                })?;
-            }
-        }
-        intent.returning = true;
-    }
-    if tx.get::<Actions>()?.0.contains_key(&p) {
-        return remember(tx, p, Some(intent));
-    }
-    let here = game_transport::area(tx.get()?, p)?;
-    if here != intent.home {
-        let next = tx
-            .get::<game_knowledge::Knowledge>()?
-            .0
-            .get(&p)
-            .and_then(|facts| game_knowledge::route(facts, here, intent.home).ok())
-            .and_then(|route| route.areas.get(1).copied());
-        if let Some(destination) = next {
-            remember(tx, p, Some(intent))?;
-            if tx
-                .attempt(game_transport::Move {
-                    person: p,
-                    destination,
-                })
-                .is_err()
-            {
-                remember(tx, p, None)?;
-            }
-            return Ok(());
-        }
-        return remember(tx, p, None);
-    }
-    if !local(tx, p, intent.beneficiary) {
-        if tx.registered::<game_search::Seek>()
-            && let Some(target) = tx.call(game_search::Seek {
-                person: p,
-                other: intent.beneficiary,
-                last_known: intent.home,
-            })?
-        {
-            intent.home = target;
-            return remember(tx, p, Some(intent));
-        }
-        return remember(tx, p, None);
-    }
-    let inventory = intent.plan.inventory().unwrap();
-    let before = intent.observed_need;
-    let mut need = before;
-    loop {
-        if game_physiology::capable(tx, intent.beneficiary).is_err()
-            || need == 0
-            || concern(tx, p, intent.beneficiary, need) <= 0
-        {
-            break;
-        }
-        let Some((good, food)) = intended_food(tx, p, &intent.plan, inventory) else {
-            break;
-        };
-        let held = tx.get::<game_cargo::Cargo>()?.0[&inventory].amount(good);
-        let wanted =
-            (u128::from(need) * u128::from(food.portion)).div_ceil(u128::from(food.relief));
-        let quantity = wanted.min(u128::from(food.portion)).min(u128::from(held)) as u64;
-        if quantity == 0 {
-            break;
-        }
-        if tx
-            .attempt(game_physiology::Serve {
-                caregiver: p,
-                patient: intent.beneficiary,
-                inventory,
-                good,
-                quantity,
-            })
-            .is_err()
-        {
-            break;
-        }
-        let estimated_relief = (u128::from(food.relief) * u128::from(quantity)
-            / u128::from(food.portion))
-        .min(u128::from(u64::MAX)) as u64;
-        need = need.saturating_sub(estimated_relief);
-    }
-    tx.call(game_knowledge::ObserveStore {
-        person: p,
-        inventory,
-    })?;
-    let reconsider = need > 0 && need < before && concern(tx, p, intent.beneficiary, need) > 0;
-    remember(tx, p, None)?;
-    if reconsider {
-        tx.schedule(tx.now().after(MINUTE)?, 45, Review { caregiver: p })?;
-    }
-    Ok(())
-}
-fn intended_food(
-    tx: &Transaction<'_>,
-    p: PersonId,
-    plan: &Plan,
-    inventory: InventoryId,
-) -> Option<(GoodId, game_objects::Food)> {
-    let good = tx
-        .get::<game_knowledge::Knowledge>()
-        .ok()?
-        .0
-        .get(&p)
-        .and_then(|facts| plan.intended_good(facts));
-    if let Some(good) = good {
-        return tx
-            .get::<game_objects::Objects>()
-            .ok()?
-            .food_rules()
-            .get(&good)
-            .cloned()
-            .map(|food| (good, food));
-    }
-    game_nutrition_choice(tx, p, inventory)
-}
-
-fn game_nutrition_choice(
-    tx: &Transaction<'_>,
-    p: PersonId,
-    inventory: InventoryId,
-) -> Option<(GoodId, game_objects::Food)> {
-    game_nutrition::choose_meal(
-        tx,
-        p,
-        &tx.get::<game_cargo::Cargo>().ok()?.0.get(&inventory)?.goods,
-    )
-}
 fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool> {
     game_physiology::capable(tx, p)?;
     require(
@@ -401,24 +230,23 @@ fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool>
         returning: false,
     };
     remember(tx, p, Some(intent.clone()))?;
-    advance(tx, p, intent)?;
-    Ok(true)
+    advance(tx, p, intent)
 }
-fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
+fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
     if game_physiology::capable(tx, p).is_err()
         || !game_vitality::can_manipulate(tx, p)
         || Some(p) == tx.get::<game_lineage::Lineage>()?.current
     {
-        return Ok(());
+        return Ok(false);
     }
     let Some(h) = tx.get::<Households>().ok() else {
-        return Ok(());
+        return Ok(false);
     };
     if let Some(intent) = h.food_care.get(&p).cloned() {
         return advance(tx, p, intent);
     }
     if !h.enabled {
-        return Ok(());
+        return Ok(false);
     }
     let local_children: Vec<_> = candidates(tx, p)
         .into_iter()
@@ -432,10 +260,10 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     children.sort_unstable_by_key(|(value, child)| (std::cmp::Reverse(*value), *child));
     for (_, child) in children {
         if start(tx, p, child)? {
-            break;
+            return Ok(true);
         }
     }
-    Ok(())
+    Ok(false)
 }
 fn prompt(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     if tx
@@ -540,17 +368,20 @@ pub fn register(b: &mut Builder) -> Result<()> {
                 e.person,
                 format!("care:food:{}", child.0),
                 game_choice::motive(desire, 0, 0, 1, 0),
-                Assist {
+                TryAssist(Assist {
                     caregiver: e.person,
                     beneficiary: child,
-                },
+                }),
             )?;
         }
         Ok(())
     })?;
     b.request::<Assist>(|tx, r| start(tx, r.caregiver, r.beneficiary))?;
-    b.request::<TendFood>(|tx, r| consider(tx, r.caregiver))?;
-    b.request::<Review>(|tx, r| consider(tx, r.caregiver))?;
+    b.request::<TryAssist>(|tx, r| {
+        start(tx, r.0.caregiver, r.0.beneficiary).map(game_choice::Outcome::from)
+    })?;
+    b.request::<TendFood>(|tx, r| consider(tx, r.caregiver).map(|_| ()))?;
+    b.request::<Review>(|tx, r| consider(tx, r.caregiver).map(game_choice::Outcome::from))?;
     b.subscribe::<ActionFinished>("care.food-review", |tx, e| prompt(tx, e.person))?;
     b.subscribe::<game_physiology::Fed>("care.food-after-self-meal", |tx, e| {
         if e.caregiver == e.patient {

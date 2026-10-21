@@ -30,5 +30,6 @@ game-physiology.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-content.workspace = true
 game-items.workspace = true
 game-land.workspace = true

@@ -42,3 +42,5 @@ an indifferent but intelligent individual can still decline care. Food hypothese
 care techniques, and learned commitments are acquired rather than genetic content.
 
 Neighbors can offer care without kinship or an existing commitment. Candidates include personally known family, voluntary beneficiaries, and bounded local encounters. Actual need must still be inferred or communicated; low cognitive ability can prevent the food hypothesis. Several people may help the same person, and a caregiver may help several others over time.
+
+Food-care choices report `Reconsider` when neither feeding nor physical work made progress. A declined serving emits `care.feeding-failed` with the observed rejection reason; the ordinary chooser can try alternatives and apply its existing failure learning. Pending travel/gathering and actual feeding remain successful progress.

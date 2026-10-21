@@ -77,7 +77,9 @@ fn willing(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> Result<bool> {
     let patience = game_vitality::disposition(tx, p, "patience");
     let openness = game_vitality::disposition(tx, p, "openness");
     let occupied = tx.get::<Actions>()?.0.contains_key(&p);
-    Ok(Some(p) != tx.get::<game_lineage::Lineage>()?.current
+    Ok(game_vitality::can_converse(tx, p)
+        && game_vitality::can_manipulate(tx, p)
+        && Some(p) != tx.get::<game_lineage::Lineage>()?.current
         && game_physiology::capable(tx, p).is_ok()
         && regard + (patience + openness) / 20 > if occupied { 80 } else { 10 })
 }

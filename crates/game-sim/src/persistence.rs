@@ -59,8 +59,8 @@ impl Host {
             .split_once("\"resources\":{}")
             .expect("resource slot");
         let io = |e: std::io::Error| Error::InvalidSave(e.to_string());
-        out.write_all(prefix.as_bytes()).map_err(&io)?;
-        out.write_all(b"\"resources\":{").map_err(&io)?;
+        out.write_all(prefix.as_bytes()).map_err(io)?;
+        out.write_all(b"\"resources\":{").map_err(io)?;
         self.registry.resources.write_entries(&self.data, out)?;
         out.write_all(suffix.as_bytes()).map_err(io)
     }

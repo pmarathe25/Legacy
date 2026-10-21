@@ -9,6 +9,7 @@ fn builder() -> Builder {
     game_property::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
     game_traits::plugin(&mut b).unwrap();
+    game_vitality::plugin(&mut b).unwrap();
     game_relationships::plugin(&mut b).unwrap();
     game_agreements::plugin(&mut b).unwrap();
     game_demand::plugin(&mut b).unwrap();
@@ -407,5 +408,52 @@ fn offer_shortcuts_preserve_refusals_and_allow_custom_trade_checks() {
         );
         let held = h.get::<game_cargo::Cargo>().unwrap().0[&first].amount(game_cargo::FOOD);
         assert_eq!(held, if custom { 8 } else { 0 });
+    }
+}
+
+#[test]
+fn an_infant_cannot_negotiate_or_accept_a_trade_even_with_exceptional_potential() {
+    for infant_is_first in [true, false] {
+        let (mut h, a, b, first, second) = setup();
+        h.dispatch(game_traits::Install(
+            game_traits::load(&mut game_content::Store::standard()).unwrap(),
+        ))
+        .unwrap();
+        let infant = if infant_is_first { a } else { b };
+        h.dispatch(game_vitality::Register {
+            person: infant,
+            born: h.now(),
+            span: Some(SimDuration(80 * 365 * DAY.0)),
+            base_health: 100,
+        })
+        .unwrap();
+        h.dispatch(game_traits::Set {
+            person: infant,
+            profile: [("intelligence".into(), 16000), ("agility".into(), 16000)].into(),
+        })
+        .unwrap();
+        for (inventory, good) in [(first, game_cargo::TIMBER), (second, game_cargo::FOOD)] {
+            h.dispatch(game_cargo::Deposit {
+                inventory,
+                good,
+                quantity: 100,
+            })
+            .unwrap();
+        }
+        let before = h.save().unwrap();
+        assert!(
+            h.dispatch(game_exchange::Trade {
+                first: a,
+                second: b,
+                offered: game_cargo::TIMBER,
+                requested: game_cargo::FOOD,
+                offered_quantity: 5,
+                requested_quantity: 5,
+            })
+            .unwrap_err()
+            .to_string()
+            .contains("offer refused")
+        );
+        assert_eq!(h.save().unwrap(), before);
     }
 }

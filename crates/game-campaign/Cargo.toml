@@ -35,6 +35,7 @@ game-physiology.workspace=true
 serde.workspace=true
 
 [dev-dependencies]
+game-identity.workspace=true
 game-choice.workspace = true
 game-search.workspace = true
 game-testimony.workspace = true

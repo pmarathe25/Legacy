@@ -2,7 +2,7 @@
 
 Legacy is a headless simulation game built as a modular Rust 2024 workspace where small, independent crates compose into a single transactional simulation host.
 
-**Why it matters:** Every simulation mechanic—from diploid crop genetics and metabolic hunger to spoken vocabulary and institutional voting—lives in an isolated owner crate under [`crates/`](crates/README.md). Features communicate strictly through typed requests and events, keeping the simulation deterministic, testable in isolation, and extensible via runtime TOML data in [`content/`](content/README.md).
+**Why it matters:** Every simulation mechanic—from diploid crop genetics and metabolic hunger to spoken vocabulary and institutional arrangements—lives in an isolated owner crate under [`crates/`](crates/README.md). Features communicate strictly through typed requests and events, keeping the simulation deterministic, testable in isolation, and extensible via runtime TOML data in [`content/`](content/README.md).
 
 > **Rewrite status:** This workspace is a clean-slate rewrite of an earlier prototype ([`MIGRATION.md`](MIGRATION.md)). Older saves, scenarios, and APIs are incompatible, and portions of the full multigenerational campaign in [`docs/plan.md`](docs/plan.md) and `docs/design/` remain unfinished.
 

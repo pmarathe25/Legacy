@@ -18,6 +18,7 @@ These notes distinguish confirmed intent from questions about future work. They 
 | Storage and scheduling | Evaluate standalone Bevy ECS, Legion, and a custom system tailored to this game. No candidate is selected solely by its general reputation or a simple iteration benchmark. |
 | Society | Government and food access emerge from people, beliefs, arrangements, and enforcement. Do not impose one universal property or sharing policy. |
 | Social scope | Include sharing, refusal, employment and other labor arrangements, agreement compliance, theft, and coercion; do not stop at a minimal voluntary economy. |
+| Political arrangements | Characters can construct consultation and influence rules; voting and its weights are not universal defaults. Power can also arise through force, fear, dependence or manipulation. Compliance is distinct from approval and private belief. |
 | Social invention | Include invented institutions and rules, learned values grounded in modeled experience, and bounded reasoning from structured precedents. These operate within represented facts and actions; unrestricted human-like reasoning is outside scope. |
 | Technological invention | Defer the decision until production exists, then evaluate a bounded domain. Ordinary production, recipes, and learning remain in scope. |
 | Logistics | Include carrying and delivery. Resources must reach their destination physically. |

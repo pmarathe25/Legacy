@@ -75,6 +75,9 @@ fn choose(
     b: PersonId,
     forced: bool,
 ) -> Result<Option<(Procedure, BTreeMap<PersonId, Attachment>)>> {
+    if !forced && (!game_vitality::can_converse(tx, a) || !game_vitality::can_converse(tx, b)) {
+        return Ok(None);
+    }
     let mut candidates = vec![];
     for (leader, subject) in [(a, b), (b, a)] {
         if forced && leader != a {
@@ -99,37 +102,38 @@ fn choose(
     if let Some((_, _, leader, subject, basis)) = candidates.into_iter().max_by_key(|c| (c.0, c.1))
     {
         return Ok(Some((
-            Procedure::Leader(leader),
+            Procedure::Consultation(game_deliberation::DecisionRule {
+                influence: [(leader, 1)].into(),
+                required_support: 1,
+            }),
             BTreeMap::from([(leader, Attachment::Independent), (subject, basis)]),
         )));
     }
     if cooperative(tx, a, b) && cooperative(tx, b, a) {
-        let vote = voice(tx, a) >= 6 && voice(tx, b) >= 6;
+        let arrangement = game_deliberation::construct(tx, a, &BTreeSet::from([a, b]));
+        let consult = [a, b].iter().all(|p| {
+            game_deliberation::preference(tx, *p, &arrangement)
+                > game_deliberation::personal_preference(tx, *p)
+        });
         Ok(Some((
-            if vote {
-                Procedure::Unanimity
+            if consult {
+                Procedure::Consultation(arrangement)
             } else {
                 Procedure::Personal
             },
-            [
-                (
-                    a,
-                    if vote {
-                        Attachment::Voice
-                    } else {
-                        Attachment::Cooperation
-                    },
-                ),
-                (
-                    b,
-                    if vote {
-                        Attachment::Voice
-                    } else {
-                        Attachment::Cooperation
-                    },
-                ),
-            ]
-            .into(),
+            [a, b]
+                .into_iter()
+                .map(|p| {
+                    (
+                        p,
+                        if consult {
+                            Attachment::Voice
+                        } else {
+                            Attachment::Cooperation
+                        },
+                    )
+                })
+                .collect(),
         )))
     } else {
         Ok(None)
@@ -183,7 +187,7 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
     }) {
         return Ok(false);
     }
-    let Some((procedure, attachments)) = choose(tx, a, b, forced)? else {
+    let Some((mut procedure, mut attachments)) = choose(tx, a, b, forced)? else {
         return Ok(false);
     };
     let (Some(first), Some(second)) = (supplies(tx, a)?, supplies(tx, b)?) else {
@@ -194,21 +198,40 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
     let area = tx.get::<game_social_life::SocialLife>()?.people[&a]
         .area
         .unwrap();
-    let name_person = if let Procedure::Leader(p) = procedure {
-        p
-    } else {
-        b
-    };
+    let name_person = procedure.sole_decider().unwrap_or(b);
     let person_name = &tx.get::<game_social_life::SocialLife>()?.people[&name_person].name;
     let name = format!(
         "{} {}",
         person_name.split_whitespace().last().unwrap_or(person_name),
-        if matches!(procedure, Procedure::Leader(_)) {
+        if procedure.sole_decider().is_some() {
             "Company"
         } else {
             "Hearth"
         }
     );
+    // Cooperation can establish a joint arrangement, but renewing access does
+    // not rewrite an agreement. Changes use the deliberation owner.
+    if !forced && let Some(id) = existing {
+        let current = &tx.get::<game_institutions::Institutions>()?.groups[&id].procedure;
+        if *current != Procedure::Personal {
+            procedure = current.clone();
+            for p in [a, b] {
+                let basis = if let Some(leader) = procedure.sole_decider() {
+                    if leader == p {
+                        Attachment::Independent
+                    } else {
+                        let Some(basis) = allegiance(tx, p, leader)? else {
+                            return Ok(false);
+                        };
+                        basis
+                    }
+                } else {
+                    Attachment::Voice
+                };
+                attachments.insert(p, basis);
+            }
+        }
+    }
     let mut changed = existing.is_none();
     let id = if let Some(id) = existing {
         if tx.get::<game_institutions::Institutions>()?.groups[&id].procedure != procedure {
@@ -231,12 +254,12 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
         }))?
     };
     for (p, inventory) in [(a, first), (b, second)] {
-        let users = match procedure {
-            Procedure::Leader(leader) if leader != p => BTreeSet::from([leader, p]),
-            Procedure::Leader(_) if belief(tx, p).sharing <= 0 => BTreeSet::from([p]),
+        let users = match procedure.sole_decider() {
+            Some(leader) if leader != p => BTreeSet::from([leader, p]),
+            Some(_) if belief(tx, p).sharing <= 0 => BTreeSet::from([p]),
             _ => members.clone(),
         };
-        if matches!(procedure, Procedure::Unanimity) && existing.is_none() {
+        if procedure.consults() && procedure.sole_decider().is_none() && existing.is_none() {
             let proposal = tx.call(game_institutions::Propose {
                 person: p,
                 institution: id,
@@ -250,8 +273,7 @@ fn organize(tx: &mut Transaction<'_>, a: PersonId, b: PersonId, forced: bool) ->
                 tx.call(game_institutions::Vote {
                     person: *person,
                     proposal,
-                    support: voice(tx, *person) >= 6
-                        && cooperative(tx, *person, if *person == a { b } else { a }),
+                    support: cooperative(tx, *person, if *person == a { b } else { a }),
                 })?;
             }
         } else {
@@ -329,8 +351,13 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             return Ok(false);
         }
         let group = &tx.get::<game_institutions::Institutions>()?.groups[&r.institution];
-        match group.procedure {
-            Procedure::Leader(p) if p == r.person => Ok(allegiance(tx, r.custodian, p)?.is_some()),
+        if let Some(p) = group.procedure.sole_decider() {
+            return Ok(p == r.person && allegiance(tx, r.custodian, p)?.is_some());
+        }
+        match &group.procedure {
+            Procedure::Consultation(rule) => Ok(belief(tx, r.custodian).sharing > 0
+                && game_deliberation::preference(tx, r.custodian, rule)
+                    >= game_deliberation::personal_preference(tx, r.custodian)),
             Procedure::Unanimity | Procedure::Majority => {
                 Ok(voice(tx, r.custodian) >= 6 && belief(tx, r.custodian).sharing > 0)
             }

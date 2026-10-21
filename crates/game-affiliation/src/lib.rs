@@ -5,7 +5,7 @@ use game_institutions::Procedure;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Affiliation {
     pub next: Table<PersonId, SimTime>,
@@ -30,7 +30,17 @@ fn basis(
     p: PersonId,
     group: &game_institutions::Institution,
 ) -> Result<Option<Attachment>> {
-    if let Procedure::Leader(leader) = group.procedure {
+    if let Some(Attachment::Fear(leader)) = tx
+        .get::<game_communities::Communities>()?
+        .attachments
+        .get(&p)
+        && game_physiology::capable(tx, *leader).is_ok()
+        && game_transport::area(tx.get()?, p).ok() == game_transport::area(tx.get()?, *leader).ok()
+        && game_pressure::afraid(tx, p, *leader)?
+    {
+        return Ok(Some(Attachment::Fear(*leader)));
+    }
+    if let Some(leader) = group.procedure.sole_decider() {
         if accepts(tx, p, leader)
             && tx
                 .get::<game_relationships::Social>()?
@@ -48,13 +58,11 @@ fn basis(
         return Ok(None);
     }
     if group.members.iter().any(|m| accepts(tx, p, *m)) {
-        Ok(Some(
-            if matches!(group.procedure, Procedure::Majority | Procedure::Unanimity) {
-                Attachment::Voice
-            } else {
-                Attachment::Cooperation
-            },
-        ))
+        Ok(Some(if group.procedure.consults() {
+            Attachment::Voice
+        } else {
+            Attachment::Cooperation
+        }))
     } else {
         Ok(None)
     }
@@ -105,8 +113,7 @@ fn encounter(tx: &mut Transaction<'_>, a: PersonId, b: PersonId) -> Result<()> {
     for p in &group.members {
         if game_physiology::capable(tx, *p).is_ok()
             && game_transport::area(tx.get()?, *p).ok() == Some(area)
-            && (accepts(tx, *p, newcomer)
-                || matches!(group.procedure,Procedure::Leader(l) if l==*p))
+            && (accepts(tx, *p, newcomer) || group.procedure.sole_decider() == Some(*p))
         {
             responses.insert(*p);
         }
@@ -144,7 +151,17 @@ struct Discuss {
 }
 impl Request for Discuss {
     const KEY: &'static str = "affiliation.discuss";
-    type Response = bool;
+    type Response = game_choice::Outcome;
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ArrangementDiscussed {
+    pub proposer: PersonId,
+    pub institution: InstitutionId,
+    pub procedure: Procedure,
+    pub responses: BTreeMap<PersonId, bool>,
+}
+impl Event for ArrangementDiscussed {
+    const KEY: &'static str = "affiliation.arrangement-discussed";
 }
 // Called only when a proposal has actually been addressed to this participant.
 fn assent(tx: &Transaction<'_>, p: PersonId, procedure: &Procedure) -> bool {
@@ -159,6 +176,7 @@ fn assent(tx: &Transaction<'_>, p: PersonId, procedure: &Procedure) -> bool {
         Procedure::Leader(l) => {
             *l == p || accepts(tx, p, *l) && social.beliefs.get(&p).is_some_and(|b| b.authority > 0)
         }
+        Procedure::Consultation(_) => true,
         Procedure::Majority | Procedure::Unanimity => voice > 0,
         Procedure::Personal => social.beliefs.get(&p).is_none_or(|b| b.authority <= 0),
     }
@@ -174,7 +192,8 @@ fn preference(tx: &Transaction<'_>, p: PersonId, procedure: &Procedure) -> i64 {
     };
     let authority = social.beliefs.get(&p).map_or(0, |b| i64::from(b.authority));
     match procedure {
-        Procedure::Personal => value("independence") * 3 - authority * 3,
+        Procedure::Personal => game_deliberation::personal_preference(tx, p),
+        Procedure::Consultation(rule) => game_deliberation::preference(tx, p, rule),
         Procedure::Majority => value("shared-decisions") * 4,
         Procedure::Unanimity => {
             value("shared-decisions") * 3 + game_vitality::disposition(tx, p, "patience") / 100
@@ -196,8 +215,50 @@ fn change_cost(
             tx,
             p,
             &format!("institution:{}", id.0),
-            &format!("{alternative:?}"),
+            &commitment(alternative),
         )
+}
+fn commitment(procedure: &Procedure) -> String {
+    match procedure {
+        Procedure::Consultation(_) => {
+            format!("arrangement:{}", fingerprint(&format!("{procedure:?}")))
+        }
+        _ => format!("{procedure:?}"),
+    }
+}
+fn response(
+    tx: &Transaction<'_>,
+    p: PersonId,
+    id: InstitutionId,
+    current: &Procedure,
+    proposed: &Procedure,
+) -> Result<Option<Attachment>> {
+    let willing = assent(tx, p, proposed)
+        && preference(tx, p, proposed)
+            > preference(tx, p, current) + change_cost(tx, p, id, proposed);
+    if let Some(leader) = proposed.sole_decider() {
+        if willing {
+            return Ok(Some(if leader == p {
+                Attachment::Independent
+            } else {
+                Attachment::Loyalty(leader)
+            }));
+        }
+        if leader != p
+            && game_physiology::capable(tx, leader).is_ok()
+            && game_transport::area(tx.get()?, p).ok()
+                == game_transport::area(tx.get()?, leader).ok()
+            && game_pressure::afraid(tx, p, leader)?
+        {
+            return Ok(Some(Attachment::Fear(leader)));
+        }
+        return Ok(None);
+    }
+    Ok(willing.then_some(if proposed.consults() {
+        Attachment::Voice
+    } else {
+        Attachment::Independent
+    }))
 }
 fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     if !game_vitality::can_converse(tx, p)
@@ -216,7 +277,7 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     };
     let group = tx.get::<game_institutions::Institutions>()?.groups[&id].clone();
     if group.members.len() > 1
-        && !matches!(group.procedure, Procedure::Leader(l) if l == p)
+        && group.procedure.sole_decider() != Some(p)
         && basis(tx, p, &group)?.is_none()
         && !game_choice::offer(
             tx,
@@ -231,13 +292,11 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     {
         leave(tx, p, id)?;
     }
-    for (name, procedure) in [
-        ("majority", Procedure::Majority),
-        ("unanimity", Procedure::Unanimity),
-        ("personal", Procedure::Personal),
-        ("lead", Procedure::Leader(p)),
+    for procedure in [
+        Procedure::Personal,
+        Procedure::Consultation(game_deliberation::construct(tx, p, &group.members)),
     ] {
-        if procedure == group.procedure || group.members.len() < 2 {
+        if procedure == group.procedure {
             continue;
         }
         let value = preference(tx, p, &procedure) - preference(tx, p, &group.procedure);
@@ -247,7 +306,11 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
         game_choice::offer(
             tx,
             p,
-            format!("affiliation:{name}:{}", id.0),
+            format!(
+                "affiliation:arrangement:{}:{}",
+                id.0,
+                fingerprint(&format!("{procedure:?}"))
+            ),
             game_choice::motive(0, 0, value, 5 + change_cost(tx, p, id, &procedure), 0),
             Discuss {
                 person: p,
@@ -268,43 +331,118 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let area = game_transport::area(tx.get()?, r.person)?;
         let now = tx.now();
         tx.edit::<Affiliation>()?.next.insert(r.person, now);
-        for p in &group.members {
-            if Some(*p) == tx.get::<game_lineage::Lineage>()?.current
-                || game_transport::area(tx.get()?, *p).ok() != Some(area)
-                || !assent(tx, *p, &r.procedure)
-                || preference(tx, *p, &r.procedure)
-                    <= preference(tx, *p, &group.procedure)
-                        + change_cost(tx, *p, r.institution, &r.procedure)
-            {
-                return Ok(false);
-            }
+        if group.members.iter().any(|p| {
+            Some(*p) == tx.get::<game_lineage::Lineage>().unwrap().current
+                || !game_vitality::can_converse(tx, *p)
+                || game_transport::area(tx.get().unwrap(), *p).ok() != Some(area)
+        }) {
+            return Ok(game_choice::Outcome::Reconsider);
+        }
+        let attachments: BTreeMap<_, _> = group
+            .members
+            .iter()
+            .map(|p| {
+                Ok((
+                    *p,
+                    if *p == r.person && r.procedure.sole_decider() == Some(*p) {
+                        // Claiming power is an expressed act, even if the claimant
+                        // has no private belief in the legitimacy of authority.
+                        Some(Attachment::Independent)
+                    } else {
+                        response(tx, *p, r.institution, &group.procedure, &r.procedure)?
+                    },
+                ))
+            })
+            .collect::<Result<_>>()?;
+        let responses: BTreeMap<_, _> =
+            attachments.iter().map(|(p, a)| (*p, a.is_some())).collect();
+        tx.emit(
+            ArrangementDiscussed {
+                proposer: r.person,
+                institution: r.institution,
+                procedure: r.procedure.clone(),
+                responses: responses.clone(),
+            },
+            group.members.iter().copied().collect(),
+        )?;
+        if responses.values().any(|accepted| !accepted) {
+            return Ok(game_choice::Outcome::Reconsider);
         }
         tx.call(game_institutions::Arrange {
             institution: r.institution,
             procedure: r.procedure.clone(),
             responses: group.members.clone(),
         })?;
-        for p in group.members {
-            tx.call(game_identity::Commit {
-                person: p,
-                domain: format!("institution:{}", r.institution.0),
-                preference: format!("{:?}", r.procedure),
-            })?;
-            let attachment = match r.procedure {
-                Procedure::Leader(l) if l != p => Attachment::Loyalty(l),
-                Procedure::Majority | Procedure::Unanimity => Attachment::Voice,
-                _ => Attachment::Independent,
-            };
+        for (p, attachment) in attachments {
+            let attachment = attachment.unwrap();
+            // Outward submission is not a private commitment to the ruler's terms.
+            if !matches!(attachment, Attachment::Fear(_)) {
+                tx.call(game_identity::Commit {
+                    person: p,
+                    domain: format!("institution:{}", r.institution.0),
+                    preference: commitment(&r.procedure),
+                })?;
+            }
             tx.call(game_communities::Membership {
                 institution: r.institution,
                 person: p,
                 attachment: Some(attachment),
             })?;
         }
-        Ok(true)
+        Ok(game_choice::Outcome::Performed)
     })?;
     b.subscribe::<game_social_life::Encounter>("z.affiliation.admission", |tx, e| {
         encounter(tx, e.first, e.second)
+    })?;
+    b.subscribe::<game_pressure::Submitted>("z.affiliation.submission", |tx, e| {
+        if matches!(e.purpose, game_pressure::Purpose::Allegiance) {
+            let s = tx.get::<game_communities::Communities>()?;
+            if let Some(id) = s.members.get(&e.leader).copied()
+                && s.members.get(&e.subject) == Some(&id)
+                && tx.get::<game_institutions::Institutions>()?.groups[&id]
+                    .members
+                    .len()
+                    > 2
+            {
+                // Individual submission matters even while others resist.
+                tx.call(game_communities::Membership {
+                    institution: id,
+                    person: e.subject,
+                    attachment: Some(Attachment::Fear(e.leader)),
+                })?;
+                let pack = tx.get::<game_cargo::Cargo>()?.carried(e.subject).next();
+                if let Some(inventory) = pack
+                    && tx
+                        .attempt(game_property::Permit {
+                            issuer: e.subject,
+                            person: e.leader,
+                            inventory,
+                            allow: true,
+                        })
+                        .is_ok()
+                {
+                    tx.call(game_institutions::RecordPractice {
+                        institution: id,
+                        terms: game_institutions::AccessRule {
+                            custodian: e.subject,
+                            inventory,
+                            users: [e.leader].into(),
+                        },
+                    })?;
+                }
+                // Each affected member can still resist; defeating one member is
+                // not evidence that everyone else has submitted.
+                tx.call(Discuss {
+                    person: e.leader,
+                    institution: id,
+                    procedure: Procedure::Consultation(game_deliberation::DecisionRule {
+                        influence: [(e.leader, 1)].into(),
+                        required_support: 1,
+                    }),
+                })?;
+            }
+        }
+        Ok(())
     })?;
     game_choice::provider(b, "a.affiliation.consider", |tx, e| {
         if !game_vitality::can_converse(tx, e.person) {
@@ -342,7 +480,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                 .cloned()
                 .unwrap_or_default();
             let s = tx.get::<game_communities::Communities>()?;
-            if s.members.get(&e.person) == s.members.get(&other) {
+            let same_group = s.members.get(&e.person) == s.members.get(&other);
+            let can_press = !s.members.contains_key(&e.person) || same_group;
+            if same_group {
                 let value = i64::from(relation.affection + relation.trust - relation.grievance);
                 game_choice::offer(
                     tx,
@@ -357,10 +497,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             }
             if game_vitality::can_manipulate(tx, e.person)
                 && game_vitality::can_converse(tx, other)
-                && !tx
-                    .get::<game_communities::Communities>()?
-                    .members
-                    .contains_key(&e.person)
+                && can_press
             {
                 let goal = game_vitality::disposition(tx, e.person, "aggression") / 10
                     + game_vitality::disposition(tx, e.person, "ambition") / 10

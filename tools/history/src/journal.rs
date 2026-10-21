@@ -100,6 +100,8 @@ impl Ledger {
                     | "mechanics.tested"
                     | "literacy.developed"
                     | "households.care-changed"
+                    | "care.feeding-failed"
+                    | "affiliation.arrangement-discussed"
                     | "works.created"
                     | "works.shared"
                     | "institutions.membership-changed"
@@ -139,6 +141,21 @@ impl Ledger {
                     self.journal_year = year;
                 }
                 match event.kind.as_str() {
+                    "care.feeding-failed" => {
+                        significant = self.seasonal.insert(format!(
+                            "care-failed:{}:{}:{}:{}",
+                            event.data["caregiver"],
+                            event.data["patient"],
+                            event.data["good"],
+                            event.data["reason"],
+                        ));
+                    }
+                    "affiliation.arrangement-discussed" => {
+                        significant = self.seasonal.insert(format!(
+                            "arrangement:{}:{}",
+                            event.data["proposer"], event.data["institution"],
+                        ));
+                    }
                     "cultivars.created" => significant = false,
                     "households.care-changed" => {
                         significant = self.seen.insert(format!(

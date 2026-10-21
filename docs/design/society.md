@@ -20,7 +20,7 @@ People invent arrangements within the facts, experiences, and actions represente
 | Learned values | Acquire attachments to new practices, groups, and ideals grounded in modeled experience; let those values change goals, decisions, and social responses. | Naming an ideal does not create a physiological need or an unmodeled mental capability. |
 | Reasoning from precedents | Compare structured cases, weigh conflicting represented principles, generalize to unfamiliar combinations, and revise judgments from experience. | Use available knowledge and uncertain estimates. Unrestricted human-like interpretation of arbitrary natural-language principles is outside scope. |
 
-Definitions are structured data with stable identities and explicit meanings. Display names and explanations describe them; generated prose does not create behavior. Rules can define new social permissions and duties, but fulfilling or enforcing them still requires actual people, actions, and resources. They cannot add physical abilities or bypass conservation and consent rules.
+Definitions are structured data with stable identities and explicit meanings. Display names and explanations describe them; generated prose does not create behavior. Rules can define new social permissions and duties, but fulfilling or enforcing them still requires actual people, actions, and resources. They cannot add physical abilities or bypass conservation and physical limits. Willing agreement is not a universal precondition for social arrangements: threats, dependence, deception and actual force can produce outward compliance. Track that compliance separately from private approval, loyalty and belief; coercion must have represented means and consequences.
 
 Distinguish representing an idea, proposing it autonomously, and evaluating its consequences. A rule interpreter alone does not implement invention. Start with bounded candidate construction and evaluation once needs, knowledge, agreements, and disputes exist. Choose the concrete search and case-comparison algorithms through implementation and behavioral tests; the kernel does not need a general programming language or language model.
 
@@ -77,11 +77,11 @@ An institution records:
 - its policies, enforcement procedures, and active disputes;
 - the people who currently recognize or oppose its authority.
 
-Initial decision procedures can be leader decision, unanimity, majority vote, or delegated decision within a mandate. These are useful early examples for councils, courts, guilds, households, armies, and governments. Do not treat them as an exhaustive enum of permissible future institutions.
+Characters decide whether to consult others and whose opinions matter, including the influence assigned to each participant and the support required to act. Equal voting, unequal consultation, delegation or personal rule can result; these are descriptions, not a prescribed menu. Adoption can follow negotiation, manipulation, intimidation or seizure of power. A claimant can declare rules that others dispute, and practical control depends on who complies, resists, defects or enforces them.
 
 An officeholder can only commit resources or make agreements within their actual authority. Their signature does not bind a competing faction that rejects that authority. Distinguish a valid institutional procedure from whether its result is obeyed.
 
-An institution needs a creation path: people propose a purpose and rules, negotiate participation and contributions, and begin operating when the founding terms are met. Changes, splinter groups, dissolution, and replacement use the same political process. Do not require the player to create every institution.
+An institution needs a creation path: people propose a purpose and rules, negotiate participation and contributions, and begin operating as people enact or enforce the terms. Changes, splinter groups, dissolution, and replacement use the same political process. Do not require the player to create every institution.
 
 ## Laws, disputes, and enforcement
 

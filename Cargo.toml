@@ -8,6 +8,7 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-deliberation = { path = "crates/game-deliberation" }
 game-simple-machines = { path = "crates/game-simple-machines" }
 game-inscription = { path = "crates/game-inscription" }
 game-violence = { path = "crates/game-violence" }

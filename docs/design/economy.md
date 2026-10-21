@@ -103,7 +103,7 @@ Support typed terms before adding new economic forms:
 
 Each agreement records parties, authorized signatories, terms, knowledge or witnesses, dates, guarantees, recognized adjudicator if any, performance records, and state. States include proposed, active, fulfilled, rejected, withdrawn, breached, renegotiated, and terminated. Breach does not automatically erase surviving obligations.
 
-Validate acceptance against consent, authority, and each term's meaning. Acceptance atomically creates the agreement and any immediately effective rights or claim transfers. Only transfers physically possible at that moment occur immediately. A promised delivery from a distant store becomes an obligation and task, never an instant stock relocation.
+Validate responses against authority and each term's meaning, recording whether participation was willing or compelled. A coerced signature or apparent agreement based on deception does not establish private approval or universal legitimacy. Acceptance atomically creates the agreement and any immediately effective rights or claim transfers. Only transfers physically possible at that moment occur immediately. A promised delivery from a distant store becomes an obligation and task, never an instant stock relocation.
 
 Output shares accrue from attributed gross production under a stated fraction. Accrual creates an amount owed; delivery or an agreed on-site division discharges it. Keep integer remainders so a stream of small harvests pays the same share as one large harvest.
 

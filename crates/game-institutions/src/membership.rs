@@ -50,8 +50,12 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             "new member must accept",
         )?;
         let sponsors: BTreeSet<_> = r.responses.intersection(&group.members).copied().collect();
-        let accepted = match group.procedure {
-            Procedure::Leader(p) => sponsors.contains(&p),
+        let accepted = match &group.procedure {
+            Procedure::Consultation(rule) => rule.passed(
+                &group.members,
+                &sponsors.iter().map(|p| (*p, true)).collect(),
+            ),
+            Procedure::Leader(p) => sponsors.contains(p),
             Procedure::Majority => sponsors.len() > group.members.len() / 2,
             Procedure::Personal | Procedure::Unanimity => sponsors == group.members,
         };
@@ -84,17 +88,21 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             rule.users.remove(&r.person);
         }
         let previous = group.procedure.clone();
-        let changed = matches!(group.procedure,Procedure::Leader(p) if p==r.person);
-        if changed {
-            group.procedure = Procedure::Personal;
+        match &mut group.procedure {
+            Procedure::Consultation(rule) => {
+                rule.influence.remove(&r.person);
+            }
+            Procedure::Leader(p) if *p == r.person => group.procedure = Procedure::Personal,
+            _ => {}
         }
+        let procedure = group.procedure.clone();
         let witnesses = group.members.iter().copied().collect();
-        if changed {
+        if previous != procedure {
             tx.emit(
                 ProcedureChanged {
                     institution: r.institution,
                     previous,
-                    procedure: Procedure::Personal,
+                    procedure,
                 },
                 witnesses,
             )?;

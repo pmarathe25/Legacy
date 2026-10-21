@@ -199,7 +199,7 @@ fn advance(h: &mut Host, minutes: u64) {
     while h.advance(SimTime(minutes * MINUTE.0), 128).unwrap().stop == Stop::Budget {}
 }
 #[test]
-fn people_can_choose_voting_after_learning_to_value_joint_decisions() {
+fn people_construct_influence_arrangements_after_learning_to_value_joint_decisions() {
     let (mut h, p, packs) = setup(10, true);
     for person in &p {
         beliefs(&mut h, *person, 10, -10);
@@ -222,10 +222,27 @@ fn people_can_choose_voting_after_learning_to_value_joint_decisions() {
     })
     .unwrap();
     advance(&mut h, 20);
-    assert_eq!(
-        h.get::<game_institutions::Institutions>().unwrap().groups[&id].procedure,
-        game_institutions::Procedure::Unanimity
-    );
+    // Consulting is a personal valuation, not a fixed conversation milestone.
+    // Repeated experience gives both participants a stronger preference for a voice.
+    for person in &p {
+        for _ in 0..12 {
+            h.dispatch(game_relationships::LearnValue {
+                person: *person,
+                concept: "shared-decisions".into(),
+                outcome: 5,
+            })
+            .unwrap();
+        }
+    }
+    h.dispatch(game_communities::Cooperate {
+        person: p[0],
+        other: p[1],
+    })
+    .unwrap();
+    assert!(matches!(
+        &h.get::<game_institutions::Institutions>().unwrap().groups[&id].procedure,
+        game_institutions::Procedure::Consultation(rule) if rule.influence.len() == 2
+    ));
     assert!(
         h.get::<game_communities::Communities>()
             .unwrap()
@@ -233,7 +250,17 @@ fn people_can_choose_voting_after_learning_to_value_joint_decisions() {
             .values()
             .all(|a| *a == game_communities::Attachment::Voice)
     );
-    // Adopting voting does not make a dissenter vote yes.
+    // A literal arrangement can require both people's opinions. Neither a
+    // generated arrangement nor its adoption manufactures their later support.
+    h.dispatch(game_institutions::Arrange {
+        institution: id,
+        procedure: game_institutions::Procedure::Consultation(game_deliberation::DecisionRule {
+            influence: [(p[0], 2), (p[1], 3)].into(),
+            required_support: 5,
+        }),
+        responses: p.iter().copied().collect(),
+    })
+    .unwrap();
     let proposal = h
         .dispatch(game_institutions::Propose {
             person: p[0],
@@ -299,10 +326,7 @@ fn admiration_can_support_a_leader_without_ballots_or_fear() {
         game_communities::Attachment::Loyalty(p[0])
     );
     let i = h.get::<game_institutions::Institutions>().unwrap();
-    assert_eq!(
-        i.groups[&id].procedure,
-        game_institutions::Procedure::Leader(p[0])
-    );
+    assert_eq!(i.groups[&id].procedure.sole_decider(), Some(p[0]));
     assert!(i.proposals.is_empty());
     assert!(
         h.get::<game_property::Property>()
@@ -684,5 +708,122 @@ fn live_encounters_can_teach_shared_decisions_without_automatically_enacting_the
             .unwrap()
             .groups
             .is_empty()
+    );
+}
+
+#[test]
+fn renewing_cooperation_does_not_rewrite_negotiated_influence() {
+    let (mut h, p, _) = setup(10, true);
+    for person in &p {
+        h.dispatch(game_relationships::LearnValue {
+            person: *person,
+            concept: "shared-decisions".into(),
+            outcome: 20,
+        })
+        .unwrap();
+    }
+    h.dispatch(game_communities::Cooperate {
+        person: p[0],
+        other: p[1],
+    })
+    .unwrap();
+    let id = h.get::<game_communities::Communities>().unwrap().members[&p[0]];
+    let first = game_institutions::Procedure::Consultation(game_deliberation::DecisionRule {
+        influence: [(p[0], 2), (p[1], 3)].into(),
+        required_support: 3,
+    });
+    h.dispatch(game_institutions::Arrange {
+        institution: id,
+        procedure: first.clone(),
+        responses: p.iter().copied().collect(),
+    })
+    .unwrap();
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for h in [&mut h, &mut loaded] {
+        // Recognizing the revised terms may update personal attachments once.
+        let _ = h.dispatch(game_communities::Cooperate {
+            person: p[0],
+            other: p[1],
+        });
+        let before = h.save().unwrap();
+        for _ in 0..3 {
+            assert!(
+                h.dispatch(game_communities::Cooperate {
+                    person: p[0],
+                    other: p[1]
+                })
+                .is_err()
+            );
+        }
+        assert_eq!(h.save().unwrap(), before);
+        assert_eq!(
+            h.get::<game_institutions::Institutions>().unwrap().groups[&id].procedure,
+            first
+        );
+        let revised = game_institutions::Procedure::Consultation(game_deliberation::DecisionRule {
+            influence: [(p[0], 4), (p[1], 1)].into(),
+            required_support: 4,
+        });
+        h.dispatch(game_institutions::Arrange {
+            institution: id,
+            procedure: revised.clone(),
+            responses: p.iter().copied().collect(),
+        })
+        .unwrap();
+        assert_eq!(
+            h.get::<game_institutions::Institutions>().unwrap().groups[&id].procedure,
+            revised
+        );
+    }
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn trusted_delegation_can_enact_sharing_without_a_preference_for_ballots() {
+    let (mut h, p, packs) = setup(10, true);
+    for (observer, other) in [(p[0], p[1]), (p[1], p[0])] {
+        h.dispatch(game_relationships::SetRelationship {
+            observer,
+            other,
+            relationship: game_relationships::Relationship {
+                affection: 20,
+                trust: 100,
+                respect: 50,
+                admiration: 50,
+                ..Default::default()
+            },
+        })
+        .unwrap();
+    }
+    h.dispatch(game_communities::Cooperate {
+        person: p[0],
+        other: p[1],
+    })
+    .unwrap();
+    let group = h
+        .get::<game_institutions::Institutions>()
+        .unwrap()
+        .groups
+        .values()
+        .next()
+        .unwrap();
+    assert!(matches!(
+        group.procedure,
+        game_institutions::Procedure::Consultation(_)
+    ));
+    assert_eq!(group.rules.len(), 2);
+    for (person, inventory) in [(p[0], packs[1]), (p[1], packs[0])] {
+        assert!(
+            h.get::<game_property::Property>()
+                .unwrap()
+                .allowed(person, inventory)
+        );
+    }
+    assert!(
+        h.get::<game_relationships::Social>()
+            .unwrap()
+            .values
+            .values()
+            .all(|values| values.get("shared-decisions").copied().unwrap_or(0) == 0)
     );
 }

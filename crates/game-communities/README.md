@@ -1,13 +1,13 @@
 # game-communities
 
-Emergent group organizing, informal supply sharing, learned preference for voting or leadership, and coercive submission.
+Emergent group organizing, informal supply sharing, personally constructed influence arrangements, and coercive submission.
 
-**Why it matters:** Communities shouldn't spawn with a preset government type. Friends start by sharing supplies informally, learn to value joint ballots or admired leaders from experience, or comply under physical threat while harboring private resentment.
+**Why it matters:** Communities shouldn't spawn with a preset government type. Friends start by sharing supplies informally, develop arrangements about whose opinions to consider from experience, or comply under physical threat while harboring private resentment.
 
 ## Responsibilities
 
 - **Organizing Decisions:** Evaluates group formation and governance choices after social encounters and during `game-characters::IdleReview`.
-- **Personal Attachment Modes (`Attachment`):** Tracks each member's private reason for participating—informal friendship (`Personal`), learned preference for joint ballots (`shared-decisions`), trust in an admired leader, or fear-driven compliance after `game-pressure`.
+- **Personal Attachment Modes (`Attachment`):** Tracks each member's private reason for participating—informal friendship (`Personal`), valuing a voice in decisions (`shared-decisions`), trust in an admired leader, or fear-driven compliance after `game-pressure`.
 - **Practical Authority Gating (`CanCommit`):** Implements `game-institutions::CanCommit` so a leader's decree or group ballot only commits a custodian's supplies if that custodian still willingly follows or fears the authority.
 - **Authority Withdrawal:** Allows idle followers who lose loyalty or escape immediate coercion to withdraw their granted `game-property` permissions.
 
@@ -30,10 +30,12 @@ Emergent group organizing, informal supply sharing, learned preference for votin
 ## Dependencies & Testing
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-physiology`, `game-traits`, `game-knowledge`, `game-relationships`, `game-lineage`, `game-institutions`, `game-pressure`, `game-characters`.
-- **Testing:** Integration tests in `tests/` (`cargo test -p game-communities`) cover informal sharing, learned ballot adoption, admired leadership, withdrawal of authority, coerced compliance, and private observation boundaries.
+- **Testing:** Integration tests in `tests/` (`cargo test -p game-communities`) cover informal sharing, constructed influence arrangements, admired leadership, withdrawal of authority, coerced compliance, and private observation boundaries.
 
 `Cooperate` succeeds when an agreement, permission, procedure, or attachment
 actually changed. An unrealized request or an already fulfilled pact supplies
 failure feedback to the chooser, which can weigh other goals and retry when
 worthwhile. Revoked permissions and changed beliefs can make renegotiation
 useful again. No care duty, mandatory cooperation, or retry ban is introduced.
+
+Autonomous joint arrangements now carry explicit participant influence and required support via `game-deliberation`. Renewing cooperation preserves an existing agreement; changing it is a separate deliberation. Historical procedure names remain loadable.

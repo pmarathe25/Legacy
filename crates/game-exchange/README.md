@@ -31,3 +31,5 @@ Local bilateral trade (`Trade`, `Barter`), marginal utility valuation, and intel
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-objects`, `game-cargo`, `game-items`, `game-property`, `game-transport`, `game-physiology`, `game-vitality`, `game-nutrition`, `game-preservation`, `game-traits`, `game-knowledge`, `game-food-memory`, `game-relationships`, `game-sentiment`, `game-demand`, `game-agreements`, `game-care`, `game-choice`, `game-utility`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-exchange`) cover asymmetric quantity trades, keepsake retention, resale medium acquisition, proposal budget bounds, and atomic rollback on failed fulfillment.
+
+Both parties must have the expressed ability to converse and manipulate goods. An infant cannot initiate or consent to a barter merely because it holds inventory or has exceptional inherited potential.

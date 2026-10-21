@@ -219,10 +219,12 @@ dependencies = [
 name = "game-affiliation"
 version = "0.2.0"
 dependencies = [
+ "game-cargo",
  "game-characters",
  "game-choice",
  "game-communities",
  "game-core",
+ "game-deliberation",
  "game-identity",
  "game-institutions",
  "game-lineage",
@@ -521,6 +523,7 @@ dependencies = [
  "game-heredity",
  "game-horticulture",
  "game-households",
+ "game-identity",
  "game-institutions",
  "game-invocation",
  "game-knowledge",
@@ -735,6 +738,7 @@ dependencies = [
  "game-conflict",
  "game-content",
  "game-core",
+ "game-deliberation",
  "game-ecology",
  "game-institutions",
  "game-knowledge",
@@ -752,6 +756,7 @@ dependencies = [
  "game-testimony",
  "game-traits",
  "game-transport",
+ "game-vitality",
  "serde",
  "serde_json",
 ]
@@ -931,6 +936,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-deliberation"
+version = "0.2.0"
+dependencies = [
+ "game-content",
+ "game-core",
+ "game-relationships",
+ "game-sim",
+ "game-traits",
+ "game-vitality",
+ "serde",
+]
+
+[[package]]
 name = "game-demand"
 version = "0.2.0"
 dependencies = [
@@ -1064,6 +1082,7 @@ dependencies = [
  "game-cargo",
  "game-characters",
  "game-choice",
+ "game-content",
  "game-core",
  "game-demand",
  "game-diagnostics",
@@ -1560,6 +1579,7 @@ version = "0.2.0"
 dependencies = [
  "game-cargo",
  "game-core",
+ "game-deliberation",
  "game-land",
  "game-objects",
  "game-physiology",

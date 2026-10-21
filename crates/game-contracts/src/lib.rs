@@ -89,13 +89,13 @@ impl Catalog {
         codecs.sort_by_key(|(_, c)| c.key);
         for (n, (id, codec)) in codecs.into_iter().enumerate() {
             if n > 0 {
-                out.write_all(b",").map_err(&io)?;
+                out.write_all(b",").map_err(io)?;
             }
             serde_json::to_writer(&mut *out, codec.key).map_err(json_error)?;
-            out.write_all(b":").map_err(&io)?;
+            out.write_all(b":").map_err(io)?;
             (codec.encode)(&data[id], out)?;
         }
-        out.write_all(b"}").map_err(&io)?;
+        out.write_all(b"}").map_err(io)?;
         Ok(())
     }
     pub fn restore(

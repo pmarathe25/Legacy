@@ -14,7 +14,7 @@ Founding, governance procedures (`Personal`, `Decide`, `Vote`, `Arrange`), offic
 ## Boundaries
 
 - **No Invisible Forcefields:** An institutional decision or office title never creates a magical barrier preventing a physical act—it only updates recognized `game-property` permissions when enacted.
-- **No Non-Member Compulsion:** Proposals cannot bind people outside the institution's membership.
+- **Membership Scope:** Institutional proposals describe participating members. Physical threats and force use the pressure/conflict owners rather than extending a paper rule to outsiders.
 
 ## How It Works
 
@@ -30,3 +30,5 @@ Founding, governance procedures (`Personal`, `Decide`, `Vote`, `Arrange`), offic
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-property`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-institutions`) verify procedure transitions, ballot tallying, office succession, custodian refusal via `CanCommit`, and save/load consistency.
+
+`Consultation` executes the participant weights and required support of a negotiated `game-deliberation::DecisionRule`. Admission uses the same support rule. Departure removes that contributor without silently lowering the agreed requirement. A later arrangement can change the quantities after the social owners collect responses, including coerced compliance. `Arrange.responses` records participation in enactment, not unanimous willing approval. Legacy named procedures retain their save and explicit request semantics.
