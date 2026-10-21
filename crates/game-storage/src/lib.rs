@@ -297,10 +297,16 @@ impl<K: Ord, V> Node<K, V> {
         loop {
             match node {
                 Self::Leaf(rows) => {
-                    return rows
-                        .binary_search_by(|(k, _)| k.borrow().cmp(key))
-                        .ok()
-                        .map(|i| &rows[i].1);
+                    let (mut low, mut high) = (0, rows.len());
+                    while low < high {
+                        let middle = low + (high - low) / 2;
+                        match rows[middle].0.borrow().cmp(key) {
+                            std::cmp::Ordering::Less => low = middle + 1,
+                            std::cmp::Ordering::Greater => high = middle,
+                            std::cmp::Ordering::Equal => return Some(&rows[middle].1),
+                        }
+                    }
+                    return None;
                 }
                 Self::Branch(children) => node = &children[Self::child(children, key)].1,
             }

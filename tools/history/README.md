@@ -85,6 +85,8 @@ Run `cargo test -p game-history` and `python3 -m unittest discover -s tools/hist
 
 For sustained studies, `cargo build --release -p game-history` uses the workspace’s thin LTO profile. The `simulation` profile remains useful for faster iteration. Freeze the selected executable before beginning a chunked study; do not change its binary mid-run.
 
+For a study on the build machine, `RUSTFLAGS="-C target-cpu=native" cargo build --release -p game-history --locked` also targets its CPU instructions. The [performance guide](../performance/README.md#profile-guided-history-builds) describes profile-guided builds, including hardware-local builds with `--target-cpu native`. Verify complete replay hashes before adopting either optimizer in a continuing study. GPU calibration in `tools/compute` measures numeric kernels; the history runner executes the assembled simulation on CPU.
+
 ## Verified optimizer upgrades
 
 A long study can keep its exact population and journal prefix when applying a behavior-preserving optimizer. Stop through `stop-request` and wait for the supervisor to exit after verifying its current checkpoint. Freeze the new executable and run three alternating replay pairs with `compare.py` against every continuing population’s current checkpoint. All four outputs must match: world, ledger, journal, and individual snapshot.

@@ -329,10 +329,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(collection.items.into_iter().map(|(p, _)| p).collect())
     })?;
     b.request::<Offer>(|tx, r| {
-        let weights = tx
-            .get::<game_traits::Traits>()
-            .ok()
-            .map(|t| t.weights(r.person));
+        // Weights only affect pruning. Read them at the pruning boundary so
+        // earlier offers and parallel capture avoid an unused trait projection.
+        let pruning = tx
+            .get::<Offers>()?
+            .active
+            .as_ref()
+            .is_some_and(|c| !c.capture && c.items.len() >= LIMIT);
+        let weights = if pruning {
+            tx.get::<game_traits::Traits>()
+                .ok()
+                .map(|t| t.weights(r.person))
+        } else {
+            None
+        };
         let collection = tx
             .edit::<Offers>()?
             .active

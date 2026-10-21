@@ -319,3 +319,31 @@ fn cache_versions_invalidate_on_writes_and_do_not_retain_rows() {
         assert!(!version.matches(&replacement));
     }
 }
+
+#[test]
+fn borrowed_point_queries_match_reference_after_splits_and_snapshot_edits() {
+    let key = |i| format!("known:{i:05}:雪");
+    let mut table = Table::new();
+    let mut reference = BTreeMap::new();
+    for i in (0..2048).step_by(2) {
+        table.insert(key(i), i);
+        reference.insert(key(i), i);
+    }
+    let snapshot = table.clone();
+    let original = reference.clone();
+    for i in (0..2048).step_by(6) {
+        table.remove(key(i).as_str());
+        reference.remove(key(i).as_str());
+    }
+    for i in (1..2048).step_by(2) {
+        table.insert(key(i), i * 3);
+        reference.insert(key(i), i * 3);
+    }
+    for query in std::iter::once(String::new())
+        .chain((0..2050).map(key))
+        .chain(std::iter::once("zzzz".into()))
+    {
+        assert_eq!(table.get(query.as_str()), reference.get(query.as_str()));
+        assert_eq!(snapshot.get(query.as_str()), original.get(query.as_str()));
+    }
+}

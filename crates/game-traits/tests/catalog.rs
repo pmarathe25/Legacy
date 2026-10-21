@@ -187,6 +187,7 @@ fn numeric_characteristics_follow_profiles_defaults_loading_and_direct_revisions
 
 #[test]
 fn recent_numeric_views_follow_shared_snapshots_world_switches_and_sparse_edits() {
+    const PEOPLE: u64 = 260;
     let make = |value| {
         let mut b = Builder::new();
         plugin(&mut b).unwrap();
@@ -204,7 +205,7 @@ fn recent_numeric_views_follow_shared_snapshots_world_switches_and_sparse_edits(
             },
         );
         h.dispatch(Install(data)).unwrap();
-        for p in 0..24 {
+        for p in 0..PEOPLE {
             h.dispatch(Set {
                 person: PersonId(p),
                 profile: [("intelligence".into(), value + p as i32)].into(),
@@ -222,7 +223,7 @@ fn recent_numeric_views_follow_shared_snapshots_world_switches_and_sparse_edits(
         })
         .unwrap();
         for _ in 0..3 {
-            for p in 0..24 {
+            for p in 0..PEOPLE {
                 for (t, expected) in [
                     (
                         a.get::<Traits>().unwrap(),

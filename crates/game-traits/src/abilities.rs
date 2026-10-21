@@ -120,7 +120,7 @@ struct Recent {
     sources: game_storage::Version<PersonId, Arc<BTreeMap<String, i32>>>,
     profile: Option<Arc<Profile>>,
 }
-const CACHE_SLOTS: usize = 8;
+const CACHE_SLOTS: usize = 128;
 thread_local! {
     static RECENT: std::cell::RefCell<[Option<Recent>; CACHE_SLOTS]> =
         const { std::cell::RefCell::new([const { None }; CACHE_SLOTS]) };
