@@ -31,3 +31,8 @@ Per-person belief tables, active local inspection, stale-stock disproof, and bel
 
 - **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-facts`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-ecology`, `game-physiology`, `game-reasoning`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-knowledge`) cover local discovery, stale stock disproof, report delivery, spoken locality, and routing across partially known road networks.
+
+Personal retention is now owned by `game-memory`. `Knowledge`, `Facts`, `Receive`
+and `Initialize` are compatible names for that same evidence store and its
+requests. Perception caches belong here but cannot bypass personal forgetting.
+There is no permanent second copy of a character's remembered facts.

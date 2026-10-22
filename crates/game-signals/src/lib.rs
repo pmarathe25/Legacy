@@ -64,15 +64,28 @@ fn care_skill(tx: &Transaction<'_>, p: PersonId) -> u64 {
         .unwrap_or(0)
         .min(4000)
 }
-/// A subjective forecast, learned from observed hunger and feeding intervals.
-pub fn estimated_hunger(tx: &Transaction<'_>, observer: PersonId, person: PersonId) -> Option<u64> {
-    let memory = tx
+/// Transient signal context follows the memory owner's inherited retention policy.
+pub fn perception<'a>(
+    tx: &'a Transaction<'_>,
+    observer: PersonId,
+    person: PersonId,
+) -> Option<&'a Perception> {
+    let p = tx
         .get::<Signals>()
         .ok()?
         .perceptions
         .get(&observer)?
         .get(&person)?;
+    (tx.now().0.saturating_sub(p.at.0) < game_memory::short_term_duration(tx, observer).0)
+        .then_some(p)
+}
+/// A subjective forecast, learned from observed hunger and feeding intervals.
+pub fn estimated_hunger(tx: &Transaction<'_>, observer: PersonId, person: PersonId) -> Option<u64> {
+    let memory = perception(tx, observer, person)?;
     let (at, need) = memory.food?;
+    if tx.now().0.saturating_sub(at.0) >= game_memory::short_term_duration(tx, observer).0 {
+        return None;
+    }
     let rules = &tx.get::<game_physiology::Bodies>().ok()?.rules;
     let foresight = ability(tx, observer, "foresight").saturating_add(care_skill(tx, observer));
     let growth = u128::from(tx.now().0.saturating_sub(at.0))
@@ -113,11 +126,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.subscribe::<game_physiology::Fed>("communication.witnessed-feeding", |tx, e| {
         if active(tx) && e.caregiver != e.patient {
             let at = tx.now();
-            let prior = tx
-                .get::<Signals>()?
-                .perceptions
-                .get(&e.caregiver)
-                .and_then(|r| r.get(&e.patient));
+            let prior = perception(tx, e.caregiver, e.patient);
             let appetite = prior.map_or(1000, |p| p.appetite);
             let need = estimated_hunger(tx, e.caregiver, e.patient).unwrap_or(0);
             let food = tx
@@ -186,12 +195,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .saturating_add(game_vitality::ability(tx, r.observer, "intelligence") / 2)
             .saturating_add(care_skill(tx, r.observer));
         // A cry is ambiguous. A thoughtful observer can infer food, but may be wrong.
-        let last_fed = tx
-            .get::<Signals>()?
-            .perceptions
-            .get(&r.observer)
-            .and_then(|row| row.get(&r.person))
-            .and_then(|p| p.last_fed);
+        let last_fed = perception(tx, r.observer, r.person)
+            .and_then(|p| p.last_fed)
+            .filter(|at| {
+                tx.now().0.saturating_sub(at.0) < game_memory::short_term_duration(tx, r.observer).0
+            });
         let elapsed = last_fed.map_or(0, |at| tx.now().0.saturating_sub(at.0));
         let anticipated = cue == "quiet"
             && understanding >= 800
@@ -224,13 +232,11 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         } else {
             0
         };
-        let previous = tx
-            .get::<Signals>()?
-            .perceptions
-            .get(&r.observer)
-            .and_then(|row| row.get(&r.person));
+        let previous = perception(tx, r.observer, r.person);
         let mut appetite = previous.map_or(1000, |p| p.appetite);
-        let mut food = previous.and_then(|p| p.food);
+        let mut food = previous.and_then(|p| p.food).filter(|(at, _)| {
+            tx.now().0.saturating_sub(at.0) < game_memory::short_term_duration(tx, r.observer).0
+        });
         if guessed_need.as_deref() == Some("food") {
             if let Some((at, before)) = food {
                 let elapsed = tx.now().0.saturating_sub(at.0);

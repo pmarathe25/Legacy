@@ -1,6 +1,12 @@
 mod support;
 use game_core::*;
 use game_observations::*;
+fn memories(h: &game_sim::Host, person: PersonId) -> Vec<game_reasoning::Observation> {
+    let facts = &h.get::<game_knowledge::Knowledge>().unwrap().0[&person];
+    game_knowledge::with_prefix(facts, "memory:empirical:")
+        .filter_map(|(_, fact)| fact.value.decode())
+        .collect()
+}
 #[test]
 fn consuming_one_sample_does_not_change_another_and_missing_stock_is_not_known_decay() {
     let (mut h, p, first) = support::people(support::builder());
@@ -53,14 +59,13 @@ fn consuming_one_sample_does_not_change_another_and_missing_stock_is_not_known_d
         inventory: second,
     })
     .unwrap();
-    let memory = &h.get::<game_inquiry::Inquiry>().unwrap().people[&p[0]];
+    let memory = memories(&h, p[0]);
     assert!(
         memory
-            .observations
             .iter()
             .any(|o| o.outcome == "stock-loss" && o.value > 0)
     );
-    assert!(memory.observations.iter().all(|o| o.outcome != "spoilage"));
+    assert!(memory.iter().all(|o| o.outcome != "spoilage"));
     let saved = h.save().unwrap();
     assert_eq!(
         saved,
@@ -94,22 +99,18 @@ fn self_eating_and_being_served_both_create_personal_effect_observations() {
         quantity: 10,
     })
     .unwrap();
-    let inquiry = h.get::<game_inquiry::Inquiry>().unwrap();
     assert_eq!(
-        inquiry.people[&p[0]]
-            .observations
+        memories(&h, p[0])
             .iter()
             .filter(|o| o.subject.starts_with("good:"))
             .collect::<Vec<_>>(),
-        inquiry.people[&p[2]]
-            .observations
+        memories(&h, p[2])
             .iter()
             .filter(|o| o.subject.starts_with("good:"))
             .collect::<Vec<_>>()
     );
     assert_eq!(
-        inquiry.people[&p[2]]
-            .observations
+        memories(&h, p[2])
             .iter()
             .filter(|o| o.subject.starts_with("good:"))
             .count(),

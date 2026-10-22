@@ -36,12 +36,15 @@ can include people, places, objects, subjects, and perceived events. They index
 what this person experienced or understood from a report, including mistakes;
 they never expose another person's private memories or add hidden world links.
 
-Existing responsibilities remain distinct: `game-facts` owns indexed fact storage
-and shared scene representation, `game-knowledge` owns personal evidence and
-observation, and `game-food-memory` projects remembered supply facts. General
-memory retention, reinforcement, salience, and associative retrieval are a proposed
-separate `game-memory` feature owner. This lifecycle and association layer is not
-yet implemented by the topic-range optimization in `game-information`.
+`game-memory` now owns the single personal evidence resource, replacing permanent
+knowledge retention and the separate episode sample. `game-knowledge` supplies
+perception and compatible query/request names; `game-facts` supplies indexed
+representation; `game-food-memory` derives food projections. See
+[game-memory](../../crates/game-memory/README.md) for implemented constants,
+selective sleep consolidation, hereditary potential, explicit recall reconstruction,
+migration and replay guarantees. The ongoing frozen history does not use this new
+behavior. The following broader goals include remaining work: rich context ranking,
+independently weighted associative links and a more detailed sleep model.
 
 A memory's accessibility should fade with elapsed time according to its kind and
 the person's expressed capacities, condition, attention, salience, and meaningful
@@ -74,7 +77,7 @@ but another person must encounter, read, and understand it to learn from it. A
 player-facing chronicle should distinguish witnessed events, attributed reports,
 and remembered interpretations, preserving their provenance and uncertainty.
 
-A future memory model needs tests for context-limited retrieval, gradual fading,
+The memory model needs tests for context-limited retrieval, gradual fading,
 meaningful reinforcement, stale and false evidence, bounded association traversal,
 and equivalence across saving and worker counts. Introduce behavioral retention
 rules as a separately identified model in historical comparisons. Storage indexing

@@ -2,7 +2,6 @@
 pub use game_facts::{same_value, with_prefix};
 use game_storage::{Records, Table};
 use std::sync::Arc;
-mod persistence;
 mod scenes;
 mod snapshots;
 pub use snapshots::FactValue;
@@ -13,109 +12,20 @@ use game_core::*;
 use game_sim::*;
 pub use geography::*;
 use serde::{Deserialize, Serialize};
-#[derive(Clone, Debug, Default, Serialize)]
-#[serde(transparent)]
-pub struct Facts(
-    game_facts::Facts<FactValue>,
-    #[serde(skip)] Option<game_storage::Version<InventoryId, ()>>,
-);
-impl PartialEq for Facts {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
-}
-impl Eq for Facts {}
-impl Facts {
-    pub fn insert(&mut self, key: Arc<str>, mut fact: Fact) -> Option<Fact> {
-        fact.value = FactValue::promote(fact.value, &key);
-        if matches!(fact.value.as_ref(), FactValue::Other(_)) {
-            self.1 = None;
-        }
-        self.0.insert(key, fact)
-    }
-}
-impl std::ops::Deref for Facts {
-    type Target = game_facts::Facts<FactValue>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl FromIterator<(Arc<str>, Fact)> for Facts {
-    fn from_iter<I: IntoIterator<Item = (Arc<str>, Fact)>>(rows: I) -> Self {
-        let mut facts = Self::default();
-        for (key, fact) in rows {
-            facts.insert(key, fact);
-        }
-        facts
-    }
-}
-pub type Fact = game_facts::Fact<FactValue>;
+pub type Facts = game_memory::Facts<FactValue>;
+pub type Fact = game_memory::Fact<FactValue>;
 pub type FactRef<'a> = game_facts::FactRef<'a, FactValue>;
-#[derive(Clone, Debug, Default)]
-pub struct Knowledge(
-    pub game_packed::Packed<PersonId, Facts>,
-    Records<Subject, Cached>,
-    Records<AreaId, scenes::CachedScene>,
-);
-impl PartialEq for Knowledge {
-    fn eq(&self, other: &Self) -> bool {
-        self.0 == other.0
-    }
+pub type Knowledge = game_memory::Memories<FactValue>;
+pub type Initialize = game_memory::Initialize<FactValue>;
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct Perception {
+    #[serde(skip)]
+    subjects: Records<Subject, Cached>,
+    #[serde(skip)]
+    scenes: Records<AreaId, scenes::CachedScene>,
 }
-impl Eq for Knowledge {}
-type KnowledgeMark = (
-    game_packed::Mark,
-    Records<Subject, Cached>,
-    Records<AreaId, scenes::CachedScene>,
-);
-impl Resource for Knowledge {
-    const KEY: &'static str = "knowledge.facts";
-    fn validate(&self) -> Result<()> {
-        require(
-            self.0.values().all(|m| m.0.valid_confidence(None)),
-            "invalid confidence",
-        )
-    }
-    fn checkpoint(&mut self) -> Checkpoint {
-        Box::new((self.0.begin(), self.1.clone(), self.2.clone()))
-    }
-    fn restore(&mut self, checkpoint: Checkpoint) {
-        let (mark, sources, scenes) = *checkpoint
-            .downcast::<KnowledgeMark>()
-            .expect("knowledge checkpoint");
-        self.0.rollback(mark);
-        self.1 = sources;
-        self.2 = scenes;
-    }
-    fn commit(&mut self, checkpoint: Checkpoint) {
-        self.0.commit(
-            checkpoint
-                .downcast::<KnowledgeMark>()
-                .expect("knowledge checkpoint")
-                .0,
-        );
-    }
-    fn validate_checkpoint(&self, checkpoint: &dyn std::any::Any) -> Result<()> {
-        let previous = checkpoint
-            .downcast_ref::<KnowledgeMark>()
-            .expect("knowledge checkpoint");
-        for (_, facts, old) in self.0.changed_pairs_since(&previous.0) {
-            require(
-                facts.0.valid_confidence(old.map(|v| &v.0)),
-                "invalid confidence",
-            )?;
-        }
-        Ok(())
-    }
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Initialize {
-    pub person: PersonId,
-    pub facts: Facts,
-}
-impl Request for Initialize {
-    const KEY: &'static str = "knowledge.initialize";
-    type Response = ();
+impl Resource for Perception {
+    const KEY: &'static str = "knowledge.perception";
 }
 #[derive(Clone, Serialize, Deserialize)]
 pub struct ObserveStore {
@@ -138,16 +48,7 @@ pub fn view(host: &Host, person: PersonId) -> Result<Facts> {
         .unwrap_or_default())
 }
 /// A receiver-owned entry point for interpreted observations, inference and readable records.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Receive {
-    pub person: PersonId,
-    pub key: String,
-    pub fact: Fact,
-}
-impl Request for Receive {
-    const KEY: &'static str = "knowledge.receive";
-    type Response = ();
-}
+pub type Receive = game_memory::Receive<FactValue>;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Conclude {
     pub person: PersonId,
@@ -160,25 +61,9 @@ impl Request for Conclude {
     type Response = ();
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
+    game_memory::plugin::<FactValue>(b)?;
     b.plugin("knowledge", 1)?;
-    b.resource::<Knowledge>()?;
-    b.request::<Receive>(|tx, r| {
-        require(
-            !r.key.is_empty()
-                && r.key.len() <= 160
-                && r.fact.confidence <= 100
-                && r.fact.observed <= tx.now()
-                && r.fact.revision <= tx.revision_after(),
-            "invalid learned claim",
-        )?;
-        let facts = tx.edit::<Knowledge>()?.0.entry(r.person).or_default();
-        if facts.get(r.key.as_str()).is_none_or(|old| {
-            (old.observed, old.confidence) <= (r.fact.observed, r.fact.confidence)
-        }) {
-            facts.insert(r.key.into(), r.fact);
-        }
-        Ok(())
-    })?;
+    b.resource::<Perception>()?;
     b.request::<Conclude>(|tx, r| {
         tx.call(Receive {
             person: r.person,
@@ -192,23 +77,6 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             },
         })
     })?;
-    b.request::<Initialize>(|tx, r| {
-        require(
-            !tx.get::<Knowledge>()?.0.contains_key(&r.person),
-            "knowledge already initialized",
-        )?;
-        tx.edit::<Knowledge>()?.0.insert(r.person, r.facts);
-        Ok(())
-    })?;
-    b.validate_save(|host| {
-        let people = &host.get::<Knowledge>()?.0;
-        require(
-            people
-                .values()
-                .all(|f| f.valid_at(host.now(), host.revision())),
-            "knowledge from a future observation",
-        )
-    });
     geography::register(b)?;
     b.request::<ObserveStore>(|tx, r| {
         let area = game_transport::area(tx.get()?, r.person)?;

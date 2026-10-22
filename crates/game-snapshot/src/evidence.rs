@@ -3,3 +3,5 @@ mod archive;
 mod view;
 pub use archive::Archive;
 pub use view::View;
+mod parts;
+pub use parts::Parts;

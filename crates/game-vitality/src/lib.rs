@@ -136,7 +136,7 @@ const PHYSICAL: &[&str] = &[
 ];
 impl Life {
     pub fn ability(&self, raw: u64, key: &str, at: SimTime) -> u64 {
-        let mental = MENTAL.contains(&key);
+        let mental = MENTAL.contains(&key) || key.starts_with("memory_");
         let physical = PHYSICAL.contains(&key);
         if !mental && !physical {
             return raw;

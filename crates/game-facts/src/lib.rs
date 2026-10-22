@@ -11,7 +11,7 @@ pub struct Fact<V> {
     pub revision: u64,
     pub confidence: u8,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stamp {
     pub source: PersonId,
     pub observed: SimTime,
@@ -83,6 +83,9 @@ impl<V> Scene<V> {
             values: values.into_boxed_slice(),
         })
     }
+    pub fn entries(&self) -> impl Iterator<Item = (&Arc<str>, &Arc<V>)> {
+        self.keys.iter().zip(self.values.iter())
+    }
     fn find(&self, key: &str) -> Option<usize> {
         if self.keys.first().is_none_or(|k| key < k.as_ref())
             || self.keys.last().is_some_and(|k| key > k.as_ref())
@@ -146,6 +149,27 @@ impl<V: Clone> Facts<V> {
             self.overrides += 1;
         }
         old.or(local)
+    }
+    /// Forget a personal entry without changing a scene shared with another observer.
+    pub fn remove(&mut self, key: &str) -> Option<Fact<V>> {
+        let old = self.get(key)?.to_owned();
+        if self
+            .local
+            .as_ref()
+            .is_some_and(|o| o.scene.find(key).is_some())
+        {
+            let local = self.local.take().unwrap();
+            for (i, k) in local.scene.keys.iter().enumerate() {
+                if k.as_ref() != key && !self.cold.contains_key(k.as_ref()) {
+                    self.cold.insert(k.clone(), local.fact(i).to_owned());
+                }
+            }
+            self.overrides = 0;
+        }
+        self.cold.remove(key);
+        self.payload_version = Arc::new(());
+        self.touch(1u64 << namespace(key));
+        Some(old)
     }
     /// Refresh an entire unchanged scene by replacing only one personal stamp.
     pub fn observe(&mut self, scene: Arc<Scene<V>>, stamp: Stamp) {
@@ -426,4 +450,93 @@ where
         Preferred::Specific(v) => specific(v),
         Preferred::Other(v) => other(v),
     })
+}
+
+impl<V: Serialize> Serialize for Scene<V> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        self.entries().collect::<Vec<_>>().serialize(s)
+    }
+}
+impl<'de, V: Deserialize<'de> + PartialEq> Deserialize<'de> for Scene<V> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Self::new(Vec::<(Arc<str>, Arc<V>)>::deserialize(d)?, None)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+/// Payload-specific compact interpretation, independent of cognitive retention rules.
+pub trait Interpretation:
+    Clone
+    + std::fmt::Debug
+    + Eq
+    + std::hash::Hash
+    + Serialize
+    + serde::de::DeserializeOwned
+    + Send
+    + Sync
+    + 'static
+{
+    fn promote(value: Arc<Self>, key: &str) -> Arc<Self>;
+}
+#[derive(Clone, Debug)]
+pub struct Interpreted<V: Interpretation>(Facts<V>);
+impl<V: Interpretation> Default for Interpreted<V> {
+    fn default() -> Self {
+        Self(Default::default())
+    }
+}
+impl<V: Interpretation> Interpreted<V> {
+    pub fn from_facts(facts: Facts<V>) -> Self {
+        Self(facts)
+    }
+    pub fn as_facts(&self) -> &Facts<V> {
+        &self.0
+    }
+    pub fn observe(&mut self, scene: Arc<Scene<V>>, stamp: Stamp) {
+        self.0.observe(scene, stamp);
+    }
+    pub fn remove(&mut self, key: &str) -> Option<Fact<V>> {
+        self.0.remove(key)
+    }
+
+    pub fn insert(&mut self, key: Arc<str>, mut fact: Fact<V>) -> Option<Fact<V>> {
+        fact.value = V::promote(fact.value, &key);
+        self.0.insert(key, fact)
+    }
+}
+impl<V: Interpretation> std::ops::Deref for Interpreted<V> {
+    type Target = Facts<V>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl<V: Interpretation> FromIterator<(Arc<str>, Fact<V>)> for Interpreted<V> {
+    fn from_iter<I: IntoIterator<Item = (Arc<str>, Fact<V>)>>(rows: I) -> Self {
+        let mut facts = Self::default();
+        for (k, f) in rows {
+            facts.insert(k, f);
+        }
+        facts
+    }
+}
+impl<V: Interpretation> PartialEq for Interpreted<V> {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+impl<V: Interpretation> Eq for Interpreted<V> {}
+
+impl<V: Interpretation> Serialize for Interpreted<V> {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        self.0.serialize(s)
+    }
+}
+impl<'de, V: Interpretation> Deserialize<'de> for Interpreted<V> {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        Ok(
+            std::collections::BTreeMap::<Arc<str>, Fact<V>>::deserialize(d)?
+                .into_iter()
+                .collect(),
+        )
+    }
 }

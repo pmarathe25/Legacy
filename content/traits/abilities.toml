@@ -96,3 +96,19 @@ name = "Reproductive role"
 minimum = 0
 maximum = 2000
 default = 1000
+
+[data.traits.memory_capacity]
+name = "Long-term memory capacity"
+minimum = 0
+maximum = 4000
+default = 1000
+[data.traits.memory_reliability]
+name = "Recall fidelity"
+minimum = 0
+maximum = 4000
+default = 1000
+[data.traits.memory_durability]
+name = "Short-term memory durability"
+minimum = 0
+maximum = 4000
+default = 1000

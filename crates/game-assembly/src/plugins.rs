@@ -96,7 +96,10 @@ pub fn load_from(
     let io = |e: std::io::Error| game_core::Error::InvalidSave(e.to_string());
     let start = source.stream_position().map_err(io)?;
     match builder()?.load_from(&mut *source, workers) {
-        Err(game_core::Error::Rejected(message)) if message == "incompatible save manifest" => {
+        Err(error)
+            if matches!(&error, game_core::Error::Rejected(message) if message == "incompatible save manifest")
+                || matches!(&error, game_core::Error::InvalidSave(message) if message.starts_with("unknown resource ")) =>
+        {
             source.seek(std::io::SeekFrom::Start(start)).map_err(io)?;
             let mut saved = String::new();
             source.read_to_string(&mut saved).map_err(io)?;

@@ -30,6 +30,9 @@ fn inherited_characteristics_are_expressed_without_inheriting_skills_or_knowledg
                 ("empathy".into(), 900),
                 ("patience".into(), 900),
                 ("intelligence".into(), 12000),
+                ("memory_capacity".into(), 4000),
+                ("memory_reliability".into(), 4000),
+                ("memory_durability".into(), 4000),
             ]),
         })
         .unwrap();
@@ -67,9 +70,18 @@ fn inherited_characteristics_are_expressed_without_inheriting_skills_or_knowledg
     while h.advance(at, 128).unwrap().stop == Stop::Budget {}
     let population = h.get::<game_lifecycle::Population>().unwrap();
     let child = *population.families.keys().next().unwrap();
-    for key in ["rigidity", "reproductive-drive"] {
+    for key in [
+        "rigidity",
+        "reproductive-drive",
+        "memory_capacity",
+        "memory_reliability",
+        "memory_durability",
+    ] {
         assert!(h.get::<game_heredity::Heredity>().unwrap().loci[&child].contains_key(key));
         assert!(h.get::<game_traits::Traits>().unwrap().people[&child].contains_key(key));
+    }
+    for key in ["memory_capacity", "memory_reliability", "memory_durability"] {
+        assert!(h.get::<game_traits::Traits>().unwrap().ability(child, key) > 3500);
     }
     assert_eq!(
         h.get::<game_heredity::Heredity>().unwrap().generation[&child],

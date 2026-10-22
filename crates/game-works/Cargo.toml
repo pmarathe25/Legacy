@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-memory.workspace = true
 game-inscription.workspace = true
 game-recollection.workspace = true
 game-testimony.workspace = true
@@ -27,6 +28,7 @@ game-traits.workspace = true
 game-transport.workspace = true
 game-physiology.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 game-observations.workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "game-memory"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-relationships.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-packed.workspace = true
+game-facts.workspace = true
+game-snapshot.workspace = true
+game-vitality.workspace = true
+game-physiology.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+[dev-dependencies]
+game-knowledge.workspace = true
+game-land.workspace = true
+game-transport.workspace = true
+game-cargo.workspace = true
+game-property.workspace = true
+game-traits.workspace = true
+game-content.workspace = true
+game-testimony.workspace = true
+game-objects.workspace = true

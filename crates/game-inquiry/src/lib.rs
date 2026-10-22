@@ -4,11 +4,9 @@ use game_reasoning::{Claim, Observation};
 use game_sim::*;
 use game_storage::Records;
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 mod choices;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Experience {
-    pub observations: VecDeque<std::sync::Arc<Observation>>,
     pub count: u64,
     pub considered: u64,
     #[serde(default)]
@@ -33,7 +31,7 @@ impl Resource for Inquiry {
 }
 fn validate_memories<'a>(mut memories: impl Iterator<Item = &'a Experience>) -> Result<()> {
     require(
-        memories.all(|p| p.observations.len() <= 128 && p.considered <= p.count),
+        memories.all(|p| p.considered <= p.count),
         "invalid empirical memory",
     )
 }
@@ -189,6 +187,24 @@ fn retain(tx: &mut Transaction<'_>, p: PersonId, c: Claim, deduction: bool) -> R
         vec![p],
     )
 }
+fn remembered(tx: &Transaction<'_>, p: PersonId) -> Vec<(String, Observation)> {
+    let limit = (8 + game_vitality::ability(tx, p, "intelligence")
+        .saturating_mul(500 + game_vitality::ability(tx, p, "attention").min(8000) / 2)
+        / 125000)
+        .clamp(8, 128) as usize;
+    let mut records: Vec<_> = tx
+        .get::<game_knowledge::Knowledge>()
+        .ok()
+        .and_then(|s| s.0.get(&p))
+        .into_iter()
+        .flat_map(|facts| game_knowledge::with_prefix(facts, "memory:empirical:"))
+        .filter_map(|(k, f)| f.value.decode::<Observation>().map(|o| (k.to_string(), o)))
+        .collect();
+    if records.len() > limit {
+        records.drain(..records.len() - limit);
+    }
+    records
+}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("inquiry", 1)?;
     b.resource::<Inquiry>()?;
@@ -226,23 +242,26 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             value: serde_json::to_value(&r.observation).unwrap(),
             confidence: 80,
         })?;
-        let memory = (8 + game_vitality::ability(tx, r.observer, "intelligence").saturating_mul(
-            500 + game_vitality::ability(tx, r.observer, "attention").min(8000) / 2,
-        ) / 125000)
-            .clamp(8, 128) as usize;
-        let m = tx.edit::<Inquiry>()?.people.entry(r.observer).or_default();
-        let contrasted = m.observations.iter().rev().take(16).any(|old| {
-            old.subject == r.observation.subject
-                && old.outcome == r.observation.outcome
-                && old.context != r.observation.context
-        });
-        m.contrasts |= contrasted;
+        let contrasted = remembered(tx, r.observer)
+            .iter()
+            .rev()
+            .take(16)
+            .any(|(_, old)| {
+                old.subject == r.observation.subject
+                    && old.outcome == r.observation.outcome
+                    && old.context != r.observation.context
+            });
         let subject = r.observation.subject.clone();
-        m.observations.push_back(std::sync::Arc::new(r.observation));
+        let m = tx.edit::<Inquiry>()?.people.entry(r.observer).or_default();
+        m.contrasts |= contrasted;
         m.count = m.count.saturating_add(1);
-        while m.observations.len() > memory {
-            m.observations.pop_front();
-        }
+        let key = format!("memory:empirical:{:020}", m.count);
+        tx.call(game_knowledge::Conclude {
+            person: r.observer,
+            key,
+            value: serde_json::to_value(r.observation).unwrap(),
+            confidence: 80,
+        })?;
         let explained = tx
             .get::<game_knowledge::Knowledge>()?
             .0
@@ -262,14 +281,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.request::<Reflect>(|tx, r| {
         let intelligence = game_vitality::ability(tx, r.person, "intelligence").min(16000);
-        let observations: Vec<_> = tx
-            .get::<Inquiry>()?
-            .people
-            .get(&r.person)
-            .into_iter()
-            .flat_map(|p| p.observations.iter())
-            .map(|o| o.as_ref().clone())
-            .collect();
+        let records = remembered(tx, r.person);
+        let mut observations = vec![];
+        for (key, _) in records {
+            if let Some(value) = tx.call(game_memory::Recall {
+                person: r.person,
+                key,
+            })? {
+                let fact: game_knowledge::Fact =
+                    serde_json::from_value(value).map_err(|e| Error::InvalidSave(e.to_string()))?;
+                if let Some(o) = fact.value.decode::<Observation>() {
+                    observations.push(o);
+                }
+            }
+        }
         let inferred = game_reasoning::infer(
             &observations,
             if intelligence >= 500 {
@@ -282,6 +307,21 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let n = inferred.len();
         for c in inferred {
             retain(tx, r.person, c, false)?;
+        }
+        let keys: Vec<_> = tx
+            .get::<game_knowledge::Knowledge>()?
+            .0
+            .get(&r.person)
+            .into_iter()
+            .flat_map(|f| game_knowledge::with_prefix(f, "theory:"))
+            .take(128)
+            .map(|(k, _)| k.to_string())
+            .collect();
+        for key in keys {
+            tx.call(game_memory::Recall {
+                person: r.person,
+                key,
+            })?;
         }
         let known = claims(tx, r.person);
         for c in game_reasoning::deduce(

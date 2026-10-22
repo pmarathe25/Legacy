@@ -252,11 +252,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                             game_transport::area(tx.get().unwrap(), intent.beneficiary).ok()
                                 == Some(area)
                         })
-                        || tx
-                            .get::<game_signals::Signals>()
-                            .ok()
-                            .and_then(|s| s.perceptions.get(&r.caregiver)?.get(&intent.beneficiary))
-                            .is_some_and(|p| p.area == Some(intent.home) && p.food.is_some()),
+                        || game_signals::perception(tx, r.caregiver, intent.beneficiary)
+                            .is_some_and(|p| p.area == Some(intent.home))
+                            && game_signals::estimated_hunger(tx, r.caregiver, intent.beneficiary)
+                                .is_some(),
                     "care need has no personally observed location",
                 )?;
             }

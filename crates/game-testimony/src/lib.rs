@@ -67,6 +67,12 @@ fn send(
     delay: SimDuration,
     support: u64,
 ) -> Result<SimTime> {
+    if tx.registered::<game_memory::Recall>() {
+        tx.call(game_memory::Recall {
+            person: sender,
+            key: key.clone(),
+        })?;
+    }
     let mut fact = tx
         .get::<Knowledge>()?
         .0

@@ -1,59 +1,29 @@
 //! Bounded personal episodes and selection of personally known creative subject matter.
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
-use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Recollections(pub Table<PersonId, Vec<String>>);
-impl Resource for Recollections {
-    const KEY: &'static str = "recollection.episodes";
-    fn validate(&self) -> Result<()> {
-        require(
-            self.0
-                .values()
-                .all(|r| r.len() <= 32 && r.iter().all(|s| !s.is_empty() && s.len() <= 160)),
-            "invalid personal episodes",
-        )
-    }
-}
 fn remember(
     tx: &mut Transaction<'_>,
     observer: PersonId,
     relation: &str,
     actor: PersonId,
     patient: PersonId,
+    quantity: Option<u64>,
 ) -> Result<()> {
     if game_physiology::capable(tx, observer).is_err()
         || game_vitality::ability(tx, observer, "intelligence") < 150
     {
         return Ok(());
     }
-    let tag = format!("{relation}:{}:{}", actor.0, patient.0);
-    if tx
-        .get::<Recollections>()?
-        .0
-        .get(&observer)
-        .is_some_and(|r| r.contains(&tag))
-    {
-        return Ok(());
-    }
-    let replacement = random(tx.seed(), observer.0, tx.now().0) as usize % 32;
-    let row = tx.edit::<Recollections>()?.0.entry(observer).or_default();
-    let slot = if row.len() < 32 {
-        row.push(tag);
-        row.len() - 1
-    } else {
-        // Retain a bounded personal sample rather than a world event archive.
-        let slot = replacement;
-        row[slot] = tag;
-        slot
-    };
+    let key = format!("memory:episode:{relation}:{}:{}", actor.0, patient.0);
     let mut scene = BTreeMap::from([
         ("@predicate".into(), format!("relation:{relation}")),
         ("actor".into(), format!("person:{}", actor.0)),
         ("patient".into(), format!("person:{}", patient.0)),
     ]);
+    if let Some(q) = quantity {
+        scene.insert("quantity".into(), q.to_string());
+    }
     if let Ok(area) = game_transport::area(tx.get()?, observer) {
         scene.insert("place".into(), format!("place:{}", area.0));
     }
@@ -65,10 +35,29 @@ fn remember(
     }
     tx.call(game_knowledge::Conclude {
         person: observer,
-        key: format!("memory:episode:{slot}"),
+        key: key.clone(),
         value: serde_json::to_value(scene).unwrap(),
         confidence: 80,
-    })
+    })?;
+    if tx.registered::<game_memory::Significance>() {
+        let closeness = tx
+            .get::<game_relationships::Social>()
+            .ok()
+            .map_or(0, |s| s.regard(observer, patient).unsigned_abs());
+        tx.call(game_memory::Significance {
+            person: observer,
+            key,
+            importance: (200 + closeness * 5).min(1000) as u16,
+            emotion: if relation == "struck" {
+                -800
+            } else if relation == "bore" {
+                800
+            } else {
+                0
+            },
+        })?;
+    }
+    Ok(())
 }
 /// Subject selection is personal and reproducible; knowledge does not imply objective truth.
 pub fn inspiration(tx: &Transaction<'_>, person: PersonId) -> Vec<(String, game_knowledge::Fact)> {
@@ -104,11 +93,17 @@ pub fn inspiration(tx: &Transaction<'_>, person: PersonId) -> Vec<(String, game_
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("recollection", 1)?;
-    b.resource::<Recollections>()?;
     b.subscribe::<game_physiology::Fed>("recollection.care", |tx, e| {
         if e.caregiver != e.patient {
             for observer in [e.caregiver, e.patient] {
-                remember(tx, observer, "fed", e.caregiver, e.patient)?;
+                remember(
+                    tx,
+                    observer,
+                    "fed",
+                    e.caregiver,
+                    e.patient,
+                    Some(e.quantity),
+                )?;
             }
         }
         Ok(())
@@ -117,14 +112,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let family = tx.get::<game_lifecycle::Population>()?.families[&e.person].clone();
         for observer in [family.mother, family.father] {
             if game_transport::area(tx.get()?, observer).ok() == Some(e.area) {
-                remember(tx, observer, "bore", family.mother, e.person)?;
+                remember(tx, observer, "bore", family.mother, e.person, None)?;
             }
         }
         Ok(())
     })?;
     b.subscribe::<game_conflict::Struck>("recollection.conflict", |tx, e| {
         for observer in [e.actor, e.target] {
-            remember(tx, observer, "struck", e.actor, e.target)?;
+            remember(tx, observer, "struck", e.actor, e.target, Some(e.amount))?;
         }
         Ok(())
     })?;
@@ -143,7 +138,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             .collect();
         for observer in observers {
             if observer != e.person {
-                remember(tx, observer, "died", e.person, e.person)?;
+                remember(tx, observer, "died", e.person, e.person, None)?;
             }
         }
         Ok(())

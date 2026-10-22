@@ -548,14 +548,15 @@ fn retained_empirical_episodes_survive_new_witnesses_and_invalid_episode_rollbac
         observation: episode(1),
     })
     .unwrap();
-    let earlier = h.get::<Inquiry>().unwrap().clone();
+    let earlier = game_knowledge::view(&h, p[0]).unwrap();
     h.dispatch(Witness {
         observer: p[0],
         observation: episode(2),
     })
     .unwrap();
-    assert_eq!(earlier.people[&p[0]].observations.len(), 1);
-    assert_eq!(earlier.people[&p[0]].observations[0].value, 1);
+    let records: Vec<_> = game_knowledge::with_prefix(&earlier, "memory:empirical:").collect();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].1.value.decode::<Observation>().unwrap().value, 1);
     let saved = h.save().unwrap();
     let mut invalid = episode(3);
     invalid.context.insert("".into(), 0);
@@ -626,4 +627,35 @@ fn rigidity_can_reject_a_comprehensible_contradiction_without_changing_inference
             expected
         );
     }
+}
+#[test]
+fn expired_empirical_memories_cannot_be_recovered_from_an_independent_reasoning_buffer() {
+    let mut b = support::builder();
+    plugin(&mut b).unwrap();
+    let (mut h, p, _) = support::people(b);
+    for (heat, value) in [(0, 1), (10, 20)] {
+        h.dispatch(Witness {
+            observer: p[0],
+            observation: Observation {
+                subject: "iron".into(),
+                outcome: "hardness".into(),
+                context: [("heat".into(), heat)].into(),
+                trial: 0,
+                value,
+            },
+        })
+        .unwrap();
+    }
+    let until = h.now().after(SimDuration(3 * DAY.0)).unwrap();
+    while h.advance(until, 1000).unwrap().stop == game_sim::Stop::Budget {}
+    assert_eq!(h.dispatch(Reflect { person: p[0] }).unwrap(), 0);
+    let facts = game_knowledge::view(&h, p[0]).unwrap();
+    assert_eq!(
+        game_knowledge::with_prefix(&facts, "memory:empirical:").count(),
+        0
+    );
+    assert_eq!(
+        game_knowledge::with_prefix(&facts, "theory:iron:").count(),
+        0
+    );
 }

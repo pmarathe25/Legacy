@@ -13,6 +13,13 @@ fn builder() -> Builder {
     game_property::plugin(&mut b).unwrap();
     game_physiology::plugin(&mut b).unwrap();
     plugin(&mut b).unwrap();
+    b.request::<SignalMemory>(|tx, r| {
+        Ok((
+            game_signals::perception(tx, r.0, r.1).is_some(),
+            estimated_hunger(tx, r.0, r.1),
+        ))
+    })
+    .unwrap();
     b
 }
 fn setup() -> (Host, Vec<PersonId>, AreaId) {
@@ -367,4 +374,44 @@ fn observing_an_incapacitated_survivor_does_not_require_them_to_act() {
     );
     let saved = h.save().unwrap();
     assert_eq!(builder().load(&saved, 4).unwrap().save().unwrap(), saved);
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct SignalMemory(PersonId, PersonId);
+impl Request for SignalMemory {
+    const KEY: &'static str = "test.signal-memory";
+    type Response = (bool, Option<u64>);
+}
+#[test]
+fn unattended_care_cues_expire_with_inherited_memory_durability_and_loading() {
+    let (mut h, p, _) = setup();
+    set(&mut h, p[0], &[("memory_durability", 0)]);
+    set(&mut h, p[1], &[("memory_durability", 4000)]);
+    h.dispatch(game_physiology::Rest { person: p[2] }).unwrap();
+    h.dispatch(game_physiology::Start).unwrap();
+    let at = h.now().after(MINUTE).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    for observer in [p[0], p[1]] {
+        h.dispatch(Notice {
+            observer,
+            person: p[2],
+        })
+        .unwrap();
+        assert!(
+            h.dispatch(SignalMemory(observer, p[2]))
+                .unwrap()
+                .1
+                .is_some()
+        );
+    }
+    let at = h.now().after(SimDuration(7 * HOUR.0)).unwrap();
+    while h.advance(at, 128).unwrap().stop == Stop::Budget {}
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut loaded] {
+        assert_eq!(
+            host.dispatch(SignalMemory(p[0], p[2])).unwrap(),
+            (false, None)
+        );
+        assert!(host.dispatch(SignalMemory(p[1], p[2])).unwrap().0);
+    }
 }

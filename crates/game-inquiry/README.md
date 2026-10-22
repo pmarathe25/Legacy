@@ -1,12 +1,12 @@
 # game-inquiry
 
-Bounded episodic memory of witnessed events, empirical reflection, and voluntary peer-to-peer teaching.
+Empirical reflection over personally retained evidence and voluntary peer-to-peer teaching.
 
 **Why it matters:** Characters should discover how the world works from lived experience rather than global omniscience. `game-inquiry` lets people record what they witness, infer causal rules during quiet reflection, and explain discoveries to others.
 
 ## Responsibilities
 
-- **Episodic Memory (`Witness`):** Stores a bounded personal log of perceived numerical episodes per character using copy-on-write `game-storage::Records`.
+- **Episodic Memory (`Witness`):** Records perceived numerical episodes in the central `game-memory` store; the inference working set is bounded separately.
 - **Empirical Reflection:** Periodically feeds witnessed episodes into `game-reasoning` to derive or refine personal causal beliefs and practical knowledge.
 - **Voluntary Teaching (`Explain`):** Proposes and executes peer teaching actions—offering detailed, practical, or demonstrated explanations that transfer evidence and knowledge via `game-communication` and `game-testimony`.
 
@@ -39,3 +39,9 @@ alone. Notification itself grants no explanation and prescribes no action.
 Empirical episodes are immutable shared records inside each personal queue. New
 witnesses copy queue pointers across snapshots, rather than every old context and
 subject string. Reflection and save data preserve the same episode sequence.
+
+Empirical episodes now reside only in `game-memory`, through knowledge requests.
+`Experience` keeps counts and reasoning progress, not a second observation queue.
+Inference retrieves a bounded working set of still-retained personal evidence;
+actual reflection recalls it, while proposing reflection remains read-only.
+Forgetting removes its availability to inference as well as ordinary queries.

@@ -114,3 +114,62 @@ fn roads_wire<S: serde::Serializer>(
     }
     .serialize(serializer)
 }
+
+impl game_facts::Interpretation for FactValue {
+    fn promote(value: Arc<Self>, key: &str) -> Arc<Self> {
+        Self::promote(value, key)
+    }
+}
+impl game_memory::Content for FactValue {
+    fn cues(&self, key: &str) -> Vec<String> {
+        let mut cues = vec![key.split(':').next().unwrap_or(key).to_string()];
+        if let Self::Other(v) = self
+            && let Some(map) = v.as_object()
+        {
+            cues.extend(
+                map.iter()
+                    .filter(|(k, _)| {
+                        ["actor", "patient", "place", "@predicate"].contains(&k.as_str())
+                    })
+                    .filter_map(|(_, v)| v.as_str().map(str::to_string)),
+            );
+        }
+        cues
+    }
+    fn reconstruct(&self, draw: u64) -> Option<Self> {
+        let mut raw = serde_json::to_value(self).ok()?;
+        // Never change IDs, actors, sources, predicates, permissions or physical objects.
+        let map = raw.as_object_mut()?;
+        let names: Vec<_> = map
+            .iter()
+            .filter(|(k, v)| {
+                ["quantity", "amount", "distance", "duration", "intensity"].contains(&k.as_str())
+                    && (v.is_u64() || v.as_str().is_some_and(|s| s.parse::<u64>().is_ok()))
+            })
+            .map(|(k, _)| k.clone())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        let key = &names[draw as usize % names.len()];
+        let string = map[key].is_string();
+        let n = map[key]
+            .as_u64()
+            .or_else(|| map[key].as_str()?.parse().ok())?;
+        let step = (n / 100).max(1);
+        let changed = if draw & 1 == 0 {
+            n.saturating_add(step)
+        } else {
+            n.saturating_sub(step)
+        };
+        map.insert(
+            key.clone(),
+            if string {
+                changed.to_string().into()
+            } else {
+                changed.into()
+            },
+        );
+        Some(Self::Other(raw))
+    }
+}

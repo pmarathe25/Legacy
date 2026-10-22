@@ -1540,6 +1540,7 @@ dependencies = [
  "game-core",
  "game-knowledge",
  "game-land",
+ "game-memory",
  "game-objects",
  "game-physiology",
  "game-property",
@@ -1683,6 +1684,7 @@ dependencies = [
  "game-ecology",
  "game-facts",
  "game-land",
+ "game-memory",
  "game-objects",
  "game-packed",
  "game-physics",
@@ -1885,6 +1887,32 @@ dependencies = [
  "game-transport",
  "game-vitality",
  "game-workshop",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-memory"
+version = "0.2.0"
+dependencies = [
+ "game-cargo",
+ "game-content",
+ "game-core",
+ "game-facts",
+ "game-knowledge",
+ "game-land",
+ "game-objects",
+ "game-packed",
+ "game-physiology",
+ "game-property",
+ "game-relationships",
+ "game-sim",
+ "game-snapshot",
+ "game-storage",
+ "game-testimony",
+ "game-traits",
+ "game-transport",
+ "game-vitality",
  "serde",
  "serde_json",
 ]
@@ -2436,6 +2464,7 @@ dependencies = [
  "game-core",
  "game-knowledge",
  "game-lifecycle",
+ "game-memory",
  "game-physiology",
  "game-relationships",
  "game-sim",
@@ -2463,6 +2492,8 @@ name = "game-save-compat"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-facts",
+ "game-snapshot",
  "serde",
  "serde_json",
 ]
@@ -2600,6 +2631,7 @@ version = "0.2.0"
 dependencies = [
  "game-choice",
  "game-core",
+ "game-memory",
  "game-objects",
  "game-physiology",
  "game-sim",
@@ -2778,6 +2810,7 @@ dependencies = [
  "game-communication",
  "game-core",
  "game-knowledge",
+ "game-memory",
  "game-sim",
  "game-transport",
  "serde",
@@ -2927,6 +2960,7 @@ dependencies = [
  "game-knowledge",
  "game-land",
  "game-literacy",
+ "game-memory",
  "game-objects",
  "game-observations",
  "game-pastimes",

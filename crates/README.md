@@ -14,7 +14,8 @@ Recent extensions have separate owners:
 | [game-syntax](game-syntax/README.md) | Grounded relational speech and personal learning in actual encounters |
 | [game-attraction](game-attraction/README.md) | Subjective tastes and perceived compatibility |
 | [game-violence](game-violence/README.md) | Dispositions and acquired moral responses to violence |
-| [game-recollection](game-recollection/README.md) | Bounded personal episodes and creative inspiration |
+| [game-memory](game-memory/README.md) | Single personal memory store, sleep consolidation, fading, hereditary potential and reconstructive recall |
+| [game-recollection](game-recollection/README.md) | Experienced episode recording and personal creative inspiration |
 | [game-inscription](game-inscription/README.md) | Physical surfaces and compatible mark-making methods |
 | [game-orthography](game-orthography/README.md) | Pure finite symbol encoding |
 | [game-simple-machines](game-simple-machines/README.md) | Elementary geometry and work-port compatibility |

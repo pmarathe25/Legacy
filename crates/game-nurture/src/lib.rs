@@ -161,9 +161,7 @@ fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool>
     let home = if local(tx, p, child) {
         Some(game_transport::area(tx.get()?, p)?)
     } else {
-        tx.get::<game_signals::Signals>()
-            .ok()
-            .and_then(|s| s.perceptions.get(&p)?.get(&child)?.area)
+        game_signals::perception(tx, p, child).and_then(|p| p.area)
     };
     let Some(home) = home else {
         return Ok(false);

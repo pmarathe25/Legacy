@@ -104,7 +104,22 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let Ok(area) = game_transport::area(tx.get()?, e.person) else {
             return Ok(());
         };
-        let evidence = game_recollection::inspiration(tx, e.person);
+        let mut evidence = game_recollection::inspiration(tx, e.person);
+        if tx.registered::<game_memory::Recall>() {
+            for (key, fact) in &mut evidence {
+                if let Some(value) = tx.call(game_memory::Recall {
+                    person: e.person,
+                    key: key.clone(),
+                })? {
+                    *fact = serde_json::from_value(value)
+                        .map_err(|e| Error::InvalidSave(e.to_string()))?;
+                }
+            }
+            evidence.retain(|(key, _)| {
+                tx.get::<game_knowledge::Knowledge>()
+                    .is_ok_and(|s| s.0.get(&e.person).is_some_and(|f| f.contains_key(key)))
+            });
+        }
         if evidence.is_empty() {
             return Ok(());
         }

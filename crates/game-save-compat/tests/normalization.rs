@@ -1,6 +1,7 @@
 use game_save_compat::normalize;
 fn defaults() -> serde_json::Value {
     let pairs = [
+        ("memory", Some("knowledge.perception")),
         ("information", Some("information.questions")),
         ("search", Some("search.people")),
         ("mechanics", Some("mechanics.devices")),
@@ -118,4 +119,38 @@ fn malformed_legacy_communication_is_rejected_without_panicking() {
         .remove("signals.experience");
     old["resources"]["communication.experience"] = serde_json::Value::Null;
     assert!(normalize(&old.to_string(), || Ok(defaults().to_string())).is_err());
+}
+#[test]
+fn old_empirical_memories_move_into_personal_evidence_without_inventing_fresh_dates() {
+    let mut old = defaults();
+    old["plugins"].as_object_mut().unwrap().remove("memory");
+    old["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("knowledge.perception");
+    old["resources"]["recollection.episodes"] = serde_json::json!({"7":["struck:7:8"]});
+    old["resources"]["knowledge.facts"] = serde_json::json!({});
+    let observation = serde_json::json!({"subject":"iron","outcome":"hardness","context":{"heat":20},"trial":1,"value":9});
+    old["resources"]["inquiry.experience"] =
+        serde_json::json!({"people":{"7":{"observations":[observation],"count":4,"considered":2}}});
+    let saved = normalize(&old.to_string(), || Ok(defaults().to_string()))
+        .unwrap()
+        .into_owned();
+    let v: serde_json::Value = serde_json::from_str(&saved).unwrap();
+    assert!(v["resources"].get("recollection.episodes").is_none());
+    assert!(
+        v["resources"]["inquiry.experience"]["people"]["7"]
+            .get("observations")
+            .is_none()
+    );
+    let archive: game_snapshot::evidence::Archive<serde_json::Value> =
+        serde_json::from_value(v["resources"]["knowledge.facts"]["archive"].clone()).unwrap();
+    let facts = archive.restore(|_, v| v).unwrap();
+    let f = facts[0]
+        .1
+        .get("memory:empirical:00000000000000000004")
+        .unwrap();
+    assert_eq!(f.value.as_ref(), &observation);
+    assert_eq!(f.source, game_core::PersonId(7));
+    assert_eq!(f.observed, game_core::SimTime(0));
 }

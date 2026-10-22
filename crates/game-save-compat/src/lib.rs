@@ -1,6 +1,8 @@
 //! Normalize historical save ownership without changing live feature rules.
 use game_core::Result;
+mod memories;
 const OPTIONAL: &[(&str, Option<&str>)] = &[
+    ("memory", Some("knowledge.perception")),
     ("information", Some("information.questions")),
     ("search", Some("search.people")),
     ("mechanics", Some("mechanics.devices")),
@@ -83,6 +85,10 @@ pub fn normalize<'a>(
                 put(&mut resources, key, &defaults["resources"][key])?;
             }
         }
+    }
+    if !header.plugins.contains_key("memory") {
+        memories::migrate(&mut resources)?;
+        resources.remove("recollection.episodes"); // Content already resides in personal evidence.
     }
     if !resources.contains_key("search.goods") {
         put(

@@ -24,10 +24,12 @@ fn caregiving_is_practiced_and_a_surviving_recipient_can_learn_a_simplified_less
     }
     assert!(h.get::<game_skills::Skills>().unwrap().levels[&p[0]]["child-care"] > 0);
     assert!(
-        h.get::<game_inquiry::Inquiry>().unwrap().people[&p[1]]
-            .observations
-            .iter()
-            .any(|o| o.subject == "child-care")
+        game_knowledge::with_prefix(
+            &h.get::<game_knowledge::Knowledge>().unwrap().0[&p[1]],
+            "memory:empirical:"
+        )
+        .filter_map(|(_, fact)| fact.value.decode::<game_reasoning::Observation>())
+        .any(|o| o.subject == "child-care")
     );
     assert!(h.dispatch(game_inquiry::Reflect { person: p[0] }).unwrap() > 0);
     let key = h.get::<game_knowledge::Knowledge>().unwrap().0[&p[0]]

@@ -12,7 +12,7 @@ pub(super) fn visible(
 ) -> Result<Arc<game_facts::Scene<FactValue>>> {
     let land = &tx.get::<game_land::Land>()?.0;
     let ecology = tx.get::<game_ecology::Ecology>().ok();
-    let previous = tx.get::<Knowledge>()?.2.get(&area);
+    let previous = tx.get::<Perception>()?.scenes.get(&area);
     if let Some(old) = previous
         && land.matches(&old.land)
         && match (ecology, &old.ecology) {
@@ -49,6 +49,6 @@ pub(super) fn visible(
         ecology: ecology.map(|w| w.patches.version()),
         scene: scene.clone(),
     };
-    tx.edit::<Knowledge>()?.2.insert(area, cached);
+    tx.edit::<Perception>()?.scenes.insert(area, cached);
     Ok(scene)
 }

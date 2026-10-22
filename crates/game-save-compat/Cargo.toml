@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-snapshot.workspace=true
+game-facts.workspace=true
 game-core.workspace = true
 serde.workspace = true
 serde_json.workspace = true

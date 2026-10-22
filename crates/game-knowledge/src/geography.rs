@@ -28,38 +28,33 @@ pub(super) fn remember(
     subject: Subject,
     data: FactValue,
 ) -> Result<()> {
-    let cached = tx.get::<Knowledge>()?.1.shared(&subject);
+    let cached = tx.get::<Perception>()?.subjects.shared(&subject);
     let cached = if cached.as_ref().is_some_and(|c| c.value.as_ref() == &data) {
         cached.unwrap()
     } else {
         let key = cached
             .map(|c| c.key.clone())
             .unwrap_or_else(|| subject.key().into());
-        tx.edit::<Knowledge>()?.1.insert(
+        tx.edit::<Perception>()?.subjects.insert(
             subject.clone(),
             Cached {
                 key,
                 value: Arc::new(data),
             },
         );
-        tx.get::<Knowledge>()?.1.shared(&subject).unwrap()
+        tx.get::<Perception>()?.subjects.shared(&subject).unwrap()
     };
-    let observed = tx.now();
-    let revision = tx.revision_after();
-    tx.edit::<Knowledge>()?
-        .0
-        .modify(person, Facts::default, |facts| {
-            facts.insert(
-                cached.key.clone(),
-                Fact {
-                    value: cached.value.clone(),
-                    source: person,
-                    observed,
-                    revision,
-                    confidence: 100,
-                },
-            );
-        });
+    tx.call(Receive {
+        person,
+        key: cached.key.to_string(),
+        fact: Fact {
+            value: cached.value.clone(),
+            source: person,
+            observed: tx.now(),
+            revision: tx.revision_after(),
+            confidence: 100,
+        },
+    })?;
     Ok(())
 }
 /// Traverse recorded roads lazily. A known road may reach an endpoint whose
@@ -118,15 +113,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             }
         } else {
             let scene = scenes::visible(tx, area)?;
-            let stamp = game_facts::Stamp {
-                source: r.person,
-                observed: tx.now(),
-                revision: tx.revision_after(),
-                confidence: 100,
-            };
-            tx.edit::<Knowledge>()?
-                .0
-                .modify(r.person, Facts::default, |f| f.0.observe(scene, stamp));
+            tx.call(game_memory::ObserveScene {
+                person: r.person,
+                scene,
+            })?;
         }
         // Inspect newly encountered accessible containers; refreshing a known stock
         // requires deliberate inspection, so remembered stock can still become stale.
@@ -137,18 +127,13 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .unwrap_or(&empty);
         let memory = tx.get::<Knowledge>()?;
         let facts = &memory.0[&r.person];
-        // Membership is immutable until permissions change. Once every permitted
-        // store is known, container motion cannot introduce an unknown store.
-        if facts.1.as_ref().is_some_and(|old| old.matches(permitted)) {
-            return Ok(());
-        }
-        let mut all_known = true;
+        let perception = tx.get::<Perception>()?;
         let inventories: Vec<_> = permitted
             .keys()
             .copied()
             .filter(|id| {
-                let known = memory
-                    .1
+                let known = perception
+                    .subjects
                     .get(&Subject::Stock(*id))
                     .map(|cached| facts.get(cached.key.as_ref()))
                     .unwrap_or_else(|| facts.get(store_key(*id).as_str()))
@@ -156,20 +141,14 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 if known {
                     return false;
                 }
-                let local = game_cargo::locality(tx, *id).is_ok_and(|a| a == area);
-                all_known &= local;
-                local
+                game_cargo::locality(tx, *id).is_ok_and(|a| a == area)
             })
             .collect();
-        let completed = (all_known && !permitted.is_empty()).then(|| permitted.version());
         for inventory in inventories {
             tx.call(ObserveStore {
                 person: r.person,
                 inventory,
             })?;
-        }
-        if let Some(version) = completed {
-            tx.edit::<Knowledge>()?.0.get_mut(&r.person).unwrap().1 = Some(version);
         }
         Ok(())
     })?;
