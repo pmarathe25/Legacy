@@ -25,3 +25,57 @@ Feeding produces caregiver practice and personal care observations. Acquired
 `child-care` skill improves cue interpretation and anticipation. Understood care
 lessons and readable works can pass learning between generations; children do not
 inherit their parents' experience. Skill changes competence, not compassion.
+
+
+## Topic retrieval, fading, and associations
+
+Memory retrieval should use a person's own topic indexes and local associations.
+A supply question needs remembered stores and resource patches; unrelated family
+stories and mechanical experiments should not be scanned to answer it. Cue indexes
+can include people, places, objects, subjects, and perceived events. They index
+what this person experienced or understood from a report, including mistakes;
+they never expose another person's private memories or add hidden world links.
+
+Existing responsibilities remain distinct: `game-facts` owns indexed fact storage
+and shared scene representation, `game-knowledge` owns personal evidence and
+observation, and `game-food-memory` projects remembered supply facts. General
+memory retention, reinforcement, salience, and associative retrieval are a proposed
+separate `game-memory` feature owner. This lifecycle and association layer is not
+yet implemented by the topic-range optimization in `game-information`.
+
+A memory's accessibility should fade with elapsed time according to its kind and
+the person's expressed capacities, condition, attention, salience, and meaningful
+reinforcement. Temporary stock reports, significant episodes, practiced knowledge,
+and relationships do not share one universal expiry clock. Strong emotional or
+repeated experiences can remain accessible longer, without making their content
+more accurate. Stable skills, commitments, and relationships retain their existing
+owners; losing recall of one episode does not automatically erase those states.
+
+Actual use, reflection, retelling, or reading can reinforce accessibility. Read-only
+queries, cache hits, proposal enumeration, and unchosen alternatives must not do so.
+Otherwise an implementation optimization would change what a person remembers,
+and repeatedly considering an action would prevent forgetting it. Reinforcement
+must not advance the original observation timestamp, replace its source, or turn
+rehearsal of a stale or false report into new evidence. Accuracy and confidence in
+an assertion remain separate from vividness and ease of recall.
+
+Direct associations should be personal, typed, weighted links formed through
+experienced or understood connections. Retrieval begins with relevant cues and
+follows a bounded set of nearby links, ranked by accessibility and current context.
+It does not traverse every memory or a global social graph. Related memories may
+help interpretation or contradict one another; an association alone proves no
+causal relationship. Link strength may fade or be reinforced independently of the
+linked episodes. Topic indexes and adjacency indexes must remain consistent through
+replacement, forgetting, rollback, and save/load.
+
+Subjective forgetting does not delete the historical journal, physical records,
+or cultural artifacts. An old text can survive its author's fading recollection,
+but another person must encounter, read, and understand it to learn from it. A
+player-facing chronicle should distinguish witnessed events, attributed reports,
+and remembered interpretations, preserving their provenance and uncertainty.
+
+A future memory model needs tests for context-limited retrieval, gradual fading,
+meaningful reinforcement, stale and false evidence, bounded association traversal,
+and equivalence across saving and worker counts. Introduce behavioral retention
+rules as a separately identified model in historical comparisons. Storage indexing
+and caching can be optimized independently when complete replay outputs match.
