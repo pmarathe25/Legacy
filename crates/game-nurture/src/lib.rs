@@ -234,6 +234,7 @@ fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool>
 }
 fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
     if game_physiology::capable(tx, p).is_err()
+        || game_transport::area(tx.get()?, p).is_err()
         || !game_vitality::can_manipulate(tx, p)
         || Some(p) == tx.get::<game_lineage::Lineage>()?.current
     {

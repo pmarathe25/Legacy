@@ -146,3 +146,66 @@ fn declined_food_reconsiders_with_failure_evidence_for_new_and_continuing_care()
         assert_eq!(s.save().unwrap(), loaded.save().unwrap());
     }
 }
+
+#[test]
+fn stale_food_reviews_reconsider_during_travel_and_after_road_interruption() {
+    for continuing in [false, true] {
+        for interrupted in [false, true] {
+            let (mut s, carer, patient, pack) = mistaken_need(continuing);
+            let h = s.debug_host_mut();
+            h.dispatch(game_households::Foster {
+                caregiver: carer,
+                child: patient,
+            })
+            .unwrap();
+            let area = game_transport::area(h.get().unwrap(), carer).unwrap();
+            let destination = *h.get::<game_land::Land>().unwrap().0[&area]
+                .links
+                .keys()
+                .next()
+                .unwrap();
+            h.dispatch(game_transport::Move {
+                person: carer,
+                destination,
+            })
+            .unwrap();
+            if interrupted {
+                h.dispatch(game_transport::Cancel { person: carer })
+                    .unwrap();
+            }
+            let before = h.get::<game_transport::Positions>().unwrap().0[&carer].clone();
+            let saved = s.save().unwrap();
+            let mut loaded = Simulation::load(&saved, 4).unwrap();
+            for sim in [&mut s, &mut loaded] {
+                let h = sim.debug_host_mut();
+                // Exercise the same saved callback that can outlive its local opportunity.
+                let review = serde_json::from_value(serde_json::json!({
+                    "key": "care.food-review", "payload": {"caregiver": carer}
+                }))
+                .unwrap();
+                assert_eq!(
+                    h.dispatch(game_choice::Run(review)).unwrap(),
+                    game_choice::Outcome::Reconsider
+                );
+                h.dispatch(game_households::TendFood { caregiver: carer })
+                    .unwrap();
+                assert_eq!(
+                    h.get::<game_transport::Positions>().unwrap().0[&carer],
+                    before
+                );
+                assert_eq!(
+                    h.get::<game_cargo::Cargo>().unwrap().0[&pack].amount(game_cargo::FOOD),
+                    100
+                );
+                assert_eq!(
+                    h.get::<game_households::Households>()
+                        .unwrap()
+                        .food_care
+                        .contains_key(&carer),
+                    continuing
+                );
+            }
+            assert_eq!(s.save().unwrap(), loaded.save().unwrap());
+        }
+    }
+}
