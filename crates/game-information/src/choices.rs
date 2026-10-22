@@ -107,19 +107,11 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 .and_then(|s| s.values.get(&p)?.get("privacy"))
                 .copied()
                 .unwrap_or(0);
-            let prefix = match &q.topic {
-                Topic::Fact(s) | Topic::Category(s) => s.as_str(),
-                Topic::Supplies(_) => "",
-            };
             let key = tx
                 .get::<Knowledge>()?
                 .0
                 .get(&p)
-                .into_iter()
-                .flat_map(|f| game_knowledge::with_prefix(f, prefix))
-                .filter(|(key, fact)| q.topic.matches(key, fact.value))
-                .max_by_key(|(key, fact)| (fact.observed, fact.confidence, std::cmp::Reverse(*key)))
-                .map(|(key, _)| key.to_string());
+                .and_then(|facts| q.topic.answer(facts));
             if let Some(key) = key {
                 offer(
                     tx,

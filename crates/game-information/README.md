@@ -44,3 +44,8 @@ Question inboxes and interests use per-person shared records. Updating one histo
 copies that person's row, preserving retained revisions without copying neighbors'
 question vectors. Proposal collection borrows immutable row snapshots; it changes
 neither willingness to answer nor which facts are available.
+
+Answer search visits only the personal-memory key ranges relevant to a topic.
+Supply questions examine remembered `patch:` and `store:` facts; selection still
+uses evidence age, confidence, and the same key tie-break. Unrelated memories
+remain available to other questions, and no cross-review answer cache is retained.

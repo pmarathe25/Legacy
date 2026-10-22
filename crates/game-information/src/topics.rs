@@ -14,6 +14,19 @@ impl Topic {
             Self::Supplies(g) => g.0 > 0,
         }
     }
+    pub(super) fn answer(&self, facts: &Facts) -> Option<String> {
+        let prefixes = match self {
+            Self::Fact(s) | Self::Category(s) => [Some(s.as_str()), None],
+            Self::Supplies(_) => [Some("patch:"), Some("store:")],
+        };
+        prefixes
+            .into_iter()
+            .flatten()
+            .flat_map(|prefix| game_knowledge::with_prefix(facts, prefix))
+            .filter(|(key, fact)| self.matches(key, fact.value))
+            .max_by_key(|(key, fact)| (fact.observed, fact.confidence, std::cmp::Reverse(*key)))
+            .map(|(key, _)| key.to_string())
+    }
     pub fn concept(&self) -> String {
         match self {
             Self::Fact(s) => s.clone(),

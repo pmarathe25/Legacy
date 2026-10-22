@@ -663,3 +663,110 @@ fn changing_one_question_history_preserves_other_people_and_older_revisions() {
     assert_eq!(h.save().unwrap(), before);
     assert_eq!(builder().load(&before, 4).unwrap().save().unwrap(), before);
 }
+
+#[test]
+fn answer_ranges_match_full_memory_search_after_evidence_changes_and_loading() {
+    let (mut h, [asker, respondent, _], [area, _]) = setup();
+    let good = game_cargo::FOOD;
+    for i in 0..256 {
+        conclude(
+            &mut h,
+            respondent,
+            &format!("memory:{i:04}"),
+            serde_json::json!({"history": i}),
+        );
+    }
+    for (key, value, confidence) in [
+        ("store:10", serde_json::json!({good.0.to_string(): 9}), 60),
+        ("store:11", serde_json::json!({good.0.to_string(): 7}), 80),
+        ("store:12", serde_json::json!({good.0.to_string(): 4}), 80),
+        ("store:bad", serde_json::json!({"invalid": "stock"}), 100),
+        (
+            "store-location:10",
+            serde_json::json!({good.0.to_string(): 99}),
+            100,
+        ),
+        (
+            "patch:10",
+            serde_json::json!({"area": area, "good": good, "stock": 5, "capacity": 10, "renew": 1}),
+            80,
+        ),
+        ("technique:bake", serde_json::json!("bread"), 70),
+        (
+            "technique:baker",
+            serde_json::json!("unrelated exact fact"),
+            90,
+        ),
+    ] {
+        h.dispatch(game_knowledge::Conclude {
+            person: respondent,
+            key: key.into(),
+            value,
+            confidence,
+        })
+        .unwrap();
+    }
+    let topics = [
+        Topic::Supplies(good),
+        Topic::Supplies(GoodId(9999)),
+        Topic::Category("store:".into()),
+        Topic::Category("memory:".into()),
+        Topic::Category("absent:".into()),
+        Topic::Fact("technique:bake".into()),
+    ];
+    let questions: Vec<_> = topics
+        .into_iter()
+        .map(|topic| {
+            let id = h
+                .dispatch(Ask {
+                    person: asker,
+                    other: respondent,
+                    topic: topic.clone(),
+                })
+                .unwrap();
+            (id, topic)
+        })
+        .collect();
+    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    for round in 0..3 {
+        for host in [&mut h, &mut loaded] {
+            if round > 0 {
+                run(host, round);
+                conclude(
+                    host,
+                    respondent,
+                    "store:10",
+                    serde_json::json!({good.0.to_string(): if round == 1 { 3 } else { 0 }}),
+                );
+                if round == 2 {
+                    conclude(
+                        host,
+                        respondent,
+                        "patch:10",
+                        serde_json::json!("forgotten location"),
+                    );
+                }
+            }
+            let offers = host
+                .dispatch(game_choice::Collect { person: respondent })
+                .unwrap();
+            for (id, topic) in &questions {
+                let facts = &host.get::<game_knowledge::Knowledge>().unwrap().0[&respondent];
+                // Independent reference scans every remembered fact, including unrelated history.
+                let expected = facts
+                    .iter()
+                    .filter(|(key, fact)| topic.matches(key, fact.value))
+                    .max_by_key(|(key, fact)| {
+                        (fact.observed, fact.confidence, std::cmp::Reverse(*key))
+                    })
+                    .map(|(key, _)| key.to_string());
+                let offered = offers
+                    .iter()
+                    .find(|o| o.key == format!("information:answer:{id}"));
+                let actual = offered.map(|o| serde_json::to_value(&o.request).unwrap()["payload"]["request"]["payload"]["key"].as_str().unwrap().to_owned());
+                assert_eq!(actual, expected, "topic {topic:?}, round {round}");
+            }
+        }
+        assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+    }
+}
