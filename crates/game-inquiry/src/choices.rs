@@ -16,10 +16,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 .is_none_or(|m| m.reasoning_signature != signature);
         if changed
             || tx.get::<Inquiry>()?.people.get(&p).is_some_and(|m| {
-                remembered(tx, p).len() >= 2
-                    && (m.count > m.considered && m.contrasts
-                        || m.considered > 0
-                            && game_vitality::ability(tx, p, "intelligence") / 250 > m.capacity)
+                (m.count > m.considered && m.contrasts
+                    || m.considered > 0
+                        && game_vitality::ability(tx, p, "intelligence") / 250 > m.capacity)
+                    && empirical(tx, p).take(2).count() == 2
             })
         {
             game_choice::offer(

@@ -16,6 +16,9 @@ impl<K, V> Default for Records<K, V> {
     }
 }
 impl<K: Ord + Clone, V: Clone> Records<K, V> {
+    pub fn ptr_eq(&self, other: &Self) -> bool {
+        self.0.ptr_eq(&other.0)
+    }
     pub fn version(&self) -> Version<K, Arc<V>> {
         self.0.version()
     }

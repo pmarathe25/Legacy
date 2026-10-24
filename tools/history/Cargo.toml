@@ -4,7 +4,12 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish = false
+[features]
+review-trace = ["game-sim/review-trace"]
+
 [dependencies]
+rayon.workspace = true
+game-choice.workspace = true
 game-mechanics.workspace = true
 game-physics.workspace = true
 game-communication.workspace = true

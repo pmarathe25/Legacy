@@ -13,6 +13,7 @@ game-physiology.workspace = true
 serde_json.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
+game-storage.workspace = true
 game-physics.workspace = true
 game-mechanics.workspace = true
 game-vitality.workspace = true

@@ -19,8 +19,45 @@ impl Request for FailedRefresh {
     const KEY: &'static str = "test.failed-refresh";
     type Response = ();
 }
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct WarmMany(Vec<Check>);
+impl Request for WarmMany {
+    const KEY: &'static str = "test.warm-many-plans";
+    type Response = ();
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Warm(Check);
+impl Request for Warm {
+    const KEY: &'static str = "test.warm-plans";
+    type Response = ();
+}
 fn configured_builder() -> Builder {
     let mut b = builder();
+    b.request::<WarmMany>(|tx, r| {
+        let queries: Vec<_> =
+            r.0.iter()
+                .map(|r| game_work_planning::Query {
+                    person: r.person,
+                    inventories: vec![r.inventory],
+                    goals: &r.goals,
+                })
+                .collect();
+        game_work_planning::prepare(tx, &queries);
+        Ok(())
+    })
+    .unwrap();
+    b.request::<Warm>(|tx, Warm(r)| {
+        game_work_planning::prepare(
+            tx,
+            &[game_work_planning::Query {
+                person: r.person,
+                inventories: vec![r.inventory],
+                goals: &r.goals,
+            }],
+        );
+        Ok(())
+    })
+    .unwrap();
     b.request::<Check>(|tx, r| {
         let actual = game_work_planning::choose(tx, r.person, &[r.inventory], &r.goals)?;
         let reference = game_work_planning::uncached(tx, r.person, &[r.inventory], &r.goals)?;
@@ -186,5 +223,82 @@ fn goal_ranking_and_personal_traits_are_part_of_the_planning_inputs() {
         })
         .unwrap();
         h.query(check.clone()).unwrap();
+    }
+}
+
+#[test]
+fn prepared_queries_revalidate_after_observation_goal_changes_and_rollback() {
+    let (mut h, mut check) = setup_plans();
+    let save = h.save().unwrap();
+    h.query(Warm(check.clone())).unwrap();
+    assert_eq!(h.save().unwrap(), save);
+    let initial = h.query(check.clone()).unwrap().unwrap();
+    h.query(Warm(check.clone())).unwrap();
+    deposit(&mut h, check.inventory, "timber", 12);
+    // Physical stock alone does not change the character's remembered plan.
+    assert_eq!(h.query(check.clone()).unwrap(), Some(initial.clone()));
+    h = configured_builder().load(&h.save().unwrap(), 4).unwrap();
+    h.query(Warm(check.clone())).unwrap();
+    h.dispatch(game_knowledge::ObserveStore {
+        person: check.person,
+        inventory: check.inventory,
+    })
+    .unwrap();
+    let changed = h.query(check.clone()).unwrap().unwrap();
+    assert_ne!(changed, initial);
+    assert!(
+        !changed
+            .steps
+            .iter()
+            .any(|s| matches!(s, game_work_planning::Step::Gather { .. }))
+    );
+    h = configured_builder().load(&h.save().unwrap(), 4).unwrap();
+    h.query(Warm(check.clone())).unwrap();
+    // Different goals must not accept the previously prepared winner.
+    check.goals[0].object = "timber".into();
+    check.goals[0].quantity = 50;
+    h.query(check.clone()).unwrap();
+    h.query(Warm(check.clone())).unwrap();
+    assert!(h.dispatch(FailedRefresh(check.clone())).is_err());
+    h.query(check).unwrap();
+}
+
+#[test]
+fn independent_private_inputs_prepare_on_multiple_workers_and_match_the_serial_oracle() {
+    let (mut h, first) = setup_plans();
+    let area = game_transport::area(h.get().unwrap(), first.person).unwrap();
+    let mut checks = vec![first.clone()];
+    for _ in 0..7 {
+        let p = person(&mut h, area);
+        let inventory = h
+            .dispatch(game_cargo::Create {
+                custody: game_cargo::Custody::Carried(p),
+                capacity: 2000,
+            })
+            .unwrap();
+        h.dispatch(game_knowledge::ObserveSurroundings { person: p })
+            .unwrap();
+        h.dispatch(game_knowledge::ObserveStore {
+            person: p,
+            inventory,
+        })
+        .unwrap();
+        checks.push(Check {
+            person: p,
+            inventory,
+            goals: first.goals.clone(),
+        });
+    }
+    let save = h.save().unwrap();
+    let reference: Vec<_> = checks.iter().map(|r| h.query(r.clone()).unwrap()).collect();
+    for workers in [1, 2, 4] {
+        let loaded = configured_builder().load(&save, workers).unwrap();
+        loaded.query(WarmMany(checks.clone())).unwrap();
+        assert_eq!(loaded.save().unwrap(), save);
+        let actual: Vec<_> = checks
+            .iter()
+            .map(|r| loaded.query(r.clone()).unwrap())
+            .collect();
+        assert_eq!(actual, reference);
     }
 }

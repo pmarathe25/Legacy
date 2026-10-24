@@ -267,6 +267,15 @@ impl<K: Key, V: Clone> Packed<K, V> {
         }
         self.current = mark.parent;
     }
+    /// Deleted keys are separate from changed rows, which have current values.
+    pub fn removed_since<'a>(&'a self, mark: &Mark) -> impl Iterator<Item = &'a K> {
+        self.undo[mark.offset..].iter().filter_map(move |undo| {
+            if let Undo::Removed(_, key, ..) = undo {
+                return (!self.contains_key(key)).then_some(key);
+            }
+            None
+        })
+    }
     pub fn changed_since<'a>(&'a self, mark: &Mark) -> impl Iterator<Item = (&'a K, &'a V)> {
         let changes = &self.undo[mark.offset..];
         let bulk = changes.iter().any(|u| matches!(u, Undo::Bulk(_)));

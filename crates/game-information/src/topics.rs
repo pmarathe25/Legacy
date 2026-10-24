@@ -1,6 +1,5 @@
 use super::*;
 use game_knowledge::{FactValue, Facts, Stock, StoreLocation, known, location_key};
-/// These are semantic topics, not access to a global index or another mind.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Topic {
     Fact(String),

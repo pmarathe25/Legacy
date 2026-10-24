@@ -335,3 +335,12 @@ pub fn observe(host: &Host) -> Result<PlayerView> {
             .collect(),
     })
 }
+
+pub fn advance(
+    host: &mut Host,
+    preparation: &mut game_anticipation::Window,
+    target: SimTime,
+    budget: usize,
+) -> Result<Progress> {
+    preparation.advance::<game_characters::Resume>(host, target, budget, |r| r.person)
+}

@@ -26,6 +26,8 @@ pub struct Transaction<'a> {
     next_notice: u64,
     calls: usize,
     depth: usize,
+    reads: Option<Arc<game_contracts::drafting::Reads>>,
+    versions: Option<Box<game_contracts::drafting::Versions>>,
 }
 impl<'a> Transaction<'a> {
     pub(crate) fn new(host: &'a Host, at: SimTime) -> Self {
@@ -46,6 +48,8 @@ impl<'a> Transaction<'a> {
             next_notice: host.next_notice,
             calls: 0,
             depth: 0,
+            reads: None,
+            versions: None,
         }
     }
     pub(crate) fn owned(host: &'a Host, at: SimTime, data: HashMap<TypeId, Stored>) -> Self {
@@ -97,6 +101,7 @@ impl<'a> Transaction<'a> {
     }
     #[inline]
     pub fn get<T: Resource>(&self) -> Result<&T> {
+        game_contracts::drafting::read::<T>(&self.reads, self.scratch);
         if let Some(parent) = self.parent
             && self.scratch != Some(TypeId::of::<T>())
         {
@@ -104,7 +109,6 @@ impl<'a> Transaction<'a> {
         }
         registry::read(self.data.as_ref().unwrap_or(&self.host.data))
     }
-    /// Stage a resource snapshot. Persistent tables copy only changed paths and records.
     pub fn edit<T: Resource>(&mut self) -> Result<&mut T> {
         let owner = self
             .host
@@ -128,6 +132,9 @@ impl<'a> Transaction<'a> {
         Ok(f(state, &host.pool))
     }
     fn edit_owned<T: Resource>(&mut self) -> Result<&mut T> {
+        if let Some(versions) = &mut self.versions {
+            versions.write::<T>();
+        }
         let id = TypeId::of::<T>();
         if self.parent.is_some() && self.scratch != Some(id) {
             self.blocked = true;
@@ -173,11 +180,8 @@ impl<'a> Transaction<'a> {
         pending.invoke(self)
     }
     pub fn call<R: Request>(&mut self, request: R) -> Result<R::Response> {
-        self.calls += 1;
-        require(
-            self.calls <= MAX_CALLS && self.depth < 32,
-            "request dispatch limit exceeded",
-        )?;
+        let _cause = game_contracts::causal::scope("request", R::KEY);
+        self.budget("request dispatch limit exceeded")?;
         let host = self.host;
         let handler = host
             .registry
@@ -199,7 +203,6 @@ impl<'a> Transaction<'a> {
         self.depth -= 1;
         result
     }
-    /// A failed nested attempt restores its own changes while retaining its caller's work.
     pub fn attempt<R: Request>(&mut self, request: R) -> Result<R::Response> {
         let checkpoint = (
             self.jobs.len(),
@@ -275,7 +278,7 @@ impl<'a> Transaction<'a> {
     }
     pub fn emit<E: Event>(&mut self, event: E, witnesses: Vec<PersonId>) -> Result<()> {
         self.external_effect()?;
-        self.notification_budget()?;
+        self.budget("notification limit exceeded")?;
         let data = serde_json::to_value(&event).map_err(registry::json_error)?;
         let sequence = self.next_notice;
         self.next_notice = sequence.checked_add(1).ok_or(Error::Overflow)?;
@@ -288,20 +291,16 @@ impl<'a> Transaction<'a> {
         });
         self.notify_event(&event)
     }
-    /// Notify feature subscribers without publishing a notice.
     pub fn notify<E: Event>(&mut self, event: E) -> Result<()> {
-        self.notification_budget()?;
+        self.budget("notification limit exceeded")?;
         self.notify_event(&event)
     }
-    fn notification_budget(&mut self) -> Result<()> {
+    fn budget(&mut self, message: &str) -> Result<()> {
         self.calls += 1;
-        require(
-            self.calls <= MAX_CALLS && self.depth < 32,
-            "notification limit exceeded",
-        )?;
-        Ok(())
+        require(self.calls <= MAX_CALLS && self.depth < 32, message)
     }
     fn notify_event<E: Event>(&mut self, event: &E) -> Result<()> {
+        let _cause = game_contracts::causal::scope("event", E::KEY);
         let host = self.host;
         let Some(listeners) = host.registry.listeners.get(E::KEY) else {
             return Ok(());
@@ -343,20 +342,21 @@ impl<'a> Transaction<'a> {
         Ok(())
     }
     pub fn finish_action(&mut self, person: PersonId, kind: &str) -> Result<()> {
-        require(
-            self.get::<Actions>()?.0.get(&person).is_some_and(|a| {
-                a.kind == kind && a.owner == self.host.registry.owners[self.owner]
-            }),
-            "action has changed",
-        )?;
+        let event = self
+            .get::<Actions>()?
+            .0
+            .get(&person)
+            .filter(|a| a.kind == kind && a.owner == self.host.registry.owners[self.owner])
+            .map(|a| ActionFinished::new(person, a.id, true));
+        require(event.is_some(), "action has changed")?;
         self.edit_owned::<Actions>()?.0.erase(&person);
-        self.notify(ActionFinished { person })
+        self.notify(event.unwrap())
     }
     pub fn cancel_action(&mut self, person: PersonId) -> Result<()> {
         if let Some(action) = self.get::<Actions>()?.0.get(&person).cloned() {
             action.cancel.invoke(self)?;
             if self.edit_owned::<Actions>()?.0.erase(&person) {
-                self.notify(ActionFinished { person })?;
+                self.notify(ActionFinished::new(person, action.id, false))?;
             }
         }
         Ok(())

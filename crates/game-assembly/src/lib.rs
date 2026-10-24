@@ -5,8 +5,25 @@ use game_api::*;
 use game_sim::*;
 pub struct Simulation {
     host: Host,
+    preparation: game_anticipation::Window,
 }
 impl Simulation {
+    fn from_host(host: Host) -> Self {
+        Self {
+            host,
+            preparation: Default::default(),
+        }
+    }
+    pub fn set_preparation_window(&mut self, width: usize) -> Result<()> {
+        self.preparation = game_anticipation::Window::new(width)?;
+        Ok(())
+    }
+    pub fn preparation_statistics(&self) -> &game_anticipation::Statistics {
+        &self.preparation.statistics
+    }
+    pub fn set_parallel_listeners(&mut self, enabled: bool) {
+        self.host.set_parallel_listeners(enabled);
+    }
     /// Developer research start: no history warmup or player assignment.
     pub fn uncontrolled(
         seed: u64,
@@ -15,7 +32,7 @@ impl Simulation {
     ) -> Result<Self> {
         let mut host = plugins::builder()?.build(seed, workers)?;
         game_openings::seed_world(&mut host, store, seed)?;
-        Ok(Self { host })
+        Ok(Self::from_host(host))
     }
     pub fn new(scenario: &str, seed: u64, workers: usize) -> Result<Self> {
         let mut store = if scenario == "generated" {
@@ -33,17 +50,17 @@ impl Simulation {
     ) -> Result<Self> {
         let mut host = plugins::builder()?.build(seed, workers)?;
         game_openings::initialize(&mut host, store, scenario, seed)?;
-        Ok(Self { host })
+        Ok(Self::from_host(host))
     }
     pub fn load(save: &str, workers: usize) -> Result<Self> {
-        plugins::load(save, workers).map(|host| Self { host })
+        plugins::load(save, workers).map(Self::from_host)
     }
     /// Read a checkpoint without retaining its complete JSON text; older manifests still migrate.
     pub fn load_from(
         source: &mut (impl std::io::Read + std::io::Seek),
         workers: usize,
     ) -> Result<Self> {
-        plugins::load_from(source, workers).map(|host| Self { host })
+        plugins::load_from(source, workers).map(Self::from_host)
     }
     pub fn save(&self) -> Result<String> {
         self.host.save()
@@ -58,7 +75,7 @@ impl Simulation {
         binding::observe(&self.host)
     }
     pub fn advance(&mut self, target: SimTime, budget: usize) -> Result<Progress> {
-        self.host.advance(target, budget)
+        binding::advance(&mut self.host, &mut self.preparation, target, budget)
     }
     pub fn now(&self) -> SimTime {
         self.host.now()

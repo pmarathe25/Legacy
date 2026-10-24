@@ -79,19 +79,16 @@ pub(super) fn register<V: Content>(b: &mut Builder) -> Result<()> {
             .entry(r.person)
             .or_default()
             .insert(key.clone(), r.fact);
-        retention::record::<V>(tx, r.person, key, same)
+        observation::record::<V>(tx, r.person, key, same)
     })?;
     b.request::<Initialize<V>>(|tx, r| {
         require(
             !tx.get::<Memories<V>>()?.0.contains_key(&r.person),
             "knowledge already initialized",
         )?;
-        let keys: Vec<_> = r.facts.keys().cloned().collect();
+        let keys: Vec<_> = r.facts.keys().map(|k| (k.clone(), false)).collect();
         tx.edit::<Memories<V>>()?.0.insert(r.person, r.facts);
-        for key in keys {
-            retention::record::<V>(tx, r.person, key, false)?;
-        }
-        Ok(())
+        observation::record_many::<V>(tx, r.person, keys)
     })?;
     b.request::<ObserveScene<V>>(|tx, r| {
         let keys: Vec<_> = r
@@ -117,10 +114,7 @@ pub(super) fn register<V: Content>(b: &mut Builder) -> Result<()> {
             .entry(r.person)
             .or_default()
             .observe(r.scene, stamp);
-        for (key, same) in keys {
-            retention::record::<V>(tx, r.person, key, same)?;
-        }
-        Ok(())
+        observation::record_many::<V>(tx, r.person, keys)
     })?;
     b.request::<Significance>(|tx, r| {
         require(

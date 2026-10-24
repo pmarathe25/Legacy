@@ -33,8 +33,11 @@ impl Resource for Information {
         self.inboxes.values().flatten().map(|q| q.id).collect()
     }
     fn validate(&self) -> Result<()> {
+        self.validate_changes(&Self::default())
+    }
+    fn validate_changes(&self, previous: &Self) -> Result<()> {
         require(
-            self.interests.values().all(|row| {
+            self.interests.changed(&previous.interests).all(|(_, row)| {
                 row.len() <= 8
                     && row.iter().all(|i| {
                         i.topic.valid()
@@ -44,13 +47,12 @@ impl Resource for Information {
                     })
             }) && self
                 .inboxes
-                .values()
-                .all(|row| row.len() <= 16 && row.iter().all(|q| q.topic.valid())),
+                .changed(&previous.inboxes)
+                .all(|(_, row)| row.len() <= 16 && row.iter().all(|q| q.topic.valid())),
             "invalid information requests",
         )
     }
 }
-/// Feature owners register a need; its pursuit competes with all other choices.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Want {
     pub person: PersonId,

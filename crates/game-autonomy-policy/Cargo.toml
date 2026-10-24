@@ -1,0 +1,21 @@
+[package]
+name = "game-autonomy-policy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-attention.workspace = true
+game-decision-food.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-choice.workspace = true
+game-content.workspace = true
+game-diagnostics.workspace = true
+game-physiology.workspace = true
+game-vitality.workspace = true
+game-provisioning.workspace = true
+game-utility.workspace = true
+game-traits.workspace = true
+serde.workspace = true
+serde_json.workspace = true

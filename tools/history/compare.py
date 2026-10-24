@@ -11,6 +11,7 @@ import subprocess
 import os
 import time
 import signal
+import sys
 from study import digest, write_json
 from state_hashes import artifact_digest, WORLD_CANONICAL
 
@@ -107,8 +108,8 @@ def compare(args):
         for key in order:
             folder = destination/f'{pair+1:02d}-{key}'
             folder.mkdir(); folders.append(folder)
-            command = ['/usr/bin/time', '-f', '{"wall_seconds":%e,"user_seconds":%U,"system_seconds":%S,"rss_kib":%M}',
-                       '-o', str(folder/'time.json'), str(binaries[key]), '--resume', str(checkpoint),
+            command = [sys.executable, str(Path(__file__).with_name('decisions.py')), '--measure',
+                       str(folder/'time.json'), str(binaries[key]), '--resume', str(checkpoint),
                        '--days', str(args.days), '--sample-days', '365000', '--checkpoint-days', '365000',
                        '--workers', str(args.workers), '--final-save', 'false', '--journal', 'notable', '--output', str(folder)]
             starting_temperature, cooling_seconds = cool_before_run(start_limit)

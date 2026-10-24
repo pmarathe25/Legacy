@@ -33,3 +33,7 @@
 Frontier recall uses a bounded weak road-namespace cache. Unchanged personal
 roads do not require rebuilding the frontier or cloning area names and links.
 Learning, rollback, and unrelated worlds retain exact query results.
+
+`Opportunity` is serializable for the opt-in `game-decision-food` cohort snapshot.
+That adapter owns preparation/reuse; this facade remains stateless and retains
+the ordinary live query and physical action path.

@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-offers.workspace = true
+game-decision-frames.workspace = true
+game-anticipation.workspace = true
 game-identity.workspace = true
 rustc-hash = "2.1.3"
 game-diagnostics.workspace=true

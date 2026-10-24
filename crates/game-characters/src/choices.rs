@@ -1,14 +1,6 @@
 use super::*;
-use game_choice::{Proposal, Wait, motive};
-#[derive(Clone, Serialize, Deserialize)]
-struct Proceed {
-    person: PersonId,
-    plan: Plan,
-}
-impl Request for Proceed {
-    const KEY: &'static str = "characters.proceed";
-    type Response = game_choice::Outcome;
-}
+use game_choice::Proposal;
+use game_decision_intents::Proceed;
 #[derive(Clone, Serialize, Deserialize)]
 struct Execute {
     person: PersonId,
@@ -18,10 +10,10 @@ impl Request for Execute {
     const KEY: &'static str = "characters.execute";
     type Response = game_choice::Outcome;
 }
-fn food(p: PersonId, key: String, plan: Plan, c: Candidate) -> Result<Proposal> {
-    Proposal::new(key, c, Proceed { person: p, plan })
-}
 pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
+    reconsider(tx, p, false)
+}
+fn reconsider(tx: &mut Transaction<'_>, p: PersonId, fresh: bool) -> Result<()> {
     let _measurement = game_diagnostics::span("character review");
     let body = &tx.get::<game_physiology::Bodies>()?.people[&p];
     let ruler = tx.get::<game_lineage::Lineage>()?.current;
@@ -35,7 +27,36 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
     if acting.as_ref().is_some_and(|a| a.kind == "combat") {
         return Ok(());
     }
-    if game_transport::area(tx.get()?, p).is_ok() {
+    if let Some(mut routine) = tx
+        .get::<Minds>()?
+        .people
+        .get(&p)
+        .and_then(|m| m.routine.clone())
+    {
+        let rules = tx.get::<Minds>()?.rules.clone();
+        if let Some(action) = routine.resume(tx, p, rules.urgent_hunger, rules.rest_fatigue)? {
+            let mind = tx.edit::<Minds>()?.people.get_mut(&p).unwrap();
+            mind.engagement = Some(action);
+            if mind.routine.is_some() {
+                mind.routine = Some(routine);
+            }
+            return Ok(());
+        }
+        tx.edit::<Minds>()?.people.get_mut(&p).unwrap().routine = None;
+    }
+    let now = tx.now();
+    if tx.get::<Minds>()?.people[&p].review_clock.is_some() {
+        tx.edit::<Minds>()?
+            .people
+            .get_mut(&p)
+            .unwrap()
+            .review_clock
+            .as_mut()
+            .unwrap()
+            .reviewed = Some(now);
+    }
+    let _preparation = game_diagnostics::span("full character review");
+    if !game_choice::observed(tx, p) && game_transport::area(tx.get()?, p).is_ok() {
         tx.call(game_knowledge::ObserveSurroundings { person: p })?;
         let packs: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(p).collect();
         for inventory in packs {
@@ -45,134 +66,69 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
             })?;
         }
     }
-    let (mut offers, options) = game_choice::collect_with(tx, p, |view| {
-        plans::options(view, p, view.get::<Minds>()?.rules.gathering_meals)
-    })?;
-    let state = tx.get::<Minds>()?;
-    let Some(mind) = state.people.get(&p) else {
-        return Ok(());
-    };
-    let rules = state.rules.clone();
-    let pressure = |hunger| plans::hunger_pressure(hunger, rules.meal_hunger, rules.urgent_hunger);
-    let body = &tx.get::<game_physiology::Bodies>()?.people[&p];
-    let hunger = body.hunger;
-    let fatigue = body.fatigue;
-    let current = mind.chosen.clone();
-    let retained = acting
-        .as_ref()
-        .is_some_and(|a| a.id != 0 && mind.engagement == Some(a.id));
-    let plan = mind.plan.clone();
-    let expectation = mind.expectation;
-    let mut wait = Proposal::new("wait", motive(0, 0, 0, 0, 0), Wait)?;
-    wait.motive.id = 0;
-    offers.push(wait);
-    if fatigue > rules.rest_fatigue {
-        offers.push(Proposal::new(
-            "rest",
-            motive(
-                fatigue.saturating_sub(rules.rest_fatigue).min(10000) as i64,
-                0,
-                0,
-                0,
-                0,
-            ),
-            game_physiology::Rest { person: p },
-        )?);
-    }
-    if let Some(plan) = plan {
-        let key = current
-            .clone()
-            .filter(|k| k.starts_with("food:") || k == "reserve")
-            .unwrap_or("food:committed".into());
-        offers.push(food(p, key, plan, motive(pressure(hunger), 5, 0, 0, 0))?);
-    }
-    let options = options?;
-    let independent = tx
-        .get::<game_relationships::Social>()?
-        .values
-        .get(&p)
-        .and_then(|v| v.get("independence"))
-        .copied()
-        .unwrap_or(0);
-    let scores = plans::FoodScores {
-        hunger,
-        value: independent,
-        independence: independent,
-        risk: 0,
-        travel_per_minute: rules.travel_effort_per_minute,
-        gathering_effort: rules.gathering_effort,
-    };
-    let discomfort = game_digestion::discomfort(tx, p);
-    let mut keys = game_choice::Keys::new(&offers);
-    for (o, mut c) in options.iter().zip(scores.candidates(&options)) {
-        let key = format!("food:{}", o.id);
-        if !keys.insert(&key, &offers) {
-            continue;
+    let prepared = game_choice::frame_decision::<game_decision_intents::Prepared>(tx, p)
+        .filter(|d| d.person == p && d.at == tx.now())
+        .filter(|d| {
+            tx.get::<Minds>().is_ok_and(|m| {
+                m.people
+                    .get(&p)
+                    .is_some_and(|mind| mind.plan == d.plan && mind.failures == d.failures)
+            })
+        });
+    let snapshot = prepared.is_some();
+    let (scored, reused, sources) = if let Some(prepared) = prepared {
+        for effect in prepared.effects {
+            tx.invoke(effect)?;
         }
-        c.need = pressure(hunger.max(o.appetite));
-        c.effort = c.effort.saturating_add(discomfort);
-        offers.push(food(p, key, o.plan.clone(), c)?);
-    }
-    if let Some(o) = plans::reserve_plan(tx, p)?
-        && !offers.iter().any(|o| o.key == "reserve")
-    {
-        let foresight = game_vitality::ability(tx, p, "foresight").min(16000) as i64;
-        offers.push(food(
-            p,
-            "reserve".into(),
-            o.plan,
-            motive(
-                0,
-                foresight / 25,
-                0,
-                (o.travel.0 / MINUTE.0).min(10000) as i64,
-                0,
-            ),
-        )?);
-    }
-    let mut continuing = None;
-    if let Some(action) = &acting {
-        let active = offers.iter().position(|o| {
-            o.continuation == Some(action.id) || retained && current.as_ref() == Some(&o.key)
-        });
-        let index = if let Some(index) = active {
-            index
-        } else {
-            let need = if action.kind == "rest" {
-                fatigue.saturating_sub(rules.rest_fatigue).min(10000) as i64
-            } else {
-                0
-            };
-            let expected = expectation
-                .filter(|_| retained && action.kind != "rest")
-                .unwrap_or(motive(need, 0, 0, 0, 0));
-            let key = current
-                .as_deref()
-                .filter(|_| retained)
-                .unwrap_or("continue");
-            offers.push(Proposal::new(key, expected, Wait)?);
-            offers.len() - 1
-        };
-        offers[index].continuation = Some(action.id);
-        offers[index].motive.goal += action.until.map_or(0, |at| {
-            20 - (at.0.saturating_sub(tx.now().0) / MINUTE.0).min(20) as i64
-        });
-        continuing = Some(offers[index].motive.id);
-    }
-    let expected: Vec<_> = offers.iter().map(|p| p.motive).collect();
-    game_choice::reweight(tx, p, &mut offers);
-    let now = tx.now();
-    let caution = 1500 - game_vitality::disposition(tx, p, "risk-tolerance");
-    let learning = game_vitality::ability(tx, p, "learning");
-    for o in &mut offers {
-        if o.continuation.is_none()
-            && let Some(until) = tx.get::<Minds>()?.people[&p].retry_after.get(&o.motive.id)
+        (prepared.scored, false, prepared.sources)
+    } else {
+        let state = tx.get::<Minds>()?;
+        let rules = state.rules.clone();
+        let memory = state.people[&p].considered.clone();
+        let game_autonomy_policy::Options {
+            offers,
+            food: options,
+            reused,
+            remembered,
+        } = game_autonomy_policy::consider(tx, p, &rules, memory.as_deref(), fresh)?;
+        if let Some(memory) = remembered
+            && let Some(mind) = tx.edit::<Minds>()?.people.get_mut(&p)
         {
-            let remaining = until.0.saturating_sub(now.0).min(rules.retry.0);
-            let cost = game_utility::failure_cost(remaining, rules.retry.0, learning, caution);
-            o.motive.risk = o.motive.risk.saturating_add(cost);
+            mind.considered = Some(memory);
         }
-    }
+        if !tx.get::<Minds>()?.people.contains_key(&p) {
+            return Ok(());
+        }
+        (
+            game_decision_intents::score(tx, p, offers, options?, acting.as_ref())?,
+            reused,
+            Default::default(),
+        )
+    };
+    let game_decision_intents::Scored {
+        mut offers,
+        expected,
+        continuing,
+        margin,
+    } = scored;
+    let rules = tx.get::<Minds>()?.rules.clone();
+    let now = tx.now();
+    game_contracts::causal::candidates(
+        p.0,
+        offers.iter().map(|o| {
+            (
+                o.motive.id,
+                [
+                    o.motive.need,
+                    o.motive.goal,
+                    o.motive.value,
+                    o.motive.effort,
+                    o.motive.risk,
+                ],
+                o.continuation,
+            )
+        }),
+    );
     for _ in 0..8 {
         let ongoing = tx.get::<Actions>()?.0.get(&p);
         if ongoing.is_none() {
@@ -183,14 +139,32 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
             ongoing
                 .filter(|a| acting.as_ref().is_some_and(|old| old.id == a.id))
                 .and(continuing),
-            game_vitality::switching_margin(tx, p, rules.switching_margin),
+            if snapshot {
+                margin
+            } else {
+                game_vitality::switching_margin(tx, p, rules.switching_margin)
+            },
             false,
         ) else {
             break;
         };
         let index = offers.iter().position(|o| o.motive.id == d.id).unwrap();
         let proposal = offers.remove(index);
+        if reused && proposal.key == "wait" {
+            return reconsider(tx, p, true);
+        }
         let continues = ongoing.is_some_and(|a| proposal.continuation == Some(a.id));
+        if !continues
+            && game_choice::frame_stale_provider(
+                tx,
+                p,
+                &proposal,
+                sources.get(&proposal.key).cloned(),
+            )?
+        {
+            tx.edit::<Minds>()?.people.get_mut(&p).unwrap().frame_retry = None;
+            continue;
+        }
         if continues
             || tx
                 .attempt(Execute {
@@ -200,6 +174,8 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
                 .is_ok_and(|outcome| outcome == game_choice::Outcome::Performed)
         {
             let engagement = tx.get::<Actions>()?.0.get(&p).map(|a| a.id);
+            let routine =
+                game_autonomy_policy::Routine::capture(tx, p, &proposal, rules.routine.as_ref())?;
             let Some(m) = tx.edit::<Minds>()?.people.get_mut(&p) else {
                 return Ok(());
             };
@@ -207,14 +183,21 @@ pub(super) fn review(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
             m.retry_after.remove(&d.id);
             if !continues {
                 m.expectation = expected.iter().find(|c| c.id == d.id).copied();
+                if let Some(memory) = &mut m.considered {
+                    Arc::make_mut(memory).consume(&proposal.key);
+                }
             }
             d.reasons = vec![proposal.key.clone()];
             m.last = Some(d);
             m.chosen = Some(proposal.key);
             m.engagement = engagement;
+            m.routine = routine.map(Box::new);
             return Ok(());
         }
         failure(tx, p, d.id)?;
+        if reused {
+            return reconsider(tx, p, true);
+        }
     }
     Ok(())
 }
@@ -239,6 +222,16 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         if e.outcome == game_choice::Outcome::Reconsider
             && let Some(id) = id
         {
+            tx.edit::<Minds>()?
+                .people
+                .get_mut(&e.person)
+                .unwrap()
+                .considered = None;
+            tx.edit::<Minds>()?
+                .people
+                .get_mut(&e.person)
+                .unwrap()
+                .routine = None;
             failure(tx, e.person, id)?;
         }
         Ok(())
@@ -261,6 +254,6 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         tx.call(game_choice::Run(r.proposal.request))
     })?;
     b.subscribe::<game_choice::Changed>("characters.new-evidence", |tx, e| {
-        scheduling::wake(tx, e.person, false)
+        scheduling::wake(tx, e.person, false, false)
     })
 }

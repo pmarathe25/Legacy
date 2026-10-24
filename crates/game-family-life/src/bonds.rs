@@ -83,11 +83,17 @@ fn assent(tx: &Transaction<'_>, p: PersonId, q: PersonId, kind: Kind) -> bool {
         .people
         .get(&p)
         .is_some_and(|b| b.alive && tx.now().0.saturating_sub(b.born.0) >= pop.adult_age.0);
+    if !adult {
+        return false;
+    }
     let existing = tx.get::<Bonds>().unwrap().partners.get(&p);
     let exclusive = existing.is_some_and(|r| {
         r.iter()
             .any(|(other, k)| *other != q && (*k == Kind::Exclusive || kind == Kind::Exclusive))
     });
+    if exclusive {
+        return false;
+    }
     let related = pop
         .families
         .get(&p)
@@ -96,13 +102,18 @@ fn assent(tx: &Transaction<'_>, p: PersonId, q: PersonId, kind: Kind) -> bool {
             .families
             .get(&q)
             .is_some_and(|f| [f.mother, f.father].contains(&p));
+    if related {
+        return false;
+    }
     let desired = attraction(tx, p, q, kind);
-    let change_is_wanted = existing.and_then(|row| row.get(&q)).is_none_or(|old| {
+    if desired <= 40 {
+        return false;
+    }
+    existing.and_then(|row| row.get(&q)).is_none_or(|old| {
         *old == kind
             || desired
                 > attraction(tx, p, q, *old) + game_vitality::disposition(tx, p, "rigidity") / 20
-    });
-    adult && !exclusive && !related && desired > 40 && change_is_wanted
+    })
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.resource::<Bonds>()?;

@@ -1,0 +1,9 @@
+[package]
+name = "game-drafting"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+rayon.workspace = true
+serde.workspace = true
+rustc-hash = "2.1.3"

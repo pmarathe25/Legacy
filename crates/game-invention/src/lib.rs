@@ -1,4 +1,5 @@
 mod designs;
+mod devices;
 mod techniques;
 use game_core::*;
 use game_mechanics::{Assemble, Experiment, Machines, busy, known};
@@ -22,14 +23,18 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             + game_vitality::disposition(tx, p, "creativity") / 10;
         let need = designs::need(tx, p);
         let packs: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(p).collect();
-        let devices: Vec<_> = tx
-            .get::<Machines>()?
-            .devices
-            .iter()
-            .filter(|(_, d)| d.area == area)
-            .map(|(id, d)| (*id, d.parts.len()))
-            .collect();
-        for (device, n) in devices {
+        let devices = devices::local(tx.get::<Machines>()?, area);
+        let hooked = tx.has_before::<game_choice::Offer>();
+        let mass = |tx: &Transaction<'_>| {
+            packs
+                .iter()
+                .copied()
+                .filter(|id| tx.get::<game_cargo::Cargo>().unwrap().0[id].mass > 0)
+                .max_by_key(|id| tx.get::<game_cargo::Cargo>().unwrap().0[id].mass)
+        };
+        let heaviest = (!hooked).then(|| mass(tx));
+        for d in devices.iter() {
+            let device = d.id;
             let acting = tx
                 .get::<Machines>()?
                 .trial(p)
@@ -37,24 +42,16 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             if busy(tx, device) && !acting {
                 continue;
             }
-            for outlet in 0..n {
-                if tx.get::<Machines>()?.devices[&device].parts[outlet]
-                    .mechanism
-                    .output()
-                    != game_physics::Motion::Linear
-                    || tx.get::<Machines>()?.devices[&device]
-                        .parts
-                        .iter()
-                        .any(|p| p.input == Some(outlet))
-                {
+            for (outlet, header) in d.outlets.iter().enumerate() {
+                let eligible = if hooked {
+                    devices::eligible(&tx.get::<Machines>()?.devices[&device], outlet)
+                } else {
+                    header.eligible
+                };
+                if !eligible {
                     continue;
                 }
-                let Some(weights) = packs
-                    .iter()
-                    .filter(|id| tx.get::<game_cargo::Cargo>().unwrap().0[id].mass > 0)
-                    .max_by_key(|id| tx.get::<game_cargo::Cargo>().unwrap().0[id].mass)
-                    .copied()
-                else {
+                let Some(weights) = heaviest.unwrap_or_else(|| mass(tx)) else {
                     continue;
                 };
                 let load = need
@@ -65,33 +62,44 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
                     )
                     .max(1)
                     .min(tx.get::<game_cargo::Cargo>()?.0[&weights].mass);
-                let uncertain = known(tx, p, device, outlet)
-                    .is_none_or(|m| need.as_ref().is_some_and(|t| t.force > m.load));
-                let mut offer = game_choice::Proposal::new(
-                    format!("mechanics:test:{device}:{outlet}"),
-                    game_choice::motive(
-                        0,
-                        curiosity / if uncertain { 1 } else { 8 },
-                        if need.is_some() && uncertain {
-                            curiosity
-                        } else {
-                            0
-                        },
-                        10,
-                        0,
-                    ),
-                    Experiment {
-                        person: p,
-                        device,
-                        weights,
-                        load,
-                        outlet,
+                let measured = if hooked {
+                    known(tx, p, device, outlet)
+                } else {
+                    tx.get::<game_knowledge::Knowledge>()
+                        .ok()
+                        .and_then(|s| s.0.get(&p))
+                        .and_then(|f| {
+                            game_knowledge::known::<game_physics::Measurement>(f, &header.memory)
+                        })
+                };
+                let uncertain =
+                    measured.is_none_or(|m| need.as_ref().is_some_and(|t| t.force > m.load));
+                let motive = game_choice::motive(
+                    0,
+                    curiosity / if uncertain { 1 } else { 8 },
+                    if need.is_some() && uncertain {
+                        curiosity
+                    } else {
+                        0
                     },
-                )?;
+                    10,
+                    0,
+                );
+                let request = Experiment {
+                    person: p,
+                    device,
+                    weights,
+                    load,
+                    outlet,
+                };
                 if acting {
+                    let mut offer =
+                        game_choice::Proposal::new(header.offer.clone(), motive, request)?;
                     offer.continuation = tx.get::<Actions>()?.0.get(&p).map(|a| a.id);
+                    game_choice::submit(tx, p, offer)?;
+                } else {
+                    game_choice::offer(tx, p, header.offer.clone(), motive, request)?;
                 }
-                game_choice::submit(tx, p, offer)?;
             }
         }
         for inventory in packs {

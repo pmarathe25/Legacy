@@ -7,6 +7,8 @@ pub use planning::Goal;
 use planning::Plan;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+mod continuation;
+pub use continuation::Continue;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rules {
@@ -38,6 +40,10 @@ pub struct Livelihoods {
     pub retry_at: Table<PersonId, SimTime>,
     pub achieved: Table<PersonId, u64>,
     pub failures: Table<PersonId, u64>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    active_steps: Table<PersonId, u64>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    ready_steps: Table<PersonId, u64>,
 }
 impl Livelihoods {
     pub fn has_plan(&self, person: PersonId) -> bool {
@@ -191,6 +197,7 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
                     .map(|_| ()),
             };
             if result.is_ok() {
+                continuation::started(tx, person)?;
                 tx.edit::<Livelihoods>()?
                     .plans
                     .get_mut(&person)
@@ -252,6 +259,27 @@ fn consider(tx: &mut Transaction<'_>, person: PersonId) -> Result<bool> {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("livelihoods", 1)?;
     b.resource::<Livelihoods>()?;
+    continuation::register(b)?;
+    b.subscribe::<game_anticipation::Preview>("livelihoods.prepare", |tx, e| {
+        if !tx.get::<Livelihoods>()?.enabled {
+            return Ok(());
+        }
+        let mut queries = Vec::new();
+        for &person in &e.people {
+            if !tx.get::<Livelihoods>()?.has_plan(person)
+                && game_transport::area(tx.get()?, person).is_ok()
+                && let Ok(held) = inventories(tx, person)
+            {
+                queries.push(planning::Query {
+                    person,
+                    inventories: held,
+                    goals: goals(tx)?,
+                });
+            }
+        }
+        planning::prepare(tx, &queries);
+        Ok(())
+    })?;
     b.request::<Pursue>(|tx, r| {
         tx.edit::<Livelihoods>()?.plans.insert(r.person, r.plan);
         Ok(if consider(tx, r.person)? {

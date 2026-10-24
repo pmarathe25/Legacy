@@ -170,3 +170,40 @@ fn a_pruned_key_can_return_with_a_better_proposal() {
         1000
     );
 }
+
+#[test]
+fn final_order_matches_string_sort_across_small_and_full_collections() {
+    for count in [0, 1, 17, 31, 32, 33, 64, 255, 256] {
+        let mut b = Builder::new();
+        plugin(&mut b).unwrap();
+        b.plugin("test", 1).unwrap();
+        b.request::<Act>(|_, _| Ok(())).unwrap();
+        b.subscribe::<Review>("offers", move |tx, e| {
+            for i in 0..count {
+                offer(
+                    tx,
+                    e.person,
+                    format!("key:{}:雪", i * 71 % 257),
+                    motive(0, 1, 0, 0, 0),
+                    Act,
+                )?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let mut h = b.build(1, 1).unwrap();
+        let retained = h
+            .dispatch(Collect {
+                person: PersonId(1),
+            })
+            .unwrap();
+        let mut expected: Vec<_> = (0..count)
+            .map(|i| format!("key:{}:雪", i * 71 % 257))
+            .collect();
+        expected.sort();
+        assert_eq!(
+            retained.into_iter().map(|p| p.key).collect::<Vec<_>>(),
+            expected
+        );
+    }
+}

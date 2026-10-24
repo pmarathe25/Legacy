@@ -7,7 +7,7 @@
 ## Responsibilities
 
 - **Vitality records (`Vitality`):** Stores each person's birth/age clock, natural lifespan, stress, satisfaction, and accumulated childhood care/distress history (`vitality.state`).
-- **Developmental & aging curves:** Computes age-dependent expression fractions for size, strength, endurance, locomotion, language readiness, reasoning, foresight, learning, and emotional regulation.
+- **Developmental & aging curves:** Delegates pure expression to [`game-expression`](../game-expression/README.md), which computes age-dependent expression fractions for size, strength, endurance, locomotion, language readiness, reasoning, foresight, learning, and emotional regulation.
 - **Expressed ability queries (`Assess`, `ability`, `disposition`):** Combines inherited `game-traits` baselines with age maturation, senescence (beginning halfway through natural lifespan), and childhood formative effects.
 
 ## Boundaries
@@ -27,7 +27,7 @@
 
 ## Dependencies & Testing
 
-- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-traits`](../game-traits/README.md).
+- **Dependencies:** [`game-expression`](../game-expression/README.md), [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-traits`](../game-traits/README.md).
 - **Testing:** `cargo test -p game-vitality` verifies childhood growth trajectories, formative distress effects, aging onset, health-fraction preservation during growth, and guardian immortality.
 
 Sustained attention has inherited potential and follows cognitive development, stress, aging, and childhood conditions. It affects switching costs and retained observations rather than imposing a fixed activity cooldown. Empathy and compassion have inherited baselines, with expression shaped by development and upbringing; learned values and individual relationships remain separate. Deliberate manipulation and independent walking use expressed motor readiness. A newborn can be a victim without receiving adult physical capabilities.
@@ -35,3 +35,21 @@ Sustained attention has inherited potential and follows cognitive development, s
 The inherited `rigidity` disposition affects commitment switching and is modulated
 by psychological development, accumulated childhood distress, and current stress.
 It describes persistence, not a favored identity, belief, or political procedure.
+
+`Life`, `Upbringing` and `maturation` remain public reexports. State ownership and
+save schemas are unchanged. Expression caching now also covers the six modulated
+dispositions with exact life/clock/raw inputs; the authoritative uncached formulas
+remain available on `Life`.
+
+Repeated owner queries validate weak life-table, trait-catalog and profile versions
+before reusing expressed abilities, modulated dispositions and motor or conversation
+readiness. This avoids resolving the same rows and raw traits for each provider.
+The cache is bounded to 128 personal frames per thread and checks the exact clock.
+It retains numeric results and weak tokens, never a world or resource snapshot.
+Missing resources, direct edits, nested rollback and loading another world retain
+their ordinary results. Unmodulated authored traits take the raw-trait path directly.
+
+Each frame lazily shares pure developmental factors through
+`game_expression::Projection`, so different attributes reuse the same upbringing
+integration, condition recovery and common maturation curves. Every result still
+uses the exact simulation clock and unchanged integer arithmetic.

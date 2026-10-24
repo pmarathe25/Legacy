@@ -1,4 +1,6 @@
+mod attention;
 mod distress;
+mod executor;
 mod journal;
 mod plants;
 use journal::Ledger;
@@ -14,7 +16,7 @@ use std::{
     path::PathBuf,
     time::Instant,
 };
-type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
 fn main() {
     if let Err(e) = run() {
         eprintln!("{e}");
@@ -38,6 +40,19 @@ fn run() -> Result<()> {
     let mut record_distress = false;
     let mut continue_after_extinction = false;
     let mut advance_budget = 1;
+    let mut prepare_window = 0;
+    let mut parallel_listeners = false;
+    let mut resident_executor = false;
+    let mut active_executor = false;
+    let mut decision_frame: Option<SimDuration> = None;
+    let mut frame_recovery: Option<bool> = None;
+    let mut frame_food: Option<bool> = None;
+    let mut frame_decisions: Option<bool> = None;
+    let mut frame_demand: Option<bool> = None;
+    let mut frame_minimum_cohort: Option<usize> = None;
+    let mut frame_commit_batch: Option<usize> = None;
+    let mut attention = attention::Overrides::default();
+    let mut goal_execution: Option<bool> = None;
     let mut stop_file: Option<PathBuf> = None;
     let args: Vec<_> = std::env::args().skip(1).collect();
     for pair in args.chunks(2) {
@@ -65,6 +80,31 @@ fn run() -> Result<()> {
                 }
             }
             "--advance-budget" => advance_budget = value.parse()?,
+            "--prepare-window" => prepare_window = value.parse()?,
+            "--parallel-listeners" => parallel_listeners = value.parse()?,
+            "--resident-executor" => resident_executor = value.parse()?,
+            "--active-executor" => active_executor = value.parse()?,
+            "--decision-frame-minutes" => {
+                decision_frame = Some(SimDuration(
+                    value
+                        .parse::<u64>()?
+                        .checked_mul(MINUTE.0)
+                        .ok_or("frame interval overflow")?,
+                ));
+            }
+            "--decision-frame-millis" => decision_frame = Some(SimDuration(value.parse()?)),
+            "--frame-recovery" => frame_recovery = Some(value.parse()?),
+            "--frame-food" => frame_food = Some(value.parse()?),
+            "--frame-decisions" => frame_decisions = Some(value.parse()?),
+            "--frame-demand" => frame_demand = Some(value.parse()?),
+            "--frame-minimum-cohort" => frame_minimum_cohort = Some(value.parse()?),
+            "--frame-commit-batch" => frame_commit_batch = Some(value.parse()?),
+            "--attention-minutes" => attention.ordinary(value, MINUTE.0)?,
+            "--attention-millis" => attention.ordinary(value, 1)?,
+            "--evidence-minutes" => attention.evidence(value, MINUTE.0)?,
+            "--evidence-millis" => attention.evidence(value, 1)?,
+            "--busy-attention" => attention.busy(value)?,
+            "--goal-execution" => goal_execution = Some(value.parse()?),
             "--stop-file" => stop_file = Some(value.into()),
             _ => return Err(format!("unknown option {}", pair[0]).into()),
         }
@@ -126,6 +166,122 @@ fn run() -> Result<()> {
     if first_day > days {
         return Err("checkpoint is later than the requested end day".into());
     }
+    sim.set_preparation_window(prepare_window)?;
+    sim.set_parallel_listeners(parallel_listeners);
+    if goal_execution == Some(false)
+        && sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .goal_execution
+    {
+        sim.debug_host_mut()
+            .dispatch(game_choice::ConfigureExecution(false))?;
+    }
+    if decision_frame == Some(SimDuration(0)) {
+        sim.debug_host_mut()
+            .dispatch(game_choice::ConfigureFrames { interval: None })?;
+        decision_frame = None;
+    }
+    if decision_frame.is_some_and(|d| d.0 > 0)
+        && !attention.configured()
+        && sim
+            .debug_host()
+            .get::<game_characters::Minds>()?
+            .rules
+            .attention
+            .is_some()
+    {
+        sim.debug_host_mut()
+            .dispatch(game_characters::ConfigureAttention(None))?;
+    }
+    attention.apply(sim.debug_host_mut())?;
+    if goal_execution == Some(true)
+        && !sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .goal_execution
+    {
+        sim.debug_host_mut()
+            .dispatch(game_choice::ConfigureExecution(true))?;
+    }
+    if let Some(duration) = decision_frame {
+        let interval = (duration.0 > 0).then_some(duration);
+        if sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .frame
+            .as_ref()
+            .map(|f| f.interval)
+            != interval
+        {
+            sim.debug_host_mut()
+                .dispatch(game_choice::ConfigureFrames { interval })?;
+        }
+    }
+    if let Some(enabled) = frame_demand {
+        if sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .frame
+            .is_none()
+        {
+            return Err("frame demand requires enabled decision frames".into());
+        }
+        let actual = sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .frame
+            .as_ref()
+            .unwrap()
+            .clock
+            .is_some();
+        if actual != enabled {
+            sim.debug_host_mut()
+                .dispatch(game_choice::ConfigureFrameDemand(enabled))?;
+        }
+    }
+    if frame_recovery.is_some()
+        || frame_food.is_some()
+        || frame_decisions.is_some()
+        || frame_minimum_cohort.is_some()
+        || frame_commit_batch.is_some()
+    {
+        let mut tuning = sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .frame
+            .as_ref()
+            .ok_or("frame tuning requires enabled decision frames")?
+            .tuning;
+        if let Some(enabled) = frame_recovery {
+            tuning.recover_idle = enabled;
+            tuning.recheck_conflicts = enabled;
+        }
+        if let Some(enabled) = frame_food {
+            tuning.batch_food = enabled;
+        }
+        if let Some(enabled) = frame_decisions {
+            tuning.batch_decisions = enabled;
+        }
+        if let Some(minimum) = frame_minimum_cohort {
+            tuning.minimum_cohort = minimum;
+        }
+        if let Some(count) = frame_commit_batch {
+            tuning.commit_batch = count;
+        }
+        if sim
+            .debug_host()
+            .get::<game_choice::Offers>()?
+            .frame
+            .as_ref()
+            .unwrap()
+            .tuning
+            != tuning
+        {
+            sim.debug_host_mut()
+                .dispatch(game_choice::TuneFrames(tuning))?;
+        }
+    }
     ledger.notable = notable;
     let epoch = ledger.epoch;
     let mut journal = BufWriter::new(File::create(output.join("events.jsonl"))?);
@@ -165,33 +321,41 @@ fn run() -> Result<()> {
                 .checked_add(DAY.0.checked_mul(day).ok_or("duration overflow")?)
                 .ok_or("time overflow")?,
         );
-        loop {
-            let progress = match advance_commits(
-                &mut sim,
-                target,
-                advance_budget,
-                &mut ledger,
-                &mut journal,
-            ) {
-                Ok(progress) => progress,
-                Err(error) => {
-                    journal.flush()?;
-                    save_checkpoint(&output, &sim, &ledger)?;
-                    write_json(
-                        output.join("execution-error.json"),
-                        &json!({"error":error.to_string(),"day":sim.now().0.saturating_sub(epoch) as f64 / DAY.0 as f64,"sequence":ledger.sequence}),
-                        true,
-                    )?;
-                    return Err(error);
-                }
-            };
-            match progress {
-                game_sim::Stop::Budget => {}
-                game_sim::Stop::Target => break,
-                game_sim::Stop::Choice(s) => {
-                    return Err(format!("unexpected input stop: {s}").into());
+        let executor = (resident_executor || active_executor).then(|| sim.debug_host().executor());
+        let mut day_work = || -> Result<()> {
+            loop {
+                let progress = match advance_commits(
+                    &mut sim,
+                    target,
+                    advance_budget,
+                    &mut ledger,
+                    &mut journal,
+                ) {
+                    Ok(progress) => progress,
+                    Err(error) => {
+                        journal.flush()?;
+                        save_checkpoint(&output, &sim, &ledger)?;
+                        write_json(
+                            output.join("execution-error.json"),
+                            &json!({"error":error.to_string(),"day":sim.now().0.saturating_sub(epoch) as f64 / DAY.0 as f64,"sequence":ledger.sequence}),
+                            true,
+                        )?;
+                        return Err(error);
+                    }
+                };
+                match progress {
+                    game_sim::Stop::Budget => {}
+                    game_sim::Stop::Target => break,
+                    game_sim::Stop::Choice(s) => {
+                        return Err(format!("unexpected input stop: {s}").into());
+                    }
                 }
             }
+            Ok(())
+        };
+        match executor {
+            Some(executor) => executor::run(&executor, active_executor, day_work)?,
+            None => day_work()?,
         }
         if let Some((watch, output)) = &mut distress {
             watch.collect(sim.debug_host(), epoch, output)?;
@@ -238,6 +402,8 @@ fn run() -> Result<()> {
         if day == reload {
             let save = sim.save()?;
             sim = game_assembly::Simulation::load(&save, if workers == 1 { 4 } else { 1 })?;
+            sim.set_preparation_window(prepare_window)?;
+            sim.set_parallel_listeners(parallel_listeners);
             if sim.save() != Ok(save) {
                 return Err("save/load changed the world".into());
             }
@@ -260,9 +426,21 @@ fn run() -> Result<()> {
         &snapshots::people(sim.debug_host())?,
         true,
     )?;
+    let offers = sim.debug_host().get::<game_choice::Offers>()?;
+    let frame_statistics = offers.frame.as_ref().map(|f| {
+        json!({
+            "interval":f.interval, "prepared":f.prepared, "effectful":f.effectful,
+            "reused":offers.frame_reused, "missed":offers.frame_missed,
+            "disabled_providers":f.disabled,
+            "tuning":f.tuning, "conflicts":offers.frame_conflicts,
+            "demand":f.clock.is_some(),
+            "ticks":f.clock.as_ref().map(|c| c.ticks),
+            "auxiliary_providers":f.auxiliary,
+        })
+    });
     write_json(
         output.join("summary.json"),
-        &json!({"seed":seed,"days":completed,"requested_generations":generations,"journal":if notable{"notable"}else{"full"},"extinct":extinct,"stopped":stopped,"resumed_from":resume,"reached_generations":reached,"epoch":epoch,"workers":workers,"advance_budget":advance_budget,"reload_day":reload,"elapsed_seconds":started.elapsed().as_secs_f64(),"profile":game_diagnostics::snapshot(),"failures":game_diagnostics::failures(),"final":snapshots::snapshot(sim.debug_host(),&ledger)?}),
+        &json!({"seed":seed,"days":completed,"requested_generations":generations,"journal":if notable{"notable"}else{"full"},"extinct":extinct,"stopped":stopped,"resumed_from":resume,"reached_generations":reached,"epoch":epoch,"workers":workers,"advance_budget":advance_budget,"decision_frame_millis":decision_frame.map(|d| d.0),"prepare_window":prepare_window,"parallel_listeners":parallel_listeners,"resident_executor":resident_executor,"active_executor":active_executor,"preparation":sim.preparation_statistics(),"drafts":sim.debug_host().draft_statistics(),"frames":frame_statistics,"reload_day":reload,"elapsed_seconds":started.elapsed().as_secs_f64(),"profile":game_diagnostics::snapshot(),"failures":game_diagnostics::failures(),"final":snapshots::snapshot(sim.debug_host(),&ledger)?}),
         true,
     )?;
     Ok(())

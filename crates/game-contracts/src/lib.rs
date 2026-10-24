@@ -1,4 +1,8 @@
 //! Runtime data contracts, erased resource codecs and registration metadata.
+#[cfg(feature = "access-trace")]
+pub mod access_trace;
+pub mod causal;
+pub use game_drafting as drafting;
 mod messages;
 use game_core::*;
 pub use messages::*;
@@ -144,6 +148,8 @@ pub fn json_error(e: impl std::fmt::Display) -> Error {
     Error::InvalidSave(e.to_string())
 }
 pub fn mutable<T: Resource>(stored: &mut Stored) -> &mut T {
+    #[cfg(feature = "access-trace")]
+    access_trace::write(T::KEY);
     Arc::get_mut(stored)
         .expect("exclusive transaction resource")
         .downcast_mut()
@@ -156,7 +162,18 @@ fn value<T: Resource>(stored: &Stored) -> &T {
         .expect("registered resource type")
 }
 pub fn read<T: Resource>(data: &HashMap<TypeId, Stored>) -> Result<&T> {
+    #[cfg(feature = "access-trace")]
+    access_trace::read(T::KEY);
     data.get(&TypeId::of::<T>())
         .and_then(|s| s.downcast_ref())
         .ok_or_else(|| Error::Missing(T::KEY.into()))
+}
+
+/// Consume an exclusive erased draft result after its workers have joined.
+pub fn take<T: Resource>(data: &mut Data) -> T {
+    let state = data.remove(&TypeId::of::<T>()).expect("draft resource");
+    let state = state.downcast::<T>().expect("draft resource type");
+    Arc::try_unwrap(state)
+        .ok()
+        .expect("exclusive draft resource")
 }

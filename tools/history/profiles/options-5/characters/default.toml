@@ -1,0 +1,18 @@
+id = "characters/default"
+version = 1
+[data]
+review = 43200000
+retry = 172800000
+meal_hunger = 30
+urgent_hunger = 90
+hunger_interrupts = ["rest", "craft", "farm", "build", "socialize", "pastime", "treat"]
+rest_fatigue = 10
+switching_margin = 5
+travel_effort_per_minute = 1
+gathering_effort = 10
+gathering_meals = 1
+
+# Behavioral experiment: retain non-survival options for five simulated minutes.
+# Consume a used option; refresh on expiry, exhaustion, or urgent invalidation.
+option_memory = 300000
+option_limit = 16

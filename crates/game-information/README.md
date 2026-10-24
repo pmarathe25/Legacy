@@ -49,3 +49,9 @@ Answer search visits only the personal-memory key ranges relevant to a topic.
 Supply questions examine remembered `patch:` and `store:` facts; selection still
 uses evidence age, confidence, and the same key tie-break. Unrelated memories
 remain available to other questions, and no cross-review answer cache is retained.
+
+Transaction validation checks only rows changed since the valid checkpoint,
+using the persistent records' structural diff. Each invariant is local to one
+row, so removing a row cannot invalidate another one. Loading and saving still
+validate every row. Direct edits, tree splits and nested rollback are covered by
+differential tests against full validation.

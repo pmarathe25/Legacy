@@ -36,12 +36,12 @@ Contrasting personally witnessed episodes without a remembered explanation notif
 allowing a character to ask for an explanation rather than having to discover it
 alone. Notification itself grants no explanation and prescribes no action.
 
-Empirical episodes are immutable shared records inside each personal queue. New
-witnesses copy queue pointers across snapshots, rather than every old context and
-subject string. Reflection and save data preserve the same episode sequence.
-
 Empirical episodes now reside only in `game-memory`, through knowledge requests.
 `Experience` keeps counts and reasoning progress, not a second observation queue.
 Inference retrieves a bounded working set of still-retained personal evidence;
 actual reflection recalls it, while proposing reflection remains read-only.
 Forgetting removes its availability to inference as well as ordinary queries.
+Reflection eligibility checks for two decodable observations only after the cheap
+progress checks pass. Knowledge compiles lossless empirical observations into
+shared typed measurements; inference borrows them and clones only the selected
+working set. Extra JSON fields retain the opaque decoding path and save format.

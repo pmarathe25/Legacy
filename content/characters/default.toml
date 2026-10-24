@@ -1,6 +1,9 @@
 id = "characters/default"
 version = 1
 [data]
+# Focus on current work; completions, idle choices and urgent evidence stay prompt.
+attention = { ordinary = 900000, evidence = 900000 }
+busy_attention = true
 review = 43200000
 retry = 172800000
 meal_hunger = 30

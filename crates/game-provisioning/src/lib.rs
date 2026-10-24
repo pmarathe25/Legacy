@@ -44,7 +44,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         ))
     })
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Opportunity {
     pub id: u64,
     pub travel: SimDuration,

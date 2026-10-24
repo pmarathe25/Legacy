@@ -1,6 +1,6 @@
 //! Typed runtime requests. JSON envelopes exist only at persistence boundaries.
 use crate::*;
-use serde::{Deserializer, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 pub(crate) enum Input<'a> {
     Value(Value),
@@ -16,7 +16,7 @@ impl Input<'_> {
         Pending::new::<R>(request)
     }
 }
-trait Payload: Send + Sync {
+trait Payload: Send + Sync + std::any::Any {
     fn payload(&self) -> &dyn erased_serde::Serialize;
     fn key(&self) -> &str;
     fn encode(&self) -> Result<Envelope> {
@@ -67,8 +67,7 @@ impl Payload for Unbound {
         registry.bind_payload(&self.key, Input::Json(self.payload.get()))
     }
 }
-/// Immutable, cheaply cloned pending work. Loading binds its envelope through
-/// the feature registry before exposing the host. It always uses `Transaction::call`.
+/// Immutable typed work, bound on load and invoked through `Transaction::call`.
 #[derive(Clone)]
 pub struct Pending(Arc<dyn Payload>);
 impl Pending {
@@ -77,10 +76,13 @@ impl Pending {
         serde_json::to_writer(std::io::sink(), &request).map_err(registry::json_error)?;
         Ok(Self::immediate(request))
     }
-    /// Like a typed Transaction::call, for work consumed within the current transaction.
-    /// Retained work must pass through new(), which validates nested payloads as well.
+    /// Temporary typed work; retained work must pass new() to validate nested payloads.
     pub fn immediate<R: Request>(request: R) -> Self {
         Self(Arc::new(request))
+    }
+    /// Inspect a bound payload without serialization or executing its handler.
+    pub fn request<R: Request>(&self) -> Option<&R> {
+        (self.0.as_ref() as &dyn std::any::Any).downcast_ref()
     }
     pub fn key(&self) -> &str {
         self.0.key()

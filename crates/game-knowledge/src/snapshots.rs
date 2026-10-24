@@ -71,7 +71,7 @@ impl FactValue {
             serde_json::from_value(raw.clone()).map(Self::Patch)
         } else if key.starts_with("theory:") {
             game_reasoning::Claim::deserialize(raw).map(|c| Self::Theory(Box::new(c)))
-        } else if key.starts_with("measured:") {
+        } else if key.starts_with("measured:") || key.starts_with("memory:empirical:") {
             game_reasoning::Observation::deserialize(raw).map(|o| Self::Measurement(Box::new(o)))
         } else {
             return value;

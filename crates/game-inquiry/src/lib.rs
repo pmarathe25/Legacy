@@ -187,23 +187,36 @@ fn retain(tx: &mut Transaction<'_>, p: PersonId, c: Claim, deduction: bool) -> R
         vec![p],
     )
 }
+fn empirical<'a>(
+    tx: &'a Transaction<'_>,
+    p: PersonId,
+) -> impl Iterator<Item = (&'a std::sync::Arc<str>, std::borrow::Cow<'a, Observation>)> {
+    tx.get::<game_knowledge::Knowledge>()
+        .ok()
+        .and_then(|s| s.0.get(&p))
+        .into_iter()
+        .flat_map(|facts| game_knowledge::with_prefix(facts, "memory:empirical:"))
+        .filter_map(|(key, fact)| {
+            let observation = match fact.value.as_ref() {
+                game_knowledge::FactValue::Measurement(o) => std::borrow::Cow::Borrowed(o.as_ref()),
+                _ => std::borrow::Cow::Owned(fact.value.decode::<Observation>()?),
+            };
+            Some((key, observation))
+        })
+}
 fn remembered(tx: &Transaction<'_>, p: PersonId) -> Vec<(String, Observation)> {
     let limit = (8 + game_vitality::ability(tx, p, "intelligence")
         .saturating_mul(500 + game_vitality::ability(tx, p, "attention").min(8000) / 2)
         / 125000)
         .clamp(8, 128) as usize;
-    let mut records: Vec<_> = tx
-        .get::<game_knowledge::Knowledge>()
-        .ok()
-        .and_then(|s| s.0.get(&p))
-        .into_iter()
-        .flat_map(|facts| game_knowledge::with_prefix(facts, "memory:empirical:"))
-        .filter_map(|(k, f)| f.value.decode::<Observation>().map(|o| (k.to_string(), o)))
-        .collect();
+    let mut records: Vec<_> = empirical(tx, p).collect();
     if records.len() > limit {
         records.drain(..records.len() - limit);
     }
     records
+        .into_iter()
+        .map(|(key, o)| (key.to_string(), o.into_owned()))
+        .collect()
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("inquiry", 1)?;

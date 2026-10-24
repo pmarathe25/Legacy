@@ -2,13 +2,54 @@
 
 Run release benchmarks from the repository root. Each process checks its resulting records; timings alone do not constitute a pass.
 
+[CONCURRENCY.md](CONCURRENCY.md) covers exact parallel drafts, the opt-in phased
+proposal model, worker coordination costs and their full-history replay evidence.
+
 Both Python build drivers default to one Cargo build job. `--build-jobs` raises
 that limit explicitly. Compiler/linker threads are separate from Cargo jobs;
 use the [bounded test scope](../testing/README.md) when the shared machine needs
 an enforced CPU and memory budget. Do not overlap benchmark timing with builds,
 tests or background simulations.
 
+## Relational and linear algebra experiments
+
+`relational.py` projects actual saved personal stock and location beliefs into an
+in-memory SQLite database. It compares store-first indexed probes, predicate
+pushdown through a person/good index, a materialized stock/location join, and
+one joined query for a batch of independent actor lookups.
+Every plan must return the same ordered inventory IDs as an independent reference,
+including after a stock update and rollback. Projection, index construction and
+steady query costs are reported separately, including loading fresh batch
+parameters. It never queries actual cargo stock.
+
+```sh
+python3 tools/performance/relational.py --checkpoint target/history/source/checkpoint.json --output target/history/relational.json
+OPENBLAS_NUM_THREADS=1 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 python3 tools/performance/linear.py --checkpoint target/history/options/checkpoint.json --output target/history/linear.json
+```
+
+`linear.py` requires NumPy and a checkpoint containing option-memory shortlists.
+It compares exact nonoverflowing row arithmetic, batched floating dot products,
+and dense GEMM using those real actor-specific motives and trait weights. It
+reports score and stable-ID winner differences against the production arithmetic
+reference. Dense GEMM computes other actors' ineligible scores too; its output
+size and wasted work are explicit. Existing exact full-range SIMD/GPU kernels
+remain in [tools/compute](../compute/README.md).
+
+These are algorithm experiments, not whole-simulation speedups. SQLite inputs
+are restricted to signed 63-bit IDs and quantities; production retains unsigned
+64-bit IDs. The linear integer prototype rejects inputs outside its proved
+nonoverflowing range. Run both tools without other builds or benchmarks. See
+[QUERY_PLANS.md](QUERY_PLANS.md) for interpretation and integration boundaries.
+
+[QUERY_VIEWS.md](QUERY_VIEWS.md) records the rejected owner-local query-cache
+experiments, including complete replay checks and the distinction between large
+local query speedups and inconsistent whole-history results.
+
 ## Profile-guided history builds
+
+[EXACT_REPLAY.md](EXACT_REPLAY.md) explains the current exact optimizations and
+why the separate decision-policy experiments change histories, including their
+observed benefits and costs.
 
 `python3 tools/performance/pgo.py --training target/history/training.json --output target/history/pgo-build`
 builds an instrumented history executable, runs the supplied workloads, merges their profiles, and builds an optimized executable at `target/history/pgo-build/game-history`. Install the compiler's matching profiler tools with `rustup component add llvm-tools-preview` first. The output directory must be new. `--restart-build` reuses compiler caches from an interrupted compilation before any training data exists; trained or completed output requires a new directory. Start without `RUSTFLAGS` or `CARGO_ENCODED_RUSTFLAGS`.
@@ -27,6 +68,10 @@ The training file contains ordinary history-tool arguments. Paths are relative t
 Training runs write only to tool-managed subdirectories. Logs, profiles, and checkpoints remain under the selected output directory. Metadata records the compiler, source fingerprint, training arguments, profile hash, and executable hash. Source changes during training or compilation reject the build. Rebuild profiles after changing mechanics or representative content.
 
 Training timings are not benchmark results. Compare the frozen executable against an ordinary release build with [the history replay driver](../history/README.md), using longer continuations and workloads outside the training set. Require matching world, ledger, event, and individual hashes before using an optimizer in a continuing study. Gains depend on the workload and compiler; profile-guided compilation changes no simulation rules.
+
+The current focused-attention simulation has a [self-contained training recipe](training/README.md)
+at `tools/performance/training/focused.json`. It includes the frozen large-world
+profile and can be used directly from a fresh checkout.
 
 `python3 -m unittest discover -s tools/performance/tests -p 'test_*.py'` checks training-plan paths, output ownership, and source fingerprints.
 
@@ -145,6 +190,23 @@ On Linux with GNU gprofng installed, `gprofng collect app -p on -a off -o target
 
 For a runtime specific to the build machine, add `--target-cpu native`. `CARGO_PROFILE_RELEASE_LTO=fat` selects whole-program optimization for both compilation phases. Metadata records the CPU target and release-profile overrides. Compare the resulting executable on workloads beyond the training windows, and keep the ordinary portable build for other machines.
 
+## Parallelism in a complete history
+
+`LEGACY_PROFILE=1 cargo run -p game-performance --profile test --features access-trace --example parallelism_world -- CHECKPOINT.json DAYS OUTPUT [MAX_BOUNDARIES]`
+traces actual single-worker transactions into a new output directory. `DAYS` is
+additional simulated days. It records scheduled request types, equal-time queue
+widths, reviews inside each transaction, and conservative resource access sets.
+The final world is saved for comparison with an ordinary replay. A limit ends the
+probe early and marks the report incomplete.
+
+This diagnostic deliberately preserves the scheduler and action policy. Its
+instrumented durations are attribution data, not benchmark results. Resource-level
+conflicts overestimate conflicts between distinct rows; equal-time jobs can still
+conflict or insert earlier-priority work. Queue mutation, global IDs, notice order,
+and evidence revisions impose additional dependencies. See the [architecture
+evaluation](ARCHITECTURE.md#why-a-single-history-scales-poorly) before interpreting
+queue width as available parallelism.
+
 ## Repeated language interpretation
 
 `cargo bench -p game-performance --bench language` compares the actual decoder
@@ -179,3 +241,27 @@ against recursive allocator calls. Stack grouping/symbol resolution happens afte
 advancement. The feature is absent from normal game builds. Use samples only to
 attribute churn: unwinding and symbol resolution add allocations and retain debug
 data, so its heap/RSS/timing numbers are not benchmark evidence.
+
+`LEGACY_PROFILE=1 cargo run -p game-performance --profile simulation --example
+region_world -- CHECKPOINT.json DAYS NEW_OUTPUT [MAX_BOUNDARIES]` inspects spatial
+opportunities while advancing the ordinary one-worker simulation. It attributes
+explicit character-resume reviews to their current area, counts distinct areas
+with queued and executed same-phase work, and reports population concentration,
+historical social links, and remembered remote supplies. Travel and nested reviews
+can remain unattributed. Areas are candidate shards; none of these counts proves
+that their reads or effects are independent. The probe saves the resulting complete
+world for replay comparison. Its instrumented durations are not speed benchmarks.
+
+[Review causality and incremental appraisal](REVIEWS.md) describes optional attempt
+tracing, bounded read views, exact replay checks, and interpretation limits.
+
+The [care-evidence study](CARE_EVIDENCE.md) evaluates field-specific interruption
+filtering in the main autonomous simulation. It includes paired runtime and
+history outcomes, a failed completion-only routine screen, default-mode replay
+checks and an explicitly opt-in content profile. The model changes remain
+disabled in ordinary content.
+
+The [throughput evaluation](THROUGHPUT.md) combines fewer deliberations with
+demand-driven frame scheduling and whole-actor preparation. It compares complete
+history time against a production baseline and retains activity and welfare
+measurements for the explicitly different model.

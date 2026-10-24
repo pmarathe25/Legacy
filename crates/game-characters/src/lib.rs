@@ -1,94 +1,17 @@
-use game_packed::Packed;
 use game_provisioning as plans;
 mod choices;
-mod rules;
-mod scheduling;
+use game_character_clock as scheduling;
+mod trace;
+pub use game_autonomy_policy::{AttentionRates, Configure, Mind, Resume, Rules, load};
+pub use game_character_clock::{Alert, ConfigureAttention, ConfigureBusyAttention};
+pub use game_character_state::Minds;
 pub use game_choice::Review as IdleReview;
 use game_core::*;
 pub use game_provisioning::Plan;
 use game_sim::*;
 pub use game_utility::{Candidate, Decision, choose};
-pub use rules::{Configure, Rules, load};
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mind {
-    pub plan: Option<Plan>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub chosen: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "engagement",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub engagement: Option<u64>,
-    pub retry_after: BTreeMap<u64, SimTime>,
-    pub last: Option<Decision>,
-    pub failures: u64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expectation: Option<Candidate>,
-}
-fn engagement<'de, D: serde::Deserializer<'de>>(
-    d: D,
-) -> std::result::Result<Option<u64>, D::Error> {
-    let value = serde_json::Value::deserialize(d)?;
-    Ok(value.as_u64().or_else(|| value.get("id")?.as_u64()))
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Minds {
-    pub people: Packed<PersonId, Mind>,
-    pub rules: Arc<Rules>,
-    pub running: bool,
-    schedule: scheduling::Schedule,
-}
-type MindMark = (game_packed::Mark, Arc<Rules>, bool, scheduling::Schedule);
-impl Resource for Minds {
-    const KEY: &'static str = "characters.minds";
-    fn validate(&self) -> Result<()> {
-        self.rules.validate()?;
-        require(
-            self.running || self.schedule == scheduling::Schedule::default(),
-            "unstarted review clock",
-        )?;
-        require(
-            self.schedule.agenda.valid()
-                && self
-                    .schedule
-                    .ready
-                    .keys()
-                    .all(|p| self.people.contains_key(p) && self.schedule.agenda.get(p).is_none())
-                && self
-                    .schedule
-                    .agenda
-                    .iter()
-                    .all(|(person, _)| self.people.contains_key(person)),
-            "invalid review agenda",
-        )
-    }
-    fn checkpoint(&mut self) -> Checkpoint {
-        Box::new((
-            self.people.begin(),
-            self.rules.clone(),
-            self.running,
-            self.schedule.clone(),
-        ))
-    }
-    fn restore(&mut self, checkpoint: Checkpoint) {
-        let (mark, rules, running, schedule) =
-            *checkpoint.downcast::<MindMark>().expect("mind checkpoint");
-        self.people.rollback(mark);
-        self.rules = rules;
-        self.running = running;
-        self.schedule = schedule;
-    }
-    fn commit(&mut self, checkpoint: Checkpoint) {
-        let checkpoint = checkpoint.downcast::<MindMark>().expect("mind checkpoint");
-        self.people.commit(checkpoint.0);
-    }
-    fn validate_checkpoint(&self, _checkpoint: &dyn std::any::Any) -> Result<()> {
-        self.rules.validate()
-    }
-}
+use std::sync::Arc;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Register {
     pub person: PersonId,
@@ -121,6 +44,10 @@ impl Request for Review {
     type Response = ();
 }
 fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
+    let trace = trace::begin(tx, person);
+    if !scheduling::begin_review(tx, person)? {
+        return Ok(());
+    }
     let now = tx.now();
     tx.edit::<Minds>()?.schedule.waking.insert(person, now);
     let result = choices::review(tx, person);
@@ -128,7 +55,9 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
         let next = scheduling::next(tx, person)?;
         tx.edit::<Minds>()?.schedule.set(person, next);
     }
-    tx.edit::<Minds>()?.schedule.waking.remove(&person);
+    tx.edit::<Minds>()?.clear_wake_at(person, now);
+    trace.annotate("after", || trace::state(tx, person));
+    trace.annotate("success", || serde_json::json!(result.is_ok()));
     result
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
@@ -136,7 +65,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     plans::plugin(b)?;
     b.plugin("characters", 1)?;
     b.resource::<Minds>()?;
-    scheduling::register(b)?;
+    scheduling::register(b, review)?;
+    game_decision_food::register(b, |tx| Ok(tx.get::<Minds>()?.rules.gathering_meals))?;
+    game_decision_intents::register(b)?;
     choices::register(b)?;
     b.request::<Configure>(|tx, r| {
         r.0.validate()?;
@@ -148,8 +79,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Abandon>(|tx, r| {
+        let execution = tx.get::<game_choice::Offers>()?.goal_execution;
         if let Some(mind) = tx.edit::<Minds>()?.people.get_mut(&r.person) {
+            if execution {
+                mind.chosen = None;
+            }
             mind.plan = None;
+            mind.routine = None;
+            mind.considered = None;
         }
         tx.cancel_action(r.person)
     })?;
@@ -163,7 +100,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         require(r.mind.plan.is_none(), "register without an active plan")?;
         tx.call(game_knowledge::ObserveSurroundings { person: r.person })?;
         tx.edit::<Minds>()?.people.insert(r.person, r.mind);
-        scheduling::wake(tx, r.person, false)
+        scheduling::wake(tx, r.person, false, true)
     })?;
     b.subscribe::<game_physiology::Died>("forget-dead-mind", |tx, event| {
         let state = tx.edit::<Minds>()?;
@@ -173,10 +110,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.subscribe::<game_transport::Arrived>("characters.arrived", |tx, e| {
-        scheduling::wake(tx, e.person, false)
+        scheduling::wake(tx, e.person, false, true)
     })?;
     b.subscribe::<ActionFinished>("characters.wake", |tx, event| {
-        scheduling::wake(tx, event.person, false)
+        scheduling::completed(tx, event.person, false, false)
     })?;
     b.validate_save(|host| {
         let state = host.get::<Minds>()?;

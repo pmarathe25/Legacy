@@ -1,16 +1,13 @@
-//! One transactional host. Plugins own all gameplay state and requests.
-use game_packed::Packed;
 mod pending;
 mod persistence;
 pub use pending::Pending;
 mod registry;
 mod transaction;
-pub use game_contracts::{Envelope, Event, Notice, Progress, Request, Stop};
+pub use game_contracts::{ActionFinished, Envelope, Event, Notice, Progress, Request, Stop};
 use game_core::*;
 pub use registry::{Builder, Checkpoint, Resource};
 use registry::{Registry, Stored};
 use rustc_hash::FxHashMap as HashMap;
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     any::TypeId,
@@ -18,63 +15,16 @@ use std::{
     sync::Arc,
 };
 pub use transaction::Transaction;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Job {
-    pub id: ScheduleId,
-    pub at: SimTime,
-    pub priority: u8,
-    pub request: Pending,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Action {
-    /// Each start receives a distinct identity, including same-time restarts.
-    #[serde(default)]
-    pub id: u64,
-    pub owner: Arc<str>,
-    pub kind: String,
-    pub until: Option<SimTime>,
-    pub cancel: Pending,
-}
-/// An internal lifecycle signal; it does not append a player notice.
-#[derive(Serialize, Deserialize)]
-pub struct ActionFinished {
-    pub person: PersonId,
-}
-impl Event for ActionFinished {
-    const KEY: &'static str = "sim.action_finished";
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Actions(pub Packed<PersonId, Action>);
-impl Resource for Actions {
-    const KEY: &'static str = "world.actions";
-    fn allocated_ids(&self) -> Vec<u64> {
-        self.0
-            .values()
-            .filter_map(|a| (a.id > 0).then_some(a.id))
-            .collect()
-    }
-    fn checkpoint(&mut self) -> Checkpoint {
-        Box::new(self.0.begin())
-    }
-    fn restore(&mut self, c: Checkpoint) {
-        self.0.rollback(*c.downcast().expect("action checkpoint"));
-    }
-    fn commit(&mut self, c: Checkpoint) {
-        self.0.commit(*c.downcast().expect("action checkpoint"));
-    }
-    fn validate_checkpoint(&self, _: &dyn std::any::Any) -> Result<()> {
-        Ok(())
-    }
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Receipt {
-    request: Envelope,
-    response: Value,
-}
+pub type Job = game_contracts::Job<Pending>;
+pub type Action = game_contracts::Action<Pending>;
+pub type Actions = game_contracts::Actions<Pending>;
+use game_contracts::Receipt;
 pub struct Host {
     registry: Arc<Registry>,
     data: HashMap<TypeId, Stored>,
-    pool: rayon::ThreadPool,
+    pool: Arc<rayon::ThreadPool>,
+    parallel_listeners: bool,
+    drafts: game_contracts::drafting::Counters,
     pub(crate) time: SimTime,
     pub(crate) seed: u64,
     revision: u64,
@@ -91,7 +41,12 @@ impl Host {
     }
     /// Queries use owner handlers but may not write, schedule, emit, or allocate.
     pub fn query<R: Request>(&self, request: R) -> Result<R::Response> {
-        let mut tx = Transaction::new(self, self.time);
+        self.query_at(self.time, request)
+    }
+    /// Inspect the current world at a future logical time without advancing it.
+    pub fn query_at<R: Request>(&self, at: SimTime, request: R) -> Result<R::Response> {
+        require(at >= self.time, "query time precedes world")?;
+        let mut tx = Transaction::new(self, at);
         let result = tx.call(request)?;
         require(tx.read_only(), "query attempted a state change")?;
         Ok(result)
@@ -103,26 +58,35 @@ impl Host {
         self.revision
     }
     pub fn next_sequence(&self) -> u64 {
-        self.receipts
-            .last_key_value()
-            .map_or(1, |(key, _)| key.saturating_add(1))
+        Receipt::next_sequence(&self.receipts)
+    }
+    pub fn executor(&self) -> Arc<rayon::ThreadPool> {
+        self.pool.clone()
+    }
+    /// Runtime-only execution policy; event order and commits are unchanged.
+    pub fn set_parallel_listeners(&mut self, enabled: bool) {
+        self.parallel_listeners = enabled;
     }
     pub fn workers(&self) -> usize {
         self.pool.current_num_threads()
     }
+    pub fn draft_statistics(&self) -> game_contracts::drafting::Statistics {
+        self.drafts.snapshot()
+    }
     pub fn get<T: Resource>(&self) -> Result<&T> {
         registry::read(&self.data)
     }
-    /// Keep at least 1024 notices or the last transaction; collect each commit for a full journal.
+    /// Scheduled work in deterministic dispatch order; inspection does not advance the clock.
+    pub fn scheduled(&self) -> impl Iterator<Item = &Job> {
+        self.jobs.values()
+    }
     pub fn notices(&self) -> impl Iterator<Item = &Notice> {
         self.notices.iter()
     }
-    /// Seek into the bounded committed journal without rescanning older notices.
     pub fn notices_since(&self, sequence: u64) -> impl Iterator<Item = &Notice> {
         let first = self.notices.partition_point(|n| n.sequence <= sequence);
         self.notices.range(first..)
     }
-    /// Internal requests and due work share exactly the same transaction path.
     pub fn dispatch<R: Request>(&mut self, request: R) -> Result<R::Response> {
         let result = self.run(Pending::new(request)?, None)?;
         serde_json::from_value(result).map_err(registry::json_error)
@@ -222,20 +186,13 @@ impl Host {
             self.job_keys.insert(job.id, key);
             self.jobs.insert(key, job);
         }
-        let retained = 1024.max(changes.notices.len());
-        for notice in changes.notices {
-            self.notices.push_back(notice);
-        }
-        while self.notices.len() > retained {
-            self.notices.pop_front();
-        }
+        game_contracts::append_notices(&mut self.notices, changes.notices, 1024);
         self.next_id = changes.next_id;
         self.next_notice = changes.next_notice;
         self.time = at;
         self.revision = self.revision.checked_add(1).ok_or(Error::Overflow)?;
         Ok(response)
     }
-    /// Bounded work lets a session service pause and input between committed boundaries.
     pub fn advance(&mut self, target: SimTime, budget: usize) -> Result<Progress> {
         require(target >= self.time, "cannot run backwards")?;
         require(budget > 0, "work budget must be positive")?;

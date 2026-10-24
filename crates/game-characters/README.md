@@ -2,6 +2,25 @@
 
 Individual mind scheduling, survival-plan commitment, urgent hunger preemption, and idle activity reviews.
 
+Default content uses a 15-minute floor for ordinary interruptions while busy.
+Idle decisions and completed actions stay prompt; own urgent needs and newly
+observed/worsening urgent care evidence can interrupt immediately. Perceptions
+continue updating. Existing saves and the programmatic `Rules::default()` retain
+their stored/legacy policy. See [the evaluation](../../tools/performance/BUSY_ATTENTION.md)
+for the deliberate change in activity pacing and its quality checks.
+
+Decision parameters and optional routine reuse live in
+[`game-autonomy-policy`](../game-autonomy-policy/README.md). Existing `Rules`, `Configure`,
+and `load` imports remain reexports. Routine reuse is disabled by default. The
+`routines-30` history overlay explicitly enables the behavioral experiment; minds
+retain its current executable and deadline, while external wake events invalidate it.
+
+The independent `option_memory` experiment retains recently considered offers
+through `game-autonomy-policy`, while this owner retains all mind writes and action
+selection. It keeps ordinary action timing and fresh survival planning, but can
+delay nonurgent opportunity discovery. It is disabled by default; use the
+`options-5` history overlay or the explicit policy comparison tool to evaluate it.
+
 **Why it matters:** Characters need a coherent mind loop that prioritizes urgent survival, commits to multi-step plans without thrashing, and delegates open time to care, work, or companionship.
 
 ## Responsibilities
@@ -32,7 +51,7 @@ Individual mind scheduling, survival-plan commitment, urgent hunger preemption, 
 
 ## Dependencies & Testing
 
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-content`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-ecology`, `game-physiology`, `game-vitality`, `game-nutrition`, `game-traits`, `game-knowledge`, `game-food-memory`, `game-provisioning`, `game-social-life`, `game-utility`, `game-choice`.
+- **Dependencies:** `game-autonomy-policy`, `game-core`, `game-sim`, `game-storage`, `game-content`, `game-diagnostics`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-ecology`, `game-physiology`, `game-vitality`, `game-nutrition`, `game-traits`, `game-knowledge`, `game-food-memory`, `game-provisioning`, `game-social-life`, `game-utility`, `game-choice`.
 - **Testing:** Integration tests in `tests/` (`cargo test -p game-characters`) cover plan continuation, stale-stock recovery, blocked routes, urgent hunger interruption, learned values, and multi-worker save/load consistency.
 
 Recent failures increase the perceived cost of the specific option; they do not
@@ -46,3 +65,48 @@ authored review cadence, including coarse history profiles.
 Task persistence depends on attention and ongoing work costs. The inherited
 rigidity trait concerns convictions and preferences, rather than every change of
 activity or care recipient; those decisions remain with their context owners.
+
+`Resume` exposes the existing typed scheduled wakeup payload for advisory queue
+inspection. It keeps its historical wire key and ordinary owner handler.
+
+`Minds` is re-exported from `game-character-state`, which contains only saved state
+and its resource contract. This plugin still registers and owns all writes to it;
+the `characters.minds` wire key, owner, and schema are unchanged.
+
+Optional `game-sim/review-trace` telemetry records review attempts, nested request,
+event and listener scopes, wake suppression, selected observed state, and ordered
+numeric proposal fingerprints. It never controls scheduling or choices. See
+`tools/performance/REVIEWS.md` for interpretation and replay verification.
+
+
+In the explicitly enabled decision-frame model, cohort observations occur together
+at the frame boundary. Reviews in that cohort reuse this observation phase until
+the next step, while current physiology, urgent food planning and physical action
+validation remain live. Ordinary reviews keep their existing observation timing.
+`game-autonomy-frames` owns cohort forecasting and the observation adapter; this
+owner still controls all mind writes, wakeups and final selection.
+
+
+Enabled frames coalesce notifications onto the next boundary and mark at most one
+review per mind per step, including duplicate scheduled callbacks. A callback
+encountered between boundaries is deferred to the next one. New injury and food
+cues therefore affect decision making within at most one frame; their physical
+state changes and action completions remain immediate. The original event-driven
+wakeup path is unchanged with frames absent.
+
+Wake admission and scheduling now live in `game-character-clock`, registered under
+this owner's existing identity. Optional frame recovery gives an idle fallback one
+next-step recheck, preserving its future wake when the current review finishes.
+It does not repeatedly poll an unchanged idle character. A selected snapshot
+proposal that its pure provider no longer offers is skipped before execution;
+genuine rejected attempts retain failure memory. `game-decision-food` can prepare
+food alternatives across actors when separately enabled; scoring and execution
+remain here and with their feature owners.
+
+`game-decision-intents` now supplies the shared pure scorer for survival plans,
+continuations, trait weights and failure risk. This owner retains execution and
+all mind writes. The separate `batch_decisions` frame setting prepares these
+scores, food queries and all offer providers in one actor task. Deferred sensing
+updates apply only when that actor resolves. A newly started joint activity
+defers the complete obsolete turn, including those updates. If preparation
+attempts an undeferred effect, that actor uses live review instead.

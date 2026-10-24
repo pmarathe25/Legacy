@@ -46,3 +46,27 @@ Neighbors can offer care without kinship or an existing commitment. Candidates i
 Food-care choices report `Reconsider` when neither feeding nor physical work made progress. A declined serving emits `care.feeding-failed` with the observed rejection reason; the ordinary chooser can try alternatives and apply its existing failure learning. Pending travel/gathering and actual feeding remain successful progress.
 
 A delayed food review rechecks that the caregiver is at an area before observing or planning local delivery. During travel or after stopping on a road it returns `Reconsider`, preserving any delivery intention, journey and supplies for later choices.
+
+The opt-in routine policy `preserve_on_care_completion` distinguishes a person's
+own action completion from external evidence. When the actor retains a routine
+and has no food-delivery intention, the completion listener leaves that routine
+intact; the ordinary character completion wake still runs. Existing deliveries,
+heard signals, self-feeding, injuries, arrivals and other evidence keep their
+ordinary interrupt path. This can defer a fresh search for someone to help until
+the routine expires, and repeated actions can have different effects from a new
+choice. The default is false and omitted from saves. It changes the model, not
+just execution speed.
+
+Care candidate scope, need inference, and concern valuation now live in
+[`game-care-perception`](../game-care-perception/README.md). Nurture retains
+planning, delivery and notification policy. `Rules::care_signal_changes_only`
+optionally filters heard-signal prompts using changed food evidence. All ordinary
+notices still execute; an existing delivery always keeps its prompt. This is a
+separate model experiment, disabled by default, with no bounded reaction delay
+for a need that was not identified as new evidence.
+
+The whole-decision frame experiment prepares this provider across actors by
+deferring its sensing updates and invalid-intention cleanup. Pure assessment and
+concern remain with `game-care-perception`; delivery and execution remain here.
+Cleanup checks that the stored intention still matches before removing it.
+Ordinary and provider-only frame reviews retain live observation and cleanup.

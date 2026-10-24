@@ -10,6 +10,7 @@
 - **Personal fact stores (`Facts<V>`):** Pairs an observer's current `Scene` and personal evidence stamp (time, source, confidence) with a persistent `game-storage::Table` of cold historical facts and explicit overrides.
 - **Zero-copy views (`FactRef`):** Provides borrowed `get`, `iter`, and `range` queries that merge active scene entries with cold overrides in key order.
 - **Namespace revision tokens:** Tracks process-local payload revision markers per key prefix (`same_namespace`) so downstream queries can skip rescanning unchanged fact categories.
+- **Key-set tokens:** `same_keys` proves membership is unchanged across snapshots, including scene demotion and payload/metadata updates. Additions and removals invalidate the token. Consumers still compare keys when tokens differ.
 
 ## Boundaries
 

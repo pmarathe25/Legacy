@@ -41,3 +41,10 @@ bond to a nonexclusive one clears the corresponding primary-household partnershi
 through the household owner's request, while retaining the agreed family bond.
 
 Care uses the household owner’s many-to-many commitments. `ShareCare` can add or withdraw help without displacing another caregiver. Birth creates kinship, not authority or a care assignment. Dead partners cease to block new voluntary relationships. Romantic attraction is supplied by `game-attraction`; companionship and care do not use romantic physical tastes.
+
+Bond assent checks apply cheap eligibility predicates before subjective appraisal:
+living adulthood, exclusivity conflicts, and close kinship can reject an impossible
+choice immediately. Failing the desire threshold also avoids calculating the old
+bond's appeal. These calculations are pure; provider order, observation effects,
+offer hooks, acceptance rules, and action timing remain unchanged. Predicates are
+not hoisted across offer requests. See `tools/performance/REVIEWS.md`.

@@ -139,7 +139,9 @@ fn builder(effect: u64) -> Builder {
     b
 }
 fn build(workers: usize, effect: u64) -> Host {
-    builder(effect).build(7, workers).unwrap()
+    let mut host = builder(effect).build(7, workers).unwrap();
+    host.set_parallel_listeners(true);
+    host
 }
 #[test]
 fn parallel_scratch_drafts_merge_in_order_and_survive_save_load() {
@@ -154,6 +156,7 @@ fn parallel_scratch_drafts_merge_in_order_and_survive_save_load() {
     // A new host has different storage and worker count, with identical subsequent state.
     let saved = parallel.save().unwrap();
     parallel = builder(0).load(&saved, 2).unwrap();
+    parallel.set_parallel_listeners(true);
     assert_eq!(
         serial.dispatch(Run).unwrap(),
         parallel.dispatch(Run).unwrap()
@@ -206,6 +209,7 @@ fn retained_scratch_changes_use_serial_execution_and_query_the_resulting_state()
         })
         .unwrap();
         let mut h = b.build(7, workers).unwrap();
+        h.set_parallel_listeners(true);
         assert_eq!(h.dispatch(KeepRun).unwrap(), vec![9]);
         worlds.push(h.save().unwrap());
     }
@@ -244,6 +248,7 @@ fn combining_draft_budgets_cannot_bypass_the_serial_dispatch_limit() {
         })
         .unwrap();
         let mut h = b.build(7, workers).unwrap();
+        h.set_parallel_listeners(true);
         assert_eq!(
             h.dispatch(KeepRun),
             Err(Error::Rejected("request dispatch limit exceeded".into()))
@@ -251,4 +256,55 @@ fn combining_draft_budgets_cannot_bypass_the_serial_dispatch_limit() {
         worlds.push(h.save().unwrap());
     }
     assert_eq!(worlds[0], worlds[1]);
+}
+
+#[test]
+fn effectful_drafts_are_barriers_and_later_drafts_see_the_updated_world() {
+    for effect in 1..=6 {
+        let mut worlds = vec![];
+        for workers in [1, 4] {
+            let mut b = builder(effect);
+            // This listener is speculated before the first provider's effect is
+            // known. Its stale draft must never be merged after the serial retry.
+            b.subscribe_isolated::<Generate, Scratch>("e", |tx, _| {
+                let value = tx.get::<State>()?.0.last().copied().unwrap_or(99);
+                tx.call(Put(value))
+            })
+            .unwrap();
+            let mut h = b.build(7, workers).unwrap();
+            h.set_parallel_listeners(true);
+            let rows = h.dispatch(Draft).unwrap();
+            assert_eq!(&rows[..4], &[1, 2, 3, 4]);
+            assert_eq!(
+                rows[4],
+                h.get::<State>().unwrap().0.last().copied().unwrap_or(99)
+            );
+            worlds.push(h.save().unwrap());
+        }
+        assert_eq!(worlds[0], worlds[1], "effect {effect}");
+    }
+}
+
+#[test]
+fn failure_after_a_prepared_effect_barrier_rolls_back_the_entire_phase() {
+    for workers in [1, 4] {
+        for panic in [false, true] {
+            let mut b = builder(1);
+            b.subscribe_isolated::<Generate, Scratch>("e", move |tx, _| {
+                // Speculation on the old world succeeds; execution after the
+                // effect barrier fails and must undo both effects and drafts.
+                if tx.get::<State>()?.0.is_empty() {
+                    return tx.call(Put(99));
+                }
+                assert!(!panic, "injected provider failure");
+                Err(Error::Rejected("injected provider failure".into()))
+            })
+            .unwrap();
+            let mut h = b.build(7, workers).unwrap();
+            h.set_parallel_listeners(true);
+            let before = h.save().unwrap();
+            assert!(h.dispatch(Draft).is_err());
+            assert_eq!(before, h.save().unwrap());
+        }
+    }
 }

@@ -34,3 +34,21 @@
 - **Testing:** `cargo test -p game-assembly` runs architecture enforcement (`tests/architecture.rs`), command retry tests, content validation, and full save/load integration checks.
 
 `Simulation::load_from` accepts a reader that can seek. Current checkpoints decode without retaining the entire JSON text, while older manifests rewind through the existing migration path.
+
+`Simulation::set_preparation_window(0..=128)` configures owner-validated entity
+preparation inside `Simulation::advance`, including calls with budgets greater
+than one. The default is disabled. `preparation_statistics` exposes runtime counts.
+Preparation occurs between the same canonical commits; stops, budget accounting,
+clock progress and notice collection retain their ordinary semantics. Settings
+and advisory caches are not serialized; reapply settings after loading.
+
+Small provider callbacks execute in order by default. The bounded pool remains
+available to entity preparation and bulk owner operations.
+`set_parallel_listeners(true)` restores provider-level parallel drafting for
+controlled comparisons and sufficiently rich custom providers.
+
+
+Assembly also binds the resource-free `game-autonomy-frames` callback. It adds no
+plugin manifest entry or activity to ordinary histories. Frame configuration is
+an explicit typed choice request; preparation and action rules remain with their
+owners.

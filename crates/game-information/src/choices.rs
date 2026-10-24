@@ -17,8 +17,8 @@ fn offer<R: Request>(
             duration: SimDuration(2 * MINUTE.0),
             request: Pending::immediate(request),
         },
-    )?;
-    Ok(())
+    )
+    .map(|_| ())
 }
 #[derive(Clone, Serialize, Deserialize)]
 struct Consult {

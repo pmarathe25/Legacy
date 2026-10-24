@@ -1,0 +1,14 @@
+[package]
+name = "game-memory-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-facts.workspace = true
+game-packed.workspace = true
+game-snapshot.workspace = true
+rustc-hash = "2.1.3"
+game-storage.workspace = true
+serde.workspace = true

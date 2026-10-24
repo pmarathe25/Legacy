@@ -1,0 +1,10 @@
+[package]
+name = "game-decision-clock"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-offers.workspace = true
+serde.workspace = true

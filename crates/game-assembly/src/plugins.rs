@@ -82,6 +82,7 @@ pub fn builder() -> Result<Builder> {
     game_wellbeing::plugin(&mut b)?;
     game_openings::plugin(&mut b)?;
     crate::binding::register(&mut b)?;
+    game_autonomy_frames::register(&mut b)?;
     Ok(b)
 }
 pub fn load(saved: &str, workers: usize) -> Result<game_sim::Host> {

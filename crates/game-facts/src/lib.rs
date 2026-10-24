@@ -118,27 +118,33 @@ pub struct Facts<V> {
     local: Option<Observed<V>>,
     overrides: usize,
     payload_version: Arc<()>,
+    keys_version: Arc<()>,
     namespaces: Table<u8, Arc<()>>,
 }
 impl<V> Default for Facts<V> {
     fn default() -> Self {
+        let version = Arc::new(());
         Self {
             cold: Table::new(),
             local: None,
             overrides: 0,
-            payload_version: Arc::new(()),
+            payload_version: version.clone(),
+            keys_version: version,
             namespaces: Table::new(),
         }
     }
 }
 impl<V: Clone> Facts<V> {
     pub fn insert(&mut self, key: Arc<str>, fact: Fact<V>) -> Option<Fact<V>> {
-        if self
-            .get(&key)
-            .is_none_or(|old| !Arc::ptr_eq(old.value, &fact.value))
-        {
+        let old = self.get(&key);
+        let added = old.is_none();
+        let changed = old.is_none_or(|old| !Arc::ptr_eq(old.value, &fact.value));
+        if changed {
             self.payload_version = Arc::new(());
             self.touch(1u64 << namespace(&key));
+        }
+        if added {
+            self.keys_version = self.payload_version.clone();
         }
         let local = self
             .local
@@ -168,6 +174,7 @@ impl<V: Clone> Facts<V> {
         }
         self.cold.remove(key);
         self.payload_version = Arc::new(());
+        self.keys_version = self.payload_version.clone();
         self.touch(1u64 << namespace(key));
         Some(old)
     }
@@ -179,18 +186,23 @@ impl<V: Clone> Facts<V> {
             .is_none_or(|old| !Arc::ptr_eq(&old.scene, &scene))
             || self.overrides > 0
         {
+            let mut added = false;
             let mask = scene
                 .keys
                 .iter()
                 .zip(scene.values.iter())
                 .filter(|(key, value)| {
-                    self.get(key)
-                        .is_none_or(|old| !Arc::ptr_eq(old.value, value))
+                    let old = self.get(key);
+                    added |= old.is_none();
+                    old.is_none_or(|old| !Arc::ptr_eq(old.value, value))
                 })
                 .fold(0, |mask, (key, _)| mask | (1u64 << namespace(key)));
             if mask != 0 {
                 self.payload_version = Arc::new(());
                 self.touch(mask);
+            }
+            if added {
+                self.keys_version = self.payload_version.clone();
             }
         }
         let same = self
@@ -240,6 +252,10 @@ impl<V> Facts<V> {
             self.namespaces.insert(slot, Arc::new(()));
             mask &= mask - 1;
         }
+    }
+    /// A shared token proves the complete logical key set is unchanged.
+    pub fn same_keys(&self, old: &Self) -> bool {
+        Arc::ptr_eq(&self.keys_version, &old.keys_version)
     }
     /// Hash collisions conservatively invalidate additional namespaces.
     pub fn namespace_version(&self, prefix: &str) -> std::sync::Weak<()> {

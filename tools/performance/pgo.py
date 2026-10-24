@@ -74,7 +74,8 @@ def prepare_output(output, restart):
     return previous
 
 
-def build(root, plan_path, output, restart=False, target_cpu=None, build_jobs=1):
+def build(root, plan_path, output, restart=False, target_cpu=None, build_jobs=1,
+          discard_build_cache=False):
     if build_jobs < 1:
         raise ValueError('build jobs must be positive')
     plan = json.loads(plan_path.read_text())
@@ -94,8 +95,10 @@ def build(root, plan_path, output, restart=False, target_cpu=None, build_jobs=1)
     raw = output/'raw'
     raw.mkdir(exist_ok=restart)
     report = {'compiler': compiler, 'target': target, 'source_sha256': original,
+              'driver_sha256': digest(Path(__file__)),
               'training': runs, 'training_inputs': inputs, 'training_plan_sha256': digest(plan_path),
               'target_cpu': target_cpu or 'portable default', 'build_jobs': build_jobs,
+              'discard_build_cache': discard_build_cache,
               'profile_overrides': {k:v for k,v in os.environ.items() if k.startswith('CARGO_PROFILE_RELEASE_')}}
     if previous is not None:
         report['restarted_compilation'] = previous
@@ -129,10 +132,17 @@ def build(root, plan_path, output, restart=False, target_cpu=None, build_jobs=1)
     run([str(profdata), 'merge', '-o', str(merged), *map(str, profiles)], 'merge.log')
     if source_digest(root) != original or input_digests(runs) != inputs:
         raise ValueError('source or training inputs changed during training; start a new build')
+    if discard_build_cache:
+        retained = output/'instrumented-game-history'
+        shutil.copy2(instrumented, retained)
+        report['instrumented_sha256'] = digest(retained)
+        shutil.rmtree(output/'generate')
     executable = compile_to(output/'use', '-Cprofile-use='+str(merged), 'use.log')
     if source_digest(root) != original:
         raise ValueError('source changed during compilation; start a new build')
     shutil.copy2(executable, output/'game-history')
+    if discard_build_cache:
+        shutil.rmtree(output/'use')
     report.update(binary_sha256=digest(output/'game-history'), profile_sha256=digest(merged))
     (output/'metadata.json').write_text(json.dumps(report, indent=2)+'\n')
     print(output/'game-history')
@@ -145,5 +155,8 @@ if __name__ == '__main__':
     parser.add_argument('--restart-build', action='store_true', help='reuse caches from interrupted compilation before training')
     parser.add_argument('--target-cpu', help='optional compiler CPU target; native is specific to this machine')
     parser.add_argument('--build-jobs', type=int, default=1)
+    parser.add_argument('--discard-build-cache', action='store_true',
+                        help='retain executables and profiles, remove tool-owned compilation caches')
     args = parser.parse_args()
-    build(Path(__file__).resolve().parents[2], args.training.resolve(), args.output.resolve(), args.restart_build, args.target_cpu, args.build_jobs)
+    build(Path(__file__).resolve().parents[2], args.training.resolve(), args.output.resolve(), args.restart_build,
+          args.target_cpu, args.build_jobs, args.discard_build_cache)

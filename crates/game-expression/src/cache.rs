@@ -13,12 +13,30 @@ thread_local! {
     static CACHE: RefCell<Box<[Option<Frame>; 128]>> =
         RefCell::new(Box::new(std::array::from_fn(|_| None)));
 }
-pub(super) fn ability(life: &Life, person: PersonId, key: &str, at: SimTime, raw: u64) -> u64 {
-    let Some(index) = MENTAL.iter().chain(PHYSICAL).position(|k| *k == key) else {
+pub fn ability(life: &Life, person: PersonId, key: &str, at: SimTime, raw: u64) -> u64 {
+    let Some(index) = ability_slot(key) else {
         return raw;
     };
+    remember(life, person, at, index, raw, || life.ability(raw, key, at))
+}
+pub fn disposition(life: &Life, person: PersonId, key: &str, at: SimTime, raw: i64) -> i64 {
+    let Some(index) = disposition_slot(key) else {
+        return raw;
+    };
+    remember(life, person, at, index, raw as u64, || {
+        life.disposition(raw, key, at) as u64
+    }) as i64
+}
+fn remember(
+    life: &Life,
+    person: PersonId,
+    at: SimTime,
+    index: usize,
+    raw: u64,
+    compute: impl FnOnce() -> u64,
+) -> u64 {
     if index >= 32 {
-        return life.ability(raw, key, at);
+        return compute();
     }
     CACHE.with(|slot| {
         let mut cache = slot.borrow_mut();
@@ -39,7 +57,7 @@ pub(super) fn ability(life: &Life, person: PersonId, key: &str, at: SimTime, raw
         let frame = row.as_mut().unwrap();
         if frame.seen & (1 << index) == 0 || frame.raw[index] != raw {
             frame.raw[index] = raw;
-            frame.values[index] = life.ability(raw, key, at);
+            frame.values[index] = compute();
             frame.seen |= 1 << index;
         }
         frame.values[index]

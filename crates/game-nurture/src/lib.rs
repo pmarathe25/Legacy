@@ -1,4 +1,5 @@
 //! Voluntary food care uses observed need, personal concern, and physical delivery.
+use game_care_perception::{candidates, concern, local, observed_need};
 use game_core::*;
 use game_households::{FoodCare, Households, RememberFoodCare, TendFood};
 use game_provisioning::Plan;
@@ -18,6 +19,15 @@ impl Request for Assist {
 #[derive(Clone, Serialize, Deserialize)]
 struct Review {
     caregiver: PersonId,
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct ForgetInvalid {
+    caregiver: PersonId,
+    intent: FoodCare,
+}
+impl Request for ForgetInvalid {
+    const KEY: &'static str = "care.forget-invalid-intent";
+    type Response = ();
 }
 impl Request for Review {
     const KEY: &'static str = "care.food-review";
@@ -43,96 +53,6 @@ impl Event for FeedingFailed {
 }
 fn remember(tx: &mut Transaction<'_>, caregiver: PersonId, intent: Option<FoodCare>) -> Result<()> {
     tx.call(RememberFoodCare { caregiver, intent })
-}
-fn concern(tx: &Transaction<'_>, p: PersonId, other: PersonId, need: u64) -> i64 {
-    let altruism = game_vitality::disposition(tx, p, "altruism");
-    let empathy = game_vitality::disposition(tx, p, "empathy");
-    let social = tx.get::<game_relationships::Social>().ok();
-    let tie = social.and_then(|s| s.relationships.get(&p)?.get(&other));
-    let attachment = tie.map_or(0, |r| {
-        i64::from(r.affection) * 4 - i64::from(r.grievance) * 4 + i64::from(r.fear) * 2
-    });
-    let moral = social
-        .and_then(|s| s.values.get(&p)?.get("care"))
-        .copied()
-        .unwrap_or(0);
-    let body = &tx.get::<game_physiology::Bodies>().unwrap().people[&p];
-    let compassion = game_vitality::disposition(tx, p, "compassion");
-    let need = need.min(1000) as i64;
-    let awareness = game_vitality::ability(tx, p, "foresight")
-        .min(game_vitality::ability(tx, p, "intelligence"))
-        .min(16000) as i64;
-    let urgent = tx
-        .get::<game_characters::Minds>()
-        .map_or(100, |m| m.rules.urgent_hunger.clamp(1, 10000)) as i64;
-    // Concern includes anticipated consequences of the perceived need, not remote bodily truth.
-    let visible_immaturity = if local(tx, p, other) {
-        tx.get::<game_physiology::Bodies>()
-            .ok()
-            .and_then(|b| b.people.get(&other))
-            .map_or(0, |b| {
-                1000 - game_vitality::maturation(b.born, tx.now(), "constitution")
-            }) as i64
-    } else {
-        0
-    };
-    let fragility = visible_immaturity * awareness / (1000 + awareness);
-    let severity = (need + need * need * awareness / (urgent * (1000 + awareness)))
-        * (1000 + fragility)
-        / 1000;
-    let perceived = severity * (500 + empathy / 4 + compassion / 4) / 1000;
-    perceived * altruism / 200 + attachment + i64::from(moral) * 3
-        - body.hunger.min(1000) as i64 * 2
-        - body.fatigue.min(1000) as i64
-        - 30
-}
-fn candidates(tx: &Transaction<'_>, p: PersonId) -> Vec<PersonId> {
-    let Ok(h) = tx.get::<Households>() else {
-        return vec![];
-    };
-    let mut known = std::collections::BTreeSet::new();
-    known.extend(h.beneficiaries_of(p));
-    known.extend(h.children.get(&p).into_iter().flatten().copied());
-    // A perceived need can motivate help without kinship or a prior commitment.
-    if let Ok(area) = game_transport::area(tx.get().unwrap(), p)
-        && let Ok(social) = tx.get::<game_social_life::SocialLife>()
-        && let Some(peers) = social.residents.get(&area)
-    {
-        let mut peers: Vec<_> = peers.keys().copied().collect();
-        if !peers.is_empty() {
-            let encounters = social.people.get(&p).map_or(0, |s| s.encounters);
-            let start = p.0.wrapping_add(encounters) as usize % peers.len();
-            peers.rotate_left(start);
-            known.extend(peers.into_iter().take(32));
-        }
-    }
-    known.remove(&p);
-    known
-        .into_iter()
-        .filter(|other| {
-            tx.get::<game_physiology::Bodies>()
-                .is_ok_and(|b| b.people.get(other).is_some_and(|b| b.alive))
-        })
-        .collect()
-}
-fn local(tx: &Transaction<'_>, p: PersonId, other: PersonId) -> bool {
-    game_transport::area(tx.get().unwrap(), p)
-        .ok()
-        .is_some_and(|area| game_transport::area(tx.get().unwrap(), other).ok() == Some(area))
-}
-fn observed_need(tx: &mut Transaction<'_>, observer: PersonId, person: PersonId) -> Result<u64> {
-    if game_communication::active(tx) {
-        if !local(tx, observer, person) {
-            return Ok(game_communication::estimated_hunger(tx, observer, person).unwrap_or(0));
-        }
-        let impression = tx.call(game_communication::Notice { observer, person })?;
-        return Ok(if impression.guessed_need.as_deref() == Some("food") {
-            impression.estimated_need
-        } else {
-            game_communication::estimated_hunger(tx, observer, person).unwrap_or(0)
-        });
-    }
-    Ok(tx.get::<game_physiology::Bodies>()?.people[&person].hunger)
 }
 fn predicted(tx: &Transaction<'_>, p: PersonId, intent: &FoodCare) -> u64 {
     if game_communication::active(tx)
@@ -306,16 +226,49 @@ pub fn register(b: &mut Builder) -> Result<()> {
         }
         for person in caregivers {
             if local(tx, person, e.person) && game_vitality::ability(tx, person, "hearing") > 0 {
-                let _ = tx.attempt(game_communication::Notice {
-                    observer: person,
-                    person: e.person,
+                let changes_only = tx.get::<game_characters::Minds>().is_ok_and(|m| {
+                    m.running && m.rules.care_signal_changes_only && m.people.contains_key(&person)
                 });
-                prompt(tx, person)?;
+                let priority = tx
+                    .get::<game_characters::Minds>()
+                    .ok()
+                    .filter(|m| {
+                        m.running
+                            && m.people.contains_key(&person)
+                            && m.rules.busy_attention
+                            && m.rules.attention.is_some()
+                    })
+                    .map(|m| m.rules.urgent_hunger);
+                use game_care_perception::SignalReaction;
+                let reaction = if let Some(threshold) = priority {
+                    game_care_perception::notice_prioritized(
+                        tx,
+                        person,
+                        e.person,
+                        changes_only,
+                        threshold,
+                    )
+                } else if game_care_perception::notice_signal(tx, person, e.person, changes_only) {
+                    SignalReaction::Changed
+                } else {
+                    SignalReaction::Ignore
+                };
+                if matches!(reaction, SignalReaction::Urgent) {
+                    tx.notify(game_characters::Alert { person })?;
+                } else if matches!(reaction, SignalReaction::Changed)
+                    || tx
+                        .get::<Households>()
+                        .is_ok_and(|h| h.food_care.contains_key(&person))
+                {
+                    prompt(tx, person)?;
+                } else {
+                    let _span = game_diagnostics::span("care signal filtered");
+                }
             }
         }
         Ok(())
     })?;
-    game_choice::provider(b, "nurture.options", |tx, e| {
+    game_choice::serial_provider(b, "nurture.options", |tx, e| {
         if !game_choice::collecting(tx, e.person)
             || !game_vitality::can_manipulate(tx, e.person)
             || !tx.get::<Households>().is_ok_and(|h| h.enabled)
@@ -332,7 +285,17 @@ pub fn register(b: &mut Builder) -> Result<()> {
                     .get(&i.beneficiary)
                     .is_some_and(|b| !b.alive)
         }) {
-            remember(tx, e.person, None)?;
+            if game_choice::planning(tx) {
+                game_choice::defer(
+                    tx,
+                    ForgetInvalid {
+                        caregiver: e.person,
+                        intent: intent.clone().unwrap(),
+                    },
+                )?;
+            } else {
+                remember(tx, e.person, None)?;
+            }
             intent = None;
         }
         if let Some(intent) = &intent {
@@ -375,13 +338,38 @@ pub fn register(b: &mut Builder) -> Result<()> {
         }
         Ok(())
     })?;
+    b.request::<ForgetInvalid>(|tx, r| {
+        if tx.get::<Households>()?.food_care.get(&r.caregiver) == Some(&r.intent) {
+            remember(tx, r.caregiver, None)?;
+        }
+        Ok(())
+    })?;
     b.request::<Assist>(|tx, r| start(tx, r.caregiver, r.beneficiary))?;
     b.request::<TryAssist>(|tx, r| {
         start(tx, r.0.caregiver, r.0.beneficiary).map(game_choice::Outcome::from)
     })?;
     b.request::<TendFood>(|tx, r| consider(tx, r.caregiver).map(|_| ()))?;
     b.request::<Review>(|tx, r| consider(tx, r.caregiver).map(game_choice::Outcome::from))?;
-    b.subscribe::<ActionFinished>("care.food-review", |tx, e| prompt(tx, e.person))?;
+    b.subscribe::<ActionFinished>("care.food-review", |tx, e| {
+        let retained = tx.get::<game_characters::Minds>().is_ok_and(|m| {
+            m.running
+                && m.rules
+                    .routine
+                    .as_ref()
+                    .is_some_and(|p| p.preserve_on_care_completion)
+                && m.people.get(&e.person).is_some_and(|m| m.routine.is_some())
+        });
+        // Continue existing deliveries immediately. Real signals and other evidence
+        // still use prompt(); characters handles the ordinary completion wake.
+        if retained
+            && tx
+                .get::<Households>()
+                .is_ok_and(|h| !h.food_care.contains_key(&e.person))
+        {
+            return Ok(());
+        }
+        prompt(tx, e.person)
+    })?;
     b.subscribe::<game_physiology::Fed>("care.food-after-self-meal", |tx, e| {
         if e.caregiver == e.patient {
             prompt(tx, e.caregiver)?;

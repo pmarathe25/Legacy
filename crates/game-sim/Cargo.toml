@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+review-trace = ["game-contracts/causality"]
+
 [dependencies]
 game-contracts.workspace = true
 game-snapshot.workspace = true

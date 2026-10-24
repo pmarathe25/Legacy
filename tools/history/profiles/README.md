@@ -4,6 +4,28 @@ These overlays define geography, abundance, founding population, and clocks. The
 create no relationships, institutions, roles, replacement births, or protected
 characters. Apply one with `--mod tools/history/profiles/<name>`.
 
+`routines-30` is a separate **behavioral experiment**, combinable with these
+physical overlays. It enables repetition of selected short inquiry/signaling
+activities within a 30-minute to two-hour attention window. It changes decision
+opportunities and can change histories; do not use it as an equivalent runtime
+upgrade for an existing study. Omit it to preserve the default policy. See
+[`game-autonomy-policy`](../../../crates/game-autonomy-policy/README.md).
+
+`reviews-5` also coalesces nonurgent full reviews to a five-minute minimum interval,
+including care and new-information responses. Urgent hunger, injury, and arrival
+remain immediate. This is a broader model change; compare outcomes separately.
+
+`options-5` instead retains non-survival offers for five simulated minutes while
+keeping ordinary action timing and fresh food planning. Urgent hunger, injury,
+arrival, failed reuse and an otherwise selected wait force fresh options. Motives,
+provider observations and nonurgent new opportunities can be delayed. It is an
+independent behavioral experiment, with no routine repetition or review floor.
+Successfully selected new options are consumed from the shortlist, preventing
+unlimited repetition of an old completed task; exhaustion also forces a refresh.
+The overlay retains at most 16 options, ranked using current trait weights, while
+every fresh review still considers the ordinary full offer list. This can defer
+lower-ranked alternatives until refresh. `option_limit` allows capacities 1–256.
+
 | Overlay | Founders | Areas | Environment |
 | --- | ---: | ---: | --- |
 | `32-people` | 32 | 4 | Shipping biome mixture |
@@ -64,3 +86,9 @@ choose whether to form relationships or have children. No population is guarante
 to persist; see the study's progress record for actual ancestry depth.
 
 `nut-forest-96-limited` retains the 96-founder warm forest and material resources, lowers wild food renewal to 10 per fixed founding multiplier, and applies the existing quarterly crop-growth overlays. This exploratory habitat follows the abundant forest’s population growth and scaling costs. It prescribes neither institutions nor surviving population size. Compare outcomes with their distinct resource conditions; this is not a controlled test of a single behavioral change.
+
+`care-evidence` enables only `care_signal_changes_only`, leaving routine reuse and
+the review floor absent. Heard signals retain their observations but interrupt an
+autonomous actor only for changed food evidence or an existing delivery. This can
+alter choices and care latency. Use the separate policy JSON with `decisions.py`
+for paired, explicitly behavioral checkpoint experiments.

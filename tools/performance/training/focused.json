@@ -1,0 +1,81 @@
+{
+  "runs": [
+    {
+      "arguments": [
+        "--seed",
+        "17",
+        "--mod",
+        "../../../tools/history/profiles/warm-32",
+        "--content",
+        "../../../content",
+        "--days",
+        "30",
+        "--workers",
+        "1",
+        "--sample-days",
+        "365000",
+        "--checkpoint-days",
+        "365000",
+        "--final-save",
+        "false",
+        "--journal",
+        "notable",
+        "--resident-executor",
+        "true",
+        "--parallel-listeners",
+        "false"
+      ]
+    },
+    {
+      "arguments": [
+        "--seed",
+        "29",
+        "--content",
+        "../../../content",
+        "--days",
+        "5",
+        "--workers",
+        "1",
+        "--sample-days",
+        "365000",
+        "--checkpoint-days",
+        "365000",
+        "--final-save",
+        "false",
+        "--journal",
+        "notable",
+        "--resident-executor",
+        "true",
+        "--parallel-listeners",
+        "false"
+      ]
+    },
+    {
+      "arguments": [
+        "--seed",
+        "43",
+        "--mod",
+        "focused-large",
+        "--content",
+        "../../../content",
+        "--days",
+        "1",
+        "--workers",
+        "4",
+        "--sample-days",
+        "365000",
+        "--checkpoint-days",
+        "365000",
+        "--final-save",
+        "false",
+        "--journal",
+        "notable",
+        "--resident-executor",
+        "true",
+        "--parallel-listeners",
+        "false"
+      ]
+    }
+  ],
+  "scope": "Predeclared seeds 17, 29 and 43, independent of held-out seeds 19 and 37 and the seed-23 scale checkpoint. Current content default busy-only 15-minute attention; portable compiler target. Compilation/training is excluded from benchmark time."
+}

@@ -1,0 +1,14 @@
+[package]
+name = "game-autonomy-frames"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-characters.workspace = true
+game-decision-frames.workspace = true
+game-knowledge.workspace = true
+game-physiology.workspace = true
+game-cargo.workspace = true
+game-transport.workspace = true

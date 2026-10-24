@@ -1,0 +1,23 @@
+[package]
+name = "game-care-perception"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-households.workspace = true
+game-character-state.workspace = true
+game-physiology.workspace = true
+game-vitality.workspace = true
+game-relationships.workspace = true
+game-transport.workspace = true
+game-social-life.workspace = true
+game-signals.workspace = true
+game-communication.workspace = true
+game-choice.workspace = true
+
+[dev-dependencies]
+game-land.workspace = true
+serde.workspace = true

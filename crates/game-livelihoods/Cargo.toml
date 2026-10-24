@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-anticipation.workspace = true
 game-work-planning.workspace = true
 game-search.workspace = true
 game-skills.workspace=true

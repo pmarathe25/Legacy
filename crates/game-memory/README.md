@@ -20,6 +20,18 @@ indexes. At most 512 short-term entries survive crowding, preferentially keeping
 important or emotional evidence. Direct observation can refresh evidence; a cache
 lookup or candidate-action query cannot rehearse it.
 
+An observation or initialization is processed as one batch before crowding. Pruning
+after each entry could delete a later entry in that same batch and panic on large
+scenes. Batch processing also calculates personal context once, ranks crowding
+once and removes forgotten association links in one pass. This corrects oversized
+scene behavior; it is not an equivalent-history claim against the broken path.
+The optional request-local cue index preserves the first four matching keys in
+sorted order; `LEGACY_MEMORY_INDEX=0` retains a linear reference with the same batch
+semantics. Linear lookup is the default; `LEGACY_MEMORY_INDEX=1` enables the index.
+`game-memory-state` holds the saved data contract, with row-journal checkpoints
+and local transaction validation. Memory retains registration and all gameplay
+writes. Resource keys and save schema remain unchanged.
+
 `game-knowledge::plugin` installs this owner automatically; callers do not also
 register another memory plugin/store.
 

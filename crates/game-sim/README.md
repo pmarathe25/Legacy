@@ -47,8 +47,10 @@ A request owner can retire its callbacks with
 current transaction, rolls back on failure, and preserves other request types.
 
 `Transaction::prepare` runs a scratch request alongside a read-only query on the
-same staged world. `notify_prepared` drafts explicitly independent subscribers in
-parallel and merges their private resource results in subscriber order. Ordinary
+same staged world. With `Host::set_parallel_listeners(true)`, `notify_prepared` drafts
+explicitly independent subscribers in parallel and merges private resource results
+in subscriber order. The default runs callbacks in order to avoid tiny-task
+handoffs. Ordinary
 subscribers are serial barriers. World writes, IDs, notices and schedule changes
 are denied during drafting; any such attempt, even if caught, retries the original
 request serially. Retained scratch changes also force a serial retry. Selection,
@@ -57,3 +59,57 @@ action execution and world commits remain serial. One worker uses the original p
 Resource contracts and erased codecs live in `game-contracts`; streaming envelope
 metadata lives in `game-snapshot`. The existing `game-sim` public types are reexports.
 The host retains ownership checks and the sole committing execution path.
+
+`notify_prepared` also runs directly inside writable transactions. Ordinary
+subscribers are effect barriers between independent drafts. If a draft attempts
+an external effect, its callback runs serially at its original position and later
+drafts are prepared again against the updated world. Earlier merged drafts remain
+part of the same atomic transaction; a later error or panic rolls them back along
+with the barrier's effects. Nested isolated `prepare` requests retain their
+whole-request fallback because their caller owns the speculative read view.
+
+`Pending::request<R>` inspects an already bound typed payload without serialization
+or handler execution. Unbound envelopes return `None`; loading binds scheduled
+payloads as usual. `Host::query_at` views the current committed world with a supplied
+logical clock at or after `now`; it does not predict future state or advance the
+scheduler. It enforces the same read-only contract as `query`. These interfaces
+support external advisory preparation without changing the dispatch loop.
+
+The listener execution policy is runtime-only and defaults to ordered callbacks
+for all worker counts. It does not change provider barriers, selection, action
+execution, IDs or commit boundaries. Large owner-controlled pool operations remain
+parallel. Explicit parallel-listener tests continue to cover isolated drafting,
+blocked effects, aggregate budgets, ordered merge and rollback.
+
+`review-trace` enables generic causal scopes from `game-contracts/causality` at
+request, event, and listener boundaries. It adds no gameplay dependency. Owners
+can correlate optional observations with these attempt scopes. The ordinary build
+compiles out this backend; see `tools/performance/REVIEWS.md` for diagnostic limits.
+
+
+Parallel listeners now draft every independent subscriber once across ordered
+barriers. A conservative resource-type read footprint is checked at each original
+application position; changed inputs retry only that callback. Attempted writes
+advance dependency versions even after rollback. Type-hash collisions only cause
+extra retries. Missing reads, nested worker reads and caught effect attempts remain
+covered. Providers that attempt external effects become serial for that registry;
+this classification changes performance only. `draft_statistics` reports attempted,
+accepted, stale and effectful drafts. Counts are runtime diagnostics, including
+rolled-back attempts, and are not serialized.
+
+`Transaction::draft(scratch, run)` executes a closure with a private scratch
+resource. `Transaction::listener(event, listener_name)` invokes a registered
+callback under its original owner. A draft returns its scratch state and an
+acceptance flag; any attempted external effect rejects acceptance, even when
+caught by the callback. Callers may retain only independently completed scratch
+groups, never the failed callback's partial result. The opt-in frame experiment
+uses these primitives to prepare actor/provider batches; only the existing host
+commits worlds.
+Generic dependency machinery lives in `game-drafting` through `game-contracts`.
+Serializable job/action records and the action row-journal resource contract live
+in `game-contracts`; existing public names remain reexports/type aliases.
+
+`Host::executor()` shares the host's worker pool through an `Arc`. A driver can
+run its committing loop inside that pool to avoid handing each small batch from
+an external coordinator to a worker. Ownership checks, transaction order and
+rollback remain the same; reloads create a new host and its own executor.

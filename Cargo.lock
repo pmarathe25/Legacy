@@ -292,6 +292,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-anticipation"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-sim",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-api"
 version = "0.2.0"
 dependencies = [
@@ -335,9 +346,11 @@ dependencies = [
  "game-affiliation",
  "game-agreements",
  "game-agriculture",
+ "game-anticipation",
  "game-api",
  "game-armies",
  "game-attachments",
+ "game-autonomy-frames",
  "game-botany",
  "game-campaign",
  "game-care",
@@ -447,17 +460,65 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-attention"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
 name = "game-attraction"
 version = "0.2.0"
 dependencies = [
  "game-choice",
  "game-communication",
  "game-core",
+ "game-diagnostics",
  "game-relationships",
  "game-sim",
  "game-social-life",
+ "game-storage",
+ "game-traits",
  "game-transport",
  "game-vitality",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-autonomy-frames"
+version = "0.2.0"
+dependencies = [
+ "game-cargo",
+ "game-characters",
+ "game-core",
+ "game-decision-frames",
+ "game-knowledge",
+ "game-physiology",
+ "game-sim",
+ "game-transport",
+]
+
+[[package]]
+name = "game-autonomy-policy"
+version = "0.2.0"
+dependencies = [
+ "game-attention",
+ "game-choice",
+ "game-content",
+ "game-core",
+ "game-decision-food",
+ "game-diagnostics",
+ "game-physiology",
+ "game-provisioning",
+ "game-sim",
+ "game-traits",
+ "game-utility",
+ "game-vitality",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -593,6 +654,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-care-perception"
+version = "0.2.0"
+dependencies = [
+ "game-character-state",
+ "game-choice",
+ "game-communication",
+ "game-core",
+ "game-households",
+ "game-land",
+ "game-physiology",
+ "game-relationships",
+ "game-signals",
+ "game-sim",
+ "game-social-life",
+ "game-transport",
+ "game-vitality",
+ "serde",
+]
+
+[[package]]
 name = "game-cargo"
 version = "0.2.0"
 dependencies = [
@@ -610,16 +691,49 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-character-clock"
+version = "0.2.0"
+dependencies = [
+ "game-autonomy-policy",
+ "game-character-state",
+ "game-choice",
+ "game-contracts",
+ "game-core",
+ "game-physiology",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-character-state"
+version = "0.2.0"
+dependencies = [
+ "game-autonomy-policy",
+ "game-choice",
+ "game-core",
+ "game-packed",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
 name = "game-characters"
 version = "0.2.0"
 dependencies = [
+ "game-autonomy-policy",
  "game-care",
  "game-cargo",
+ "game-character-clock",
+ "game-character-state",
  "game-choice",
  "game-communication",
  "game-companionship",
  "game-content",
+ "game-contracts",
  "game-core",
+ "game-decision-food",
+ "game-decision-frames",
+ "game-decision-intents",
  "game-diagnostics",
  "game-digestion",
  "game-ecology",
@@ -657,9 +771,12 @@ dependencies = [
 name = "game-choice"
 version = "0.2.0"
 dependencies = [
+ "game-anticipation",
  "game-core",
+ "game-decision-frames",
  "game-diagnostics",
  "game-identity",
+ "game-offers",
  "game-sim",
  "game-storage",
  "game-traits",
@@ -840,6 +957,8 @@ name = "game-contracts"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-drafting",
+ "game-packed",
  "rustc-hash 2.1.3",
  "serde",
  "serde_json",
@@ -936,6 +1055,59 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-decision-clock"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-offers",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-decision-food"
+version = "0.2.0"
+dependencies = [
+ "game-choice",
+ "game-core",
+ "game-provisioning",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-decision-frames"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-decision-clock",
+ "game-offers",
+ "game-sim",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-decision-intents"
+version = "0.2.0"
+dependencies = [
+ "game-autonomy-policy",
+ "game-character-state",
+ "game-choice",
+ "game-core",
+ "game-diagnostics",
+ "game-digestion",
+ "game-physiology",
+ "game-provisioning",
+ "game-relationships",
+ "game-sim",
+ "game-vitality",
+ "rayon",
+ "serde",
+]
+
+[[package]]
 name = "game-deliberation"
 version = "0.2.0"
 dependencies = [
@@ -1019,6 +1191,15 @@ dependencies = [
  "game-vitality",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-drafting"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "rustc-hash 2.1.3",
+ "serde",
 ]
 
 [[package]]
@@ -1130,6 +1311,14 @@ dependencies = [
  "game-vitality",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-expression"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "serde",
 ]
 
 [[package]]
@@ -1380,6 +1569,7 @@ dependencies = [
  "game-care",
  "game-cargo",
  "game-characters",
+ "game-choice",
  "game-communication",
  "game-communities",
  "game-content",
@@ -1423,6 +1613,7 @@ dependencies = [
  "game-works",
  "game-workshop",
  "mimalloc",
+ "rayon",
  "serde",
  "serde_json",
 ]
@@ -1608,6 +1799,7 @@ dependencies = [
  "game-reasoning",
  "game-relationships",
  "game-sim",
+ "game-storage",
  "game-transport",
  "game-vitality",
  "serde",
@@ -1795,6 +1987,7 @@ dependencies = [
 name = "game-livelihoods"
 version = "0.2.0"
 dependencies = [
+ "game-anticipation",
  "game-cargo",
  "game-characters",
  "game-choice",
@@ -1901,6 +2094,7 @@ dependencies = [
  "game-facts",
  "game-knowledge",
  "game-land",
+ "game-memory-state",
  "game-objects",
  "game-packed",
  "game-physiology",
@@ -1915,6 +2109,20 @@ dependencies = [
  "game-vitality",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-memory-state"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-facts",
+ "game-packed",
+ "game-sim",
+ "game-snapshot",
+ "game-storage",
+ "rustc-hash 2.1.3",
+ "serde",
 ]
 
 [[package]]
@@ -2005,11 +2213,13 @@ dependencies = [
 name = "game-nurture"
 version = "0.2.0"
 dependencies = [
+ "game-care-perception",
  "game-cargo",
  "game-characters",
  "game-choice",
  "game-communication",
  "game-core",
+ "game-diagnostics",
  "game-households",
  "game-knowledge",
  "game-lineage",
@@ -2092,6 +2302,18 @@ dependencies = [
  "game-workshop",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-offers"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-sim",
+ "game-traits",
+ "game-utility",
+ "rustc-hash 2.1.3",
+ "serde",
 ]
 
 [[package]]
@@ -2245,6 +2467,7 @@ dependencies = [
  "game-cargo",
  "game-characters",
  "game-communication",
+ "game-contracts",
  "game-core",
  "game-diagnostics",
  "game-ecology",
@@ -2872,6 +3095,7 @@ version = "0.2.0"
 dependencies = [
  "game-content",
  "game-core",
+ "game-expression",
  "game-sim",
  "game-storage",
  "game-traits",
@@ -2943,6 +3167,7 @@ dependencies = [
  "game-transport",
  "game-vitality",
  "game-workshop",
+ "rayon",
  "serde",
 ]
 

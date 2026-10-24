@@ -8,7 +8,23 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-memory-state = { path = "crates/game-memory-state" }
 game-memory = { path = "crates/game-memory" }
+
+game-autonomy-policy = { path = "crates/game-autonomy-policy" }
+game-attention = { path = "crates/game-attention" }
+game-drafting = { path = "crates/game-drafting" }
+game-offers = { path = "crates/game-offers" }
+game-decision-frames = { path = "crates/game-decision-frames" }
+game-decision-clock = { path = "crates/game-decision-clock" }
+game-decision-food = { path = "crates/game-decision-food" }
+game-decision-intents = { path = "crates/game-decision-intents" }
+game-character-clock = { path = "crates/game-character-clock" }
+game-autonomy-frames = { path = "crates/game-autonomy-frames" }
+game-care-perception = { path = "crates/game-care-perception" }
+game-character-state = { path = "crates/game-character-state" }
+game-expression = { path = "crates/game-expression" }
+game-anticipation = { path = "crates/game-anticipation" }
 game-deliberation = { path = "crates/game-deliberation" }
 game-simple-machines = { path = "crates/game-simple-machines" }
 game-inscription = { path = "crates/game-inscription" }

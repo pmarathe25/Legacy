@@ -538,7 +538,13 @@ fn compiled_empirical_facts_preserve_extensions_uncertainty_and_wire_values() {
     let mut facts = Facts::default();
     for (key, value) in [
         ("theory:stone:test", claim.clone()),
-        ("measured:stone:speed", measurement),
+        ("measured:stone:speed", measurement.clone()),
+        ("memory:empirical:0001", measurement.clone()),
+        ("memory:empirical:extended", {
+            let mut extended = measurement;
+            extended["extension"] = serde_json::json!(true);
+            extended
+        }),
         ("theory:stone:extended", {
             let mut extended = claim;
             extended["extension"] = serde_json::json!(true);
@@ -566,6 +572,18 @@ fn compiled_empirical_facts_preserve_extensions_uncertainty_and_wire_values() {
     ));
     assert!(matches!(
         facts.get("theory:stone:extended").unwrap().value.as_ref(),
+        FactValue::Other(_)
+    ));
+    assert!(matches!(
+        facts.get("memory:empirical:0001").unwrap().value.as_ref(),
+        FactValue::Measurement(_)
+    ));
+    assert!(matches!(
+        facts
+            .get("memory:empirical:extended")
+            .unwrap()
+            .value
+            .as_ref(),
         FactValue::Other(_)
     ));
     let encoded = serde_json::to_string(&facts).unwrap();

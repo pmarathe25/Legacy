@@ -9,6 +9,39 @@ fn stamp(n: u64) -> Stamp {
         confidence: 100,
     }
 }
+
+#[test]
+fn key_versions_ignore_payloads_and_scene_refreshes_but_detect_membership_changes() {
+    let mut facts = Facts::default();
+    let first = scene(&["patch:1", "roads:1"], None);
+    facts.observe(first.clone(), stamp(1));
+    let original = facts.clone();
+    facts.insert("roads:1".into(), fact("closed", 2));
+    assert!(facts.same_keys(&original));
+    facts.observe(first.clone(), stamp(3));
+    assert!(facts.same_keys(&original));
+    // Leaving a scene retains its evidence in cold storage.
+    facts.observe(scene(&["patch:1"], Some(&first)), stamp(4));
+    assert!(facts.same_keys(&original));
+    facts.observe(scene(&["patch:2"], None), stamp(5));
+    assert!(!facts.same_keys(&original));
+    let expanded = facts.clone();
+    facts.remove("missing");
+    assert!(facts.same_keys(&expanded));
+    // Removing a visible key materializes the other scene facts correctly.
+    let removed = facts.remove("patch:2").unwrap();
+    assert!(!facts.same_keys(&expanded));
+    assert_eq!(facts.len(), 2);
+    facts.insert("patch:2".into(), removed);
+    assert!(!facts.same_keys(&expanded));
+    assert_eq!(facts, expanded);
+    let mut fork = expanded.clone();
+    fork.remove("roads:1");
+    fork.insert("roads:2".into(), fact("open", 6));
+    assert_eq!(fork.len(), expanded.len());
+    assert!(!fork.same_keys(&expanded));
+    assert_eq!(original.len(), 2);
+}
 fn fact(value: &str, n: u64) -> Fact<String> {
     Fact {
         value: Arc::new(value.into()),

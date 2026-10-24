@@ -35,3 +35,10 @@ Practiced `child-care` skill improves interpretation and anticipated hunger
 without changing willingness to help. `game-observations` awards practice for
 actual feeding and comprehensible care lessons; genes influence the abilities
 used to learn rather than transmitting acquired knowledge.
+
+`assess` computes the ordinary notice interpretation without a state change.
+`Notice` still assesses and records immediately. Experimental actor preparation
+can instead defer an `ApplyAssessment` request. Application ignores obsolete-time
+or out-of-contact observations and recomputes if the observer has acquired a newer
+perception. This preserves newer personal learning instead of overwriting it with
+an old prepared record. The pure assessment itself grants no remote information.

@@ -1,5 +1,6 @@
 use super::*;
 use game_storage::{Table, Version};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 const MAX_ENTRIES: usize = 512;
 const MAX_BYTES: usize = 4 * 1024 * 1024;
@@ -23,9 +24,11 @@ struct Entry {
     supplies: Vec<Supply>,
     result: Option<Plan>,
     used: u64,
+    prepared: bool,
     bytes: usize,
 }
 struct Inputs<'a> {
+    person: PersonId,
     seed: u64,
     area: AreaId,
     intelligence: u64,
@@ -66,7 +69,7 @@ impl Entry {
                     a.id == *id && a.capacity == *cap && a.version.matches(stock)
                 })
     }
-    fn new(i: Inputs<'_>, result: Option<Plan>, used: u64) -> Self {
+    fn new(i: Inputs<'_>, result: Option<Plan>, used: u64, prepared: bool) -> Self {
         let bytes = std::mem::size_of::<Self>()
             + i.goals
                 .iter()
@@ -112,6 +115,7 @@ impl Entry {
                 .collect(),
             result,
             used,
+            prepared,
             bytes,
         }
     }
@@ -152,6 +156,7 @@ fn inputs<'a>(
     })?;
     let traits = tx.get::<game_traits::Traits>().ok();
     Some(Inputs {
+        person: p,
         seed: tx.seed(),
         area,
         intelligence: game_vitality::ability(tx, p, "intelligence"),
@@ -189,13 +194,25 @@ pub fn choose(
             && old.matches(&input)
         {
             old.used = used;
+            if old.prepared {
+                old.prepared = false;
+                let _reused = game_diagnostics::span("work preparation reused");
+            }
             let _hit = game_diagnostics::span("work cache hit");
             return Ok(old.result.clone());
         }
+        if c.entries.get(&key).is_some_and(|e| e.prepared) {
+            let _stale = game_diagnostics::span("work preparation stale");
+        }
     }
     let result = uncached(tx, p, inventories, goals)?;
+    remember(input, result.clone(), false);
+    Ok(result)
+}
+fn remember(input: Inputs<'_>, result: Option<Plan>, prepared: bool) {
+    let key = (input.person, input.area);
     let mut c = cache();
-    let entry = Entry::new(input, result.clone(), c.clock);
+    let entry = Entry::new(input, result, c.clock, prepared);
     if entry.bytes <= MAX_BYTES {
         if let Some(old) = c.entries.remove(&key) {
             c.bytes -= old.bytes;
@@ -212,5 +229,51 @@ pub fn choose(
         c.bytes += entry.bytes;
         c.entries.insert(key, entry);
     }
-    Ok(result)
+}
+
+pub struct Query<'a> {
+    pub person: PersonId,
+    pub inventories: Vec<InventoryId>,
+    pub goals: &'a [Goal],
+}
+/// Capture private inputs before workers search; retain only bounded results and weak versions.
+pub fn prepare(tx: &Transaction<'_>, queries: &[Query<'_>]) {
+    use rayon::prelude::*;
+    let _span = game_diagnostics::span("work preparation batch");
+    let drafts: Vec<_> = queries
+        .iter()
+        .filter_map(|q| {
+            let versions = inputs(tx, q.person, &q.inventories, q.goals)?;
+            if cache()
+                .entries
+                .get(&(q.person, versions.area))
+                .is_some_and(|e| e.matches(&versions))
+            {
+                let _already = game_diagnostics::span("work preparation already cached");
+                return None;
+            }
+            match super::search::capture(tx, q.person, &q.inventories, q.goals) {
+                Ok(Some(input)) => Some((versions, input)),
+                _ => {
+                    let _failed = game_diagnostics::span("work preparation failed");
+                    None
+                }
+            }
+        })
+        .collect();
+    let run = |(versions, input): (Inputs<'_>, super::search::Inputs<'_>)| {
+        let _search = game_diagnostics::span("work prepared search");
+        if let Ok(result) = input.run() {
+            remember(versions, result, true);
+        } else {
+            let _failed = game_diagnostics::span("work preparation failed");
+        }
+    };
+    if drafts.len() < 2 || tx.compute().current_num_threads() == 1 {
+        drafts.into_iter().for_each(run);
+    } else {
+        let _parallel = game_diagnostics::span("work preparation parallel batch");
+        tx.compute()
+            .install(|| drafts.into_par_iter().for_each(run));
+    }
 }

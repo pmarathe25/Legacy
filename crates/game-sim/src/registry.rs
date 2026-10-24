@@ -18,9 +18,13 @@ fn register_listener<T: 'static>(
     if listeners.contains_key(name) {
         return Err(Error::Duplicate(name.into()));
     }
+    #[cfg(feature = "review-trace")]
+    let label = name.to_owned();
     listeners.insert(
         name.into(),
         Arc::new(move |tx, value| {
+            #[cfg(feature = "review-trace")]
+            let _cause = game_contracts::causal::scope("listener", &label);
             let value = value
                 .downcast_ref::<T>()
                 .ok_or_else(|| Error::Rejected("listener type mismatch".into()))?;
@@ -40,7 +44,7 @@ pub(crate) struct Registry {
     pub batches: HashMap<String, usize>,
     pub request_owners: HashMap<String, usize>,
     pub listeners: HashMap<String, BTreeMap<String, Listener>>,
-    pub isolated: HashMap<String, HashMap<String, TypeId>>,
+    pub isolated: HashMap<String, HashMap<String, game_contracts::drafting::Isolation>>,
     pub save_checks: Vec<fn(&Host) -> Result<()>>,
     pub guards: Vec<Guard>,
     pub stops: Vec<Stopper>,
@@ -110,7 +114,6 @@ impl Builder {
         self.registry.typed.insert(TypeId::of::<R>(), typed);
         Ok(())
     }
-    /// Opt into atomic, ordered batches of adjacent due requests.
     pub fn batch<R: Request>(&mut self, limit: usize) -> Result<()> {
         require((1..=128).contains(&limit), "batch limit must be 1..=128")?;
         require(
@@ -143,7 +146,7 @@ impl Builder {
             .isolated
             .entry(E::KEY.into())
             .or_default()
-            .insert(name.into(), TypeId::of::<T>());
+            .insert(name.into(), game_contracts::drafting::Isolation::new::<T>());
         Ok(())
     }
     pub fn before<R: Request>(
@@ -179,7 +182,9 @@ impl Builder {
         Ok(Host {
             registry: Arc::new(self.registry),
             data: self.data,
-            pool,
+            pool: Arc::new(pool),
+            parallel_listeners: false,
+            drafts: Default::default(),
             time: SimTime(0),
             seed,
             revision: 0,

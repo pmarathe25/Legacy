@@ -24,6 +24,24 @@ fn builder() -> Builder {
         Err(Error::Rejected("rollback".into()))
     })
     .unwrap();
+    b.request::<FailScene>(|tx, r| {
+        tx.call(scene(r.0))?;
+        Err(Error::Rejected("rollback scene".into()))
+    })
+    .unwrap();
+    b.request::<NestedScene>(|tx, r| {
+        tx.call(scene(r.0))?;
+        let expected = tx.get::<Knowledge>()?.clone();
+        assert!(tx.attempt(FailScene(r.0)).is_err());
+        assert_eq!(&expected, tx.get::<Knowledge>()?);
+        tx.call(Conclude {
+            person: r.0,
+            key: "zzafter:rollback".into(),
+            value: serde_json::json!(1),
+            confidence: 80,
+        })
+    })
+    .unwrap();
     b
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -360,4 +378,93 @@ fn short_term_crowding_preserves_an_encoded_memory_and_bounds_personal_associati
     assert!(s.0[&p].contains_key("episode:important"));
     assert!(game_memory::retrieve(s, p, "topic").len() <= 16);
     assert!(s.1[&p].entries.values().all(|t| t.related.len() <= 4));
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct FailScene(PersonId);
+impl Request for FailScene {
+    const KEY: &'static str = "test-memory.fail-scene";
+    type Response = ();
+}
+fn scene(person: PersonId) -> game_memory::ObserveScene<game_knowledge::FactValue> {
+    let entries = (0..700)
+        .map(|n| {
+            (
+                std::sync::Arc::from(format!("episode:{n:04}")),
+                std::sync::Arc::new(game_knowledge::FactValue::from(
+                    serde_json::json!({"quantity":n}),
+                )),
+            )
+        })
+        .collect();
+    game_memory::ObserveScene {
+        person,
+        scene: std::sync::Arc::new(game_facts::Scene::new(entries, None).unwrap()),
+    }
+}
+#[test]
+fn oversized_observation_is_atomic_bounded_and_replayable() {
+    let (mut h, p, q) = setup();
+    let before = h.save().unwrap();
+    assert!(h.dispatch(FailScene(p)).is_err());
+    assert_eq!(before, h.save().unwrap());
+    h.dispatch(scene(q)).unwrap();
+    let mut other = builder().load(&h.save().unwrap(), 4).unwrap();
+    for host in [&mut h, &mut other] {
+        host.dispatch(scene(p)).unwrap();
+        host.dispatch(scene(p)).unwrap();
+        let s = host.get::<Knowledge>().unwrap();
+        assert_eq!(s.0[&p].len(), 512);
+        assert_eq!(s.1[&p].entries.len(), 512);
+        assert_eq!(s.0[&q].len(), 512);
+        for (k, t) in s.1[&p].entries.iter() {
+            assert!(s.0[&p].contains_key(k));
+            assert!(t.related.iter().all(|k| s.1[&p].entries.contains_key(k)));
+        }
+    }
+    assert_eq!(h.save().unwrap(), other.save().unwrap());
+    run(&mut h, SimTime(3 * DAY.0));
+    assert!(h.get::<Knowledge>().unwrap().0[&p].is_empty());
+}
+#[test]
+fn oversized_initialization_records_before_crowding_and_preserves_tie_breaking() {
+    let (mut h, p, _) = setup();
+    let facts = scene(p)
+        .scene
+        .entries()
+        .map(|(k, value)| {
+            (
+                k.clone(),
+                game_memory::Fact {
+                    value: value.clone(),
+                    source: p,
+                    observed: SimTime(0),
+                    revision: h.revision(),
+                    confidence: 100,
+                },
+            )
+        })
+        .collect();
+    h.dispatch(game_memory::Initialize { person: p, facts })
+        .unwrap();
+    let s = h.get::<Knowledge>().unwrap();
+    assert_eq!(s.0[&p].len(), 512);
+    assert_eq!(s.0[&p].keys().next().unwrap().as_ref(), "episode:0188");
+    assert_eq!(s.0[&p].keys().last().unwrap().as_ref(), "episode:0699");
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct NestedScene(PersonId);
+impl Request for NestedScene {
+    const KEY: &'static str = "test-memory.nested-scene";
+    type Response = ();
+}
+#[test]
+fn failed_inner_batch_restores_book_and_fact_journals_without_discarding_outer_changes() {
+    let (mut h, p, _) = setup();
+    h.dispatch(NestedScene(p)).unwrap();
+    assert!(h.get::<Knowledge>().unwrap().0[&p].contains_key("zzafter:rollback"));
+    assert_eq!(h.get::<Knowledge>().unwrap().0[&p].len(), 512);
+    let save = h.save().unwrap();
+    assert_eq!(builder().load(&save, 4).unwrap().save().unwrap(), save);
 }
