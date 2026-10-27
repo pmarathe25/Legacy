@@ -15,5 +15,7 @@ game-physiology.workspace = true
 game-relationships.workspace = true
 game-digestion.workspace = true
 game-vitality.workspace = true
+game-traits.workspace = true
+game-utility.workspace = true
 serde.workspace = true
 rayon.workspace = true

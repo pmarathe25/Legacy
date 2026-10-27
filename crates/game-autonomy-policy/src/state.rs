@@ -6,6 +6,10 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Mind {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame_tier: Option<game_choice::FrameTier>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub urgent_frame_at: Option<SimTime>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame_retry: Option<SimTime>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub considered: Option<std::sync::Arc<crate::Consideration>>,

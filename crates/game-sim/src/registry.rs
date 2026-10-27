@@ -42,6 +42,7 @@ pub(crate) struct Registry {
     pub owners: Vec<Arc<str>>,
     pub typed: HashMap<TypeId, Stored>,
     pub batches: HashMap<String, usize>,
+    pub waves: HashMap<String, crate::scheduled::Wave>,
     pub request_owners: HashMap<String, usize>,
     pub listeners: HashMap<String, BTreeMap<String, Listener>>,
     pub isolated: HashMap<String, HashMap<String, game_contracts::drafting::Isolation>>,
@@ -64,7 +65,7 @@ impl Registry {
 }
 pub struct Builder {
     pub(crate) registry: Registry,
-    owner: usize,
+    pub(crate) owner: usize,
     data: HashMap<TypeId, Stored>,
 }
 impl Builder {

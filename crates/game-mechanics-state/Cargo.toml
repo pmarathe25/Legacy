@@ -1,0 +1,15 @@
+[package]
+name = "game-mechanics-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-storage.workspace = true
+game-physics.workspace = true
+game-knowledge.workspace = true
+game-physiology.workspace = true
+game-vitality.workspace = true
+game-transport.workspace = true
+serde.workspace = true

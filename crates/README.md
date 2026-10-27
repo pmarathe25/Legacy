@@ -1,6 +1,6 @@
 # Crates
 
-The `crates/` directory contains 148 small crates—each owning one simulation mechanic, storage structure, or application adapter.
+The `crates/` directory contains small crates for simulation mechanics, storage structures, and application adapters.
 
 **Why it matters:** Strict single-owner boundaries keep dependencies acyclic, let feature tests compose their required plugins without importing `game-assembly`, and prevent cross-module state corruption.
 
@@ -8,6 +8,16 @@ Recent extensions have separate owners:
 
 | Crate | Responsibility |
 | --- | --- |
+| [game-causality](game-causality/README.md) | Optional read-only causal telemetry re-exported by the runtime contracts |
+| [game-household-state](game-household-state/README.md) | Household-owned saved intentions and food-refusal bookkeeping |
+| [game-food-care-execution](game-food-care-execution/README.md) | Care-owned delivery and refusal retry execution |
+| [game-physiology-eating](game-physiology-eating/README.md) | Physiology-owned food serving and consumption |
+| [game-cargo-planning](game-cargo-planning/README.md) | Read-only provisional arbitration of physical stock claims |
+| [game-character-choices](game-character-choices/README.md) | Character-owned review selection and action execution |
+| [game-character-pause](game-character-pause/README.md) | Transaction-local urgent invalidation for paused reviews |
+| [game-character-attention](game-character-attention/README.md) | Character-owned attention configuration and frame compatibility |
+| [game-frame-arbitration](game-frame-arbitration/README.md) | Choice-owned cohort arbitration participation counter |
+| [game-frame-tuning](game-frame-tuning/README.md) | Shared saved settings for decision-frame experiments |
 | [game-identity](game-identity/README.md) | Acquired commitments and genetically influenced switching costs |
 | [game-phonology](game-phonology/README.md) | Numeric phonemes and reversible IAST-based display |
 | [game-grammar](game-grammar/README.md) | Pure construction learning, role particles, and embedded clauses |
@@ -53,7 +63,7 @@ Recent extensions have separate owners:
 | [game-offers](game-offers/README.md) | Proposal state and ordered bounded collection, registered by choice | `game-core`, `game-sim`, `game-utility`, `game-traits` |
 | [game-decision-food](game-decision-food/README.md) | Optional parallel cohort food inputs; no world resource | `game-core`, `game-sim`, `game-choice`, `game-provisioning` |
 | [game-decision-intents](game-decision-intents/README.md) | Whole-actor read-only preparation and shared survival/continuation scoring; ordered owner effects | `game-core`, `game-sim`, `game-character-state`, `game-autonomy-policy`, `game-choice`, `game-provisioning`, `game-physiology`, `game-relationships`, `game-digestion`, `game-vitality` |
-| [game-character-clock](game-character-clock/README.md) | Character-owned wake admission, scheduling and bounded frame recovery | `game-core`, `game-sim`, `game-choice`, `game-character-state`, `game-autonomy-policy`, `game-physiology`, `game-contracts` |
+| [game-character-clock](game-character-clock/README.md) | Character-owned wake admission, scheduling and bounded frame recovery | `game-core`, `game-sim`, `game-choice`, `game-character-attention`, `game-character-state`, `game-autonomy-policy`, `game-invocation`, `game-lineage`, `game-physiology`, `game-contracts` |
 | [game-decision-frames](game-decision-frames/README.md) | Opt-in saved step snapshots and actor/provider batches | `game-core`, `game-sim`, `game-offers`, `game-decision-clock` |
 | [game-decision-clock](game-decision-clock/README.md) | Periodic or demand-driven frame deadlines under the choice owner | `game-core`, `game-sim`, `game-offers` |
 | [game-autonomy-frames](game-autonomy-frames/README.md) | Gather due review cohorts and refresh observations for decision frames | `game-core`, `game-sim`, `game-characters`, `game-decision-frames`, `game-knowledge`, `game-physiology`, `game-cargo`, `game-transport` |

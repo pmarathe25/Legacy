@@ -16,6 +16,7 @@ compact-storage = ["game-packed/compact"]
 
 [dependencies]
 game-contracts.workspace = true
+game-drafting.workspace = true
 game-food-memory.workspace = true
 game-communication.workspace = true
 game-diagnostics.workspace=true
@@ -29,6 +30,7 @@ game-assembly.workspace = true
 game-api.workspace = true
 game-session.workspace = true
 game-core.workspace = true
+game-content.workspace = true
 game-sim.workspace = true
 game-storage.workspace = true
 game-packed.workspace = true
@@ -36,6 +38,7 @@ game-openings.workspace = true
 game-physiology.workspace = true
 game-transport.workspace = true
 game-cargo.workspace = true
+game-cargo-planning.workspace = true
 game-property.workspace = true
 game-characters.workspace = true
 game-land.workspace = true

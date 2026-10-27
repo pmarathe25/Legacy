@@ -1,12 +1,12 @@
 //! Voluntary food care uses observed need, personal concern, and physical delivery.
 use game_care_perception::{candidates, concern, local, observed_need};
 use game_core::*;
-use game_households::{FoodCare, Households, RememberFoodCare, TendFood};
-use game_provisioning::Plan;
+pub use game_food_care_execution::FeedingFailed;
+use game_food_care_execution::{Review, advance, predicted, prompt, refusals, remember};
+use game_households::{FoodCare, Households, TendFood};
 use game_sim::*;
 use serde::{Deserialize, Serialize};
-mod delivery;
-use delivery::advance;
+mod interactions;
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Assist {
     pub caregiver: PersonId,
@@ -17,10 +17,6 @@ impl Request for Assist {
     type Response = bool;
 }
 #[derive(Clone, Serialize, Deserialize)]
-struct Review {
-    caregiver: PersonId,
-}
-#[derive(Clone, Serialize, Deserialize)]
 struct ForgetInvalid {
     caregiver: PersonId,
     intent: FoodCare,
@@ -29,10 +25,6 @@ impl Request for ForgetInvalid {
     const KEY: &'static str = "care.forget-invalid-intent";
     type Response = ();
 }
-impl Request for Review {
-    const KEY: &'static str = "care.food-review";
-    type Response = game_choice::Outcome;
-}
 // Choice outcomes retain observed failure evidence while trying another offer.
 #[derive(Clone, Serialize, Deserialize)]
 struct TryAssist(Assist);
@@ -40,36 +32,54 @@ impl Request for TryAssist {
     const KEY: &'static str = "care.food-choice";
     type Response = game_choice::Outcome;
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct FeedingFailed {
-    pub caregiver: PersonId,
-    pub patient: PersonId,
-    pub good: GoodId,
-    pub quantity: u64,
-    pub reason: String,
-}
-impl Event for FeedingFailed {
-    const KEY: &'static str = "care.feeding-failed";
-}
-fn remember(tx: &mut Transaction<'_>, caregiver: PersonId, intent: Option<FoodCare>) -> Result<()> {
-    tx.call(RememberFoodCare { caregiver, intent })
-}
-fn predicted(tx: &Transaction<'_>, p: PersonId, intent: &FoodCare) -> u64 {
-    if game_communication::active(tx)
-        && let Some(need) = game_communication::estimated_hunger(tx, p, intent.beneficiary)
-    {
-        return need;
-    }
-    let rules = &tx.get::<game_physiology::Bodies>().unwrap().rules;
-    let elapsed = tx.now().0.saturating_sub(intent.observed_at.0);
-    let foresight = game_vitality::ability(tx, p, "foresight");
-    let growth = u128::from(elapsed) * u128::from(rules.hunger_per_tick) / u128::from(rules.tick.0);
-    intent.observed_need.saturating_add(
-        (growth * u128::from(foresight) / (1000 + u128::from(foresight))).min(u128::from(u64::MAX))
-            as u64,
-    )
-}
 fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool> {
+    if tx.get::<Households>()?.food_refusal_window.is_none() {
+        return start_once(tx, p, child, None);
+    }
+    // A refusal can expose another personally known food immediately, but one
+    // review cannot loop indefinitely over a changing or contested inventory.
+    let mut attempted = std::collections::BTreeSet::new();
+    for _ in 0..4 {
+        let before = tx
+            .get::<Households>()?
+            .food_refusals
+            .get(&p)
+            .and_then(|patients| patients.get(&child))
+            .cloned();
+        if start_once(tx, p, child, Some(&attempted))? {
+            return Ok(true);
+        }
+        let after = tx
+            .get::<Households>()?
+            .food_refusals
+            .get(&p)
+            .and_then(|patients| patients.get(&child))
+            .cloned();
+        if before == after {
+            return Ok(false);
+        }
+        if let Some(group) = &after {
+            for (good, rows) in &group.foods {
+                for refusal in rows {
+                    if before
+                        .as_ref()
+                        .and_then(|old| old.foods.get(good))
+                        .is_none_or(|old| !old.contains(refusal))
+                    {
+                        attempted.insert((*good, refusal.quantity));
+                    }
+                }
+            }
+        }
+    }
+    Ok(false)
+}
+fn start_once(
+    tx: &mut Transaction<'_>,
+    p: PersonId,
+    child: PersonId,
+    attempted: Option<&std::collections::BTreeSet<(GoodId, u64)>>,
+) -> Result<bool> {
     game_physiology::capable(tx, p)?;
     require(
         game_vitality::can_manipulate(tx, p),
@@ -100,8 +110,21 @@ fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool>
     }
     let motive = concern(tx, p, child, need);
     let options = game_provisioning::care_options(tx, p, (need / 40 + 1).min(64))?;
+    let facts = tx.get::<game_knowledge::Knowledge>()?.0.get(&p);
     let chosen = options
         .into_iter()
+        .filter(|o| {
+            facts
+                .and_then(|facts| {
+                    let good = o.plan.intended_good(facts)?;
+                    let quantity = refusals::known_quantity(tx, facts, &o.plan, good, need)?;
+                    Some(
+                        attempted.is_none_or(|seen| !seen.contains(&(good, quantity)))
+                            && !refusals::blocked(tx, p, child, good, quantity, need),
+                    )
+                })
+                .unwrap_or(true)
+        })
         .map(|o| {
             let effort = o.travel.0.saturating_add(o.plan.work_duration().0);
             let value = motive + o.value - o.risk - (effort / MINUTE.0).min(1000) as i64 / 2;
@@ -148,7 +171,8 @@ fn start(tx: &mut Transaction<'_>, p: PersonId, child: PersonId) -> Result<bool>
         returning: false,
     };
     remember(tx, p, Some(intent.clone()))?;
-    advance(tx, p, intent)
+    let mut retry_alternative = false;
+    advance(tx, p, intent, &mut retry_alternative)
 }
 fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
     if game_physiology::capable(tx, p).is_err()
@@ -162,7 +186,28 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
         return Ok(false);
     };
     if let Some(intent) = h.food_care.get(&p).cloned() {
-        return advance(tx, p, intent);
+        let patient = intent.beneficiary;
+        let prior = h
+            .food_refusals
+            .get(&p)
+            .and_then(|patients| patients.get(&patient))
+            .cloned();
+        let mut retry_alternative = false;
+        let progress = advance(tx, p, intent, &mut retry_alternative)?;
+        if progress || tx.get::<Households>()?.food_refusal_window.is_none() {
+            return Ok(progress);
+        }
+        let current = tx
+            .get::<Households>()?
+            .food_refusals
+            .get(&p)
+            .and_then(|patients| patients.get(&patient))
+            .cloned();
+        return if retry_alternative || prior != current {
+            start(tx, p, patient)
+        } else {
+            Ok(false)
+        };
     }
     if !h.enabled {
         return Ok(false);
@@ -184,23 +229,10 @@ fn consider(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
     }
     Ok(false)
 }
-fn prompt(tx: &mut Transaction<'_>, p: PersonId) -> Result<()> {
-    if tx
-        .get::<Households>()
-        .is_ok_and(|h| h.food_care.contains_key(&p) || !candidates(tx, p).is_empty())
-    {
-        if tx
-            .get::<game_characters::Minds>()
-            .is_ok_and(|m| m.running && m.people.contains_key(&p))
-        {
-            return tx.notify(game_choice::Changed { person: p });
-        }
-        tx.schedule(tx.now(), 45, Review { caregiver: p })?;
-    }
-    Ok(())
-}
 /// Registers inside the care owner; household commitments use receiver-owned requests.
 pub fn register(b: &mut Builder) -> Result<()> {
+    interactions::register(b)?;
+    refusals::register(b)?;
     b.subscribe::<game_communication::Signalled>("nurture.heard-need", |tx, e| {
         let mut caregivers = game_transport::area(tx.get()?, e.person)
             .ok()
@@ -254,6 +286,17 @@ pub fn register(b: &mut Builder) -> Result<()> {
                     SignalReaction::Ignore
                 };
                 if matches!(reaction, SignalReaction::Urgent) {
+                    if tx.get::<Households>().is_ok_and(|h| {
+                        h.food_refusal_window.is_some()
+                            && h.food_refusals
+                                .get(&person)
+                                .is_some_and(|patients| patients.contains_key(&e.person))
+                    }) {
+                        tx.call(game_households::ClearNewFoodUrgency {
+                            caregiver: person,
+                            patient: e.person,
+                        })?;
+                    }
                     tx.notify(game_characters::Alert { person })?;
                 } else if matches!(reaction, SignalReaction::Changed)
                     || tx
@@ -351,6 +394,7 @@ pub fn register(b: &mut Builder) -> Result<()> {
     b.request::<TendFood>(|tx, r| consider(tx, r.caregiver).map(|_| ()))?;
     b.request::<Review>(|tx, r| consider(tx, r.caregiver).map(game_choice::Outcome::from))?;
     b.subscribe::<ActionFinished>("care.food-review", |tx, e| {
+        refusals::finished(tx, e)?;
         let retained = tx.get::<game_characters::Minds>().is_ok_and(|m| {
             m.running
                 && m.rules

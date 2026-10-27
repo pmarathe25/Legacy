@@ -1,5 +1,9 @@
 # game-vitality
 
+`Experiences` applies distinct personal mood changes on private owner rows in the
+shared worker pool and publishes them in input order. Scalar experience hooks and
+duplicate recipients require the ordinary request path.
+
 `game-vitality` models human physical and cognitive development from infancy through old age, tracks stress and satisfaction, and computes expressed capabilities from baseline traits.
 
 **Why it matters:** An infant, a healthy adult, and an elderly or distressed elder with the same genetic potential have very different physical strength, walking ability, language readiness, and lifespan limits.

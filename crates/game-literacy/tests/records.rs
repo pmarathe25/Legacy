@@ -3,6 +3,75 @@ use game_core::*;
 use game_literacy::*;
 use game_reasoning::Claim;
 use game_sim::*;
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ScopedChoices {
+    person: PersonId,
+    fast: bool,
+}
+impl Request for ScopedChoices {
+    const KEY: &'static str = "test.literacy-scoped-choices";
+    type Response = Vec<game_choice::Proposal>;
+}
+
+#[test]
+fn literacy_discovery_can_be_deferred_without_changing_full_collection() {
+    let mut builder = support::builder();
+    game_items::plugin(&mut builder).unwrap();
+    plugin(&mut builder).unwrap();
+    builder.plugin("test.literacy-tiers", 1).unwrap();
+    builder
+        .request::<ScopedChoices>(|tx, request| {
+            let mut offers = None;
+            let draft = tx.draft(
+                game_choice::Offers::planning_tier(false, request.fast),
+                |child| {
+                    offers = Some(child.call(game_choice::Collect {
+                        person: request.person,
+                    })?);
+                    Ok(())
+                },
+            );
+            require(draft.accepted, "literacy draft rejected")?;
+            offers.ok_or_else(|| Error::Missing("literacy offers".into()))
+        })
+        .unwrap();
+    let (mut host, people, inventory) = support::people(builder);
+    for key in ["paper", "ink"] {
+        let good = host
+            .get::<game_objects::Objects>()
+            .unwrap()
+            .resolve(key)
+            .unwrap();
+        host.dispatch(game_cargo::Deposit {
+            inventory,
+            good,
+            quantity: 10,
+        })
+        .unwrap();
+    }
+    let p = people[0];
+    let full = host
+        .dispatch(ScopedChoices {
+            person: p,
+            fast: false,
+        })
+        .unwrap();
+    assert!(
+        full.iter()
+            .any(|offer| offer.key.starts_with("literacy:develop:"))
+    );
+    let fast = host
+        .dispatch(ScopedChoices {
+            person: p,
+            fast: true,
+        })
+        .unwrap();
+    assert!(fast.iter().all(|offer| !offer.key.starts_with("literacy:")));
+    assert_eq!(
+        full,
+        host.dispatch(game_choice::Collect { person: p }).unwrap()
+    );
+}
 fn setup() -> (Host, Vec<PersonId>, InventoryId) {
     let mut b = support::builder();
     game_items::plugin(&mut b).unwrap();

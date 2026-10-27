@@ -35,13 +35,11 @@ impl Host {
         Ok(())
     }
     pub fn save(&self) -> Result<String> {
-        let mut bytes = Vec::new();
-        self.save_to(&mut bytes)?;
-        Ok(String::from_utf8(bytes).expect("JSON is UTF-8"))
+        game_snapshot::to_string(|out| self.save_to(out))
     }
     pub fn save_to(&self, out: &mut dyn std::io::Write) -> Result<()> {
         self.validate_saved_state()?;
-        let metadata = serde_json::to_string(&Save {
+        let metadata = Save {
             version: 1,
             plugins: self.registry.plugins.clone(),
             resources: BTreeMap::<String, ()>::new(),
@@ -53,16 +51,10 @@ impl Host {
             jobs: self.jobs.values().cloned().collect(),
             notices: self.notices.clone(),
             receipts: self.receipts.clone(),
+        };
+        game_snapshot::write_with_resources(out, &metadata, |out| {
+            self.registry.resources.write_entries(&self.data, out)
         })
-        .map_err(registry::json_error)?;
-        let (prefix, suffix) = metadata
-            .split_once("\"resources\":{}")
-            .expect("resource slot");
-        let io = |e: std::io::Error| Error::InvalidSave(e.to_string());
-        out.write_all(prefix.as_bytes()).map_err(io)?;
-        out.write_all(b"\"resources\":{").map_err(io)?;
-        self.registry.resources.write_entries(&self.data, out)?;
-        out.write_all(suffix.as_bytes()).map_err(io)
     }
 }
 impl Builder {
@@ -102,16 +94,7 @@ impl Builder {
             host.job_keys.insert(job.id, key);
             host.jobs.insert(key, job);
         }
-        require(
-            save.next_id > 0 && save.next_notice > 0,
-            "invalid saved counters",
-        )?;
-        let mut previous = 0;
-        for notice in &save.notices {
-            let valid = notice.at <= save.time && notice.sequence < save.next_notice;
-            require(valid && notice.sequence > previous, "invalid saved event")?;
-            previous = notice.sequence;
-        }
+        game_contracts::validate_notices(&save.notices, save.time, save.next_id, save.next_notice)?;
         host.time = save.time;
         host.revision = save.revision;
         host.next_id = save.next_id;

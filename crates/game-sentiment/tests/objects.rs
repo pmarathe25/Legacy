@@ -15,8 +15,99 @@ fn builder() -> Builder {
     game_sentiment::plugin(&mut b).unwrap();
     b
 }
+fn reentrant_builder() -> Builder {
+    let mut b = builder();
+    b.plugin("test-reentrant-stock", 1).unwrap();
+    b.subscribe::<game_cargo::Changed>("0.replenish-before-items", |tx, e| {
+        if !e.added && e.quantity == 2 {
+            tx.call(game_cargo::Deposit {
+                inventory: e.inventory,
+                good: e.good,
+                quantity: 1,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    b
+}
+#[test]
+fn reentrant_stock_change_keeps_legacy_identity_selection() {
+    let mut h = reentrant_builder().build(1, 1).unwrap();
+    h.advance(SimTime(24 * 365 * DAY.0), 1).unwrap();
+    h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
+        .unwrap();
+    h.dispatch(game_vitality::Enable).unwrap();
+    let area = h
+        .dispatch(game_land::CreateArea {
+            name: "home".into(),
+        })
+        .unwrap();
+    let person = h
+        .dispatch(game_physiology::Create {
+            kind: game_physiology::Kind::Mortal,
+            born: SimTime(0),
+        })
+        .unwrap();
+    h.dispatch(game_transport::Place { person, area }).unwrap();
+    let inventory = h
+        .dispatch(game_cargo::Create {
+            custody: game_cargo::Custody::Carried(person),
+            capacity: 1000,
+        })
+        .unwrap();
+    let good = GoodId(442);
+    h.dispatch(game_cargo::Deposit {
+        inventory,
+        good,
+        quantity: 3,
+    })
+    .unwrap();
+    let first = h
+        .dispatch(game_items::Mark {
+            person,
+            inventory,
+            good,
+            label: "first".into(),
+        })
+        .unwrap();
+    let second = h
+        .dispatch(game_items::Mark {
+            person,
+            inventory,
+            good,
+            label: "second".into(),
+        })
+        .unwrap();
+    h.dispatch(game_cargo::Consume {
+        inventory,
+        good,
+        quantity: 2,
+    })
+    .unwrap();
+    assert_eq!(
+        h.get::<game_cargo::Cargo>().unwrap().0[&inventory].amount(good),
+        2
+    );
+    assert_eq!(
+        h.get::<game_items::Items>().unwrap().objects[&first].inventory,
+        Some(inventory)
+    );
+    assert_eq!(
+        h.get::<game_items::Items>().unwrap().objects[&second].inventory,
+        Some(inventory)
+    );
+    let saved = h.save().unwrap();
+    assert_eq!(
+        reentrant_builder().load(&saved, 4).unwrap().save().unwrap(),
+        saved
+    );
+}
 fn setup() -> (Host, PersonId, PersonId, InventoryId, InventoryId) {
-    let mut h = builder().build(1, 1).unwrap();
+    setup_with(builder())
+}
+fn setup_with(builder: Builder) -> (Host, PersonId, PersonId, InventoryId, InventoryId) {
+    let mut h = builder.build(1, 1).unwrap();
     h.advance(SimTime(24 * 365 * DAY.0), 1).unwrap();
     h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
         .unwrap();
@@ -46,6 +137,40 @@ fn setup() -> (Host, PersonId, PersonId, InventoryId, InventoryId) {
         people.push((p, inv));
     }
     (h, people[0].0, people[1].0, people[0].1, people[1].1)
+}
+#[test]
+fn failed_item_movement_listener_rolls_back_stock_identity_and_notices() {
+    let mut b = builder();
+    b.plugin("test-failing-item-listener", 1).unwrap();
+    b.subscribe::<game_items::Moved>("test.reject-movement", |_, _| {
+        Err(Error::Rejected("failed item listener".into()))
+    })
+    .unwrap();
+    let (mut h, person, _, inventory, _) = setup_with(b);
+    let good = GoodId(442);
+    h.dispatch(game_cargo::Deposit {
+        inventory,
+        good,
+        quantity: 1,
+    })
+    .unwrap();
+    h.dispatch(game_items::Mark {
+        person,
+        inventory,
+        good,
+        label: "keepsake".into(),
+    })
+    .unwrap();
+    let before = h.save().unwrap();
+    assert!(
+        h.dispatch(game_cargo::Consume {
+            inventory,
+            good,
+            quantity: 1
+        })
+        .is_err()
+    );
+    assert_eq!(h.save().unwrap(), before);
 }
 #[test]
 fn identity_follows_the_specific_unit_and_memories_survive_transfer_and_destruction() {

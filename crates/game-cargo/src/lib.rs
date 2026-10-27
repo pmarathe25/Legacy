@@ -279,23 +279,27 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         })
     })?;
     b.request::<Deposit>(|tx, r| {
-        add(tx, r.inventory, r.good, r.quantity)?;
+        let stock = add(tx, r.inventory, r.good, r.quantity)?;
         tx.notify(Changed {
             inventory: r.inventory,
             destination: None,
             good: r.good,
             quantity: r.quantity,
             added: true,
+            stock: Some(stock),
+            destination_stock: None,
         })
     })?;
     b.request::<Consume>(|tx, r| {
-        remove(tx, r.inventory, r.good, r.quantity)?;
+        let stock = remove(tx, r.inventory, r.good, r.quantity)?;
         tx.notify(Changed {
             inventory: r.inventory,
             destination: None,
             good: r.good,
             quantity: r.quantity,
             added: false,
+            stock: Some(stock),
+            destination_stock: None,
         })
     })?;
     b.request::<DropCarried>(|tx, r| {
@@ -348,14 +352,16 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             locality(tx, r.from)? == locality(tx, r.to)?,
             "goods must be carried between areas",
         )?;
-        remove(tx, r.from, r.good, r.quantity)?;
-        add(tx, r.to, r.good, r.quantity)?;
+        let stock = remove(tx, r.from, r.good, r.quantity)?;
+        let destination_stock = add(tx, r.to, r.good, r.quantity)?;
         tx.notify(Changed {
             inventory: r.from,
             destination: Some(r.to),
             good: r.good,
             quantity: r.quantity,
             added: false,
+            stock: Some(stock),
+            destination_stock: Some(destination_stock),
         })
     })
 }
@@ -372,7 +378,14 @@ impl Cargo {
     }
 }
 
-/// Committed stock movement; consumers can preserve ages across real transfers.
+/// The amount before and after one inventory's part of a stock operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StockBalance {
+    pub before: u64,
+    pub after: u64,
+}
+/// Stock movement observed inside the enclosing transaction. An outer rollback
+/// can still undo the movement and all effects of its listeners.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Changed {
     pub inventory: InventoryId,
@@ -380,6 +393,12 @@ pub struct Changed {
     pub good: GoodId,
     pub quantity: u64,
     pub added: bool,
+    /// Captured at the mutation boundary, before any change listener runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stock: Option<StockBalance>,
+    /// The matching destination balance for a transfer, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub destination_stock: Option<StockBalance>,
 }
 impl Event for Changed {
     const KEY: &'static str = "cargo.changed";
@@ -389,7 +408,7 @@ fn add(
     inventory: InventoryId,
     good: GoodId,
     quantity: u64,
-) -> Result<()> {
+) -> Result<StockBalance> {
     require(quantity > 0, "quantity must be positive")?;
     let mass = tx.get::<game_objects::Objects>()?.mass(good, quantity)?;
     let inv = tx
@@ -403,15 +422,16 @@ fn add(
     )?;
     inv.mass = inv.mass.checked_add(mass).ok_or(Error::Overflow)?;
     let q = inv.goods.entry(good).or_default();
+    let before = *q;
     *q = q.checked_add(quantity).ok_or(Error::Overflow)?;
-    Ok(())
+    Ok(StockBalance { before, after: *q })
 }
 fn remove(
     tx: &mut Transaction<'_>,
     inventory: InventoryId,
     good: GoodId,
     quantity: u64,
-) -> Result<()> {
+) -> Result<StockBalance> {
     require(quantity > 0, "quantity must be positive")?;
     let mass = tx.get::<game_objects::Objects>()?.mass(good, quantity)?;
     let inv = tx
@@ -421,7 +441,8 @@ fn remove(
         .ok_or_else(|| Error::Missing("inventory".into()))?;
     let q = inv.goods.entry(good).or_default();
     require(*q >= quantity, "insufficient stock")?;
+    let before = *q;
     *q -= quantity;
     inv.mass = inv.mass.checked_sub(mass).ok_or(Error::Overflow)?;
-    Ok(())
+    Ok(StockBalance { before, after: *q })
 }

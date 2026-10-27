@@ -1,5 +1,9 @@
 # game-digestion
 
+`IngestMany` computes distinct personal stomach updates in parallel from the same
+committed body state, then installs them in input order. Duplicate recipients or
+scalar ingestion hooks require ordered requests instead.
+
 `game-digestion` tracks lazy stomach fullness after swallowing food and computes satiety discomfort relative to expressed body size.
 
 **Why it matters:** Without stomach capacity, a character seeking minor nutrient or mood benefits could binge-eat unlimited portions back-to-back; fullness adds natural, body-scaled satiety pressure without a rigid cooldown timer.

@@ -1,4 +1,6 @@
 //! Inherited potential, age-related expression, and experienced condition.
+mod batch;
+pub use batch::Experiences;
 use game_core::*;
 use game_sim::*;
 use game_storage::Table;
@@ -154,6 +156,7 @@ impl Request for Assess {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("vitality", 2)?;
     b.resource::<Vitality>()?;
+    batch::register(b)?;
     b.request::<Assess>(|tx, r| {
         let Some(life) = tx.get::<Vitality>()?.people.get(&r.person) else {
             return Ok(None);

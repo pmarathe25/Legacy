@@ -1,5 +1,8 @@
 # game-pastimes
 
+The experimental fast-review policy defers new leisure discovery until a full
+review. Ordinary reviews and direct leisure requests retain their normal behavior.
+
 Leisure activities, material supply consumption, skill practice, and interest reinforcement.
 
 **Why it matters:** Human life is more than bare subsistence. When survival needs are met, characters pursue music, writing, drawing, weaving, tea, and reflection—shaping their skills, tastes, and future material goals.

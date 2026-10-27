@@ -24,7 +24,10 @@ fn builder() -> Builder {
     b
 }
 fn setup() -> (Host, [PersonId; 3], [AreaId; 2]) {
-    let mut h = builder().build(39, 1).unwrap();
+    setup_with(builder())
+}
+fn setup_with(builder: Builder) -> (Host, [PersonId; 3], [AreaId; 2]) {
+    let mut h = builder.build(39, 1).unwrap();
     h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
         .unwrap();
     h.dispatch(game_traits::Install(
@@ -84,6 +87,262 @@ fn choose(h: &mut Host, person: PersonId, prefix: &str) {
         .find(|o| o.key.starts_with(prefix))
         .unwrap();
     h.dispatch(game_choice::Run(proposal.request)).unwrap();
+}
+
+#[test]
+fn outgoing_question_window_rotates_among_local_peers() {
+    let (mut host, [asker, _, _], [area, _]) = setup();
+    for index in 0..8 {
+        let person = host
+            .dispatch(game_physiology::Create {
+                kind: game_physiology::Kind::Mortal,
+                born: SimTime(0),
+            })
+            .unwrap();
+        host.dispatch(game_transport::Place { person, area })
+            .unwrap();
+        host.dispatch(game_social_life::Register {
+            person,
+            name: format!("Additional person {index}"),
+        })
+        .unwrap();
+    }
+    host.dispatch(Want {
+        person: asker,
+        topic: Topic::Category("technique:".into()),
+        importance: 80,
+    })
+    .unwrap();
+    let collect = |host: &mut Host| -> std::collections::BTreeSet<_> {
+        host.dispatch(game_choice::Collect { person: asker })
+            .unwrap()
+            .into_iter()
+            .filter_map(|offer| {
+                offer
+                    .key
+                    .starts_with("information:ask:")
+                    .then_some(offer.key)
+            })
+            .collect()
+    };
+    let first = collect(&mut host);
+    assert_eq!(first.len(), 4);
+    run(&mut host, 60);
+    let next = collect(&mut host);
+    assert_eq!(next.len(), 4);
+    assert_ne!(first, next);
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct DraftQuestions(PersonId);
+impl Request for DraftQuestions {
+    const KEY: &'static str = "test.information-draft-questions";
+    type Response = Vec<game_choice::Proposal>;
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ScopedQuestions {
+    person: PersonId,
+    fast: bool,
+    fanout: bool,
+}
+impl Request for ScopedQuestions {
+    const KEY: &'static str = "test.information-scoped-questions";
+    type Response = Vec<game_choice::Proposal>;
+}
+fn draft_builder() -> Builder {
+    let mut builder = builder();
+    builder.plugin("information-draft-test", 1).unwrap();
+    builder
+        .request::<DraftQuestions>(|tx, request| {
+            let mut offers = None;
+            let draft = tx.draft(game_choice::Offers::planning(false), |child| {
+                offers = Some(child.call(game_choice::Collect { person: request.0 })?);
+                Ok(())
+            });
+            require(draft.accepted, "information draft rejected")?;
+            offers.ok_or_else(|| Error::Missing("draft offers".into()))
+        })
+        .unwrap();
+    builder
+        .request::<ScopedQuestions>(|tx, request| {
+            let mut offers = None;
+            let draft = tx.draft(
+                game_choice::Offers::planning_tier(request.fanout, request.fast),
+                |child| {
+                    offers = Some(child.call(game_choice::Collect {
+                        person: request.person,
+                    })?);
+                    Ok(())
+                },
+            );
+            require(draft.accepted, "scoped information draft rejected")?;
+            offers.ok_or_else(|| Error::Missing("scoped information offers".into()))
+        })
+        .unwrap();
+    builder
+}
+
+#[test]
+fn fast_questions_answer_inbox_but_defer_outgoing_discovery() {
+    let (mut host, [asker, respondent, _], _) = setup_with(draft_builder());
+    let topic = Topic::Category("technique:".into());
+    conclude(
+        &mut host,
+        respondent,
+        "technique:oven",
+        serde_json::json!("clay"),
+    );
+    host.dispatch(Want {
+        person: respondent,
+        topic: topic.clone(),
+        importance: 80,
+    })
+    .unwrap();
+    host.dispatch(Ask {
+        person: asker,
+        other: respondent,
+        topic,
+    })
+    .unwrap();
+    for fanout in [false, true] {
+        let full = host
+            .dispatch(ScopedQuestions {
+                person: respondent,
+                fast: false,
+                fanout,
+            })
+            .unwrap();
+        let fast = host
+            .dispatch(ScopedQuestions {
+                person: respondent,
+                fast: true,
+                fanout,
+            })
+            .unwrap();
+        assert!(full.iter().any(|p| p.key.starts_with("information:ask:")));
+        assert!(
+            fast.iter().all(|p| !p.key.starts_with("information:ask:")
+                && !p.key.starts_with("information:read:"))
+        );
+        for prefix in ["information:answer:", "information:decline:"] {
+            let expected = full.iter().find(|p| p.key.starts_with(prefix)).unwrap();
+            assert_eq!(
+                fast.iter().find(|p| p.key.starts_with(prefix)),
+                Some(expected)
+            );
+        }
+        assert_eq!(
+            full,
+            host.dispatch(game_choice::Collect { person: respondent })
+                .unwrap()
+        );
+    }
+    let save = host.save().unwrap();
+    let mut loaded = draft_builder().load(&save, 4).unwrap();
+    let scoped = ScopedQuestions {
+        person: respondent,
+        fast: true,
+        fanout: true,
+    };
+    assert_eq!(
+        host.dispatch(scoped.clone()).unwrap(),
+        loaded.dispatch(scoped).unwrap()
+    );
+    assert_eq!(host.save().unwrap(), loaded.save().unwrap());
+}
+
+#[test]
+fn drafted_questions_recompute_importance_and_match_after_reload() {
+    let (mut host, [asker, _, _], _) = setup_with(draft_builder());
+    let topic = Topic::Category("technique:".into());
+    let want = |importance| Want {
+        person: asker,
+        topic: topic.clone(),
+        importance,
+    };
+    host.dispatch(want(10)).unwrap();
+    let cold = host.dispatch(DraftQuestions(asker)).unwrap();
+    let warm = host.dispatch(DraftQuestions(asker)).unwrap();
+    assert_eq!(cold, warm);
+    assert_eq!(
+        cold,
+        host.dispatch(game_choice::Collect { person: asker })
+            .unwrap()
+    );
+    host.dispatch(want(90)).unwrap();
+    let updated = host.dispatch(DraftQuestions(asker)).unwrap();
+    let question = |offers: &[game_choice::Proposal]| {
+        offers
+            .iter()
+            .find(|p| p.key.starts_with("information:ask:"))
+            .unwrap()
+            .clone()
+    };
+    let old = question(&cold);
+    let new = question(&updated);
+    assert_eq!(old.key, new.key);
+    assert_eq!(old.request, new.request);
+    assert_eq!(old.motive.goal, 10);
+    assert_eq!(new.motive.goal, 90);
+    assert_eq!(new.motive.id, old.motive.id);
+    let checkpoint = host.save().unwrap();
+    let mut loaded = draft_builder().load(&checkpoint, 4).unwrap();
+    assert_eq!(
+        host.dispatch(DraftQuestions(asker)).unwrap(),
+        loaded.dispatch(DraftQuestions(asker)).unwrap()
+    );
+    assert_eq!(host.save().unwrap(), loaded.save().unwrap());
+}
+#[test]
+fn answer_offer_reacts_to_metadata_only_personal_knowledge_updates() {
+    let (mut host, [asker, respondent, _], _) = setup();
+    for (key, confidence) in [("technique:a", 50), ("technique:b", 80)] {
+        host.dispatch(game_knowledge::Conclude {
+            person: respondent,
+            key: key.into(),
+            value: serde_json::json!("known"),
+            confidence,
+        })
+        .unwrap();
+    }
+    host.dispatch(Ask {
+        person: asker,
+        other: respondent,
+        topic: Topic::Category("technique:".into()),
+    })
+    .unwrap();
+    let answer_key = |host: &mut Host| {
+        let offers = host
+            .dispatch(game_choice::Collect { person: respondent })
+            .unwrap();
+        let request = &offers
+            .iter()
+            .find(|offer| offer.key.starts_with("information:answer:"))
+            .unwrap()
+            .request;
+        let undertaking =
+            game_choice::inspect_frame_request::<game_choice::Undertake>(request).unwrap();
+        game_choice::inspect_frame_request::<Answer>(&undertaking.request)
+            .unwrap()
+            .key
+    };
+    assert_eq!(answer_key(&mut host).as_deref(), Some("technique:b"));
+    let before = host.get::<game_knowledge::Knowledge>().unwrap().0[&respondent].clone();
+    let mut fact = before.get("technique:a").unwrap().to_owned();
+    fact.confidence = 90;
+    host.dispatch(game_knowledge::Receive {
+        person: respondent,
+        key: "technique:a".into(),
+        fact,
+    })
+    .unwrap();
+    let after = &host.get::<game_knowledge::Knowledge>().unwrap().0[&respondent];
+    assert!(before.same_namespace(after, "technique"));
+    assert_eq!(answer_key(&mut host).as_deref(), Some("technique:a"));
+    let checkpoint = host.save().unwrap();
+    let mut loaded = builder().load(&checkpoint, 4).unwrap();
+    assert_eq!(answer_key(&mut host).as_deref(), Some("technique:a"));
+    assert_eq!(answer_key(&mut loaded).as_deref(), Some("technique:a"));
+    assert_eq!(host.save().unwrap(), loaded.save().unwrap());
 }
 #[test]
 fn information_needs_offer_questions_without_inspecting_a_prospective_respondents_mind() {
@@ -377,7 +636,7 @@ fn a_requested_causal_explanation_can_be_simplified_for_a_less_capable_listener(
 }
 #[test]
 fn consulting_a_registry_requires_seen_text_and_a_decoded_title_and_survives_reload() {
-    let (mut h, [reader, author, _], _) = setup();
+    let (mut h, [reader, author, _], _) = setup_with(draft_builder());
     h.dispatch(game_traits::Set {
         person: author,
         profile: [("intelligence".into(), 4000)].into(),
@@ -512,6 +771,20 @@ fn consulting_a_registry_requires_seen_text_and_a_decoded_title_and_survives_rel
             .count(),
         3
     );
+    for fast in [false, true] {
+        let scoped = h
+            .dispatch(ScopedQuestions {
+                person: reader,
+                fast,
+                fanout: true,
+            })
+            .unwrap();
+        let reads = scoped
+            .iter()
+            .filter(|o| o.key.starts_with("information:read:"))
+            .count();
+        assert_eq!(reads, if fast { 0 } else { 3 });
+    }
     for topic in [Topic::Fact(key.clone()), Topic::Category("store:".into())] {
         h.dispatch(Withdraw {
             person: reader,
@@ -560,7 +833,7 @@ fn consulting_a_registry_requires_seen_text_and_a_decoded_title_and_survives_rel
     let available_at = h.now().after(MINUTE).unwrap();
     while h.advance(available_at, 512).unwrap().stop == Stop::Budget {}
     choose(&mut h, reader, "information:read:");
-    let mut loaded = builder().load(&h.save().unwrap(), 4).unwrap();
+    let mut loaded = draft_builder().load(&h.save().unwrap(), 4).unwrap();
     let end = h.now().after(SimDuration(2 * MINUTE.0)).unwrap();
     for host in [&mut h, &mut loaded] {
         while host.advance(end, 512).unwrap().stop == Stop::Budget {}

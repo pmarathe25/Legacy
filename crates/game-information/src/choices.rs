@@ -30,23 +30,6 @@ impl Request for Consult {
     const KEY: &'static str = "information.consult";
     type Response = game_choice::Outcome;
 }
-fn reading_ability(tx: &Transaction<'_>, person: PersonId, document: u64) -> u64 {
-    let script = tx
-        .get::<game_literacy::Literacy>()
-        .ok()
-        .and_then(|r| {
-            let script = r.documents.get(&document)?.script;
-            r.known.get(&person)?.get(&script).copied()
-        })
-        .unwrap_or(0);
-    game_choice::identity(&format!(
-        "{}:{}:{}:{}",
-        script,
-        game_vitality::ability(tx, person, "intelligence") / 250,
-        game_vitality::ability(tx, person, "interpretation") >= 80,
-        game_vitality::ability(tx, person, "learning") / 250
-    ))
-}
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.subscribe::<game_inquiry::Uncertain>("information.curiosity", |tx, e| {
         let importance = (game_vitality::disposition(tx, e.person, "openness")
@@ -62,7 +45,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Consult>(|tx, r| {
-        let ability = reading_ability(tx, r.person, r.document);
+        let ability = game_literacy::reading_signature(tx, r.person, r.document);
         let result = tx.attempt(game_literacy::Read {
             person: r.person,
             document: r.document,
@@ -137,6 +120,9 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 },
             )?;
         }
+        if game_choice::fast_review(tx) {
+            return Ok(());
+        }
         let Some(interests) = tx
             .get::<Information>()?
             .interests
@@ -157,10 +143,16 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
             .collect();
         for i in interests.iter() {
             let topic_id = game_choice::identity(&format!("{:?}", i.topic));
-            for other in &peers {
-                if i.asked.contains(other) || i.asked.len() >= 64 {
-                    continue;
-                }
+            let start = (p.0.wrapping_add(topic_id).wrapping_add(tx.now().0 / HOUR.0)
+                % peers.len().max(1) as u64) as usize;
+            for other in peers
+                .iter()
+                .cycle()
+                .skip(start)
+                .take(peers.len())
+                .filter(|other| !i.asked.contains(other) && i.asked.len() < 64)
+                .take(4)
+            {
                 let regard = game_social_life::affinity(tx, p, *other);
                 // We do not inspect prospective respondents' memories to choose whom to ask.
                 offer(
@@ -187,7 +179,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                     .filter(|(id, d)| {
                         i.read
                             .get(id)
-                            .is_none_or(|old| *old != reading_ability(tx, p, *id))
+                            .is_none_or(|old| *old != game_literacy::reading_signature(tx, p, *id))
                             && tx
                                 .get::<game_communication::Communication>()
                                 .ok()

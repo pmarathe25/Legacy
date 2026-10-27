@@ -12,7 +12,7 @@
 
 ## Boundaries
 
-- **Pure arithmetic only:** Owns no `game-sim` plugin or resource storage; [`game-soma`](../game-soma/README.md) stores authoritative bodies and [`game-physiology`](../game-physiology/README.md) orchestrates actions and ticks.
+- **Owner-controlled storage:** Owns no plugin or resource storage; [`game-soma`](../game-soma/README.md) stores authoritative bodies and registers the optional generic nourishment batch under its own owner. [`game-physiology`](../game-physiology/README.md) orchestrates actions and ticks.
 
 ## How It Works
 

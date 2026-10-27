@@ -1,17 +1,35 @@
 //! Runtime data contracts, erased resource codecs and registration metadata.
 #[cfg(feature = "access-trace")]
 pub mod access_trace;
-pub mod causal;
+pub use game_causality as causal;
 pub use game_drafting as drafting;
 mod messages;
+mod runtime;
 use game_core::*;
 pub use messages::*;
+pub use runtime::{
+    commit_jobs, previous_receipt, record_receipt, scheduled_prefix, validate_notices,
+};
 use rustc_hash::FxHashMap as HashMap;
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
     any::{Any, TypeId},
     sync::Arc,
 };
+/// Remove staged jobs by their original indexes without disturbing survivor order.
+pub fn remove_cancelled<T>(rows: &mut Vec<T>, indices: &mut Vec<usize>) {
+    if indices.is_empty() {
+        return;
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    let mut index = 0;
+    rows.retain(|_| {
+        let keep = indices.binary_search(&index).is_err();
+        index += 1;
+        keep
+    });
+}
 pub type Checkpoint = Box<dyn Any + Send + Sync>;
 /// Mutable fields must clone independently; resource state cannot share mutable aliases.
 pub trait Resource: Clone + Default + Serialize + DeserializeOwned + Send + Sync + 'static {

@@ -80,6 +80,7 @@ skill="craft"
     );
     let scenario = std::fs::read_to_string(pack.root.join("scenarios/kernel-fixture.toml"))
         .unwrap()
+        .replace("\r\n", "\n")
         .replace("id = \"kernel-fixture\"", "id = \"harbor\"")
         .replace("fixture = true", "fixture = false")
         .replace("Kernel fixture", "Harbor")

@@ -1,4 +1,6 @@
 //! Lazy stomach fullness is a bodily consequence, never a prohibition on eating.
+mod batch;
+pub use batch::IngestMany;
 use game_core::*;
 use game_sim::*;
 use game_storage::Table;
@@ -51,6 +53,7 @@ impl Request for Ingest {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("digestion", 1)?;
     b.resource::<Digestion>()?;
+    batch::register(b)?;
     b.request::<Ingest>(|tx, r| {
         let amount = remaining(tx, r.person).saturating_add(r.amount);
         let at = tx.now();

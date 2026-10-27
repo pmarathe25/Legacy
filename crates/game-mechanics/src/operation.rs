@@ -8,13 +8,7 @@ struct Cancel {
     job: ScheduleId,
 }
 request!(Cancel, "mechanics.cancel", ());
-fn source(tx: &Transaction<'_>, p: PersonId) -> Effort {
-    Effort {
-        force: game_vitality::factor(game_vitality::ability(tx, p, "strength")),
-        travel: game_vitality::factor(game_vitality::ability(tx, p, "agility")),
-    }
-}
-fn finish(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
+pub(super) fn finish(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
     if !tx.get::<Machines>()?.work.contains_key(&p) {
         return Ok(true);
     }
@@ -103,13 +97,18 @@ fn finish(tx: &mut Transaction<'_>, p: PersonId) -> Result<bool> {
             source: effort,
             outlet: work.outlet,
             task: work.recipe.map(|label| (label, work.task)),
+            parts: None,
         },
         vec![p],
     )?;
     Ok(success)
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
+    game_mechanics_sessions::register(b, finish)?;
     b.request::<Experiment>(|tx, r| {
+        if game_choice::frame_tuning(tx).mechanics_sessions {
+            return game_mechanics_sessions::start(tx, r);
+        }
         let area = ready(tx, r.person)?;
         let device = tx
             .get::<Machines>()?
@@ -157,6 +156,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         tx.edit::<Machines>()?.work.insert(
             r.person,
             Work {
+                session: None,
                 device: Some(r.device),
                 task: Task {
                     force: r.load,
@@ -236,6 +236,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         tx.edit::<Machines>()?.work.insert(
             r.person,
             Work {
+                session: None,
                 device: chosen.map(|v| v.0),
                 outlet: chosen.map_or(0, |v| v.1),
                 task: r.task,

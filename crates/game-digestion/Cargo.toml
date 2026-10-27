@@ -4,9 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-diagnostics.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
 game-storage.workspace = true
 game-soma.workspace = true
 game-vitality.workspace = true
 serde.workspace = true
+rayon.workspace = true

@@ -35,3 +35,7 @@ Autonomous companion search (`SeekCompany`) and conversation initiation proposal
 Current partners remain available for reevaluation outside the bounded alternative
 search. Their ordinary motives and attention margin still compete with new company
 and other needs, including when a settlement exceeds the recall window.
+
+The invitation owner also rejects a recipient who became the current player
+character after selection. This check runs at execution, including delayed
+approaches, rather than relying on the provider's earlier protected-peer filter.

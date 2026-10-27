@@ -1,4 +1,4 @@
-use game_contracts::causal::{Review, candidates, scope, wake};
+use game_contracts::causal::{Review, candidates, point, scope, wake};
 #[test]
 fn disabled_tracing_never_evaluates_observers() {
     if std::env::var_os("LEGACY_REVIEW_TRACE").is_some() {
@@ -9,6 +9,7 @@ fn disabled_tracing_never_evaluates_observers() {
     let _scope = scope("request", "test.no-output");
     wake(1, 2, false, false, true);
     candidates(1, std::iter::from_fn(|| panic!("disabled candidates")));
+    point("unused", || panic!("disabled point"));
 }
 #[cfg(feature = "causality")]
 #[test]
@@ -27,6 +28,7 @@ fn trace_child() {
     review.annotate("success", || true.into());
     let _listener = scope("listener", "test.help");
     wake(8, 20, false, false, true);
+    point("test.operation", || serde_json::json!({"person": 7}));
 }
 #[cfg(feature = "causality")]
 #[test]
@@ -50,7 +52,7 @@ fn trace_correlates_nested_requests_wakes_and_reviews() {
         .lines()
         .map(|s| serde_json::from_str(s).unwrap())
         .collect();
-    assert_eq!(rows.len(), 4);
+    assert_eq!(rows.len(), 5);
     let review = rows.iter().find(|r| r["type"] == "review").unwrap();
     assert_eq!(review["causes"].as_array().unwrap().len(), 1);
     assert_eq!(review["causes"][0]["hunger_only"], true);
@@ -59,4 +61,9 @@ fn trace_correlates_nested_requests_wakes_and_reviews() {
     assert_eq!(review["success"], true);
     assert_eq!(rows[2]["during_review"], review["id"]);
     assert_eq!(rows[2]["stack"][1][1], "test.help");
+    let point = rows.iter().find(|r| r["type"] == "point").unwrap();
+    assert_eq!(point["label"], "test.operation");
+    assert_eq!(point["data"]["person"], 7);
+    assert_eq!(point["stack"][1][1], "test.help");
+    assert_eq!(point["during_review"], review["id"]);
 }

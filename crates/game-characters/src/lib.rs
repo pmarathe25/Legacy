@@ -1,6 +1,7 @@
-use game_provisioning as plans;
-mod choices;
+use game_character_choices as choices;
 use game_character_clock as scheduling;
+use game_provisioning as plans;
+mod cohort;
 mod trace;
 pub use game_autonomy_policy::{AttentionRates, Configure, Mind, Resume, Rules, load};
 pub use game_character_clock::{Alert, ConfigureAttention, ConfigureBusyAttention};
@@ -50,12 +51,34 @@ fn review(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
     }
     let now = tx.now();
     tx.edit::<Minds>()?.schedule.waking.insert(person, now);
+    let tuning = game_choice::frame_tuning(tx);
+    let tracking = tuning.nonurgent_millis > 0 || tuning.full_review_millis > 0;
+    if tracking {
+        require(
+            !tx.get::<Minds>()?.cohort_urgency.contains_key(&person),
+            "review already active",
+        )?;
+        tx.edit::<Minds>()?.cohort_urgency.insert(person, 0);
+    }
     let result = choices::review(tx, person);
+    let interrupted = tuning.full_review_millis > 0
+        && tx
+            .get::<Minds>()?
+            .cohort_urgency
+            .get(&person)
+            .is_some_and(|n| *n > 0);
     if result.is_ok() && tx.get::<Minds>()?.people.contains_key(&person) {
         let next = scheduling::next(tx, person)?;
         tx.edit::<Minds>()?.schedule.set(person, next);
     }
-    tx.edit::<Minds>()?.clear_wake_at(person, now);
+    let state = tx.edit::<Minds>()?;
+    state.clear_wake_at(person, now);
+    if tracking {
+        state.cohort_urgency.remove(&person);
+    }
+    if interrupted && result.is_ok() && tx.get::<Minds>()?.people.contains_key(&person) {
+        scheduling::wake(tx, person, false, true)?;
+    }
     trace.annotate("after", || trace::state(tx, person));
     trace.annotate("success", || serde_json::json!(result.is_ok()));
     result
@@ -65,10 +88,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     plans::plugin(b)?;
     b.plugin("characters", 1)?;
     b.resource::<Minds>()?;
-    scheduling::register(b, review)?;
+    scheduling::register(b, review, cohort::resolve)?;
     game_decision_food::register(b, |tx| Ok(tx.get::<Minds>()?.rules.gathering_meals))?;
     game_decision_intents::register(b)?;
     choices::register(b)?;
+    game_character_activities::register(b)?;
+    cohort::register(b)?;
     b.request::<Configure>(|tx, r| {
         r.0.validate()?;
         require(
@@ -79,6 +104,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Abandon>(|tx, r| {
+        scheduling::cancel_consideration(tx, r.person)?;
         let execution = tx.get::<game_choice::Offers>()?.goal_execution;
         if let Some(mind) = tx.edit::<Minds>()?.people.get_mut(&r.person) {
             if execution {
@@ -103,6 +129,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         scheduling::wake(tx, r.person, false, true)
     })?;
     b.subscribe::<game_physiology::Died>("forget-dead-mind", |tx, event| {
+        scheduling::cancel_consideration(tx, event.person)?;
         let state = tx.edit::<Minds>()?;
         state.people.erase(&event.person);
         state.schedule.agenda.set(event.person, None);
@@ -172,6 +199,17 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         for person in people {
             let state = tx.edit::<Minds>()?;
             state.schedule.cursor = Some(person);
+            // A gathered actor's bounded cohort job owns this frame review.
+            if game_choice::frame_tuning(tx).meal_arbitration
+                && game_choice::frame_start(tx) == Some(now)
+                && tx
+                    .get::<game_choice::Offers>()?
+                    .frame
+                    .as_ref()
+                    .is_some_and(|frame| frame.people.contains(&person))
+            {
+                continue;
+            }
             review(tx, person)?;
         }
         if tx.get::<Minds>()?.schedule.due(&now).next().is_some() {

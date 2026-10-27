@@ -1,0 +1,10 @@
+[package]
+name = "settlement-history"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-history-kernel = { path = "../../crates/game-history-kernel" }
+game-history-import = { path = "../../crates/game-history-import" }
+serde_json.workspace = true
+rayon.workspace = true

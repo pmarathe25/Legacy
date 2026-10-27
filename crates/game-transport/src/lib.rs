@@ -1,16 +1,27 @@
 //! Travel owns position, arrival, and interruption. No work is credited in transit.
+mod arrivals;
+mod timing;
 use game_core::*;
 use game_packed::Packed;
 use game_sim::*;
 use game_storage::Table;
 use serde::{Deserialize, Serialize};
+pub use timing::{ConfigureArrivalWindow, arrival_window};
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 struct Riders {
+    #[serde(default, skip_serializing_if = "timing::exact")]
+    arrival_window: SimDuration,
     moving: Table<PersonId, PersonId>,
     departures: Table<PersonId, Location>,
 }
 impl Resource for Riders {
     const KEY: &'static str = "transport.riders";
+    fn validate(&self) -> Result<()> {
+        require(
+            self.arrival_window.0 <= DAY.0,
+            "arrival window exceeds one day",
+        )
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Location {
@@ -220,6 +231,10 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("transport", 2)?;
     b.resource::<Positions>()?;
     b.resource::<Riders>()?;
+    b.request::<ConfigureArrivalWindow>(|tx, r| {
+        tx.edit::<Riders>()?.arrival_window = r.0;
+        Ok(())
+    })?;
     b.request::<Dismount>(|tx, r| {
         require(
             carrier(tx, r.person).is_some() && game_vitality::can_walk(tx, r.person),
@@ -276,6 +291,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.request::<Move>(|tx, r| {
+        game_contracts::causal::point("transport.move", || {
+            serde_json::json!({"person": r.person, "destination": r.destination, "at": tx.now(), "revision": tx.revision_after()})
+        });
         require(
             game_vitality::can_walk(tx, r.person),
             "cannot yet walk independently",
@@ -392,27 +410,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.edit::<Riders>()?.moving.insert(r.passenger, r.carrier);
         Ok(arrives)
     })?;
-    b.request::<Arrive>(|tx, r| {
-        tx.edit::<Riders>()?.moving.remove(&r.person);
-        if tx
-            .get::<Actions>()?
-            .0
-            .get(&r.person)
-            .is_some_and(|a| a.kind == "travel")
-        {
-            tx.finish_action(r.person, "travel")?;
-        }
-        tx.edit::<Positions>()?
-            .0
-            .insert(r.person, Location::At(r.destination));
-        tx.emit(
-            Arrived {
-                person: r.person,
-                area: r.destination,
-            },
-            vec![r.person],
-        )
-    })?;
+    b.request::<Arrive>(arrivals::one)?;
+    b.scheduled_wave::<Arrive>(16384, arrivals::wave)?;
     b.request::<Cancel>(|tx, r| {
         tx.edit::<Riders>()?.moving.remove(&r.person);
         let passengers: Vec<_> = tx
@@ -466,13 +465,14 @@ fn begin(
     active: bool,
 ) -> Result<SimTime> {
     let now = tx.now();
-    let arrives = now.after(duration)?;
+    let window = tx.get::<Riders>()?.arrival_window;
+    let arrives = timing::deadline(now, duration, if active { window } else { SimDuration(0) })?;
     if active {
         tx.start_action(person, "travel", Some(arrives), Cancel { person })?;
     }
     let job = tx.schedule(
         arrives,
-        10,
+        if window.0 > 0 { 9 } else { 10 },
         Arrive {
             person,
             destination,

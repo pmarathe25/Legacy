@@ -46,15 +46,9 @@ A request owner can retire its callbacks with
 `Transaction::cancel_scheduled::<R>()`. Cancellation includes work staged in the
 current transaction, rolls back on failure, and preserves other request types.
 
-`Transaction::prepare` runs a scratch request alongside a read-only query on the
-same staged world. With `Host::set_parallel_listeners(true)`, `notify_prepared` drafts
-explicitly independent subscribers in parallel and merges private resource results
-in subscriber order. The default runs callbacks in order to avoid tiny-task
-handoffs. Ordinary
-subscribers are serial barriers. World writes, IDs, notices and schedule changes
-are denied during drafting; any such attempt, even if caught, retries the original
-request serially. Retained scratch changes also force a serial retry. Selection,
-action execution and world commits remain serial. One worker uses the original path.
+With `Host::set_parallel_listeners(true)`, `notify_prepared` drafts explicitly independent subscribers in parallel and merges private resource results in subscriber order. Ordinary subscribers and world effects are serial barriers; rejected speculative drafts retry through the original listener.
+
+Owner-registered `Builder::scheduled_wave` callbacks receive contiguous same-time, same-priority work atomically. They may update disjoint owner rows on workers before publishing ordered events. Urgent jobs created during publication execute after the wave; before-hooks retain ordinary ordered request dispatch. Wave failure rolls back the whole prefix, including jobs and notices.
 
 Resource contracts and erased codecs live in `game-contracts`; streaming envelope
 metadata lives in `game-snapshot`. The existing `game-sim` public types are reexports.

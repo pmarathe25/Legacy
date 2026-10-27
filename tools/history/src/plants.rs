@@ -1,6 +1,6 @@
 use super::*;
 /// Keep actual observed plant identities, rather than every ungerminated fruit family.
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Plants(BTreeMap<u64, BTreeMap<u64, u64>>);
 impl Plants {
     pub(crate) fn founding(h: &game_sim::Host) -> Result<Self> {

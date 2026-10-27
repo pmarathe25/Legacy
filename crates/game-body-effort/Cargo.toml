@@ -1,0 +1,12 @@
+[package]
+name = "game-body-effort"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-core.workspace = true
+game-sim.workspace = true
+game-body.workspace = true
+game-vitality.workspace = true
+game-diagnostics.workspace = true
+serde.workspace = true

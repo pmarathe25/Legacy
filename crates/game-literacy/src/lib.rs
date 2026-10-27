@@ -27,6 +27,24 @@ pub struct Literacy {
     pub seen: Table<PersonId, Table<u64, ()>>,
     pub shown: Table<u64, PersonId>,
 }
+/// Identity of reading skills used to decide whether a comprehension retry is new.
+pub fn reading_signature(tx: &Transaction<'_>, person: PersonId, document: u64) -> u64 {
+    let script = tx
+        .get::<Literacy>()
+        .ok()
+        .and_then(|r| {
+            let script = r.documents.get(&document)?.script;
+            r.known.get(&person)?.get(&script).copied()
+        })
+        .unwrap_or(0);
+    game_choice::identity(&format!(
+        "{}:{}:{}:{}",
+        script,
+        game_vitality::ability(tx, person, "intelligence") / 250,
+        game_vitality::ability(tx, person, "interpretation") >= 80,
+        game_vitality::ability(tx, person, "learning") / 250
+    ))
+}
 impl Literacy {
     fn notice(&mut self, person: PersonId, item: u64) {
         self.seen.entry(person).or_default().insert(item, ());

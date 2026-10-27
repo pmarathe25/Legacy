@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-frame-arbitration.workspace = true
 game-offers.workspace = true
 game-decision-frames.workspace = true
 game-anticipation.workspace = true

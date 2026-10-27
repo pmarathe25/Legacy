@@ -24,6 +24,10 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
 pub fn planning(tx: &Transaction<'_>) -> bool {
     tx.get::<Offers>().is_ok_and(|o| o.planning)
 }
+/// True only within an explicitly scoped speculative collection.
+pub fn fast_review(tx: &Transaction<'_>) -> bool {
+    tx.get::<Offers>().is_ok_and(|o| o.fast_review)
+}
 pub fn defer<R: Request>(tx: &mut Transaction<'_>, request: R) -> Result<()> {
     if planning(tx) {
         tx.call(Defer(Pending::immediate(request)))
@@ -45,10 +49,18 @@ pub fn with_provider(
     result
 }
 impl Offers {
+    pub fn set_fast_review(&mut self, fast: bool) -> bool {
+        std::mem::replace(&mut self.fast_review, fast)
+    }
     pub fn planning(fanout: bool) -> Self {
+        Self::planning_tier(fanout, false)
+    }
+    /// Skip only providers that explicitly opt into the fast-review policy.
+    pub fn planning_tier(fanout: bool, fast_review: bool) -> Self {
         Self {
             planning: true,
             fanout,
+            fast_review,
             ..Self::default()
         }
     }

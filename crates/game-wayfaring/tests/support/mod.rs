@@ -30,6 +30,7 @@ pub fn builder() -> Builder {
     game_lineage::plugin(&mut b).unwrap();
     game_workshop::plugin(&mut b).unwrap();
     game_livelihoods::plugin(&mut b).unwrap();
+    game_choice::plugin(&mut b).unwrap();
     game_wayfaring::plugin(&mut b).unwrap();
     b.plugin("test", 1).unwrap();
     b.request::<Idle>(|tx, r| tx.notify(game_characters::IdleReview { person: r.0 }))

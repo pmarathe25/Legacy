@@ -1,0 +1,22 @@
+[package]
+name = "game-local-interactions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-diagnostics.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-character-state.workspace = true
+game-character-clock.workspace = true
+game-character-choices.workspace = true
+game-choice.workspace = true
+game-decision-intents.workspace = true
+game-provisioning.workspace = true
+game-physiology.workspace = true
+game-cargo.workspace = true
+game-cargo-planning.workspace = true
+game-drafting.workspace = true
+game-knowledge.workspace = true
+game-utility.workspace = true
+serde.workspace = true

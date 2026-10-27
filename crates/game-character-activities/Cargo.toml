@@ -1,0 +1,18 @@
+[package]
+name = "game-character-activities"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-mechanics-state.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+game-choice.workspace = true
+game-character-clock.workspace = true
+game-character-state.workspace = true
+game-physiology.workspace = true
+game-transport.workspace = true
+game-lineage.workspace = true
+game-invocation.workspace = true
+game-diagnostics.workspace = true
+serde.workspace = true

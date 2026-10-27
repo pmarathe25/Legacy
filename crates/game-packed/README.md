@@ -10,6 +10,7 @@
 - **Nested undo journals:** Supports `begin`, `commit`, and `rollback` savepoints that record at most one backup per row per scope.
 - **Paged ID index:** Groups IDs into 256-entry pages that adapt between compact sorted pairs (when sparse) and direct slot lookups (when dense), with optional `hash-index` and `compact` feature flags.
 - **Bulk parallel updates:** Exposes `update` to process independent physical rows across a bounded Rayon pool and `changed_since` / `changed_pairs_since` for incremental validation.
+- **Selected disjoint updates:** `update_selected` rejects duplicate or missing IDs before mutation and journals each selected row. The caller chooses a measured parallel threshold and supplies a row-local callback over immutable inputs; parallel execution order is unspecified. The parallel path scans the physical rows and is not automatically faster for sparse selections. A surrounding owner transaction remains responsible for validation, effects and rollback.
 
 ## Boundaries
 

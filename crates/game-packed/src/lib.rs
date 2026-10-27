@@ -335,6 +335,43 @@ impl<K: Key, V: Clone> Packed<K, V> {
             pool.install(|| rows.par_iter_mut().for_each(|(k, v)| f(k, v)));
         }
     }
+    /// Update distinct existing rows under the current undo journal. The callback
+    /// must operate only on its row and immutable inputs; it runs in any order.
+    /// Invalid keys cause no change; the caller sets the measured parallel threshold.
+    pub fn update_selected(
+        &mut self,
+        pool: &rayon::ThreadPool,
+        keys: &[K],
+        minimum_parallel: usize,
+        f: impl Fn(&K, &mut V) + Send + Sync,
+    ) -> bool
+    where
+        K: Send + Sync,
+        V: Send + Sync,
+    {
+        let selected: rustc_hash::FxHashSet<_> = keys.iter().copied().collect();
+        if selected.len() != keys.len() || keys.iter().any(|key| !self.contains_key(key)) {
+            return false;
+        }
+        if keys.len() < minimum_parallel || pool.current_num_threads() == 1 {
+            for key in keys {
+                f(key, self.get_mut(key).expect("validated row"));
+            }
+        } else {
+            for key in keys {
+                self.touch(*key);
+            }
+            let rows = &mut Arc::make_mut(&mut self.data).rows;
+            pool.install(|| {
+                rows.par_iter_mut().for_each(|(key, value)| {
+                    if selected.contains(key) {
+                        f(key, value);
+                    }
+                })
+            });
+        }
+        true
+    }
     pub fn entry(&mut self, key: K) -> Entry<'_, K, V> {
         Entry { store: self, key }
     }

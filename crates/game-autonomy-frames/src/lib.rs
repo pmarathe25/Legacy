@@ -56,12 +56,24 @@ pub fn register(b: &mut Builder) -> Result<()> {
                 game_decision_frames::wake(tx, at)?;
             }
         }
-        for &person in &people {
-            if game_transport::area(tx.get()?, person).is_ok() {
-                tx.call(game_knowledge::ObserveSurroundings { person })?;
-                let packs: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(person).collect();
-                for inventory in packs {
-                    tx.call(game_knowledge::ObserveStore { person, inventory })?;
+        let tuning = game_decision_frames::tuning(tx);
+        let people = if tuning.activity_epochs || tuning.mechanics_sessions {
+            tx.call(game_character_activities::Epoch(people))?
+        } else {
+            people
+        };
+        if game_decision_frames::tuning(tx).batch_observations {
+            tx.call(game_knowledge::ObserveFrame {
+                people: people.clone(),
+            })?;
+        } else {
+            for &person in &people {
+                if game_transport::area(tx.get()?, person).is_ok() {
+                    tx.call(game_knowledge::ObserveSurroundings { person })?;
+                    let packs: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(person).collect();
+                    for inventory in packs {
+                        tx.call(game_knowledge::ObserveStore { person, inventory })?;
+                    }
                 }
             }
         }

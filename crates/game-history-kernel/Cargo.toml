@@ -1,0 +1,12 @@
+[package]
+name = "game-history-kernel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-history-population = { path = "../game-history-population" }
+game-history-economy = { path = "../game-history-economy" }
+game-history-society = { path = "../game-history-society" }
+serde.workspace = true
+serde_json.workspace = true
+rayon.workspace = true

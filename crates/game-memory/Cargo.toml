@@ -14,6 +14,7 @@ game-facts.workspace = true
 game-snapshot.workspace = true
 game-vitality.workspace = true
 game-physiology.workspace = true
+rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 [dev-dependencies]

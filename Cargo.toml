@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "tools/performance", "tools/compute", "tools/history"]
+members = ["crates/*", "tools/performance", "tools/compute", "tools/history", "tools/settlement-history"]
 resolver = "3"
 
 [workspace.package]
@@ -8,6 +8,12 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
+game-mechanics-state = { path = "crates/game-mechanics-state" }
+game-mechanics-sessions = { path = "crates/game-mechanics-sessions" }
+game-body-effort = { path = "crates/game-body-effort" }
+game-rest-activities = { path = "crates/game-rest-activities" }
+game-character-activities = { path = "crates/game-character-activities" }
+game-local-interactions = { path = "crates/game-local-interactions" }
 game-memory-state = { path = "crates/game-memory-state" }
 game-memory = { path = "crates/game-memory" }
 
@@ -16,13 +22,22 @@ game-attention = { path = "crates/game-attention" }
 game-drafting = { path = "crates/game-drafting" }
 game-offers = { path = "crates/game-offers" }
 game-decision-frames = { path = "crates/game-decision-frames" }
+game-frame-tuning = { path = "crates/game-frame-tuning" }
+game-frame-arbitration = { path = "crates/game-frame-arbitration" }
 game-decision-clock = { path = "crates/game-decision-clock" }
 game-decision-food = { path = "crates/game-decision-food" }
 game-decision-intents = { path = "crates/game-decision-intents" }
 game-character-clock = { path = "crates/game-character-clock" }
+game-character-attention = { path = "crates/game-character-attention" }
+game-character-pause = { path = "crates/game-character-pause" }
+game-character-choices = { path = "crates/game-character-choices" }
 game-autonomy-frames = { path = "crates/game-autonomy-frames" }
 game-care-perception = { path = "crates/game-care-perception" }
 game-character-state = { path = "crates/game-character-state" }
+game-household-state = { path = "crates/game-household-state" }
+game-food-care-execution = { path = "crates/game-food-care-execution" }
+game-physiology-eating = { path = "crates/game-physiology-eating" }
+game-causality = { path = "crates/game-causality" }
 game-expression = { path = "crates/game-expression" }
 game-anticipation = { path = "crates/game-anticipation" }
 game-deliberation = { path = "crates/game-deliberation" }
@@ -103,6 +118,7 @@ game-api = { path = "crates/game-api" }
 game-armies = { path = "crates/game-armies" }
 game-assembly = { path = "crates/game-assembly" }
 game-cargo = { path = "crates/game-cargo" }
+game-cargo-planning = { path = "crates/game-cargo-planning" }
 game-characters = { path = "crates/game-characters" }
 game-communities = { path = "crates/game-communities" }
 game-cli = { path = "crates/game-cli" }

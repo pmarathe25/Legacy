@@ -14,6 +14,9 @@ game-transport.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-cargo-planning.workspace = true
+game-drafting.workspace = true
+rayon.workspace = true
 serde_json.workspace = true
 game-land.workspace = true
 game-property.workspace = true

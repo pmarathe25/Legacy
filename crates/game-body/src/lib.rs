@@ -3,10 +3,17 @@ use game_core::*;
 use serde::{Deserialize, Serialize};
 mod compute;
 mod events;
+mod nourishment;
+mod resting;
 pub use compute::{
     advance_body, advance_rates, advance_scaled, hunger_threshold, hunger_threshold_scaled,
 };
 pub use events::{Damaged, Died, Rested};
+pub use nourishment::{
+    CheckLocalMeal, CheckSelfMeal, ConsumeEdible, Eating, Fed, Nourish, NourishMany,
+    NourishmentOwner, Serve, apply_nourishment, register_nourishment_batch,
+};
+pub use resting::{SetRestingMany, register_resting_batch};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Kind {
     Mortal,

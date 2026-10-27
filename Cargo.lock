@@ -492,6 +492,7 @@ name = "game-autonomy-frames"
 version = "0.2.0"
 dependencies = [
  "game-cargo",
+ "game-character-activities",
  "game-characters",
  "game-core",
  "game-decision-frames",
@@ -527,7 +528,21 @@ version = "0.2.0"
 dependencies = [
  "game-content",
  "game-core",
+ "game-diagnostics",
+ "game-packed",
  "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-body-effort"
+version = "0.2.0"
+dependencies = [
+ "game-body",
+ "game-core",
+ "game-diagnostics",
+ "game-sim",
+ "game-vitality",
  "serde",
 ]
 
@@ -677,7 +692,9 @@ dependencies = [
 name = "game-cargo"
 version = "0.2.0"
 dependencies = [
+ "game-cargo-planning",
  "game-core",
+ "game-drafting",
  "game-land",
  "game-objects",
  "game-physiology",
@@ -686,8 +703,84 @@ dependencies = [
  "game-skills",
  "game-storage",
  "game-transport",
+ "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-cargo-planning"
+version = "0.2.0"
+dependencies = [
+ "game-cargo",
+ "game-core",
+ "game-drafting",
+ "game-storage",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-causality"
+version = "0.2.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
+name = "game-character-activities"
+version = "0.2.0"
+dependencies = [
+ "game-character-clock",
+ "game-character-state",
+ "game-choice",
+ "game-core",
+ "game-diagnostics",
+ "game-invocation",
+ "game-lineage",
+ "game-mechanics-state",
+ "game-physiology",
+ "game-sim",
+ "game-transport",
+ "serde",
+]
+
+[[package]]
+name = "game-character-attention"
+version = "0.2.0"
+dependencies = [
+ "game-autonomy-policy",
+ "game-character-state",
+ "game-choice",
+ "game-core",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-character-choices"
+version = "0.2.0"
+dependencies = [
+ "game-autonomy-policy",
+ "game-cargo",
+ "game-character-clock",
+ "game-character-state",
+ "game-choice",
+ "game-contracts",
+ "game-core",
+ "game-decision-food",
+ "game-decision-intents",
+ "game-diagnostics",
+ "game-invocation",
+ "game-knowledge",
+ "game-lineage",
+ "game-physiology",
+ "game-provisioning",
+ "game-sim",
+ "game-transport",
+ "game-utility",
+ "game-vitality",
+ "serde",
 ]
 
 [[package]]
@@ -695,11 +788,27 @@ name = "game-character-clock"
 version = "0.2.0"
 dependencies = [
  "game-autonomy-policy",
+ "game-character-attention",
+ "game-character-pause",
  "game-character-state",
  "game-choice",
  "game-contracts",
  "game-core",
+ "game-drafting",
+ "game-invocation",
+ "game-lineage",
  "game-physiology",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-character-pause"
+version = "0.2.0"
+dependencies = [
+ "game-character-state",
+ "game-choice",
+ "game-core",
  "game-sim",
  "serde",
 ]
@@ -720,9 +829,13 @@ dependencies = [
 name = "game-characters"
 version = "0.2.0"
 dependencies = [
+ "game-autonomy-frames",
  "game-autonomy-policy",
  "game-care",
  "game-cargo",
+ "game-cargo-planning",
+ "game-character-activities",
+ "game-character-choices",
  "game-character-clock",
  "game-character-state",
  "game-choice",
@@ -736,6 +849,7 @@ dependencies = [
  "game-decision-intents",
  "game-diagnostics",
  "game-digestion",
+ "game-drafting",
  "game-ecology",
  "game-family-life",
  "game-food-memory",
@@ -746,6 +860,8 @@ dependencies = [
  "game-land",
  "game-lifecycle",
  "game-lineage",
+ "game-local-interactions",
+ "game-mechanics",
  "game-nutrition",
  "game-objects",
  "game-packed",
@@ -756,6 +872,7 @@ dependencies = [
  "game-sim",
  "game-skills",
  "game-social-life",
+ "game-soma",
  "game-storage",
  "game-testimony",
  "game-traits",
@@ -775,6 +892,7 @@ dependencies = [
  "game-core",
  "game-decision-frames",
  "game-diagnostics",
+ "game-frame-arbitration",
  "game-identity",
  "game-offers",
  "game-sim",
@@ -956,6 +1074,7 @@ dependencies = [
 name = "game-contracts"
 version = "0.2.0"
 dependencies = [
+ "game-causality",
  "game-core",
  "game-drafting",
  "game-packed",
@@ -1102,6 +1221,8 @@ dependencies = [
  "game-provisioning",
  "game-relationships",
  "game-sim",
+ "game-traits",
+ "game-utility",
  "game-vitality",
  "rayon",
  "serde",
@@ -1155,10 +1276,12 @@ name = "game-digestion"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-diagnostics",
  "game-sim",
  "game-soma",
  "game-storage",
  "game-vitality",
+ "rayon",
  "serde",
 ]
 
@@ -1402,6 +1525,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-food-care-execution"
+version = "0.2.0"
+dependencies = [
+ "game-care-perception",
+ "game-cargo",
+ "game-characters",
+ "game-choice",
+ "game-communication",
+ "game-core",
+ "game-households",
+ "game-knowledge",
+ "game-nutrition",
+ "game-objects",
+ "game-physiology",
+ "game-property",
+ "game-provisioning",
+ "game-search",
+ "game-signals",
+ "game-sim",
+ "game-transport",
+ "game-vitality",
+ "serde",
+]
+
+[[package]]
 name = "game-food-inquiry"
 version = "0.2.0"
 dependencies = [
@@ -1458,6 +1606,24 @@ dependencies = [
  "game-traits",
  "game-transport",
  "game-vitality",
+ "serde",
+]
+
+[[package]]
+name = "game-frame-arbitration"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-offers",
+ "game-sim",
+ "serde",
+]
+
+[[package]]
+name = "game-frame-tuning"
+version = "0.2.0"
+dependencies = [
+ "game-core",
  "serde",
 ]
 
@@ -1610,12 +1776,58 @@ dependencies = [
  "game-traits",
  "game-transport",
  "game-vitality",
+ "game-wayfaring",
  "game-works",
  "game-workshop",
  "mimalloc",
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-history-economy"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-history-import"
+version = "0.2.0"
+dependencies = [
+ "game-history-kernel",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-history-kernel"
+version = "0.2.0"
+dependencies = [
+ "game-history-economy",
+ "game-history-population",
+ "game-history-society",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-history-population"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-history-society"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
 ]
 
 [[package]]
@@ -1649,6 +1861,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-household-state"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-provisioning",
+ "game-sim",
+ "game-storage",
+ "game-transport",
+ "serde",
+]
+
+[[package]]
 name = "game-households"
 version = "0.2.0"
 dependencies = [
@@ -1658,6 +1882,7 @@ dependencies = [
  "game-core",
  "game-diagnostics",
  "game-food-memory",
+ "game-household-state",
  "game-knowledge",
  "game-lifecycle",
  "game-lineage",
@@ -2018,6 +2243,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-local-interactions"
+version = "0.2.0"
+dependencies = [
+ "game-cargo",
+ "game-cargo-planning",
+ "game-character-choices",
+ "game-character-clock",
+ "game-character-state",
+ "game-choice",
+ "game-core",
+ "game-decision-intents",
+ "game-diagnostics",
+ "game-drafting",
+ "game-knowledge",
+ "game-physiology",
+ "game-provisioning",
+ "game-sim",
+ "game-utility",
+ "serde",
+]
+
+[[package]]
 name = "game-logistics"
 version = "0.2.0"
 dependencies = [
@@ -2067,6 +2314,8 @@ dependencies = [
  "game-invention",
  "game-knowledge",
  "game-land",
+ "game-mechanics-sessions",
+ "game-mechanics-state",
  "game-objects",
  "game-physics",
  "game-physiology",
@@ -2082,6 +2331,41 @@ dependencies = [
  "game-workshop",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-mechanics-sessions"
+version = "0.2.0"
+dependencies = [
+ "game-body-effort",
+ "game-cargo",
+ "game-choice",
+ "game-core",
+ "game-diagnostics",
+ "game-mechanics-state",
+ "game-physics",
+ "game-physiology",
+ "game-property",
+ "game-sim",
+ "game-transport",
+ "game-vitality",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-mechanics-state"
+version = "0.2.0"
+dependencies = [
+ "game-core",
+ "game-knowledge",
+ "game-physics",
+ "game-physiology",
+ "game-sim",
+ "game-storage",
+ "game-transport",
+ "game-vitality",
+ "serde",
 ]
 
 [[package]]
@@ -2107,6 +2391,7 @@ dependencies = [
  "game-traits",
  "game-transport",
  "game-vitality",
+ "rayon",
  "serde",
  "serde_json",
 ]
@@ -2220,9 +2505,11 @@ dependencies = [
  "game-communication",
  "game-core",
  "game-diagnostics",
+ "game-food-care-execution",
  "game-households",
  "game-knowledge",
  "game-lineage",
+ "game-local-interactions",
  "game-nutrition",
  "game-objects",
  "game-physiology",
@@ -2244,6 +2531,7 @@ name = "game-nutrition"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-diagnostics",
  "game-diet",
  "game-metabolism",
  "game-objects",
@@ -2251,6 +2539,7 @@ dependencies = [
  "game-storage",
  "game-traits",
  "game-vitality",
+ "rayon",
  "serde",
 ]
 
@@ -2309,6 +2598,7 @@ name = "game-offers"
 version = "0.2.0"
 dependencies = [
  "game-core",
+ "game-frame-tuning",
  "game-sim",
  "game-traits",
  "game-utility",
@@ -2465,11 +2755,14 @@ dependencies = [
  "game-api",
  "game-assembly",
  "game-cargo",
+ "game-cargo-planning",
  "game-characters",
  "game-communication",
+ "game-content",
  "game-contracts",
  "game-core",
  "game-diagnostics",
+ "game-drafting",
  "game-ecology",
  "game-food-memory",
  "game-knowledge",
@@ -2521,11 +2814,14 @@ dependencies = [
  "game-content",
  "game-core",
  "game-digestion",
+ "game-items",
  "game-land",
  "game-nutrition",
  "game-objects",
  "game-packed",
+ "game-physiology-eating",
  "game-property",
+ "game-rest-activities",
  "game-sim",
  "game-skills",
  "game-soma",
@@ -2536,6 +2832,24 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "game-physiology-eating"
+version = "0.2.0"
+dependencies = [
+ "game-body",
+ "game-cargo",
+ "game-core",
+ "game-digestion",
+ "game-nutrition",
+ "game-objects",
+ "game-property",
+ "game-sim",
+ "game-soma",
+ "game-transport",
+ "game-vitality",
+ "serde",
 ]
 
 [[package]]
@@ -2707,6 +3021,20 @@ dependencies = [
  "game-core",
  "game-sim",
  "game-storage",
+ "serde",
+]
+
+[[package]]
+name = "game-rest-activities"
+version = "0.2.0"
+dependencies = [
+ "game-body",
+ "game-core",
+ "game-diagnostics",
+ "game-sim",
+ "game-soma",
+ "game-transport",
+ "rayon",
  "serde",
 ]
 
@@ -2944,6 +3272,7 @@ name = "game-soma"
 version = "0.2.0"
 dependencies = [
  "game-body",
+ "game-body-effort",
  "game-core",
  "game-diagnostics",
  "game-metabolism",
@@ -3056,7 +3385,9 @@ name = "game-transport"
 version = "0.2.0"
 dependencies = [
  "game-cargo",
+ "game-contracts",
  "game-core",
+ "game-diagnostics",
  "game-land",
  "game-objects",
  "game-packed",
@@ -3068,6 +3399,7 @@ dependencies = [
  "game-storage",
  "game-vitality",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -3095,10 +3427,12 @@ version = "0.2.0"
 dependencies = [
  "game-content",
  "game-core",
+ "game-diagnostics",
  "game-expression",
  "game-sim",
  "game-storage",
  "game-traits",
+ "rayon",
  "serde",
  "serde_json",
 ]
@@ -3657,6 +3991,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6662b5879511e06e8999a8a235d848113e942c9124f211511b16466ee2995f26"
 dependencies = [
  "serde_core",
+]
+
+[[package]]
+name = "settlement-history"
+version = "0.2.0"
+dependencies = [
+ "game-history-import",
+ "game-history-kernel",
+ "rayon",
+ "serde_json",
 ]
 
 [[package]]

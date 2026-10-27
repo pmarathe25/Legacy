@@ -16,9 +16,11 @@ pub fn setup() -> Fixture {
     setup_with(builder())
 }
 pub fn setup_with(builder: Builder) -> Fixture {
+    setup_with_objects(builder, game_objects::standard().unwrap())
+}
+pub fn setup_with_objects(builder: Builder, objects: game_objects::Objects) -> Fixture {
     let mut host = builder.build(7, 1).unwrap();
-    host.dispatch(game_objects::Install(game_objects::standard().unwrap()))
-        .unwrap();
+    host.dispatch(game_objects::Install(objects)).unwrap();
     let home = host
         .dispatch(game_land::CreateArea {
             name: "home".into(),

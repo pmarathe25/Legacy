@@ -119,23 +119,8 @@ fn builder(effect: u64) -> Builder {
         Ok(std::mem::take(&mut scratch.rows))
     })
     .unwrap();
-    b.request::<Run>(move |tx, _| {
-        let count = std::sync::atomic::AtomicUsize::new(0);
-        let result = tx.prepare::<Draft, Scratch, _>(Draft, |view| {
-            count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            Ok(view.get::<State>()?.0.clone())
-        });
-        assert_eq!(
-            count.load(std::sync::atomic::Ordering::Relaxed),
-            if effect != 0 && tx.compute().current_num_threads() > 1 {
-                2
-            } else {
-                1
-            }
-        );
-        result
-    })
-    .unwrap();
+    b.request::<Run>(|tx, _| Ok((tx.call(Draft)?, tx.get::<State>()?.0.clone())))
+        .unwrap();
     b
 }
 fn build(workers: usize, effect: u64) -> Host {
@@ -164,7 +149,7 @@ fn parallel_scratch_drafts_merge_in_order_and_survive_save_load() {
     assert_eq!(serial.save().unwrap(), parallel.save().unwrap());
 }
 #[test]
-fn effects_and_caught_effect_attempts_retry_the_entire_request_serially() {
+fn effects_and_caught_effect_attempts_retry_listeners_serially() {
     for effect in 1..=6 {
         let mut serial = build(1, effect);
         let mut parallel = build(4, effect);
@@ -203,9 +188,8 @@ fn retained_scratch_changes_use_serial_execution_and_query_the_resulting_state()
         })
         .unwrap();
         b.request::<KeepRun>(|tx, _| {
-            Ok(tx
-                .prepare::<Keep, Scratch, _>(Keep, |view| Ok(view.get::<Scratch>()?.rows.clone()))?
-                .1)
+            tx.call(Keep)?;
+            Ok(tx.get::<Scratch>()?.rows.clone())
         })
         .unwrap();
         let mut h = b.build(7, workers).unwrap();
@@ -243,7 +227,7 @@ fn combining_draft_budgets_cannot_bypass_the_serial_dispatch_limit() {
         })
         .unwrap();
         b.request::<KeepRun>(|tx, _| {
-            tx.prepare::<Keep, Scratch, _>(Keep, |_| Ok(()))?;
+            tx.call(Keep)?;
             Ok(vec![])
         })
         .unwrap();

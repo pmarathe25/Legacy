@@ -6,7 +6,11 @@ use game_provisioning::{self as plans, Plan};
 use game_sim::*;
 use serde::{Deserialize, Serialize};
 mod batch;
+mod cursor;
+mod review_stamp;
 pub use batch::{Prepared, register};
+pub use cursor::SelectionCursor;
+pub use review_stamp::{ReviewStamp, ReviewStatus};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Proceed {
     pub person: PersonId,

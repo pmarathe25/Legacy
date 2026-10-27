@@ -4,7 +4,7 @@ use game_core::*;
 use game_sim::Transaction;
 use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 pub struct Options {
@@ -29,14 +29,7 @@ pub fn consider(
         let _measurement = game_diagnostics::span("considered options reused");
         let updated = if let Some(memory) = memory.filter(|m| m.pending.is_none()) {
             let mut updated = memory.clone();
-            updated.pending = Some(tx.schedule(
-                updated.until,
-                50,
-                crate::Recall {
-                    person,
-                    until: updated.until,
-                },
-            )?);
+            updated.arm(tx, person)?;
             Some(Arc::new(updated))
         } else {
             None
@@ -90,6 +83,8 @@ pub struct Consideration {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) pending: Option<ScheduleId>,
     offers: Arc<Vec<Proposal>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    sources: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     used: BTreeSet<String>,
 }
@@ -137,6 +132,7 @@ impl Consideration {
                     .cloned()
                     .collect(),
             ),
+            sources: BTreeMap::new(),
             used: BTreeSet::new(),
         })
     }
@@ -154,7 +150,33 @@ impl Consideration {
             self.used.insert(key.to_owned());
         }
     }
-    fn cancel(&self, tx: &mut Transaction<'_>) {
+    /// Retain provider identities only for offers actually present in the shortlist.
+    pub fn set_sources(&mut self, sources: BTreeMap<String, String>) {
+        self.sources = sources
+            .into_iter()
+            .filter(|(key, _)| self.offers.iter().any(|offer| &offer.key == key))
+            .collect();
+    }
+    pub fn sources(&self) -> &BTreeMap<String, String> {
+        &self.sources
+    }
+    /// Schedule a bounded refresh for a saved consideration under its owner.
+    pub fn arm(&mut self, tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
+        require(
+            self.pending.is_none() && self.until > tx.now(),
+            "invalid consideration deadline",
+        )?;
+        self.pending = Some(tx.schedule(
+            self.until,
+            50,
+            crate::Recall {
+                person,
+                until: self.until,
+            },
+        )?);
+        Ok(())
+    }
+    pub fn cancel(&self, tx: &mut Transaction<'_>) {
         if let Some(id) = self.pending {
             tx.unschedule(id);
         }

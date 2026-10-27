@@ -441,6 +441,9 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     game_choice::provider(b, "pastimes.leisure", |tx, e| {
         if game_choice::collecting(tx, e.person) {
+            if game_choice::fast_review(tx) {
+                return Ok(());
+            }
             motivation::propose(tx, e.person)
         } else {
             consider(tx, e.person)

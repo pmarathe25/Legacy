@@ -2,6 +2,15 @@
 
 Run release benchmarks from the repository root. Each process checks its resulting records; timings alone do not constitute a pass.
 
+`cargo run --profile simulation -p game-performance --example observation_cohort`
+measures a real knowledge/memory cohort update with 1, 4, and 12 workers in
+alternating order. `LEGACY_POPULATION`, `LEGACY_LOCAL_PATCHES`, and `LEGACY_ROUNDS`
+set its size. Every replay starts from the same saved fixture and requires the
+complete resulting save to match. The timed phase includes actual scene and
+personal-memory processing, owner publication and expiry scheduling. Fixture
+construction, loading and save validation are outside the measured phase. This is
+an observation-phase workload, not a full-history or end-to-end speedup claim.
+
 [CONCURRENCY.md](CONCURRENCY.md) covers exact parallel drafts, the opt-in phased
 proposal model, worker coordination costs and their full-history replay evidence.
 
@@ -217,6 +226,19 @@ rendering, checksums, and unchanged saved vocabulary. `LEGACY_WORDS` and
 `LEGACY_DECODES` select scale. This measures a language query workload, not a
 whole-world speedup.
 
+## Provisional stock arbitration
+
+Build and run `stock_arbitration` with the `simulation` profile. The
+`LEGACY_POPULATION`, `LEGACY_STORES`, and `LEGACY_ROUNDS` environment variables
+select the number of synthetic actors, actual cargo inventories and repeated
+measurements. The example compares one, four and twelve workers, checks identical
+decisions and confirms cargo and the saved world remain unchanged.
+
+This measures a read-only stock planning phase. It does not execute character
+actions, verify permissions or location, resolve item lots, invoke owner hooks,
+or measure overall simulation throughput. Its provisional results are not stock
+reservations and must be revalidated before any action.
+
 ## World memory phases
 
 `cargo run -p game-performance --profile simulation --features allocation-profile
@@ -265,3 +287,10 @@ The [throughput evaluation](THROUGHPUT.md) combines fewer deliberations with
 demand-driven frame scheduling and whole-actor preparation. It compares complete
 history time against a production baseline and retains activity and welfare
 measurements for the explicitly different model.
+
+`cargo run -p game-performance --profile simulation --example meal_wave`
+compares ordered self-meals with physiology's experimental phase at different
+worker counts. `LEGACY_POPULATION` selects 1–128 participants and
+`LEGACY_ROUNDS` controls alternating repetitions. Setup, reload and save checks
+are outside the timed dispatch; the fixture excludes normal decision selection,
+most listeners and mature-world workload, so it is not an end-to-end speed claim.

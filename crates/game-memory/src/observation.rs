@@ -1,14 +1,14 @@
 use super::*;
 use game_memory_state::CueIndex;
 
-struct Context {
+pub(super) struct Context {
     now: SimTime,
     end: SimTime,
     emotion: i16,
     values: Option<Table<Arc<str>, i32>>,
 }
 impl Context {
-    fn new(tx: &Transaction<'_>, p: PersonId) -> Result<Self> {
+    pub(super) fn new(tx: &Transaction<'_>, p: PersonId) -> Result<Self> {
         Ok(Self {
             now: tx.now(),
             end: tx.now().after(retention::duration(tx, p))?,
@@ -46,23 +46,25 @@ pub(super) fn record_many<V: Content>(
         return Ok(());
     }
     let context = Context::new(tx, p)?;
-    static INDEX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    let indexed = *INDEX.get_or_init(|| std::env::var("LEGACY_MEMORY_INDEX").as_deref() == Ok("1"));
-    let mut index = (indexed && keys.len() >= 32).then(|| {
-        tx.get::<Memories<V>>()
-            .unwrap()
-            .1
-            .get(&p)
-            .map(CueIndex::new)
-            .unwrap_or_default()
-    });
     let state = tx.edit::<Memories<V>>()?;
     let facts = &state.0[&p];
     let book = state.1.entry(p).or_default();
-    for (key, same) in keys {
-        note(facts, book, key, same, &context, index.as_mut());
-    }
+    record_rows(facts, book, keys, &context);
     retention::finish_batch::<V>(tx, p)
+}
+
+pub(super) fn record_rows<V: Content>(
+    facts: &Facts<V>,
+    book: &mut Book,
+    keys: Vec<(Arc<str>, bool)>,
+    context: &Context,
+) {
+    static INDEX: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    let indexed = *INDEX.get_or_init(|| std::env::var("LEGACY_MEMORY_INDEX").as_deref() == Ok("1"));
+    let mut index = (indexed && keys.len() >= 32).then(|| CueIndex::new(book));
+    for (key, same) in keys {
+        note(facts, book, key, same, context, index.as_mut());
+    }
 }
 
 fn note<V: Content>(

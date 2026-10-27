@@ -4,6 +4,12 @@ Invented writing scripts, personal reading/writing proficiency, and physical wri
 
 **Why it matters:** Oral testimony fades or distorts across generations. Inventing scripts and inscribing physical pages lets societies preserve exact assertions, provenance, and causal knowledge across time and distance—if future readers know the script.
 
+Literacy opportunity discovery opts into the experimental fast-review scope;
+ordinary and full reviews continue to offer all available literacy actions.
+An opt-in experimental character policy enables fast reviews between full deadlines.
+`reading_signature` exposes the comprehension retry signature used by the
+information owner; it is not a check that a document is currently accessible.
+
 ## Responsibilities
 
 - **Script Invention & Proficiency:** Tracks invented writing systems and each character's reading/writing proficiency without assuming any initial universal script.

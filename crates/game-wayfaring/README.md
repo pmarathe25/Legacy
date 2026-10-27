@@ -6,7 +6,7 @@
 
 ## Responsibilities
 
-- **Journeys & visit history (`Wayfaring`):** Stores active outbound/return trip intentions, 4-hour destination layover deadlines, per-area last-visit timestamps, and travel cooldowns (`wayfaring.state`).
+- **Journeys & visit history (`Wayfaring`):** Stores active outbound/return trip intentions, per-area last-visit timestamps, and an optional completed-trip cooldown (`wayfaring.journeys`).
 - **Frontier & revisit selection:** Chooses unexplored frontier areas (known roads whose destination surroundings have never been observed) or revisits familiar areas not seen in 7 days for characters with sufficient risk tolerance.
 - **Discovery learning:** Emits `Visited` on first arrival at a new area and strengthens the traveler's personal concept value for discovery via `game-relationships`.
 
@@ -16,13 +16,14 @@
 
 ## How It Works
 
-- **Layover & return cycle:** Upon arriving at a destination, the traveler observes local surroundings (`game-knowledge`) and remains free for 4 hours to gather, converse, or trade before scheduling the return trip home.
-- **Non-interference with urgent needs:** Respects a 2-day cooldown between trips, excludes the controlled player and actors with active livelihood plans, and yields immediately if hunger or fatigue intervenes.
+- **Return cycle:** On arrival the traveler observes local surroundings. Return remains available immediately; this owner does not impose a destination layover.
+- **Experimental cooldown:** `ConfigureTripCooldown` optionally defers new voluntary journeys after a completed round trip. While a trip is active, voluntary exploration stays aimed at its original destination or home; reaching home also closes an outbound trip. It does not block a return leg, survival travel, or direct movement. The default is disabled; this changes behavior and should be evaluated against a baseline.
+- **Other choices:** Controlled players are excluded, and travel competes with other options according to their current motives.
 
 ## Game Integration
 
-- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`wayfaring`, resource `wayfaring.state`).
-- **Requests & Events:** Handles `Enable` and `Step`; registers with [`game-choice`](../game-choice/README.md); subscribes to `game_transport::Arrived` and `game_physiology::Died`; emits `Visited`.
+- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`wayfaring`, resource `wayfaring.journeys`).
+- **Requests & Events:** Handles `Enable`, `Consider`, and `ConfigureTripCooldown`; registers with [`game-choice`](../game-choice/README.md); subscribes to `game_transport::Arrived` and `game_physiology::Died`; emits `Visited`.
 - **Callers:** Enabled by [`game-campaign`](../game-campaign/README.md) and [`game-openings`](../game-openings/README.md).
 
 ## Dependencies & Testing

@@ -1,5 +1,10 @@
 # game-nutrition
 
+`Meals` consumes distinct recipients' diets on private owner rows in the bounded
+worker pool, then publishes rows and returns effects in input order. It rejects
+scalar meal/registration hooks and duplicate recipients; use the scalar requests
+for those cases. Registration and final row installation remain ordered.
+
 `game-nutrition` tracks each person's dietary nutrient reserves, personally experienced food effects, and substance tolerance or dependence.
 
 **Why it matters:** People need a balanced diet rather than a single calorie source, and they learn which foods nourish, sicken, or create cravings only after personally tasting them.

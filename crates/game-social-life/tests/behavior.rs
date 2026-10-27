@@ -22,6 +22,16 @@ fn builder() -> Builder {
     b.plugin("test", 1).unwrap();
     b.request::<CancelPerson>(|tx, r| tx.cancel_action(r.0))
         .unwrap();
+    b.request::<NotifyArrived>(|tx, r| {
+        tx.emit(
+            game_transport::Arrived {
+                person: r.person,
+                area: r.area,
+            },
+            vec![r.person],
+        )
+    })
+    .unwrap();
     b
 }
 fn setup() -> (Host, AreaId, AreaId, Vec<PersonId>) {
@@ -79,6 +89,142 @@ struct CancelPerson(PersonId);
 impl Request for CancelPerson {
     const KEY: &'static str = "test.cancel-person";
     type Response = ();
+}
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct NotifyArrived {
+    person: PersonId,
+    area: AreaId,
+}
+impl Request for NotifyArrived {
+    const KEY: &'static str = "test.notify-arrived";
+    type Response = ();
+}
+
+#[test]
+fn arrival_after_death_does_not_restore_social_residency() {
+    let (mut h, home, _, people) = setup();
+    let person = people[0];
+    h.dispatch(game_physiology::Damage {
+        person,
+        amount: 100,
+    })
+    .unwrap();
+    h.dispatch(NotifyArrived { person, area: home }).unwrap();
+    assert_eq!(h.get::<SocialLife>().unwrap().people[&person].area, None);
+    assert!(!neighbors(&h, people[1]).unwrap().contains(&person));
+    let saved = h.save().unwrap();
+    builder().load(&saved, 1).unwrap();
+}
+
+#[test]
+fn reentrant_departure_during_arrival_does_not_restore_stale_residency() {
+    let (initial, home, away, people) = setup();
+    let saved = initial.save().unwrap();
+    let person = people[0];
+    let mut results = vec![];
+    for workers in [1, 4] {
+        let mut b = builder();
+        b.subscribe::<game_transport::Arrived>("aaa.restart", move |tx, e| {
+            if e.person == person && e.area == away {
+                tx.call(game_transport::Move {
+                    person,
+                    destination: home,
+                })?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let mut h = b.load(&saved, workers).unwrap();
+        let at = h
+            .dispatch(game_transport::Move {
+                person,
+                destination: away,
+            })
+            .unwrap();
+        run(&mut h, at);
+        assert!(matches!(
+            h.get::<game_transport::Positions>().unwrap().0[&person],
+            game_transport::Location::Transit { .. }
+        ));
+        assert_eq!(h.get::<SocialLife>().unwrap().people[&person].area, None);
+        assert!(!neighbors(&h, people[1]).unwrap().contains(&person));
+        let result = h.save().unwrap();
+        builder().load(&result, workers).unwrap();
+        results.push(result);
+    }
+    assert_eq!(results[0], results[1]);
+}
+
+#[test]
+fn carried_person_who_dies_in_transit_is_not_added_on_arrival() {
+    let passenger = Arc::new(std::sync::Mutex::new(None));
+    let carried = passenger.clone();
+    let mut b = builder();
+    b.subscribe::<game_transport::Departed>("test.carry-passenger", move |tx, event| {
+        if let Some(person) = *carried.lock().unwrap() {
+            tx.call(game_transport::Carry {
+                carrier: event.person,
+                passenger: person,
+                destination: event.destination,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let mut h = b.build(17, 1).unwrap();
+    h.dispatch(game_traits::Install(
+        game_traits::load(&mut game_content::Store::standard()).unwrap(),
+    ))
+    .unwrap();
+    let home = h
+        .dispatch(game_land::CreateArea {
+            name: "Home".into(),
+        })
+        .unwrap();
+    let away = h
+        .dispatch(game_land::CreateArea {
+            name: "Away".into(),
+        })
+        .unwrap();
+    h.dispatch(game_land::Link {
+        from: home,
+        to: away,
+        duration: HOUR,
+    })
+    .unwrap();
+    let mut people = Vec::new();
+    for name in ["Carrier", "Passenger"] {
+        let person = h
+            .dispatch(game_physiology::Create {
+                kind: game_physiology::Kind::Mortal,
+                born: SimTime(0),
+            })
+            .unwrap();
+        h.dispatch(game_transport::Place { person, area: home })
+            .unwrap();
+        h.dispatch(Register {
+            person,
+            name: name.into(),
+        })
+        .unwrap();
+        people.push(person);
+    }
+    *passenger.lock().unwrap() = Some(people[1]);
+    let arrival = h
+        .dispatch(game_transport::Move {
+            person: people[0],
+            destination: away,
+        })
+        .unwrap();
+    h.dispatch(game_physiology::Damage {
+        person: people[1],
+        amount: 100,
+    })
+    .unwrap();
+    run(&mut h, arrival);
+    assert_eq!(h.get::<SocialLife>().unwrap().people[&people[1]].area, None);
+    assert!(neighbors(&h, people[0]).unwrap().is_empty());
+    h.save().unwrap();
 }
 #[test]
 fn completed_company_uses_both_actions_and_transmits_only_remembered_evidence() {

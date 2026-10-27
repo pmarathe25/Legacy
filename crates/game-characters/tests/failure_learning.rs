@@ -131,6 +131,124 @@ impl Request for ResolvedAgain {
     const KEY: &'static str = "test.repeat-outcome";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct ImmediateOutcome(bool);
+impl Request for ImmediateOutcome {
+    const KEY: &'static str = "test.immediate-outcome";
+    type Response = game_choice::Outcome;
+}
+
+#[test]
+fn reconsider_keeps_action_evidence_while_a_rejected_action_rolls_it_back() {
+    for reject in [false, true] {
+        let mut b = support::builder();
+        b.plugin("immediate-outcome-test", 1).unwrap();
+        b.resource::<Circumstances>().unwrap();
+        b.request::<ImmediateOutcome>(|tx, r| {
+            tx.edit::<Circumstances>()?.performed += 1;
+            if r.0 {
+                return Err(Error::Rejected("failed after changing evidence".into()));
+            }
+            Ok(game_choice::Outcome::Reconsider)
+        })
+        .unwrap();
+        game_choice::provider(&mut b, "test.immediate-outcome", move |tx, e| {
+            game_choice::offer(
+                tx,
+                e.person,
+                "try-outcome",
+                game_choice::motive(100, 0, 0, 0, 0),
+                ImmediateOutcome(reject),
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        let mut host = b.build(1, 1).unwrap();
+        host.dispatch(game_objects::Install(game_objects::standard().unwrap()))
+            .unwrap();
+        let area = host
+            .dispatch(game_land::CreateArea {
+                name: "Home".into(),
+            })
+            .unwrap();
+        let person = host
+            .dispatch(game_physiology::Create {
+                kind: game_physiology::Kind::Mortal,
+                born: SimTime(0),
+            })
+            .unwrap();
+        host.dispatch(game_transport::Place { person, area })
+            .unwrap();
+        host.dispatch(game_characters::Register {
+            person,
+            mind: Default::default(),
+        })
+        .unwrap();
+        host.dispatch(game_characters::Start).unwrap();
+        support::run(&mut host, SimTime(MINUTE.0));
+        assert_eq!(
+            host.get::<Circumstances>().unwrap().performed,
+            u64::from(!reject)
+        );
+        assert_eq!(
+            host.get::<game_characters::Minds>().unwrap().people[&person].failures,
+            1
+        );
+    }
+}
+
+#[test]
+fn review_stops_after_eight_failed_selected_alternatives() {
+    let mut b = support::builder();
+    b.plugin("attempt-limit-test", 1).unwrap();
+    b.resource::<Circumstances>().unwrap();
+    b.request::<ImmediateOutcome>(|tx, _| {
+        tx.edit::<Circumstances>()?.performed += 1;
+        Ok(game_choice::Outcome::Reconsider)
+    })
+    .unwrap();
+    game_choice::provider(&mut b, "test.attempt-limit", |tx, e| {
+        for index in 0..9 {
+            game_choice::offer(
+                tx,
+                e.person,
+                format!("alternative-{index}"),
+                game_choice::motive(100 + index, 0, 0, 0, 0),
+                ImmediateOutcome(false),
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let mut host = b.build(1, 1).unwrap();
+    host.dispatch(game_objects::Install(game_objects::standard().unwrap()))
+        .unwrap();
+    let area = host
+        .dispatch(game_land::CreateArea {
+            name: "Home".into(),
+        })
+        .unwrap();
+    let person = host
+        .dispatch(game_physiology::Create {
+            kind: game_physiology::Kind::Mortal,
+            born: SimTime(0),
+        })
+        .unwrap();
+    host.dispatch(game_transport::Place { person, area })
+        .unwrap();
+    host.dispatch(game_characters::Register {
+        person,
+        mind: Default::default(),
+    })
+    .unwrap();
+    host.dispatch(game_characters::Start).unwrap();
+    support::run(&mut host, SimTime(MINUTE.0));
+    assert_eq!(host.get::<Circumstances>().unwrap().performed, 8);
+    assert_eq!(
+        host.get::<game_characters::Minds>().unwrap().people[&person].failures,
+        8
+    );
+}
 #[test]
 fn delayed_rejection_and_reconsideration_are_learned_once_without_penalizing_success() {
     for mode in [0, 1, 2] {

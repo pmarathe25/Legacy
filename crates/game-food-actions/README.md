@@ -8,10 +8,12 @@
 
 - **Self-feeding execution (`step`):** Advances a committed food plan by one physical action—moving toward a container or source (`game-transport`), attaching a container (`game-cargo`), freeing pack space (`game-stockpiles`), gathering (`game-ecology`), transferring portions (`game-property`), or eating (`game-physiology::ConsumeEdible`).
 - **Caregiver acquisition (`acquire`):** Runs the same travel, container pickup, and gathering/taking stages to obtain a target food quantity *without* consuming it, leaving the food in the caregiver's inventory for delivery.
+- **Local self-meal description (`local_meal`):** Read-only advisory stock demand for an explicit edible `Meal` whose actor is idle at an area and whose personally remembered destination and actual inventory locality both match. The quantity is the food definition's real portion. A remembered own carried store follows its actor, matching execution. No descriptor is returned for unspecified meals, travel, exploration, or forage stages.
 
 ## Boundaries
 
 - **Physical stage runner only:** Owns no `game-sim` plugin, persistent resource, or utility scoring; calls typed requests on `game-transport`, `game-cargo`, `game-stockpiles`, `game-ecology`, and `game-physiology`.
+- **Descriptions are not admission or authorization:** `local_meal` does not check available stock, permissions, health, or motor capacity, invoke hooks, reserve goods, or grant knowledge. Empty local stock can still produce a demand. Callers must recheck after intervening changes and execute the original request through its existing checks and hooks. Caregiver `acquire` plans must not be treated as self-meals merely because they use the same `Plan` type.
 
 ## How It Works
 

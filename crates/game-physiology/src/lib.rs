@@ -1,7 +1,7 @@
 //! Needs, bodily harm, rest, and guardian recovery.
 pub use game_body::{
-    Body, BodyView, Damaged, DeathCause, Died, Exert, Kind, Rates, Rested, Rules, advance_body,
-    hunger_threshold, load,
+    Body, BodyView, CheckLocalMeal, CheckSelfMeal, ConsumeEdible, Damaged, DeathCause, Died,
+    Eating, Exert, Fed, Kind, Rates, Rested, Rules, Serve, advance_body, hunger_threshold, load,
 };
 use game_core::*;
 use game_sim::*;
@@ -10,8 +10,14 @@ pub use game_soma::{
     capable, maximum_health, view,
 };
 use serde::{Deserialize, Serialize};
-mod eating;
-pub use eating::{Administer, ConsumeEdible, Eating, Restrained, Serve};
+mod meal_wave;
+pub use game_physiology_eating::{
+    Administer, Eat, Feed, OfferOutcome, Restrained, ServeLocalMeals, TryServe,
+};
+pub use game_rest_activities::{
+    CheckRestActivities, InterruptRest, RestActivities, RestActivity, resting_activity,
+};
+pub use meal_wave::{ConsumeSelfMeals, TryConsumeSelfMeals};
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Start;
 impl Request for Start {
@@ -22,15 +28,6 @@ impl Request for Start {
 struct Tick;
 impl Request for Tick {
     const KEY: &'static str = "physiology.tick";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Eat {
-    pub person: PersonId,
-    pub inventory: InventoryId,
-}
-impl Request for Eat {
-    const KEY: &'static str = "physiology.eat";
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -58,33 +55,11 @@ impl Request for CancelRest {
     const KEY: &'static str = "physiology.cancel_rest";
     type Response = ();
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Fed {
-    #[serde(default)]
-    pub inventory: Option<InventoryId>,
-    pub caregiver: PersonId,
-    pub patient: PersonId,
-    pub good: GoodId,
-    pub quantity: u64,
-}
-impl Event for Fed {
-    const KEY: &'static str = "physiology.fed";
-}
-/// Voluntary physical feeding: the caregiver supplies a locally present person.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Feed {
-    pub caregiver: PersonId,
-    pub patient: PersonId,
-    pub inventory: InventoryId,
-}
-impl Request for Feed {
-    const KEY: &'static str = "physiology.feed";
-    type Response = ();
-}
 pub fn plugin(b: &mut Builder) -> Result<()> {
     game_soma::plugin(b)?;
     game_digestion::plugin(b)?;
     b.plugin("physiology", 1)?;
+    game_rest_activities::register(b)?;
     b.request::<game_property::Observers>(|tx, r| {
         let positions = tx.get::<game_transport::Positions>()?;
         let mut observers:Vec<_> = tx.get::<Bodies>()?.people.rows()
@@ -115,7 +90,8 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         tx.schedule(tx.now().after(tx.get::<Bodies>()?.rules.tick)?, 0, Tick)?;
         Ok(())
     })?;
-    eating::register(b)?;
+    game_physiology_eating::register(b)?;
+    meal_wave::register(b)?;
     b.request::<Rest>(|tx, r| {
         capable(tx, r.person)?;
         require(

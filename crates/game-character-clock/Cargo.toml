@@ -4,11 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-character-pause.workspace = true
+game-character-attention.workspace = true
 game-core.workspace = true
 game-sim.workspace = true
 game-choice.workspace = true
+game-drafting.workspace = true
 game-character-state.workspace = true
 game-autonomy-policy.workspace = true
+game-invocation.workspace = true
+game-lineage.workspace = true
 game-physiology.workspace = true
 game-contracts.workspace = true
 serde.workspace = true

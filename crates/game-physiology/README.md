@@ -1,5 +1,20 @@
 # game-physiology
 
+`ServeLocalMeals` is a strict phased boundary for exclusive, idle local self-meals
+and voluntary care offers. It runs each `Serve` hook and exact physical stock
+operation in input order, rolls back declined offers' hooks, and settles all
+accepted personal digestion, diet, body and mood effects before publishing `Fed`.
+Callers must wrap the request in an attempt before ordered fallback. Busy or
+overlapping participants, incompatible personal-effect hooks, changed participants
+and lethal nutrition require that fallback. This phase intentionally differs from
+actor-by-actor listener visibility; output order and worker-count replay are stable.
+
+Serving and eating requests live in
+[`game-physiology-eating`](../game-physiology-eating/README.md), registered
+under the existing physiology owner. `TryServe` reports actual acceptance or
+refusal while preserving `Serve` hooks and rolling their effects back on a
+decline; ordinary `Serve` retains its existing error behavior.
+
 `game-physiology` orchestrates eating, feeding others, resting, and batched physiological wake-ups over bodily state owned by [`game-soma`](../game-soma/README.md).
 
 **Why it matters:** Connects physical cargo consumption, dietary nutrition, stomach satiety, and action clocks so eating or resting requires real food, co-location, and recipient consent.
@@ -7,6 +22,7 @@
 ## Responsibilities
 
 - **Eating & serving (`Eat`, `ConsumeEdible`, `Serve`, `Feed`):** Consumes edible portions from an accessible local inventory via `game-cargo`, records dietary intake in `game-nutrition` and stomach fullness in `game-digestion`, and applies hunger relief and food effects to `game-soma` and `game-vitality`.
+- **Experimental self-meal wave (`ConsumeSelfMeals`):** Settles stock changes with their listeners in order, then updates surviving bodies as an owner batch and applies all mood effects before feeding observers. The phase intentionally changes observation timing; incompatible hooks, invalidation or failure retry the ordered scalar path transactionally. The character cohort uses it only when the separate `meal_wave` tuning is enabled.
 - **Timed rest (`Rest`):** Occupies the actor's canonical action slot while setting `game-soma` into resting recovery until rested or interrupted.
 - **Observer query (`Observers`):** Reports awake, living people co-located in an area for witness and perception checks.
 

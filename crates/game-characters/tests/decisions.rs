@@ -27,6 +27,183 @@ impl Request for Involve {
     const KEY: &'static str = "test.involve-actor";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct Evidence(PersonId);
+impl Request for Evidence {
+    const KEY: &'static str = "test.frame-evidence";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct RolledBackAlert(PersonId);
+impl Request for RolledBackAlert {
+    const KEY: &'static str = "test.rolled-back-alert";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct CommittedAlert(PersonId);
+impl Request for CommittedAlert {
+    const KEY: &'static str = "test.committed-alert";
+    type Response = ();
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ProbePausedReview(PersonId);
+impl Request for ProbePausedReview {
+    const KEY: &'static str = "test.probe-paused-review";
+    type Response = ();
+}
+
+#[test]
+fn paused_review_detects_coalesced_urgent_cues_and_rolls_back_markers() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    for (workers, urgent_enabled) in [(1, false), (1, true), (4, false), (4, true)] {
+        let mut b = builder(false);
+        let checked = Arc::new(AtomicUsize::new(0));
+        let armed = Arc::new(AtomicBool::new(false));
+        b.request::<RolledBackAlert>(|tx, r| {
+            tx.notify(game_character_clock::Alert { person: r.0 })?;
+            Err(Error::Rejected("roll back urgent cue".into()))
+        })
+        .unwrap();
+        b.request::<CommittedAlert>(|tx, r| tx.notify(game_character_clock::Alert { person: r.0 }))
+            .unwrap();
+        b.request::<ProbePausedReview>(|tx, r| {
+            tx.call(game_character_clock::PauseReview(r.0))?;
+            let urgent_before = tx.get::<Minds>()?.people[&r.0].urgent_frame_at;
+            tx.notify(game_character_clock::Alert { person: r.0 })?;
+            tx.notify(game_character_clock::Alert { person: r.0 })?;
+            assert!(tx.attempt(game_character_clock::PauseReview(r.0)).is_err());
+            assert_eq!(
+                tx.get::<Minds>()?.people[&r.0].urgent_frame_at,
+                urgent_before
+            );
+            assert!(tx.call(game_character_clock::FinishPausedReview(r.0))?);
+            tx.call(game_character_clock::PauseReview(r.0))?;
+            tx.attempt(CommittedAlert(r.0))?;
+            assert!(tx.call(game_character_clock::FinishPausedReview(r.0))?);
+            tx.call(game_character_clock::PauseReview(r.0))?;
+            assert!(tx.attempt(RolledBackAlert(r.0)).is_err());
+            assert!(!tx.call(game_character_clock::FinishPausedReview(r.0))?);
+            let urgent = tx.get::<Minds>()?.rules.urgent_hunger;
+            let hungry = tx.get::<game_physiology::Bodies>()?.people[&r.0].hunger >= urgent;
+            tx.call(game_character_clock::PauseReview(r.0))?;
+            tx.notify(game_choice::Changed { person: r.0 })?;
+            assert_eq!(
+                tx.call(game_character_clock::FinishPausedReview(r.0))?,
+                hungry
+            );
+            if !hungry {
+                tx.call(game_physiology::Exert {
+                    person: r.0,
+                    energy: urgent.saturating_mul(1_000_000),
+                    fatigue: 0,
+                })?;
+                assert!(tx.get::<game_physiology::Bodies>()?.people[&r.0].hunger >= urgent);
+                tx.call(game_character_clock::PauseReview(r.0))?;
+                tx.notify(game_choice::Changed { person: r.0 })?;
+                assert!(tx.call(game_character_clock::FinishPausedReview(r.0))?);
+            }
+            Ok(())
+        })
+        .unwrap();
+        let observed = checked.clone();
+        let active = armed.clone();
+        b.before::<game_choice::Run>("test.pause-during-review", move |tx, _| {
+            let person = tx
+                .get::<Minds>()?
+                .schedule
+                .waking
+                .iter()
+                .find_map(|(person, at)| (*at == tx.now()).then_some(*person));
+            if active.load(Ordering::Relaxed)
+                && let Some(person) = person
+            {
+                tx.call(ProbePausedReview(person))?;
+                observed.fetch_add(1, Ordering::Relaxed);
+            }
+            Ok(())
+        })
+        .unwrap();
+        let (mut host, _, _) = setup_with(b, workers);
+        let mut tuning = host
+            .get::<game_choice::Offers>()
+            .unwrap()
+            .frame
+            .as_ref()
+            .unwrap()
+            .tuning;
+        tuning.urgent_immediate = urgent_enabled;
+        tuning.commit_batch = 64;
+        host.dispatch(game_choice::ConfigureFrames {
+            interval: Some(SimDuration(30_000)),
+        })
+        .unwrap();
+        host.dispatch(game_choice::ConfigureFrameDemand(true))
+            .unwrap();
+        host.dispatch(game_choice::TuneFrames(tuning)).unwrap();
+        armed.store(true, Ordering::Relaxed);
+        support::run(&mut host, SimTime(0));
+        assert!(checked.load(Ordering::Relaxed) > 0);
+        assert!(host.get::<Minds>().unwrap().paused_reviews.is_empty());
+        let saved = host.save().unwrap();
+        let loaded = builder(false).load(&saved, workers).unwrap();
+        assert_eq!(loaded.save().unwrap(), saved);
+    }
+}
+
+#[test]
+fn an_unclosed_paused_review_rejects_and_rolls_back_the_outer_transaction() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    let armed = Arc::new(AtomicBool::new(false));
+    let entered = Arc::new(AtomicBool::new(false));
+    let mut b = builder(false);
+    let active = armed.clone();
+    let seen = entered.clone();
+    b.before::<game_choice::Run>("test.leave-review-paused", move |tx, _| {
+        if active.load(Ordering::Relaxed) {
+            let person = tx
+                .get::<Minds>()?
+                .schedule
+                .waking
+                .iter()
+                .find_map(|(p, at)| (*at == tx.now()).then_some(*p))
+                .ok_or_else(|| Error::Rejected("no active review".into()))?;
+            tx.call(game_character_clock::PauseReview(person))?;
+            seen.store(true, Ordering::Relaxed);
+        }
+        Ok(())
+    })
+    .unwrap();
+    let (mut host, _, _) = setup_with(b, 1);
+    let mut tuning = host
+        .get::<game_choice::Offers>()
+        .unwrap()
+        .frame
+        .as_ref()
+        .unwrap()
+        .tuning;
+    tuning.commit_batch = 64;
+    host.dispatch(game_choice::ConfigureFrames {
+        interval: Some(SimDuration(30_000)),
+    })
+    .unwrap();
+    host.dispatch(game_choice::ConfigureFrameDemand(true))
+        .unwrap();
+    host.dispatch(game_choice::TuneFrames(tuning)).unwrap();
+    host.advance(SimTime(0), 1).unwrap();
+    let before = host.save().unwrap();
+    armed.store(true, Ordering::Relaxed);
+    assert!(host.advance(SimTime(0), 1).is_err());
+    assert!(entered.load(Ordering::Relaxed));
+    assert_eq!(host.save().unwrap(), before);
+    assert!(host.get::<Minds>().unwrap().paused_reviews.is_empty());
+}
 fn builder(effectful: bool) -> Builder {
     let mut b = support::builder();
     b.plugin("decision-test", 1).unwrap();
@@ -49,6 +226,8 @@ fn builder(effectful: bool) -> Builder {
     })
     .unwrap();
     b.request::<Involve>(|tx, r| tx.start_action(r.0, "joint", None, Sense(r.0)))
+        .unwrap();
+    b.request::<Evidence>(|tx, r| tx.notify(game_choice::Changed { person: r.0 }))
         .unwrap();
     game_choice::serial_provider(&mut b, "test.sensing", move |tx, e| {
         game_choice::defer(tx, Sense(e.person))?;
@@ -145,6 +324,66 @@ fn setup_with(b: Builder, workers: usize) -> (Host, Vec<PersonId>, InventoryId) 
     .unwrap();
     support::run(&mut h, SimTime(0));
     (h, people, inventory)
+}
+
+#[test]
+fn urgent_frame_wake_runs_before_the_next_boundary_and_survives_reload() {
+    let (mut h, people, _) = setup(false, 1);
+    let mut tuning = h
+        .get::<game_choice::Offers>()
+        .unwrap()
+        .frame
+        .as_ref()
+        .unwrap()
+        .tuning;
+    tuning.urgent_immediate = true;
+    h.dispatch(game_choice::TuneFrames(tuning)).unwrap();
+    support::run(&mut h, SimTime(1_000));
+    let before = h
+        .get::<Senses>()
+        .unwrap()
+        .0
+        .get(&people[0])
+        .copied()
+        .unwrap_or(0);
+    h.dispatch(Evidence(people[0])).unwrap();
+    assert!(
+        h.scheduled()
+            .all(|job| job.request.key() != "characters.urgent-frame-resume")
+    );
+    h.dispatch(game_physiology::Damage {
+        person: people[0],
+        amount: 1,
+    })
+    .unwrap();
+    h.dispatch(game_physiology::Damage {
+        person: people[0],
+        amount: 1,
+    })
+    .unwrap();
+    assert_eq!(
+        h.get::<Senses>()
+            .unwrap()
+            .0
+            .get(&people[0])
+            .copied()
+            .unwrap_or(0),
+        before
+    );
+    assert_eq!(
+        h.scheduled()
+            .filter(|job| job.request.key() == "characters.urgent-frame-resume")
+            .count(),
+        1
+    );
+    let mut loaded = builder(false).load(&h.save().unwrap(), 4).unwrap();
+    support::run(&mut h, SimTime(1_000));
+    support::run(&mut loaded, SimTime(1_000));
+    assert!(h.get::<Senses>().unwrap().0[&people[0]] > before);
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
+    support::run(&mut h, SimTime(MINUTE.0));
+    support::run(&mut loaded, SimTime(MINUTE.0));
+    assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
 #[test]
 fn grouped_resolutions_preserve_shared_stock_arbitration_and_midframe_worker_reload() {

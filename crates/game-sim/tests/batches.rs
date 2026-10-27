@@ -79,6 +79,78 @@ fn builder() -> Builder {
     .unwrap();
     b
 }
+
+fn wave_builder(hook: bool, panic: bool) -> Builder {
+    let mut b = builder();
+    b.scheduled_wave::<Step>(128, move |tx, requests| {
+        for r in requests {
+            tx.call(r.clone())?;
+        }
+        assert!(!panic, "wave panic");
+        Ok(())
+    })
+    .unwrap();
+    if hook {
+        b.before::<Step>("check", |tx, _| {
+            tx.edit::<Log>()?.values.push(99);
+            Ok(())
+        })
+        .unwrap();
+    }
+    b
+}
+
+#[test]
+fn waves_finish_the_captured_phase_before_urgent_work_and_cancellation() {
+    let mut worlds = vec![];
+    for workers in [1, 4] {
+        let mut h = wave_builder(false, false).build(1, workers).unwrap();
+        h.dispatch(Seed {
+            count: 3,
+            fail: false,
+            spawn: true,
+            cancel: true,
+        })
+        .unwrap();
+        let saved = h.save().unwrap();
+        h = wave_builder(false, false).load(&saved, workers).unwrap();
+        h.advance(SimTime(5), 1).unwrap();
+        assert_eq!(h.get::<Log>().unwrap().values, vec![0, 1, 2]);
+        h.advance(SimTime(5), 1).unwrap();
+        assert_eq!(h.get::<Log>().unwrap().values, vec![0, 1, 2, 1000]);
+        worlds.push(h.save().unwrap());
+    }
+    assert_eq!(worlds[0], worlds[1]);
+}
+
+#[test]
+fn wave_failures_restore_every_job_and_before_hooks_retain_serial_dispatch() {
+    for workers in [1, 4] {
+        for panic in [false, true] {
+            let mut h = wave_builder(false, panic).build(1, workers).unwrap();
+            h.dispatch(Seed {
+                count: 8,
+                fail: !panic,
+                spawn: true,
+                cancel: true,
+            })
+            .unwrap();
+            let before = h.save().unwrap();
+            assert!(h.advance(SimTime(5), 1).is_err());
+            assert_eq!(h.save().unwrap(), before);
+        }
+        let mut h = wave_builder(true, true).build(1, workers).unwrap();
+        h.dispatch(Seed {
+            count: 3,
+            fail: false,
+            spawn: true,
+            cancel: true,
+        })
+        .unwrap();
+        while h.advance(SimTime(5), 1).unwrap().stop == Stop::Budget {}
+        assert_eq!(h.get::<Log>().unwrap().values, vec![99, 0, 1000, 99, 2]);
+    }
+}
 #[test]
 fn batches_are_bounded_atomic_and_replay_across_workers_and_budgets() {
     let mut host = builder().build(1, 1).unwrap();

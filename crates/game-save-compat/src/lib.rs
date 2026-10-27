@@ -1,6 +1,7 @@
 //! Normalize historical save ownership without changing live feature rules.
 use game_core::Result;
 mod memories;
+const LOCAL_INTERACTION_PHASE: &str = "characters.local-interaction-phase";
 const OPTIONAL: &[(&str, Option<&str>)] = &[
     ("memory", Some("knowledge.perception")),
     ("information", Some("information.questions")),
@@ -53,11 +54,14 @@ pub fn normalize<'a>(
     #[derive(serde::Deserialize)]
     struct Header {
         plugins: BTreeMap<String, u32>,
+        resources: BTreeMap<String, serde::de::IgnoredAny>,
     }
     let header: Header = serde_json::from_str(saved).map_err(invalid)?;
     if OPTIONAL
         .iter()
         .all(|(plugin, _)| header.plugins.contains_key(*plugin))
+        && (!header.plugins.contains_key("characters")
+            || header.resources.contains_key(LOCAL_INTERACTION_PHASE))
     {
         return Ok(Cow::Borrowed(saved));
     }
@@ -74,6 +78,17 @@ pub fn normalize<'a>(
     fields.remove("plugins");
     let defaults: Value = serde_json::from_str(&defaults()?).map_err(invalid)?;
     let mut plugins = header.plugins.clone();
+    // A phase cannot survive a committed checkpoint. Older character saves
+    // therefore have exactly the same state as an empty phase, without changing
+    // any durable character state or accepting other missing resources.
+    if header.plugins.contains_key("characters") && !resources.contains_key(LOCAL_INTERACTION_PHASE)
+    {
+        put(
+            &mut resources,
+            LOCAL_INTERACTION_PHASE,
+            &serde_json::json!({}),
+        )?;
+    }
     for &(plugin, resource) in OPTIONAL {
         if !header.plugins.contains_key(plugin) {
             plugins.insert(

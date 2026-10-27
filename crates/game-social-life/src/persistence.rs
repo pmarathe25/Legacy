@@ -40,10 +40,15 @@ pub(super) fn validate_host(h: &Host) -> Result<()> {
         } else {
             None
         };
-        require(
-            p.last_contact <= h.now() && p.area == area,
-            "invalid social location or memory",
-        )?;
+        if p.last_contact > h.now() || p.area != area {
+            return Err(Error::Rejected(format!(
+                "invalid social location or memory for {id:?}: last_contact={:?}, now={:?}, social_area={:?}, actual_area={area:?}, alive={}",
+                p.last_contact,
+                h.now(),
+                p.area,
+                body.alive
+            )));
+        }
     }
     for (id, m) in &state.meetings {
         require(

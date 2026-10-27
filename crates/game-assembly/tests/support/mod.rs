@@ -20,7 +20,7 @@ impl Pack {
     }
     pub fn edit(&self, path: &str, from: &str, to: &str) {
         let p = self.root.join(path);
-        let text = std::fs::read_to_string(&p).unwrap();
+        let text = std::fs::read_to_string(&p).unwrap().replace("\r\n", "\n");
         assert!(text.contains(from), "missing replacement in {path}");
         std::fs::write(p, text.replace(from, to)).unwrap();
     }

@@ -4,7 +4,7 @@ mod reserves;
 mod scoring;
 use game_core::*;
 use game_food_actions::next_step;
-pub use game_food_actions::{FoodCare, Plan, TendFood};
+pub use game_food_actions::{FoodCare, LocalMeal, Plan, TendFood, local_meal};
 pub use game_food_memory::remembered_meal;
 use game_knowledge::{Facts, with_prefix};
 use game_sim::*;
@@ -25,6 +25,10 @@ struct Step(Advance);
 impl Request for Step {
     const KEY: &'static str = "characters.food-step";
     type Response = (Plan, bool);
+}
+/// A phased meal cannot bypass ordered provisioning hooks.
+pub fn meal_wave_has_hooks(tx: &Transaction<'_>) -> bool {
+    tx.has_before::<Advance>() || tx.has_before::<Step>()
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
     reserves::plugin(b)?;

@@ -50,6 +50,15 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.subscribe::<game_transport::Arrived>("inquiry.travel-outcome", |tx, e| {
+        if game_transport::area(tx.get()?, e.person).ok() != Some(e.area)
+            || tx
+                .get::<Observations>()?
+                .trips
+                .get(&e.person)
+                .is_some_and(|trip| trip.to != e.area)
+        {
+            return Ok(());
+        }
         if let Some(trip) = tx.edit::<Observations>()?.trips.remove(&e.person) {
             let trip = std::sync::Arc::unwrap_or_clone(trip);
             let value = tx.now().0.saturating_sub(trip.at.0) / MINUTE.0;

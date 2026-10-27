@@ -25,6 +25,10 @@ fn options(tx: &Transaction<'_>, person: PersonId, protected: Option<PersonId>) 
         return vec![];
     };
     let Some(area) = p.area else { return vec![] };
+    let current = tx
+        .get::<game_lineage::Lineage>()
+        .ok()
+        .and_then(|l| l.current);
     let residents = &state.residents[&area];
     let explore = random(tx.seed(), person.0, p.encounters.wrapping_add(901)) % 1000
         < ((disposition(tx, person, "sociability") + disposition(tx, person, "risk-tolerance")) / 4)
@@ -41,6 +45,7 @@ fn options(tx: &Transaction<'_>, person: PersonId, protected: Option<PersonId>) 
         .filter(|other| {
             *other != person
                 && Some(*other) != protected
+                && Some(*other) != current
                 && (!tx.get::<Actions>().unwrap().0.contains_key(other)
                     || state
                         .meetings
@@ -64,6 +69,13 @@ fn options(tx: &Transaction<'_>, person: PersonId, protected: Option<PersonId>) 
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("companionship", 1)?;
     b.request::<Approach>(|tx, r| {
+        require(
+            tx.get::<game_lineage::Lineage>()
+                .ok()
+                .and_then(|l| l.current)
+                != Some(r.0.other),
+            "player-controlled companion requires an invitation",
+        )?;
         let result = tx.attempt(r.0.clone());
         tx.call(Scanned {
             person: r.0.person,

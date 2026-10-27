@@ -34,6 +34,32 @@ impl Request for Attempt {
     const KEY: &'static str = "test.attempt";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct OwnedAlternative {
+    rollback: bool,
+    reject_hook: bool,
+}
+impl Request for OwnedAlternative {
+    const KEY: &'static str = "test.owned-alternative";
+    type Response = u64;
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct RejectOuterAlternative;
+impl Request for RejectOuterAlternative {
+    const KEY: &'static str = "test.reject-outer-alternative";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+struct ForeignAlternative;
+impl Request for ForeignAlternative {
+    const KEY: &'static str = "test.foreign-alternative";
+    type Response = u64;
+}
+#[derive(Clone, Default, Serialize, Deserialize)]
+struct HookCounter(u64);
+impl Resource for HookCounter {
+    const KEY: &'static str = "test.hook-counter";
+}
 #[derive(Serialize, Deserialize)]
 struct Added {
     amount: u64,
@@ -137,6 +163,106 @@ fn nested_failed_attempt_does_not_damage_prior_or_later_work() {
         .unwrap(),
         3
     );
+}
+
+#[test]
+fn owned_alternative_preserves_hooks_and_rolls_back_all_nested_effects() {
+    let mut b = builder();
+    b.request::<OwnedAlternative>(|tx, request| {
+        tx.attempt_owned_request(
+            Add {
+                amount: 3,
+                fail: request.reject_hook,
+            },
+            |tx, r| {
+                tx.edit::<Counter>()?.amount += r.amount;
+                let id = tx.allocate()?;
+                tx.emit(Added { amount: r.amount }, vec![])?;
+                tx.schedule(
+                    tx.now().after(MINUTE)?,
+                    1,
+                    Add {
+                        amount: 1,
+                        fail: false,
+                    },
+                )?;
+                Ok(if request.rollback {
+                    AttemptOutcome::Rollback(id)
+                } else {
+                    AttemptOutcome::Commit(id)
+                })
+            },
+        )
+    })
+    .unwrap();
+    b.request::<RejectOuterAlternative>(|tx, _| {
+        tx.call(OwnedAlternative {
+            rollback: false,
+            reject_hook: false,
+        })?;
+        Err(Error::Rejected("outer failure".into()))
+    })
+    .unwrap();
+    b.plugin("test-hook-owner", 1).unwrap();
+    b.resource::<HookCounter>().unwrap();
+    b.before::<Add>("test.hook", |tx, r| {
+        tx.edit::<HookCounter>()?.0 += 1;
+        tx.allocate()?;
+        tx.schedule(
+            tx.now().after(MINUTE)?,
+            1,
+            Add {
+                amount: 1,
+                fail: false,
+            },
+        )?;
+        require(!r.fail, "offered food declined")
+    })
+    .unwrap();
+    b.request::<ForeignAlternative>(|tx, _| {
+        tx.attempt_owned_request(
+            Add {
+                amount: 3,
+                fail: false,
+            },
+            |_, _| Ok(AttemptOutcome::Commit(99)),
+        )
+    })
+    .unwrap();
+    let mut h = b.build(1, 1).unwrap();
+    let before = h.save().unwrap();
+    assert!(h.dispatch(ForeignAlternative).is_err());
+    assert_eq!(h.save().unwrap(), before);
+    assert!(h.dispatch(RejectOuterAlternative).is_err());
+    assert_eq!(h.save().unwrap(), before);
+    assert!(
+        matches!(h.dispatch(OwnedAlternative { rollback: false, reject_hook: true }),
+        Err(Error::Rejected(reason)) if reason == "offered food declined")
+    );
+    assert_eq!(h.save().unwrap(), before);
+    assert_eq!(
+        h.dispatch(OwnedAlternative {
+            rollback: true,
+            reject_hook: false
+        })
+        .unwrap(),
+        3
+    );
+    assert_eq!(h.get::<Counter>().unwrap().amount, 0);
+    assert_eq!(h.get::<HookCounter>().unwrap().0, 0);
+    assert_eq!(h.notices().count(), 0);
+    // The rolled-back hook and body consumed no IDs and scheduled no jobs.
+    assert_eq!(
+        h.dispatch(OwnedAlternative {
+            rollback: false,
+            reject_hook: false
+        })
+        .unwrap(),
+        3
+    );
+    assert_eq!(h.get::<Counter>().unwrap().amount, 3);
+    assert_eq!(h.get::<HookCounter>().unwrap().0, 1);
+    assert_eq!(h.notices().count(), 1);
 }
 #[test]
 fn retries_are_durable_and_sequence_reuse_is_rejected() {

@@ -1,5 +1,42 @@
 use game_assembly::Simulation;
 #[test]
+fn older_character_checkpoint_defaults_only_the_transient_interaction_resource() {
+    let current = Simulation::new("kernel-fixture", 29, 1)
+        .unwrap()
+        .save()
+        .unwrap();
+    let mut old: serde_json::Value = serde_json::from_str(&current).unwrap();
+    assert_eq!(
+        old["resources"]
+            .as_object_mut()
+            .unwrap()
+            .remove("characters.local-interaction-phase"),
+        Some(serde_json::json!({}))
+    );
+    let source = old.to_string();
+    for workers in [1, 4] {
+        assert_eq!(
+            Simulation::load(&source, workers).unwrap().save().unwrap(),
+            current
+        );
+        assert_eq!(
+            Simulation::load_from(&mut std::io::Cursor::new(source.as_bytes()), workers)
+                .unwrap()
+                .save()
+                .unwrap(),
+            current
+        );
+    }
+    // The compatibility exception must not become a general missing-state default.
+    old["resources"]
+        .as_object_mut()
+        .unwrap()
+        .remove("world.actions");
+    let corrupt = old.to_string();
+    assert!(Simulation::load(&corrupt, 1).is_err());
+    assert!(Simulation::load_from(&mut std::io::Cursor::new(corrupt.as_bytes()), 1).is_err());
+}
+#[test]
 fn streaming_and_string_loads_preserve_every_field_and_legacy_migration() {
     let sim = Simulation::new("kernel-fixture", 1, 1).unwrap();
     let saved = sim.save().unwrap();

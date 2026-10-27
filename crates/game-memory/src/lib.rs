@@ -8,7 +8,7 @@ mod observation;
 mod requests;
 mod retention;
 pub use game_memory_state::{Book, Content, Fact, Facts, Memories, Trace};
-pub use requests::{Initialize, ObserveScene, Recall, Receive, Significance};
+pub use requests::{Initialize, ObserveScene, ObserveScenes, Recall, Receive, Significance};
 pub use retention::duration as short_term_duration;
 #[derive(Clone, Serialize, Deserialize)]
 struct Sweep {

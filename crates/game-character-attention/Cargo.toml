@@ -1,0 +1,13 @@
+[package]
+name = "game-character-attention"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-autonomy-policy.workspace = true
+game-character-state.workspace = true
+game-choice.workspace = true
+game-core.workspace = true
+game-sim.workspace = true
+serde.workspace = true

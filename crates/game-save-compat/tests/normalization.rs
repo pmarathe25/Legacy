@@ -39,6 +39,28 @@ fn current_manifests_preserve_original_bytes_without_constructing_defaults() {
     assert!(matches!(normalized, std::borrow::Cow::Borrowed(_)));
     assert_eq!(normalized, text);
 }
+
+#[test]
+fn existing_character_owner_receives_only_the_missing_empty_interaction_phase() {
+    let mut old = defaults();
+    old["resources"]["confinement.barriers"] = serde_json::json!({});
+    old["plugins"]["characters"] = serde_json::json!(1);
+    old["resources"]["characters.minds"] = serde_json::json!({"private": [11, 23]});
+    let saved = old.to_string();
+    let normalized = normalize(&saved, || Ok(defaults().to_string())).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&normalized).unwrap();
+    assert_eq!(
+        value["resources"]["characters.local-interaction-phase"],
+        serde_json::json!({})
+    );
+    let mut expected = old;
+    expected["resources"]["characters.local-interaction-phase"] = serde_json::json!({});
+    assert_eq!(value, expected);
+    assert!(matches!(
+        normalize(&normalized, || panic!("already current")).unwrap(),
+        std::borrow::Cow::Borrowed(_)
+    ));
+}
 #[test]
 fn old_signal_payload_moves_without_becoming_public_or_disappearing() {
     let old = serde_json::json!({"plugins":{"communication":1},"resources":{

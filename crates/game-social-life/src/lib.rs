@@ -261,7 +261,13 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         relocate(tx, r.passenger, None)
     })?;
     b.subscribe::<game_transport::Arrived>("social-life.arrive", |tx, e| {
-        relocate(tx, e.person, Some(e.area))
+        let alive = tx
+            .get::<game_physiology::Bodies>()?
+            .people
+            .get(&e.person)
+            .is_some_and(|body| body.alive);
+        let present = game_transport::area(tx.get::<game_transport::Positions>()?, e.person).ok();
+        relocate(tx, e.person, present.filter(|_| alive))
     })?;
     b.subscribe::<game_physiology::Died>("social-life.death", |tx, e| {
         relocate(tx, e.person, None)

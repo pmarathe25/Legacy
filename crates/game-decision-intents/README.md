@@ -1,9 +1,20 @@
 # game-decision-intents
 
+Transaction-local `ReviewStamp` checks live body, urgent generation and action
+identity before a retained frame alternative is selected. It preserves incoming
+activities and permits vanished continuations to be discarded without rebuilding
+all providers. Stamps have no saved-resource footprint.
+
 Pure autonomous survival alternatives, continuation valuation, trait weighting and
 failure scoring. The character owner registers this adapter and retains all mind
 writes and physical action execution. `Proceed` keeps its existing wire key and
 character-owned handler.
+
+`SelectionCursor` tracks the remaining alternatives within a single review. It
+selects against the current action and caller-supplied switching margin without
+executing actions or recording failure. The character owner retains review
+admission, stale checks, effects, failure learning and finalization. A cursor is
+ephemeral: it is not a saved or independently resumable review.
 
 `FrameTuning::minimum_cohort` can leave small cohorts on live decision collection.
 The cohort still observes together and validates newly involved actions, but skips

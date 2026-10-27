@@ -82,6 +82,14 @@ impl Request for ObserveSurroundings {
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
+pub struct ObserveFrame {
+    pub people: Vec<PersonId>,
+}
+impl Request for ObserveFrame {
+    const KEY: &'static str = "knowledge.observe_frame";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
 pub struct ObservePatch {
     pub person: PersonId,
     pub patch: u64,
@@ -91,6 +99,37 @@ impl Request for ObservePatch {
     type Response = ();
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
+    b.request::<ObserveFrame>(|tx, r| {
+        if tx.has_before::<ObserveSurroundings>()
+            || tx.has_before::<ObservePatch>()
+            || tx.has_before::<game_memory::ObserveScene<FactValue>>()
+        {
+            for person in r.people {
+                if game_transport::area(tx.get()?, person).is_ok() {
+                    tx.call(ObserveSurroundings { person })?;
+                    observe_carried(tx, person)?;
+                }
+            }
+            return Ok(());
+        }
+        let mut scenes = Vec::new();
+        let mut located = Vec::new();
+        for person in r.people {
+            if let Ok(area) = game_transport::area(tx.get()?, person) {
+                scenes.push(game_memory::ObserveScene {
+                    person,
+                    scene: scenes::visible(tx, area)?,
+                });
+                located.push((person, area));
+            }
+        }
+        tx.call(game_memory::ObserveScenes(scenes))?;
+        for (person, area) in located {
+            discover(tx, person, area)?;
+            observe_carried(tx, person)?;
+        }
+        Ok(())
+    })?;
     b.request::<ObserveSurroundings>(|tx, r| {
         let _measurement = game_diagnostics::span("observe surroundings");
         let area = game_transport::area(tx.get()?, r.person)?;
@@ -118,39 +157,7 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
                 scene,
             })?;
         }
-        // Inspect newly encountered accessible containers; refreshing a known stock
-        // requires deliberate inspection, so remembered stock can still become stale.
-        let empty = Table::new();
-        let permitted = tx
-            .get::<game_property::Property>()?
-            .permitted_set(r.person)
-            .unwrap_or(&empty);
-        let memory = tx.get::<Knowledge>()?;
-        let facts = &memory.0[&r.person];
-        let perception = tx.get::<Perception>()?;
-        let inventories: Vec<_> = permitted
-            .keys()
-            .copied()
-            .filter(|id| {
-                let known = perception
-                    .subjects
-                    .get(&Subject::Stock(*id))
-                    .map(|cached| facts.get(cached.key.as_ref()))
-                    .unwrap_or_else(|| facts.get(store_key(*id).as_str()))
-                    .is_some_and(|f| matches!(f.value.as_ref(), FactValue::Stock(_)));
-                if known {
-                    return false;
-                }
-                game_cargo::locality(tx, *id).is_ok_and(|a| a == area)
-            })
-            .collect();
-        for inventory in inventories {
-            tx.call(ObserveStore {
-                person: r.person,
-                inventory,
-            })?;
-        }
-        Ok(())
+        discover(tx, r.person, area)
     })?;
     b.request::<ObservePatch>(|tx, r| {
         let patch = tx
@@ -166,4 +173,40 @@ pub(super) fn register(b: &mut Builder) -> Result<()> {
         let subject = Subject::Patch(r.patch);
         remember(tx, r.person, subject, FactValue::Patch(patch))
     })
+}
+
+fn observe_carried(tx: &mut Transaction<'_>, person: PersonId) -> Result<()> {
+    let packs: Vec<_> = tx.get::<game_cargo::Cargo>()?.carried(person).collect();
+    for inventory in packs {
+        tx.call(ObserveStore { person, inventory })?;
+    }
+    Ok(())
+}
+
+fn discover(tx: &mut Transaction<'_>, person: PersonId, area: AreaId) -> Result<()> {
+    // Known stock remains stale until deliberately inspected.
+    let empty = Table::new();
+    let permitted = tx
+        .get::<game_property::Property>()?
+        .permitted_set(person)
+        .unwrap_or(&empty);
+    let facts = &tx.get::<Knowledge>()?.0[&person];
+    let perception = tx.get::<Perception>()?;
+    let inventories: Vec<_> = permitted
+        .keys()
+        .copied()
+        .filter(|id| {
+            let known = perception
+                .subjects
+                .get(&Subject::Stock(*id))
+                .map(|cached| facts.get(cached.key.as_ref()))
+                .unwrap_or_else(|| facts.get(store_key(*id).as_str()))
+                .is_some_and(|f| matches!(f.value.as_ref(), FactValue::Stock(_)));
+            !known && game_cargo::locality(tx, *id).is_ok_and(|a| a == area)
+        })
+        .collect();
+    for inventory in inventories {
+        tx.call(ObserveStore { person, inventory })?;
+    }
+    Ok(())
 }

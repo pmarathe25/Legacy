@@ -1,6 +1,7 @@
 //! Conservative dependencies for ordered speculative drafts, with no gameplay state.
 use rayon::prelude::*;
 use serde::Serialize;
+pub mod arbitration;
 use std::{
     any::TypeId,
     hash::{Hash, Hasher},

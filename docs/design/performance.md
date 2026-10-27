@@ -125,6 +125,244 @@ This does not justify freezing distant people, reducing intelligence when the CP
 
 Long-term history is retained in appropriate storage with indexes and summaries. Do not keep every routine per-minute trace in active memory forever. Preserve historical facts needed by the mechanics, such as obligations, memories, ancestry, and disputes. Benchmarks include growing history rather than only fresh worlds.
 
+## Parallel-first actor pipeline
+
+The current frame experiment parallelizes preparation, but observation and
+action commits still pass through ordered transactions over feature-wide
+resources. More workers cannot scale work that remains behind those boundaries.
+Explore a separate phased model that exposes owner-controlled disjoint updates:
+
+1. Materialize immutable, revision-tagged local scenes at a simulation boundary.
+2. Update each observer's own perception and memory in parallel, subject to the
+   same visibility and personal-knowledge rules.
+3. Prepare decisions from the committed observations in parallel and produce
+   typed intents naming participants, stock claims, expected versions and effects.
+4. Resolve overlapping claims deterministically; reserve participants and resources
+   atomically for joint actions. Execute disjoint conflict groups concurrently.
+5. Publish action results, owner events and scheduled work at a defined boundary,
+   then deliver evidence in a subsequent causal wave.
+
+Feature owners retain validation and rule authority. Storage needs row- or
+partition-level ownership and rollback rather than unrestricted mutable access to
+an entire feature resource. Unconverted mechanics must have an explicit ordered
+fallback. Start with an end-to-end slice covering observation, food or work choice,
+shared-stock arbitration, action execution and personal evidence; a scoring-only
+kernel would omit the dominant coordination costs.
+
+The experimental stock planner currently provides advisory allocation only; it
+neither reserves nor consumes goods. A review-local selection cursor now separates
+choosing the next scored alternative from invoking it, without changing review
+admission, sensing, stale checks, failure learning or finalization. It cannot
+cross a transaction boundary. A possible next slice would suspend eligible reviews
+after their selected local meal passes the stale check, arbitrate those actual
+selections, then execute admitted reviews through the existing food and cargo
+owners. A provisional loss should try another alternative without failure learning.
+An admitted intention still needs current-state and access validation; any
+intervening effect or urgent wake can invalidate it. Unconverted intentions and
+review hooks need an explicit ordered path. Suspending a review cannot call the
+normal resume request again, because admission and wake cleanup already occurred.
+In particular, review admission marks an actor as waking at the current time;
+the urgent-wake queue can then coalesce a later alert without creating an urgent
+job. A paused review therefore needs its own invalidation signal, recorded before
+wake suppression, and must discard its old prepared decision and reprepare after
+an intervening urgent change. Checking only the presence of an urgent job is not
+sufficient. Ordinary synchronous reviews do not suspend between actors; the
+experimental selected-meal cohort below interleaves a bounded group instead.
+An experimental transaction-local paused-review marker and urgency serial now
+record these invalidations before suppression, including cues during selection and
+hooks before the pause is armed. They must be closed before commit and roll back
+with nested attempts. The opt-in local-meal cohort clears the frame and prepares a
+fresh review when an intervening urgent cue invalidates a selected actor.
+
+Prepared proposal payloads may also be unbound after reload even when their wire
+key is valid; selected-intent inspection must use the same checked typed-or-wire
+decoding as frame decisions. `decode_pending` supplies this inspection to meal
+arbitration. Test loading after preparation and before resolution,
+so reload does not silently change which intents participate in arbitration.
+
+This opt-in slice tests arbitration of selected local self-meals, with urgent
+claims first and a persisted participation counter rotating actor order before
+bounded groups are formed. Each group resolves its own stock conflicts; ordering
+is not a guarantee of starvation freedom as participants and resources change.
+Denied claims refresh personally visible stock without recording an action
+failure, and failed grants allow denied claims to be reconsidered against the
+remaining stock. Resume hooks force the original ordered path. It still does not
+parallelize action effects. Cohort selection does not yet provide per-actor
+causal-review trace attribution; use ordinary resolution for those traces.
+Cargo change listeners reconstruct
+per-operation stock and item-lot state, so batching multiple mutations before
+publishing old notifications is unsafe. A parallel commit requires a revised
+owner-defined effect contract with exact per-operation data, independent row
+updates, deterministic event publication and rollback across owners.
+
+Cargo notifications now include the source's exact before/after quantities and,
+for a transfer, the destination's quantities. These describe the mutation within
+its enclosing transaction and are undone with it. The named-item listener uses
+the captured source amount only when it still matches the live post-mutation
+amount; if an earlier reentrant listener changed stock, it retains the original
+live reconstruction. Old notification payloads may lack the optional snapshots.
+This prepares one effect contract but does not parallelize commits or make it
+safe to batch notifications: named-item, cultivar, preservation and maturation
+effects remain ordered and require their own conversion or fallback.
+
+The provisional arbiter can now claim every required participant as well as
+stock: any common participant joins the same conflict group, and admission is
+all-or-nothing. This is not an actual reservation. The sparse packed-row API
+can journal and mutate distinct existing owner rows concurrently, rejecting
+duplicates and missing rows before mutation. It does not publish effects or
+call requests, and its parallel path scans the full row array; callers must
+measure their own threshold. Participant claims are not yet wired into a joint
+action; the selected-meal wave below uses the row facility for body effects.
+
+An opt-in physiology-owned self-meal wave is connected to the selected-meal
+cohort. It admits and revalidates participants, performs property, eating and
+individual cargo notifications in order, and uses the body owner's disjoint-row
+batch for survivors. Digestion, nutrition and vitality remain ordered. Fed
+observations occur after all meal body and mood effects, so this is a distinct
+behavioral model. Incompatible hooks, duplicate participants, invalidation,
+and potential death fall back to the ordinary ordered path. A transactional
+attempt rolls back stock, personal rows, notices, schedules and identity
+counters before cohort fallback. Worker callbacks cannot call requests or
+allocate IDs. This slice still needs end-to-end performance and welfare screens.
+
+Phased arrival processing is another candidate for owner-controlled effects:
+validate transit and action completion, update personal locations and knowledge
+in disjoint owner rows, merge shared area indexes, then publish evidence and
+wakes in a deterministic order under one rollback boundary. Passenger, household,
+guardian, logistics, mission and carried-stock listeners need explicit conversion
+or ordered fallback. A one-day mature small-population trace found only singleton
+arrival cohorts after the experimental journey cooldown, even in 15-minute bins.
+This is not evidence about larger worlds, but it does not justify assuming a
+same-time arrival wave will speed that history. Windows spanning different event
+times are a distinct behavioral model and need latency and welfare evaluation.
+
+An opt-in food-refusal experiment now records bounded observations of actual
+declines and schedules a coalesced retry, while allowing other food and serving
+choices and responding to relevant observations and urgency. It is a distinct
+behavioral model under validation, not an adopted history policy.
+
+Repeated declined food offers are a more frequent mature-history workload than
+completed workshop products. A caregiver can choose the same food and recipient
+again after refusal because no observed refusal is retained. Evaluate an explicit,
+bounded memory of the caregiver's observed refusal that permits other foods and
+reacts promptly to new evidence or urgent need. Do not use private recipient
+state as the caregiver's knowledge, suppress all care for a patient, or assume a
+time-only delay preserves responsiveness. Measure failed offers, food delivery,
+care latency and welfare as well as throughput across workers and reload.
+The record should distinguish caregiver, recipient, food and serving size, and
+must not survive a rolled-back attempt. A rejection of one food must not block a
+different food, another caregiver or urgent reassessment. Any future recheck
+mechanism needs a bounded wake for time-dependent appetite, coalesced generation
+tokens, death cleanup and invalidation when the relevant observed situation
+changes. Validating only a nutrition version is insufficient when willingness
+also changes with time and action commitments. Exhausted-option caching must
+also detect newly observed food and must not replace the actual serving owner's
+validation. Treat this as a proposed behavioral model, not an implemented speedup.
+
+Signal completion alone is not an independent row update: a signal reaches the
+food-care listener through the communication event re-export, which can produce
+perception changes and decision wakes. A parallel signal wave must account for
+those effects and their ordering rather than treating the published event as
+subscriber-free.
+
+Classify competing claims by actual people, goods and locations, rather than by
+whole-resource type. Use a specified deterministic fairness policy for equal
+claims, and measure starvation. A stale prepared intent requires bounded replanning
+or an alternative; it does not automatically imply a personal failure. Allocate
+stable identities and random occurrence keys independently of worker order and
+scheduler bookkeeping.
+
+Urgent detected changes must invalidate affected intentions and receive a prompt
+causal phase independently of broad planning cadence. Persistent goals may advance
+on their natural completion events with owner validation; broad reconsideration
+can have a slower bounded deadline. These are behavioral-model changes. Test
+response latency and social, cultural, survival and productive participation, and
+compare multiple seeds and mature worlds before choosing them for a study.
+
+The broad nonurgent shortlist experiment suppresses every non-food provider during
+its reuse window. Its short histories changed conflict and mortality as well as
+social and cultural activity, so it is not a safe proxy for an interrupt-driven
+policy. A narrower next experiment should keep care, conflict responses, family,
+and other safety-relevant providers live while reusing only explicitly opted-in
+provider results. A cached empty result must remain distinguishable from a missing
+cache entry. Cached offers need their provider identity, original collection order,
+bounded lifetime, and live revalidation before execution; a selected stale offer
+must not be treated as a personal failure. Urgent cues must invalidate both a
+prepared decision and the relevant persistent entries, including during an open
+cohort. Hooks and providers with sensing or other effects require the live path
+unless their semantics are explicitly supported. Persist model settings and any
+behavior-affecting cache state so reload and worker scheduling cannot change the
+history. These requirements are a design target, not an implemented cache.
+
+A possible implementation keeps the normal `Collect` call for every actor and
+reuses only explicitly selected provider output at its original listener boundary.
+Capture the provider's ordered raw offers before global pruning, not just the
+winning shortlist, then submit them through the normal collection with their
+provider identity. Distinguish an empty captured result from a miss, make the
+stale-selection recheck force a live provider call, and carry cache deltas from
+parallel drafts into owner-controlled commit. Do not reuse provider outputs that
+contain continuations, deferred effects or unsupported hooks. Detect intervening
+urgent changes before applying drafts. Capturing and replaying offers must retain
+duplicate-key errors, offer hooks, limit behavior and ordered barriers; otherwise
+fall back to live collection. Measure the added capture and memory costs as well
+as reduced provider work before deciding if this is worth retaining.
+Owner-defined freshness must cover all dependencies and nested rollback; the
+generic `Changed` event is not emitted by every relevant write. Compare an
+invalidation generation before and after applying deferred effects, even when no
+entry existed to clear. An expiry that should trigger reconsideration also needs
+a coalesced actor wake; a timestamp alone does not wake an idle actor. An exact
+derived cache may be discarded on reload only if rebuilding produces the same
+offers, motives and order. A deliberately frozen deliberation must instead save
+its entries, consumed alternatives, policy version and invalidation state.
+
+The information provider is a candidate for a more conservative first slice:
+cache immutable construction inputs while evaluating availability and motives
+against current personal state. Do not use `Facts::namespace_version` alone to
+cache answers: it intentionally ignores observation and confidence metadata,
+while answer selection ranks by those fields. The information integration test
+`answer_offer_reacts_to_metadata_only_personal_knowledge_updates` demonstrates
+that an answer can change while the payload namespace token remains unchanged.
+Any versioned answer cache must track that metadata as well, including scene
+refreshes and rollback, or evaluate answer selection live. Measure complete
+simulation throughput and allocation cost on fixed histories before retaining
+the added cache machinery; a high local hit rate is not sufficient evidence.
+
+A more substantial candidate is two-tier deliberation: run fresh survival,
+care, conflict and urgent-response choices at the existing responsive cadence,
+and run fresh broader discovery at episode boundaries or a bounded deadline.
+This intentionally changes when ordinary opportunities are considered; it does
+not reuse a stale shortlist. Providers must explicitly opt into deferral, with
+unknown and effectful listeners staying live. The cheap tier must preserve an
+ongoing action when no urgent alternative warrants interruption, and its idle
+path must not immediately trigger the full tier on every frame. Deadline expiry
+must schedule a wake even for idle actors; injury, care and other urgent cues
+must preempt it, including after parallel preparation and before group commit.
+Current scheduling already sleeps many busy actors until completion or a
+predicted hunger threshold, so simply skipping all busy actors is not this
+redesign. Introduce it only as a separate saved model and test provider coverage,
+urgent latency, progress without starvation, rollback, worker and reload replay,
+and matched welfare and activity outcomes before using it for the history.
+
+The first building block is now implemented: whole-actor drafts can explicitly
+select a fast collection scope, and a pure provider can register for deferral
+in that scope. Ordinary providers, unclassified listeners and ordered observers
+remain active; the full provider is used for stale rechecks. Literacy discovery
+is the first explicitly deferrable provider. The information provider also
+keeps incoming answers and refusals live but defers outgoing questions and
+document discovery in fast scope, retaining its single listener and full-review
+order. An opt-in scheduler policy now uses a saved per-person full-review deadline
+and urgent invalidation generation; the long history has not adopted it. No
+performance or welfare claim is established yet. A provider must not opt in if its
+callback includes required sensing or other effects, because skipping the
+callback prevents the framework from observing them.
+
+Regional timelines may expose work across different simulation times, but need
+explicit ownership transfer, timestamped messages and a safe inbound horizon.
+Prior traces found little same-time geographic independence and a concentrated
+older population, so region partitioning alone cannot address a busy settlement.
+GPU candidates should likewise be drawn from large resident numeric phases, not
+assumed to accelerate irregular state mutation or small decision batches.
+
 ## Optional GPU compute
 
 Keep a narrow compute interface around suitable pure batches. A compute backend receives versioned, packed inputs and produces typed results. The simulation validates and commits them through the same rules as CPU work. GPU code does not own the world, assign identities, decide institutional authority, acknowledge player warnings, or mutate a renderer's scene as simulation state.

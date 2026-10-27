@@ -40,11 +40,20 @@ pub fn choose(
     margin: i64,
     _urgent: bool,
 ) -> Option<Decision> {
+    choose_iter(candidates.iter(), current, margin, _urgent)
+}
+
+/// Select from a reusable candidate iterator without allocating an intermediate list.
+pub fn choose_iter<'a>(
+    mut candidates: impl Iterator<Item = &'a Candidate> + Clone,
+    current: Option<u64>,
+    margin: i64,
+    _urgent: bool,
+) -> Option<Decision> {
     let best = candidates
-        .iter()
+        .clone()
         .max_by_key(|c| (c.score(), std::cmp::Reverse(c.id)))?;
     let chosen = candidates
-        .iter()
         .find(|c| Some(c.id) == current && best.score() <= c.score().saturating_add(margin))
         .unwrap_or(best);
     Some(Decision {

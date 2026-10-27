@@ -1,5 +1,15 @@
 # game-information
 
+In the experimental fast-review scope, incoming questions still generate live
+answer and refusal choices; outgoing questions and document discovery are
+deferred. An opt-in experimental character policy enables fast reviews between
+full deadlines.
+
+Outgoing question generation considers at most four eligible nearby people per
+interest in a review. The window rotates hourly, so repeated reviews can reach
+other neighbors; incoming answers and refusals remain available. This is a
+deliberate change to attention and may change conversations and choices.
+
 Owns information interests and remembered questions. `Want` registers interest
 in a fact, a category of facts, or sources of a particular good. `Withdraw`
 abandons an interest. Features can use these requests without defining a new

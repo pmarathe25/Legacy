@@ -61,11 +61,154 @@ fn batch_observation_keeps_per_patch_hooks_and_their_atomic_failures() {
         .unwrap();
     host.dispatch(ObserveSurroundings { person }).unwrap();
     assert_eq!(host.get::<Audit>().unwrap().count, 1);
+    host.dispatch(ObserveFrame {
+        people: vec![person],
+    })
+    .unwrap();
+    assert_eq!(host.get::<Audit>().unwrap().count, 2);
     assert!(view(&host, person).unwrap().contains_key(&patch_key(patch)));
     host.dispatch(Deny).unwrap();
     let before = host.save().unwrap();
-    assert!(host.dispatch(ObserveSurroundings { person }).is_err());
+    assert!(
+        host.dispatch(ObserveFrame {
+            people: vec![person]
+        })
+        .is_err()
+    );
     assert_eq!(host.save().unwrap(), before);
+}
+#[test]
+fn parallel_frame_observations_preserve_personal_stock_and_worker_replay() {
+    let mut f = setup();
+    let mut parallel = builder().load(&f.host.save().unwrap(), 4).unwrap();
+    for host in [&mut f.host, &mut parallel] {
+        host.dispatch(ObserveFrame {
+            people: vec![f.ruler, f.other],
+        })
+        .unwrap();
+        let seen: Stock = known(&view(host, f.ruler).unwrap(), &store_key(f.store)).unwrap();
+        assert!(known::<Stock>(&view(host, f.other).unwrap(), &store_key(f.store)).is_none());
+        host.dispatch(game_cargo::Deposit {
+            inventory: f.store,
+            good: game_cargo::FOOD,
+            quantity: 1,
+        })
+        .unwrap();
+        host.dispatch(ObserveFrame {
+            people: vec![f.ruler, f.other],
+        })
+        .unwrap();
+        assert_eq!(
+            known::<Stock>(&view(host, f.ruler).unwrap(), &store_key(f.store)).unwrap(),
+            seen
+        );
+    }
+    assert_eq!(f.host.save().unwrap(), parallel.save().unwrap());
+    let loaded = builder().load(&parallel.save().unwrap(), 2).unwrap();
+    assert_eq!(loaded.save().unwrap(), parallel.save().unwrap());
+}
+#[test]
+fn frame_observations_preserve_scene_hooks_and_rollback() {
+    let mut b = builder();
+    b.plugin("audit", 1).unwrap();
+    b.resource::<Audit>().unwrap();
+    b.request::<Deny>(|tx, _| {
+        tx.edit::<Audit>()?.deny = true;
+        Ok(())
+    })
+    .unwrap();
+    b.before::<game_memory::ObserveScene<FactValue>>("audit.scene", |tx, _| {
+        tx.edit::<Audit>()?.count += 1;
+        require(!tx.get::<Audit>()?.deny, "scene denied")
+    })
+    .unwrap();
+    let mut host = b.build(7, 4).unwrap();
+    let area = host
+        .dispatch(game_land::CreateArea {
+            name: "home".into(),
+        })
+        .unwrap();
+    let mut people = Vec::new();
+    for _ in 0..2 {
+        let person = host
+            .dispatch(game_physiology::Create {
+                kind: game_physiology::Kind::Mortal,
+                born: SimTime(0),
+            })
+            .unwrap();
+        host.dispatch(game_transport::Place { person, area })
+            .unwrap();
+        people.push(person);
+    }
+    host.dispatch(ObserveFrame {
+        people: people.clone(),
+    })
+    .unwrap();
+    assert_eq!(host.get::<Audit>().unwrap().count, 2);
+    host.dispatch(Deny).unwrap();
+    let before = host.save().unwrap();
+    assert!(host.dispatch(ObserveFrame { people }).is_err());
+    assert_eq!(host.save().unwrap(), before);
+}
+#[test]
+fn scene_hook_can_move_later_observer_before_their_scene_is_chosen() {
+    let change = std::sync::Arc::new(std::sync::Mutex::new(None));
+    let hook = change.clone();
+    let mut b = builder();
+    b.plugin("audit", 1).unwrap();
+    b.before::<game_memory::ObserveScene<FactValue>>("audit.move-later", move |tx, row| {
+        if let Some((first, later, destination)) = *hook.lock().unwrap()
+            && row.person == first
+        {
+            tx.call(game_transport::Move {
+                person: later,
+                destination,
+            })?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let mut host = b.build(7, 4).unwrap();
+    let home = host
+        .dispatch(game_land::CreateArea {
+            name: "home".into(),
+        })
+        .unwrap();
+    let away = host
+        .dispatch(game_land::CreateArea {
+            name: "away".into(),
+        })
+        .unwrap();
+    host.dispatch(game_land::Link {
+        from: home,
+        to: away,
+        duration: HOUR,
+    })
+    .unwrap();
+    let mut people = Vec::new();
+    for _ in 0..2 {
+        let person = host
+            .dispatch(game_physiology::Create {
+                kind: game_physiology::Kind::Mortal,
+                born: SimTime(0),
+            })
+            .unwrap();
+        host.dispatch(game_transport::Place { person, area: home })
+            .unwrap();
+        people.push(person);
+    }
+    *change.lock().unwrap() = Some((people[0], people[1], away));
+    host.dispatch(ObserveFrame {
+        people: people.clone(),
+    })
+    .unwrap();
+    assert!(game_transport::area(host.get().unwrap(), people[1]).is_err());
+    assert!(view(&host, people[1]).unwrap().is_empty());
+    assert!(
+        view(&host, people[0])
+            .unwrap()
+            .contains_key(&roads_key(home))
+    );
 }
 #[test]
 fn scenario_facts_are_validated_and_cannot_overwrite_existing_knowledge() {

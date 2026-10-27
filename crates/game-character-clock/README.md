@@ -33,6 +33,18 @@ these handlers under its existing owner and supplies the review callback. This
 crate owns no resource or plugin manifest entry; `Minds` stays character-owned.
 It preserves ordinary attention, routine and event wake behavior.
 
+The experimental two-tier mode arms a separate frame wake for a person's full
+review deadline, even during a long action. Urgent evidence invalidates prepared
+work before coalescing; immediate jobs are bounded per person and simulation
+time, with excess evidence carried to a future frame. This mode is a behavioral
+experiment and is incompatible with the shortlist cache and meal arbitration.
+
+`PauseReview` and `FinishPausedReview` provide a transaction-local invalidation
+guard for a future interleaved cohort. An urgent cue marks a paused actor even
+when the usual wake is coalesced, and cleanup returns whether a live replan is
+needed. A pause must be closed before the transaction commits. The opt-in meal
+arbitration experiment uses these requests; ordinary resolution does not.
+
 The opt-in frame recovery policy schedules one next-boundary follow-up after an
 idle fallback. The follow-up does not repeat itself if it still finds no activity;
 later external events can initiate another bounded recovery. This reduces the

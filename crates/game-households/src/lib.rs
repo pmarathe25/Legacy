@@ -1,44 +1,13 @@
 //! Voluntary families, dependent care, and age-appropriate enrollment.
 use game_core::*;
 use game_sim::*;
-use game_storage::Table;
 use serde::{Deserialize, Serialize};
 mod care;
-mod index;
 pub use care::{CareChanged, CommitCare};
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(from = "index::Saved")]
-pub struct Households {
-    pub enabled: bool,
-    pub nursery: Table<PersonId, AreaId>,
-    pub partners: Table<PersonId, PersonId>,
-    pub children: Table<PersonId, Vec<PersonId>>,
-    pub next: Table<PersonId, SimTime>,
-    pub caregivers: Table<PersonId, Table<PersonId, ()>>,
-    pub self_reliant: Table<PersonId, ()>,
-    pub review: Option<ScheduleId>,
-    #[serde(default, skip_serializing_if = "Table::is_empty")]
-    pub food_care: Table<PersonId, FoodCare>,
-    #[serde(skip)]
-    wards: Table<PersonId, Table<PersonId, ()>>,
-}
-impl Resource for Households {
-    const KEY: &'static str = "households.kin";
-    fn validate(&self) -> Result<()> {
-        require(
-            self.food_care.iter().all(|(p, i)| i.valid_for(*p)),
-            "invalid food care",
-        )
-    }
-    fn validate_changes(&self, old: &Self) -> Result<()> {
-        require(
-            self.food_care
-                .changed(&old.food_care)
-                .all(|(p, i)| i.valid_for(*p)),
-            "invalid food care",
-        )
-    }
-}
+pub use game_household_state::{
+    ClearNewFoodUrgency, ClearObservedFoodAction, ConfigureFoodRefusals, ExpireFoodRefusals,
+    FoodRefusal, Households, RefusalGroup, RememberFoodRefusal, SetRefusalRetry,
+};
 #[derive(Clone, Serialize, Deserialize)]
 struct ReviewDependents {
     after: Option<PersonId>,
@@ -215,6 +184,7 @@ impl Request for Independent {
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("households", 2)?;
     b.resource::<Households>()?;
+    game_household_state::register_refusals(b)?;
     b.request::<Separate>(|tx, r| {
         if tx.get::<Households>()?.partners.get(&r.person) == Some(&r.other) {
             tx.edit::<Households>()?.partners.remove(&r.person);
@@ -393,6 +363,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         Ok(())
     })?;
     b.subscribe::<game_physiology::Died>("households.bereavement", |tx, e| {
+        game_household_state::forget_person(tx, e.person)?;
         let carers: Vec<_> = tx.get::<Households>()?.carers_of(e.person).collect();
         let beneficiaries: Vec<_> = tx.get::<Households>()?.beneficiaries_of(e.person).collect();
         for carer in carers {
@@ -416,10 +387,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     })?;
     b.validate_save(|h| {
         let s = h.get::<Households>()?;
-        require(
-            s.wards == index::build(&s.caregivers),
-            "invalid dependent index",
-        )?;
+        require(s.wards_valid(), "invalid dependent index")?;
         require(
             s.partners
                 .iter()

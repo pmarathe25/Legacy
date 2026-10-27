@@ -1,0 +1,11 @@
+[package]
+name = "game-causality"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+causality = []
+
+[dependencies]
+serde_json.workspace = true

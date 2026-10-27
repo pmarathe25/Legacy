@@ -19,6 +19,7 @@ Proposal collection, executable offers, timed undertakings, and agenda helpers f
 ## How It Works
 
 - **Provider Registration:** Feature plugins register proposal providers (`provider`) and execution handlers during setup.
+- **Scoped discovery:** Pure, nonurgent discovery can opt into `deliberative_provider`, which is skipped only in an explicitly requested fast review. Required observations or side effects must remain on ordinary providers. An opt-in experimental character policy requests this scope between full-review deadlines, including in the live fallback.
 - **Collect-Then-Run Cycle:** When a character's decision timer fires (`Next`), `game-choice` gathers proposals from all registered providers, applies `game-utility` scoring and hysteresis against any active task, and invokes the winning handler.
 
 ## Game Integration

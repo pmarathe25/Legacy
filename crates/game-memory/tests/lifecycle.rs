@@ -29,6 +29,11 @@ fn builder() -> Builder {
         Err(Error::Rejected("rollback scene".into()))
     })
     .unwrap();
+    b.request::<FailScenes>(|tx, r| {
+        tx.call(game_memory::ObserveScenes(vec![scene(r.0), scene(r.1)]))?;
+        Err(Error::Rejected("rollback scenes".into()))
+    })
+    .unwrap();
     b.request::<NestedScene>(|tx, r| {
         tx.call(scene(r.0))?;
         let expected = tx.get::<Knowledge>()?.clone();
@@ -386,6 +391,12 @@ impl Request for FailScene {
     const KEY: &'static str = "test-memory.fail-scene";
     type Response = ();
 }
+#[derive(Clone, Serialize, Deserialize)]
+struct FailScenes(PersonId, PersonId);
+impl Request for FailScenes {
+    const KEY: &'static str = "test-memory.fail-scenes";
+    type Response = ();
+}
 fn scene(person: PersonId) -> game_memory::ObserveScene<game_knowledge::FactValue> {
     let entries = (0..700)
         .map(|n| {
@@ -425,6 +436,36 @@ fn oversized_observation_is_atomic_bounded_and_replayable() {
     assert_eq!(h.save().unwrap(), other.save().unwrap());
     run(&mut h, SimTime(3 * DAY.0));
     assert!(h.get::<Knowledge>().unwrap().0[&p].is_empty());
+}
+#[test]
+fn parallel_personal_scenes_preserve_replay_and_atomic_rollback() {
+    let (mut one, p, q) = setup();
+    let mut four = builder().load(&one.save().unwrap(), 4).unwrap();
+    for host in [&mut one, &mut four] {
+        let before = host.save().unwrap();
+        assert!(host.dispatch(FailScenes(p, q)).is_err());
+        assert_eq!(host.save().unwrap(), before);
+        for _ in 0..2 {
+            host.dispatch(game_memory::ObserveScenes(vec![scene(p), scene(q)]))
+                .unwrap();
+        }
+        // Duplicate people must retain sequential observation semantics.
+        host.dispatch(game_memory::ObserveScenes(vec![scene(p), scene(p)]))
+            .unwrap();
+        for person in [p, q] {
+            let state = host.get::<Knowledge>().unwrap();
+            assert_eq!(state.0[&person].len(), 512);
+            assert_eq!(state.1[&person].entries.len(), 512);
+        }
+    }
+    assert_eq!(one.save().unwrap(), four.save().unwrap());
+    let mut loaded = builder().load(&four.save().unwrap(), 2).unwrap();
+    assert_eq!(four.save().unwrap(), loaded.save().unwrap());
+    run(&mut one, SimTime(3 * DAY.0));
+    run(&mut loaded, SimTime(3 * DAY.0));
+    assert_eq!(one.save().unwrap(), loaded.save().unwrap());
+    assert!(one.get::<Knowledge>().unwrap().0[&p].is_empty());
+    assert!(one.get::<Knowledge>().unwrap().0[&q].is_empty());
 }
 #[test]
 fn oversized_initialization_records_before_crowding_and_preserves_tie_breaking() {

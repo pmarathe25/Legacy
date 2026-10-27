@@ -18,6 +18,12 @@ Per-person belief tables, active local inspection, stale-stock disproof, and bel
 
 ## How It Works
 
+`ObserveFrame` is an experimental phased cohort operation: it updates personal
+scene memories as a batch before inspecting each person's accessible and carried
+stores in order. Per-observation or per-patch hooks force the ordinary path.
+This changes cross-person observation and scheduling order, so it is a separate
+behavioral model rather than an exact upgrade to individual observations.
+
 - **Shared Immutable Scenes:** Shares immutable road and exposed-patch snapshots across local observers via `game-facts` while maintaining separate per-person evidence timestamps. Moving to a new area freezes prior scene evidence into cold history.
 - **Versioned Discovery Caches:** Tracks weak permission-version tokens per person to skip redundant container discovery scans until property access changes.
 

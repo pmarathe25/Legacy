@@ -84,6 +84,58 @@ polling for work and implies residency. Both are runtime options and default to
 false. Active polling can reduce latency while spending much more CPU; compare
 wall and CPU time together. Reloads use the newly loaded host's executor.
 
+`--frame-meal-arbitration true` enables the experimental selected-local-meal
+cohort policy; it requires `--frame-commit-batch` to be positive and whole-actor
+frame decisions. The setting changes actor ordering and can change behavior.
+Its arbitration is provisional and bounded by the commit group; food actions
+still run through their original owners in sequence. Compare outcomes separately
+before choosing it for a history.
+
+`--frame-meal-wave true` enables a separate phased execution experiment and
+requires `--frame-meal-arbitration true`. It updates admitted self-meal bodies
+as a group and publishes feeding observations after all body and mood effects;
+stock and its listeners remain ordered. Hooks, invalidation and failures can
+force an ordered retry. This changes observer timing and is not yet validated
+for the long history. Body updates use a serial threshold for current cohort
+sizes because a small synthetic screen found worker dispatch slower.
+
+`--frame-local-interactions true` selects the in-development local interaction
+frame, which groups selected local meals and care. It requires batched frame
+decisions and meal arbitration, and cannot be combined with the older meal wave.
+It changes interaction ordering and requires performance and replay validation.
+
+`--frame-activity-epochs true` selects the in-development persistent-activity
+model. Its first activity batches rest and retains it across recovery epochs,
+while urgent events and player control can interrupt it. It changes decision
+and rest timing and requires performance and replay validation.
+
+`--frame-mechanics-sessions true` selects the in-development persistent
+mechanics session model. It retains an experiment across bounded trials and
+batches independent physical calculations, with urgent interruption. It changes
+experiment timing and requires performance and replay validation.
+
+`--arrival-window-minutes N` rounds new nonzero journeys up to a shared arrival
+boundary of N minutes; zero uses exact arrival times. Passengers retain their
+carrier's arrival time, and journeys already in progress keep their deadlines.
+This changes travel duration and batches arrivals; compare end-to-end speed and
+outcomes before using it for a long history.
+
+`--frame-full-minutes N` enables the experimental two-tier review model. It
+requires grouped whole-actor frames and urgent interrupts, and is incompatible
+with the nonurgent shortlist cache and meal arbitration. Fresh fast reviews
+continue to consider survival, care, conflict, incoming questions and other
+unclassified providers; outgoing information and other explicitly designated
+discovery wait for a bounded full review. This changes behavior and remains
+unvalidated for the long history. Set zero to disable it.
+
+`--frame-nonurgent-minutes N` enables a separate experimental nonurgent offer
+cache on whole-actor frames; `0` disables it. The maximum is one day. Food and
+body pressures are recomputed, while remembered nonurgent offers can remain
+stale for the specified window and until the next frame. Injury and other urgent
+signals invalidate the cache; hunger threshold crossing is not independently
+scheduled. Compare this behavioral model with a matching baseline and retain
+its distinct journal and checkpoint lineage.
+
 Biological years last 365 days; authored climate years currently last 360. Small scenarios retain their controlled fixture clocks. See the [physical profile guide](profiles/README.md) for experimental habitats and their limits.
 
 ## Analysis and verification
@@ -93,6 +145,22 @@ Biological years last 365 days; authored climate years currently last 360. Small
 `mortality.py` reads compact demographic evidence. `patterns.py` describes recorded social, ecological, and personal-value patterns. Recorded intermediate exchange is not proof that a monetary system formed. Trait/reproductive associations do not separate selection from drift, family preferences, or culture; young cohorts remain censored.
 
 `LEGACY_PROFILE=1` adds inclusive feature timings and failed-plan reasons to summaries. Compare matched conditions when measuring performance. The legacy `study.py` supervisor remains available for older experiment plans; prefer chunked studies for new work.
+
+For diagnostic traces, repeat `--trace-event` with exact event keys (for example,
+`--trace-event transport.arrived`). The selected events are added to the journal
+without changing simulation or checkpoint ledger state. Trace journals contain
+extra records and must be kept separate from ordinary history segments.
+
+`--journey-cooldown-minutes N` enables an experimental delay between completed
+voluntary round trips and the next discretionary journey. It changes behavior,
+is saved with the world, and does not block direct or survival travel; use zero
+to disable it. Compare outcomes and replay separately before adoption.
+
+`--care-refusal-minutes N` enables experimental, bounded memory of a voluntary
+food refusal. It permits other known foods and quantities, reacts to newer
+observed need and relevant action completion, and schedules a retry at expiry.
+It changes behavior, is saved with the world, and defaults to disabled. Use
+zero to disable it; evaluate care outcomes, responsiveness and replay separately.
 
 The profile separates history loading, advancement, journal collection, checkpoints, JSON export, and snapshot construction. Feature spans include character review, barter, food planning, observation, physiology, wild growth, and plant genetics. Nested spans overlap; do not add them as independent costs. The summary cannot include the time spent writing itself. Profiling changes no simulation state.
 
@@ -269,6 +337,21 @@ Add `--parallel-listeners true` to share work across independent providers insid
 small actor cohorts. Larger cohorts keep whole-actor tasks. This changes task
 granularity, while worker counts and execution strategy must preserve results
 within the selected model.
+
+`--frame-urgent true` enables the separate interrupt experiment for frame models.
+Detected injury, arrival and urgent-care alerts trigger a live review without
+waiting for the next frame. Other wakes interrupt when the character is already
+above the urgent-hunger threshold; this setting does not add a threshold-crossing
+detector. Same-time wakes coalesce, and the affected actor's prepared frame inputs
+are invalidated. The option is saved and defaults to false. Compare this behavioral
+model separately, including care outcomes, latency, worker counts and reloads.
+
+`--frame-parallel-observations true` enables an experimental phased observation
+step. Personal scene-memory transformations prepare in parallel and publish in
+stable order, then accessible and carried stores are inspected individually.
+Cross-person observation and scheduling order changes. Per-observation hooks
+fall back to the ordinary path. This setting is saved, defaults to false and
+requires decision frames; measure complete history throughput and outcomes.
 
 `--frame-demand true` enables demand-driven frame timing. Mind deadlines and new
 cues request the next useful boundary; empty periods stop polling. The saved

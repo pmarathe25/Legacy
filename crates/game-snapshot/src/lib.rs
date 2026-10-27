@@ -16,6 +16,30 @@ pub struct Decoded<M, V> {
     pub metadata: M,
     pub resources: BTreeMap<String, V>,
 }
+pub fn to_string(
+    write: impl FnOnce(&mut dyn std::io::Write) -> game_core::Result<()>,
+) -> game_core::Result<String> {
+    let mut bytes = Vec::new();
+    write(&mut bytes)?;
+    Ok(String::from_utf8(bytes).expect("JSON is UTF-8"))
+}
+/// Stream the manifest and encoded resources without materializing a combined tree.
+pub fn write_with_resources<M: serde::Serialize>(
+    out: &mut dyn std::io::Write,
+    metadata: &M,
+    resources: impl FnOnce(&mut dyn std::io::Write) -> game_core::Result<()>,
+) -> game_core::Result<()> {
+    let metadata = serde_json::to_string(metadata)
+        .map_err(|e| game_core::Error::InvalidSave(e.to_string()))?;
+    let (prefix, suffix) = metadata
+        .split_once("\"resources\":{}")
+        .expect("resource slot");
+    let io = |e: std::io::Error| game_core::Error::InvalidSave(e.to_string());
+    out.write_all(prefix.as_bytes()).map_err(io)?;
+    out.write_all(b"\"resources\":{").map_err(io)?;
+    resources(out)?;
+    out.write_all(suffix.as_bytes()).map_err(io)
+}
 
 pub fn from_str<M: DeserializeOwned, V, E: Display>(
     source: &str,

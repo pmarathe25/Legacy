@@ -1,0 +1,27 @@
+[package]
+name = "game-character-choices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-autonomy-policy.workspace = true
+game-cargo.workspace = true
+game-character-clock.workspace = true
+game-character-state.workspace = true
+game-choice.workspace = true
+game-contracts.workspace = true
+game-core.workspace = true
+game-decision-food.workspace = true
+game-decision-intents.workspace = true
+game-diagnostics.workspace = true
+game-invocation.workspace = true
+game-knowledge.workspace = true
+game-lineage.workspace = true
+game-physiology.workspace = true
+game-provisioning.workspace = true
+game-sim.workspace = true
+game-transport.workspace = true
+game-utility.workspace = true
+game-vitality.workspace = true
+serde.workspace = true

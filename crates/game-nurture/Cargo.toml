@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 [dependencies]
+game-local-interactions.workspace = true
+game-food-care-execution.workspace = true
 game-care-perception.workspace = true
 game-diagnostics.workspace = true
 game-search.workspace = true

@@ -1,5 +1,8 @@
 # game-invention
 
+The experimental fast-review policy defers mechanical invention discovery until
+a full review; ordinary reviews and physical action handlers remain unchanged.
+
 Voluntary apparatus construction and experiments compete in the ordinary chooser.
 Existing materials and visible geometry provide possible designs; private physical
 limits do not become character knowledge. Trials expose moved loads, felt effort,

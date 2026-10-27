@@ -9,6 +9,21 @@ impl Request for Go {
     const KEY: &'static str = "wayfaring.go";
     type Response = ();
 }
+fn cooldown_active(state: &Wayfaring, person: PersonId, now: SimTime) -> bool {
+    state
+        .trip_cooldown
+        .zip(state.completed_at.get(&person))
+        .is_some_and(|(cooldown, completed)| now.0.saturating_sub(completed.0) < cooldown.0)
+}
+fn allowed(state: &Wayfaring, person: PersonId, target: AreaId, now: SimTime) -> bool {
+    if state.trip_cooldown.is_none() {
+        return true;
+    }
+    match state.trips.get(&person) {
+        Some(trip) => target == trip.home || target == trip.destination,
+        None => !cooldown_active(state, person, now),
+    }
+}
 fn position(tx: &Transaction<'_>, p: PersonId) -> Result<game_transport::Location> {
     let position = tx
         .get::<game_transport::Positions>()?
@@ -34,6 +49,10 @@ fn position(tx: &Transaction<'_>, p: PersonId) -> Result<game_transport::Locatio
 }
 pub(super) fn register(b: &mut Builder) -> Result<()> {
     b.request::<Go>(|tx, r| {
+        require(
+            allowed(tx.get::<Wayfaring>()?, r.person, r.target, tx.now()),
+            "voluntary journey is cooling down or already committed",
+        )?;
         let location = position(tx, r.person)?;
         let area = match location {
             game_transport::Location::At(a) => a,
@@ -93,6 +112,11 @@ pub(super) fn options(tx: &Transaction<'_>, p: PersonId) -> Result<Vec<Proposal>
         return Ok(offers);
     };
     let state = tx.get::<Wayfaring>()?;
+    // Only new discretionary journeys are delayed. Continuing an existing trip,
+    // survival travel and direct movement remain available.
+    if !state.trips.contains_key(&p) && cooldown_active(state, p, tx.now()) {
+        return Ok(offers);
+    }
     let mut targets: std::collections::BTreeSet<_> =
         game_provisioning::frontiers(facts).into_iter().collect();
     targets.extend(
@@ -102,6 +126,9 @@ pub(super) fn options(tx: &Transaction<'_>, p: PersonId) -> Result<Vec<Proposal>
     );
     if let Some(t) = state.trips.get(&p) {
         targets.extend([t.home, t.destination]);
+        if state.trip_cooldown.is_some() {
+            targets.retain(|target| *target == t.home || *target == t.destination);
+        }
     }
     let risk = game_vitality::disposition(tx, p, "risk-tolerance");
     let foresight = game_vitality::ability(tx, p, "foresight").min(16000) as i64;

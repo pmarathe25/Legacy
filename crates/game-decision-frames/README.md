@@ -56,6 +56,26 @@ Auxiliary providers subscribe to a separate event and never enter normal offer
 arbitration. They share the cohort's single pool submission, with a separate task
 per auxiliary query so expensive food searches do not block provider chunks.
 Saved typed input payloads remain readable after reload.
+`decode_pending` also inspects a selected request by its checked wire key, using
+the typed fast path or a saved-payload fallback without invoking its handler.
+
+The opt-in `meal_arbitration` policy requires whole-actor preparation and a
+positive grouped-commit size. It changes the ordering of character reviews;
+the character owner validates and executes every accepted action. It does not
+promise starvation freedom for changing cohorts. The additional `meal_wave`
+option executes multiple admitted self-meals in a phased transaction: stock and
+its listeners remain ordered, surviving bodies may update in parallel, and all
+meal body and mood effects settle before `Fed` observers. It is a separate
+behavioral model with hook, interruption and failure fallback; other actions
+continue through the ordered path. Current cohorts are capped at 128; body
+updates run serially at that size after a short synthetic worker screen.
+
+The independent `nonurgent_millis` experiment retains a bounded shortlist of
+nonurgent offers while recomputing food, hunger, fatigue and scoring on frame
+reviews. Urgent evidence clears it; an expired or exhausted shortlist refreshes.
+Owner requests still validate at execution. Its wake can be delayed until the
+next frame, and a hunger crossing has no independent interrupt detector. Cached
+motives and provider observations can change behavior; it defaults to zero.
 
 Each cohort captures the actor's action identity as a resolution precondition.
 If an earlier resolution newly involves that actor in an activity, its obsolete
@@ -70,6 +90,15 @@ through `StoreDecisions`. Prepared effects and pure-provider provenance survive
 reload. Named-provider rechecks preserve the conflict-memory mitigation after
 preparation moves out of the provider cache. This freezes more inputs than the
 original hybrid model and is separately opt-in.
+
+`Tune::urgent_immediate` is a separate opt-in interrupt experiment. Injury,
+arrival and urgent care alerts schedule a live review at the current simulation
+time instead of waiting for the next frame. Other wakes also interrupt if the
+actor's hunger has already reached the configured urgent threshold. This does not
+create an independent hunger-threshold detector. The interrupt discards that
+actor's prepared frame inputs, coalesces same-time wakes and keeps ordinary
+frame scheduling for other decisions. Timing and choices differ from both the
+original frame and event-driven models; measure outcomes as well as performance.
 
 `Tune::commit_batch` optionally resolves whole-actor frames in groups of 1–128
 actors. Character-owned scheduling runs after cohort preparation; ordinary

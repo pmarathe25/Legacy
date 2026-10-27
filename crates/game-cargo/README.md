@@ -17,6 +17,15 @@
 
 ## How It Works
 
+Experimental read-only stock planning is provided by [`game-cargo-planning`](../game-cargo-planning/README.md); cargo requests remain authoritative.
+
+Each `cargo.changed` notification includes the affected inventory's exact stock
+before and after the operation, and transfers include the destination's balances.
+These snapshots describe that operation inside its enclosing transaction; an
+outer rollback can still undo it. Listeners still run in order, and an earlier
+reentrant listener can change current stock after the snapshot. The snapshots do
+not yet permit multiple stock mutations to be committed before notification.
+
 - **Cached mass accounting:** Each inventory caches its total occupied and reserved mass so `used()` and capacity checks run in $O(1)$ time, while full save validation recomputes and verifies the sum.
 - **Co-location enforcement:** Transfers and pickups query [`game-transport`](../game-transport/README.md) to confirm both endpoints are in the same area.
 

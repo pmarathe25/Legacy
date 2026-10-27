@@ -53,34 +53,6 @@ impl<'a> Transaction<'a> {
             accepted,
         }
     }
-    pub fn prepare<R: Request, T: Resource + Eq, Q: Send>(
-        &mut self,
-        request: R,
-        query: impl Fn(&Transaction<'_>) -> Result<Q> + Sync,
-    ) -> Result<(R::Response, Q)>
-    where
-        R::Response: Send,
-    {
-        if self.compute().current_num_threads() > 1 {
-            let initial = self.get::<T>()?.clone();
-            let mut draft = self.fork(initial.clone());
-            let (result, extra) = self.compute().join(
-                || {
-                    let result = draft.call(request.clone());
-                    let accept = !draft.blocked && draft.get::<T>().is_ok_and(|v| *v == initial);
-                    (result, accept, draft.calls)
-                },
-                || query(self),
-            );
-            let (result, accept, calls) = result;
-            drop(draft);
-            if accept {
-                self.calls = calls;
-                return Ok((result?, extra?));
-            }
-        }
-        Ok((self.call(request)?, query(self)?))
-    }
     pub fn notify_prepared<E: Event + Sync, T: Resource>(
         &mut self,
         event: E,

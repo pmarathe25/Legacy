@@ -1,5 +1,6 @@
 //! Live bodily state and owner-validated physical changes.
 use game_body::*;
+pub use game_body::{Nourish, NourishMany, SetRestingMany};
 use game_core::*;
 use game_packed::Packed;
 use game_storage::Table;
@@ -69,6 +70,17 @@ impl Resource for Bodies {
             return self.validate();
         }
         self.validate_rows(self.people.changed_since(&previous.0).map(|(_, row)| row))
+    }
+}
+impl NourishmentOwner for Bodies {
+    fn body_rows(&self) -> &Packed<PersonId, Body> {
+        &self.people
+    }
+    fn body_rows_mut(&mut self) -> &mut Packed<PersonId, Body> {
+        &mut self.people
+    }
+    fn body_rules(&self) -> &Rules {
+        &self.rules
     }
 }
 pub fn view(host: &Host, person: PersonId) -> Result<Option<BodyView>> {
@@ -190,17 +202,6 @@ pub struct SetResting {
 }
 impl Request for SetResting {
     const KEY: &'static str = "soma.resting";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Nourish {
-    pub person: PersonId,
-    pub relief: u64,
-    pub health: i32,
-    pub alertness: i32,
-}
-impl Request for Nourish {
-    const KEY: &'static str = "soma.nourish";
     type Response = ();
 }
 pub fn plugin(b: &mut Builder) -> Result<()> {
@@ -354,23 +355,12 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let max = maximum_health(tx.get()?, r.person);
         let p = body_mut(tx, r.person)?;
         require(p.alive, "cannot feed a dead body")?;
-        if r.relief > p.hunger {
-            p.hunger_fraction = 0;
-        }
-        p.hunger = p.hunger.saturating_sub(r.relief);
-        p.health = if r.health >= 0 {
-            p.health.saturating_add(r.health as u64).min(max)
-        } else {
-            p.health.saturating_sub(u64::from(r.health.unsigned_abs()))
-        };
-        p.fatigue = if r.alertness >= 0 {
-            p.fatigue.saturating_sub(r.alertness as u64)
-        } else {
-            p.fatigue
-                .saturating_add(u64::from(r.alertness.unsigned_abs()))
-        };
+        apply_nourishment(p, max, &r);
         death(tx, r.person, r.health < 0)
     })?;
+    register_nourishment_batch::<Bodies>(b)?;
+    register_resting_batch::<Bodies>(b)?;
+    game_body_effort::register::<Bodies>(b)?;
     development::register(b)
 }
 

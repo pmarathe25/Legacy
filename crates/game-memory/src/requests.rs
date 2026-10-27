@@ -1,4 +1,5 @@
 use super::*;
+use rayon::prelude::*;
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(bound = "V: Content")]
 pub struct Receive<V: Content> {
@@ -28,6 +29,14 @@ pub struct ObserveScene<V: Content> {
 }
 impl<V: Content> Request for ObserveScene<V> {
     const KEY: &'static str = "memory.observe_scene";
+    type Response = ();
+}
+/// Prepare independent personal scene updates in parallel and publish in input order.
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(bound = "V: Content")]
+pub struct ObserveScenes<V: Content>(pub Vec<ObserveScene<V>>);
+impl<V: Content> Request for ObserveScenes<V> {
+    const KEY: &'static str = "memory.observe_scenes";
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -115,6 +124,70 @@ pub(super) fn register<V: Content>(b: &mut Builder) -> Result<()> {
             .or_default()
             .observe(r.scene, stamp);
         observation::record_many::<V>(tx, r.person, keys)
+    })?;
+    b.request::<ObserveScenes<V>>(|tx, r| {
+        let unique: std::collections::BTreeSet<_> = r.0.iter().map(|row| row.person).collect();
+        if tx.has_before::<ObserveScene<V>>()
+            || unique.len() != r.0.len()
+            || r.0.len() < 2
+            || tx.compute().current_num_threads() == 1
+        {
+            for row in r.0 {
+                tx.call(row)?;
+            }
+            return Ok(());
+        }
+        let rows: Vec<Result<_>> = tx.compute().install(|| {
+            r.0.par_iter()
+                .map(|row| {
+                    let memories = tx.get::<Memories<V>>()?;
+                    let old = memories.0.get(&row.person);
+                    let keys: Vec<_> = row
+                        .scene
+                        .entries()
+                        .map(|(key, value)| {
+                            let same = old.and_then(|facts| facts.get(key)).is_some_and(|fact| {
+                                game_facts::same_value(fact.value.as_ref(), value.as_ref())
+                            });
+                            (key.clone(), same)
+                        })
+                        .collect();
+                    let mut facts = old.cloned().unwrap_or_default();
+                    facts.observe(
+                        row.scene.clone(),
+                        game_facts::Stamp {
+                            source: row.person,
+                            observed: tx.now(),
+                            revision: tx.revision_after(),
+                            confidence: 100,
+                        },
+                    );
+                    let book = if keys.is_empty() {
+                        None
+                    } else {
+                        let context = observation::Context::new(tx, row.person)?;
+                        let mut book = memories.1.get(&row.person).cloned().unwrap_or_default();
+                        observation::record_rows(&facts, &mut book, keys, &context);
+                        retention::forget_prepared(&mut facts, &mut book);
+                        Some(book)
+                    };
+                    Ok((row.person, facts, book))
+                })
+                .collect()
+        });
+        let rows: Result<Vec<_>> = rows.into_iter().collect();
+        for (person, facts, book) in rows? {
+            let has_book = book.is_some();
+            let memory = tx.edit::<Memories<V>>()?;
+            memory.0.insert(person, facts);
+            if let Some(book) = book {
+                memory.1.insert(person, book);
+            }
+            if has_book {
+                retention::schedule::<V>(tx, person)?;
+            }
+        }
+        Ok(())
     })?;
     b.request::<Significance>(|tx, r| {
         require(

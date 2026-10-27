@@ -1,4 +1,6 @@
 //! Actual diets, experienced food effects, and substance dependence.
+mod batch;
+pub use batch::Meals;
 mod motives;
 use game_core::*;
 pub use game_diet::{Diet, Effects, Evaluation as FoodEvaluation, Habit, Learned, Status};
@@ -217,6 +219,7 @@ pub fn choose_meal(
 pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("nutrition", 1)?;
     b.resource::<Nutrition>()?;
+    batch::register(b)?;
     b.request::<Enable>(|tx, _| {
         if !tx.get::<Nutrition>()?.enabled {
             tx.edit::<Nutrition>()?.enabled = true;

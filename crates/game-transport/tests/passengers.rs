@@ -33,7 +33,14 @@ fn builder() -> Builder {
 }
 #[test]
 fn a_passenger_can_rest_and_signal_and_cancellation_preserves_their_own_action() {
+    for window in [SimDuration(0), SimDuration(15 * MINUTE.0)] {
+        passenger_interruption(window);
+    }
+}
+fn passenger_interruption(window: SimDuration) {
     let mut h = builder().build(3, 1).unwrap();
+    h.dispatch(game_transport::ConfigureArrivalWindow(window))
+        .unwrap();
     let home = h
         .dispatch(game_land::CreateArea {
             name: "Home".into(),
@@ -68,6 +75,17 @@ fn a_passenger_can_rest_and_signal_and_cancellation_preserves_their_own_action()
     })
     .unwrap();
     assert!(!h.get::<Actions>().unwrap().0.contains_key(&p[1]));
+    let positions = h.get::<game_transport::Positions>().unwrap();
+    assert!(game_transport::together(positions, p[0], p[1]));
+    if window.0 > 0 {
+        assert!(matches!(
+            positions.0[&p[1]],
+            game_transport::Location::Transit {
+                arrives: SimTime(900_000),
+                ..
+            }
+        ));
+    }
     h.dispatch(game_physiology::Rest { person: p[1] }).unwrap();
     h.dispatch(game_signals::Express { person: p[1] }).unwrap();
     assert!(

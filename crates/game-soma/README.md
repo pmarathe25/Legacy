@@ -8,6 +8,7 @@
 
 - **Bodies resource (`Bodies`):** Stores dense `game-packed` body rows, physiological `Rules`, phase clock, and a live-person index (`physiology.bodies`).
 - **Validated body mutations:** Handles `SpawnBody`, `Damage`, `Heal`, `Exert`, `RestState`, `FeedBody`, and `TickBodies`.
+- **Experimental nourishment batch (`NourishMany`):** Applies independent surviving body effects through owner-controlled disjoint rows. Duplicate people, missing or dead rows, possible death, and scalar hooks use the ordinary ordered `Nourish` requests. Callers select a measured parallel threshold and own the surrounding transaction.
 - **Deferred dead-row projection:** Advances only living rows during periodic ticks while projecting deceased rows on read/save to preserve canonical save compatibility.
 
 ## Boundaries

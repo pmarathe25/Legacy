@@ -256,13 +256,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
             vec![item]
         } else {
             let after = tx.get::<game_cargo::Cargo>()?.0[&e.inventory].amount(e.good);
-            departing(
-                tx.get()?,
-                e.inventory,
-                e.good,
-                after.saturating_add(e.quantity),
-                e.quantity,
-            )
+            // Reentrant earlier listeners may have changed stock again. In that
+            // case retain the original live-state reconstruction until those
+            // listeners support ordered effect publication.
+            let before = e
+                .stock
+                .filter(|s| s.after == after)
+                .map_or_else(|| after.saturating_add(e.quantity), |s| s.before);
+            departing(tx.get()?, e.inventory, e.good, before, e.quantity)
         };
         for item in moved {
             let s = tx.edit::<Items>()?;

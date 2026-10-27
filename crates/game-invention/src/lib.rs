@@ -8,7 +8,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     b.plugin("invention", 1)?;
     observations(b)?;
     techniques::register(b)?;
-    game_choice::provider(b, "mechanics.opportunities", |tx, e| {
+    game_choice::deliberative_provider(b, "mechanics.opportunities", |tx, e| {
         if !game_choice::collecting(tx, e.person)
             || !tx.get::<Machines>()?.enabled
             || !game_vitality::can_manipulate(tx, e.person)
@@ -154,6 +154,7 @@ fn observations(b: &mut Builder) -> Result<()> {
             tx.call(game_knowledge::Conclude {person:e.person,key:format!("mechanics:need:{label}"),value:serde_json::json!({"force":task.force,"travel":task.travel,"met":e.lifted>=task.force && e.travel>=task.travel}),confidence:80})?;
         }
         let Some(id) = e.device else { return Ok(()) };
+        let parts = e.parts.clone().or_else(|| tx.get::<Machines>().ok()?.devices.get(&id).map(|d| d.parts.clone()));
         let gain = (u128::from(e.lifted) * 1000 / u128::from(e.source.force.max(1)))
             .min(u128::from(u64::MAX)) as u64;
         let travel = if e.lifted > 0 {
@@ -168,17 +169,16 @@ fn observations(b: &mut Builder) -> Result<()> {
             value: serde_json::json!({"gain":gain,"travel":travel,"load":e.lifted,"input_force":e.source.force,"input_travel":e.source.travel}),
             confidence: 80,
         })?;
-        let parts = tx.get::<Machines>()?.devices[&id].parts.clone();
+        let Some(parts) = parts else { return Ok(()) };
         tx.call(game_knowledge::Conclude {
             person: e.person, key: format!("mechanics:design:{}", game_physics::design_key(&parts)),
             value: serde_json::json!({"parts":parts,"gain":gain,"travel":travel}), confidence: 80,
         })?;
-        let d = &tx.get::<Machines>()?.devices[&id];
         let context = std::collections::BTreeMap::from([
-            ("drive".into(), i64::from(d.parts[e.outlet].drive)),
-            ("load-arm".into(), i64::from(d.parts[e.outlet].load)),
+            ("drive".into(), i64::from(parts[e.outlet].drive)),
+            ("load-arm".into(), i64::from(parts[e.outlet].load)),
             ("weight".into(), e.lifted.min(i64::MAX as u64) as i64),
-            ("stages".into(), d.parts.len() as i64),
+            ("stages".into(), parts.len() as i64),
         ]);
         for (outcome, value) in [("effort", e.source.force), ("travel", e.travel)] {
             tx.call(game_inquiry::Witness {

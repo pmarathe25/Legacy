@@ -36,6 +36,7 @@ fn run() -> Result<()> {
     let mut checkpoint = 30u64;
     let mut resume: Option<PathBuf> = None;
     let mut notable = true;
+    let mut trace_events = BTreeSet::new();
     let mut final_save = true;
     let mut record_distress = false;
     let mut continue_after_extinction = false;
@@ -51,6 +52,18 @@ fn run() -> Result<()> {
     let mut frame_demand: Option<bool> = None;
     let mut frame_minimum_cohort: Option<usize> = None;
     let mut frame_commit_batch: Option<usize> = None;
+    let mut frame_urgent: Option<bool> = None;
+    let mut frame_observations: Option<bool> = None;
+    let mut frame_meal_arbitration: Option<bool> = None;
+    let mut frame_meal_wave: Option<bool> = None;
+    let mut frame_local_interactions: Option<bool> = None;
+    let mut frame_activity_epochs: Option<bool> = None;
+    let mut frame_mechanics_sessions: Option<bool> = None;
+    let mut frame_nonurgent_millis: Option<u64> = None;
+    let mut frame_full_millis: Option<u64> = None;
+    let mut journey_cooldown: Option<SimDuration> = None;
+    let mut arrival_window: Option<SimDuration> = None;
+    let mut care_refusal_window: Option<SimDuration> = None;
     let mut attention = attention::Overrides::default();
     let mut goal_execution: Option<bool> = None;
     let mut stop_file: Option<PathBuf> = None;
@@ -69,6 +82,33 @@ fn run() -> Result<()> {
             "--sample-days" => sample = value.parse()?,
             "--checkpoint-days" => checkpoint = value.parse()?,
             "--resume" => resume = Some(PathBuf::from(value)),
+            "--trace-event" => {
+                trace_events.insert(value.clone());
+            }
+            "--journey-cooldown-minutes" => {
+                journey_cooldown = Some(SimDuration(
+                    value
+                        .parse::<u64>()?
+                        .checked_mul(MINUTE.0)
+                        .ok_or("journey cooldown overflow")?,
+                ));
+            }
+            "--care-refusal-minutes" => {
+                care_refusal_window = Some(SimDuration(
+                    value
+                        .parse::<u64>()?
+                        .checked_mul(MINUTE.0)
+                        .ok_or("care refusal window overflow")?,
+                ));
+            }
+            "--arrival-window-minutes" => {
+                arrival_window = Some(SimDuration(
+                    value
+                        .parse::<u64>()?
+                        .checked_mul(MINUTE.0)
+                        .ok_or("arrival window overflow")?,
+                ));
+            }
             "--final-save" => final_save = value.parse()?,
             "--distress" => record_distress = value.parse()?,
             "--continue-after-extinction" => continue_after_extinction = value.parse()?,
@@ -99,6 +139,29 @@ fn run() -> Result<()> {
             "--frame-demand" => frame_demand = Some(value.parse()?),
             "--frame-minimum-cohort" => frame_minimum_cohort = Some(value.parse()?),
             "--frame-commit-batch" => frame_commit_batch = Some(value.parse()?),
+            "--frame-urgent" => frame_urgent = Some(value.parse()?),
+            "--frame-parallel-observations" => frame_observations = Some(value.parse()?),
+            "--frame-meal-arbitration" => frame_meal_arbitration = Some(value.parse()?),
+            "--frame-meal-wave" => frame_meal_wave = Some(value.parse()?),
+            "--frame-local-interactions" => frame_local_interactions = Some(value.parse()?),
+            "--frame-activity-epochs" => frame_activity_epochs = Some(value.parse()?),
+            "--frame-mechanics-sessions" => frame_mechanics_sessions = Some(value.parse()?),
+            "--frame-nonurgent-minutes" => {
+                frame_nonurgent_millis = Some(
+                    value
+                        .parse::<u64>()?
+                        .checked_mul(MINUTE.0)
+                        .ok_or("nonurgent window overflow")?,
+                )
+            }
+            "--frame-full-minutes" => {
+                frame_full_millis = Some(
+                    value
+                        .parse::<u64>()?
+                        .checked_mul(MINUTE.0)
+                        .ok_or("full review interval overflow")?,
+                )
+            }
             "--attention-minutes" => attention.ordinary(value, MINUTE.0)?,
             "--attention-millis" => attention.ordinary(value, 1)?,
             "--evidence-minutes" => attention.evidence(value, MINUTE.0)?,
@@ -245,6 +308,15 @@ fn run() -> Result<()> {
         || frame_decisions.is_some()
         || frame_minimum_cohort.is_some()
         || frame_commit_batch.is_some()
+        || frame_urgent.is_some()
+        || frame_observations.is_some()
+        || frame_meal_arbitration.is_some()
+        || frame_meal_wave.is_some()
+        || frame_local_interactions.is_some()
+        || frame_activity_epochs.is_some()
+        || frame_mechanics_sessions.is_some()
+        || frame_nonurgent_millis.is_some()
+        || frame_full_millis.is_some()
     {
         let mut tuning = sim
             .debug_host()
@@ -269,6 +341,33 @@ fn run() -> Result<()> {
         if let Some(count) = frame_commit_batch {
             tuning.commit_batch = count;
         }
+        if let Some(enabled) = frame_meal_arbitration {
+            tuning.meal_arbitration = enabled;
+        }
+        if let Some(enabled) = frame_meal_wave {
+            tuning.meal_wave = enabled;
+        }
+        if let Some(enabled) = frame_local_interactions {
+            tuning.local_interactions = enabled;
+        }
+        if let Some(enabled) = frame_activity_epochs {
+            tuning.activity_epochs = enabled;
+        }
+        if let Some(enabled) = frame_mechanics_sessions {
+            tuning.mechanics_sessions = enabled;
+        }
+        if let Some(millis) = frame_nonurgent_millis {
+            tuning.nonurgent_millis = millis;
+        }
+        if let Some(millis) = frame_full_millis {
+            tuning.full_review_millis = millis;
+        }
+        if let Some(enabled) = frame_urgent {
+            tuning.urgent_immediate = enabled;
+        }
+        if let Some(enabled) = frame_observations {
+            tuning.batch_observations = enabled;
+        }
         if sim
             .debug_host()
             .get::<game_choice::Offers>()?
@@ -282,7 +381,30 @@ fn run() -> Result<()> {
                 .dispatch(game_choice::TuneFrames(tuning))?;
         }
     }
+    if let Some(cooldown) = journey_cooldown {
+        sim.debug_host_mut()
+            .dispatch(game_wayfaring::ConfigureTripCooldown(cooldown))?;
+    }
+    if let Some(window) = arrival_window
+        && game_transport::arrival_window(sim.debug_host())? != window
+    {
+        sim.debug_host_mut()
+            .dispatch(game_transport::ConfigureArrivalWindow(window))?;
+    }
+    if let Some(window) = care_refusal_window {
+        let desired = (window.0 > 0).then_some(window);
+        if sim
+            .debug_host()
+            .get::<game_households::Households>()?
+            .food_refusal_window
+            != desired
+        {
+            sim.debug_host_mut()
+                .dispatch(game_households::ConfigureFoodRefusals(window))?;
+        }
+    }
     ledger.notable = notable;
+    ledger.trace_events = trace_events;
     let epoch = ledger.epoch;
     let mut journal = BufWriter::new(File::create(output.join("events.jsonl"))?);
     let mut daily = BufWriter::new(File::create(output.join("daily.jsonl"))?);
@@ -516,6 +638,119 @@ mod tests {
     impl Request for Publish {
         const KEY: &'static str = "test.publish";
         type Response = ();
+    }
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct TraceNotice;
+    impl Event for TraceNotice {
+        const KEY: &'static str = "test.trace-notice";
+    }
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct PublishTrace;
+    impl Request for PublishTrace {
+        const KEY: &'static str = "test.publish-trace";
+        type Response = ();
+    }
+    #[test]
+    fn selected_trace_events_are_retained_without_changing_checkpoint_ledger() {
+        let mut b = Builder::new();
+        game_objects::plugin(&mut b).unwrap();
+        b.plugin("test", 1).unwrap();
+        b.request::<PublishTrace>(|tx, _| tx.emit(TraceNotice, vec![]))
+            .unwrap();
+        let mut h = b.build(1, 1).unwrap();
+        h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
+            .unwrap();
+        h.dispatch(PublishTrace).unwrap();
+        let mut ordinary = Ledger::default();
+        let mut traced = Ledger {
+            trace_events: [TraceNotice::KEY.to_owned()].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut normal_out = vec![];
+        let mut trace_out = vec![];
+        ordinary.collect(&h, &mut normal_out).unwrap();
+        traced.collect(&h, &mut trace_out).unwrap();
+        assert!(normal_out.is_empty());
+        let record: Value = serde_json::from_slice(&trace_out).unwrap();
+        assert_eq!(record["kind"], TraceNotice::KEY);
+        assert_eq!(
+            serde_json::to_value(&ordinary).unwrap(),
+            serde_json::to_value(&traced).unwrap()
+        );
+        assert_eq!(traced.counts[TraceNotice::KEY], 1);
+    }
+    #[derive(Clone, serde::Serialize, serde::Deserialize)]
+    struct PublishPlant;
+    impl Request for PublishPlant {
+        const KEY: &'static str = "test.publish-plant";
+        type Response = ();
+    }
+    #[test]
+    fn trace_only_plant_event_does_not_advance_persisted_plant_cursor() {
+        let mut b = Builder::new();
+        game_objects::plugin(&mut b).unwrap();
+        b.plugin("botany", 1).unwrap();
+        b.resource::<game_botany::Botany>().unwrap();
+        b.request::<PublishPlant>(|tx, _| {
+            let now = tx.now();
+            tx.edit::<game_botany::Botany>()?.stands.insert(
+                1,
+                game_botany::Stand {
+                    sequence: 0,
+                    plants: vec![],
+                    seedbank: Default::default(),
+                    fruit: Default::default(),
+                    minimum: 0,
+                    maximum: 1,
+                    rain_min: 0,
+                    rain_max: 1,
+                    maturity: MINUTE,
+                    lifespan: DAY,
+                    shelf: None,
+                    last: now,
+                    flowering: now,
+                },
+            );
+            tx.emit(
+                game_botany::Changed {
+                    patch: 1,
+                    living: 1,
+                    seeds: 0,
+                    births: 0,
+                    deaths: 0,
+                    generation: 0,
+                    mean_cold: 0,
+                },
+                vec![],
+            )
+        })
+        .unwrap();
+        let mut h = b.build(1, 1).unwrap();
+        h.dispatch(game_objects::Install(game_objects::standard().unwrap()))
+            .unwrap();
+        h.dispatch(PublishPlant).unwrap();
+        let seasonal = ["plants:1:false".to_owned()].into_iter().collect();
+        let mut ordinary = Ledger {
+            notable: true,
+            seasonal,
+            ..Default::default()
+        };
+        let mut traced = Ledger {
+            notable: true,
+            seasonal: ordinary.seasonal.clone(),
+            trace_events: ["botany.changed".to_owned()].into_iter().collect(),
+            ..Default::default()
+        };
+        let mut normal_out = vec![];
+        let mut trace_out = vec![];
+        ordinary.collect(&h, &mut normal_out).unwrap();
+        traced.collect(&h, &mut trace_out).unwrap();
+        assert!(normal_out.is_empty());
+        assert!(!trace_out.is_empty());
+        assert_eq!(
+            serde_json::to_value(&ordinary).unwrap(),
+            serde_json::to_value(&traced).unwrap()
+        );
     }
     #[test]
     fn notable_plant_records_keep_observed_genomes_without_every_fruit_family() {

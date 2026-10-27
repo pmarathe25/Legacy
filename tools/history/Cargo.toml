@@ -6,8 +6,10 @@ license.workspace = true
 publish = false
 [features]
 review-trace = ["game-sim/review-trace"]
+interaction-profile = ["game-diagnostics/interaction-profile"]
 
 [dependencies]
+game-wayfaring.workspace = true
 rayon.workspace = true
 game-choice.workspace = true
 game-mechanics.workspace = true

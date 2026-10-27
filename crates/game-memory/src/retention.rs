@@ -8,6 +8,30 @@ pub fn duration(tx: &Transaction<'_>, p: PersonId) -> SimDuration {
             + game_vitality::ability(tx, p, "memory_durability").min(4000) * 42 * HOUR.0 / 1000,
     )
 }
+pub(super) fn forget_prepared<V: Content>(facts: &mut Facts<V>, book: &mut Book) {
+    let keys = book.crowded_short(512);
+    if keys.is_empty() {
+        return;
+    }
+    let removed: std::collections::BTreeSet<_> = keys.into_iter().collect();
+    for key in &removed {
+        facts.remove(key);
+        book.entries.remove(key);
+    }
+    let linked: Vec<_> = book
+        .entries
+        .iter()
+        .filter(|(_, trace)| trace.related.iter().any(|key| removed.contains(key)))
+        .map(|(key, _)| key.clone())
+        .collect();
+    for key in linked {
+        book.entries
+            .get_mut(&key)
+            .unwrap()
+            .related
+            .retain(|value| !removed.contains(value));
+    }
+}
 pub(super) fn forget_many<V: Content>(
     tx: &mut Transaction<'_>,
     p: PersonId,

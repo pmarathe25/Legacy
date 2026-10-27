@@ -1,6 +1,6 @@
 use super::*;
 pub(super) fn register(b: &mut Builder) -> Result<()> {
-    game_choice::provider(b, "literacy.opportunities", |tx, e| {
+    game_choice::deliberative_provider(b, "literacy.opportunities", |tx, e| {
         if !game_choice::collecting(tx, e.person) {
             return Ok(());
         }

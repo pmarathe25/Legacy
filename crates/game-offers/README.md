@@ -16,6 +16,12 @@ Nested provider preparation merges deferred effects and provenance as well as
 offers. Each private provider starts with an empty effect buffer; earlier captured
 effects must not be duplicated during fan-out.
 
+`Offers::planning_tier` can mark a speculative collection as a fast review.
+The marker stays within scratch state, including provider fan-out, and does not
+enter saves. `game-choice::CollectScoped` also supports the live fallback and
+restores its scope after errors. Only explicitly deferrable providers are skipped. Standalone
+stale rechecks use full scope, and fast drafts cannot fetch full-frame offers.
+
 Optional `FrameClock` state retains the demand clock's pending timestamp and
 scheduled identity. It is absent from periodic-frame saves. Only choice-owned
 clock handlers mutate it.

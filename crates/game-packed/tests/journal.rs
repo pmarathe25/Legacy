@@ -159,3 +159,52 @@ fn one_row_backup_per_scope_and_successful_child_is_undone_with_parent() {
     rows.rollback(outer);
     assert_eq!(rows[&1].text, "before");
 }
+
+#[test]
+fn selected_parallel_rows_are_atomic_across_nested_rollback_and_reload() {
+    let original: Packed<u64, u64> = (0..1000).map(|id| (id, id * 2)).collect();
+    let keys: Vec<_> = (0..1000).rev().filter(|id| id % 2 == 0).collect();
+    let mut reference = None;
+    for workers in [1, 4, 12] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap();
+        let mut rows = original.clone();
+        let outer = rows.begin();
+        assert!(!rows.update_selected(&pool, &[1, 1], 2, |_, value| *value = 0));
+        assert!(!rows.update_selected(&pool, &[1, 1000], 2, |_, value| *value = 0));
+        assert_eq!(rows, original);
+        assert!(rows.update_selected(&pool, &keys, 2, |id, value| *value += *id));
+        let encoded = serde_json::to_string(&rows).unwrap();
+        assert_eq!(
+            rows,
+            serde_json::from_str::<Packed<u64, u64>>(&encoded).unwrap()
+        );
+        if let Some(expected) = &reference {
+            assert_eq!(&encoded, expected);
+        } else {
+            reference = Some(encoded);
+        }
+        let inner = rows.begin();
+        assert!(rows.update_selected(&pool, &keys, 2, |_, value| *value += 1));
+        rows.commit(inner);
+        rows.rollback(outer);
+        assert_eq!(rows, original);
+        let mark = rows.begin();
+        assert!(
+            catch_unwind(AssertUnwindSafe(|| rows.update_selected(
+                &pool,
+                &keys,
+                2,
+                |id, value| {
+                    *value += 1;
+                    assert_ne!(*id, 500);
+                }
+            )))
+            .is_err()
+        );
+        rows.rollback(mark);
+        assert_eq!(rows, original);
+    }
+}

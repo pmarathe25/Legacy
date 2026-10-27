@@ -3,6 +3,8 @@ use game_core::*;
 use game_knowledge::{Facts, StoreLocation, known, location_key, patch_key};
 use game_sim::*;
 use serde::{Deserialize, Serialize};
+mod local_meal;
+pub use local_meal::{LocalMeal, local_meal};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Plan {
     Explore {

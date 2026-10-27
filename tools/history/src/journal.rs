@@ -9,6 +9,9 @@ pub(crate) struct Ledger {
     pub(crate) epoch: u64,
     #[serde(default)]
     pub(crate) notable: bool,
+    /// Additional diagnostic events to retain; this is not checkpoint state.
+    #[serde(skip)]
+    pub(crate) trace_events: BTreeSet<String>,
     #[serde(default)]
     pub(crate) journal_year: u64,
     #[serde(default)]
@@ -326,7 +329,7 @@ impl Ledger {
                     _ => {}
                 }
             }
-            if significant {
+            if significant || self.trace_events.contains(&event.kind) {
                 let mut data = event.data.clone();
                 if event.kind == "mechanics.built" {
                     let id = data["device"].as_u64().ok_or("apparatus lacks id")?;
@@ -335,7 +338,12 @@ impl Ledger {
                 }
 
                 if event.kind == "botany.changed" {
-                    self.plants.enrich(h, &mut data)?;
+                    if significant {
+                        self.plants.enrich(h, &mut data)?;
+                    } else {
+                        // Diagnostic-only rows must not advance the persisted journal cursor.
+                        self.plants.clone().enrich(h, &mut data)?;
+                    }
                     if self.notable
                         && let Some(plants) = data["observed_plants"].as_array_mut()
                     {

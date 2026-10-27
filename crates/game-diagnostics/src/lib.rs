@@ -1,5 +1,8 @@
 //! Optional wall-clock measurements, kept outside simulation state and saves.
 use serde::Serialize;
+mod interactions;
+#[cfg(feature = "interaction-profile")]
+pub use interactions::{count, interaction_enabled, interaction_meal, ordered_proposal};
 use std::{
     collections::BTreeMap,
     sync::{Mutex, OnceLock},

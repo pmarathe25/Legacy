@@ -1,5 +1,9 @@
 # game-households
 
+Saved household records and refusal bookkeeping live in
+[`game-household-state`](../game-household-state/README.md), registered here
+under the existing household owner and save key.
+
 Owns adult partnerships, kinship, revocable care commitments, and food-care intentions.
 `Households.caregivers` records many caregivers per beneficiary; a caregiver can
 support many people. `beneficiaries_of`, `carers_of`, and `committed` expose both

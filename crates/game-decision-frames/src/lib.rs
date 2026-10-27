@@ -21,7 +21,7 @@ impl Request for Tune {
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
-struct Recheck {
+pub struct Recheck {
     person: PersonId,
     proposal: Proposal,
     #[serde(default)]
@@ -61,6 +61,12 @@ impl Request for StoreDecisions {
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Batch {
     pub people: Vec<PersonId>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct InvalidatePerson(pub PersonId);
+impl Request for InvalidatePerson {
+    const KEY: &'static str = "choice.invalidate-frame-person";
+    type Response = ();
 }
 impl Request for Batch {
     const KEY: &'static str = "choice.prepare-frame";
@@ -102,6 +108,16 @@ impl Request for Fetch {
     type Response = Option<Vec<Proposal>>;
 }
 pub fn register(b: &mut Builder) -> Result<()> {
+    b.request::<InvalidatePerson>(|tx, r| {
+        if let Some(frame) = tx.edit::<Offers>()?.frame.as_mut() {
+            let frame = Arc::make_mut(frame);
+            frame.people.remove(&r.0);
+            frame.actions.remove(&r.0);
+            frame.proposals.remove(&r.0);
+            frame.decisions.remove(&r.0);
+        }
+        Ok(())
+    })?;
     b.request::<StoreDecisions>(|tx, r| {
         let f = tx
             .edit::<Offers>()?
@@ -133,6 +149,11 @@ pub fn register(b: &mut Builder) -> Result<()> {
             r.0.commit_batch == 0 || r.0.batch_decisions,
             "grouped commits require whole-actor frames",
         )?;
+        require(
+            !r.0.meal_arbitration || r.0.commit_batch > 0,
+            "meal arbitration requires grouped commits",
+        )?;
+        require(r.0.valid_experiments(), "invalid frame experiments")?;
         let f = tx
             .edit::<Offers>()?
             .frame
@@ -162,6 +183,7 @@ pub fn register(b: &mut Builder) -> Result<()> {
         };
         tx.edit::<Offers>()?.frame = r.interval.map(|interval| {
             Arc::new(FrameState {
+                meal_round: 0,
                 clock,
                 interval,
                 until,
@@ -189,6 +211,7 @@ pub fn register(b: &mut Builder) -> Result<()> {
         let until = tx.now().after(interval)?;
         let old = tx.get::<Offers>()?.frame.as_ref().unwrap();
         let next = FrameState {
+            meal_round: old.meal_round,
             clock: old.clock.clone(),
             interval,
             until,
@@ -353,7 +376,10 @@ pub fn provider(
     listener: impl Fn(&mut Transaction<'_>, &Review) -> Result<()> + Send + Sync + 'static,
 ) -> Result<()> {
     b.subscribe_isolated::<Review, Offers>(name, move |tx, e| {
-        if tx.get::<Offers>()?.frame.is_some()
+        if !fast_review(tx)
+            && tx
+                .get::<Offers>()
+                .is_ok_and(|offers| offers.frame.is_some())
             && let Some(proposals) = tx.call(Fetch {
                 provider: name.into(),
                 person: e.person,
@@ -399,9 +425,11 @@ pub fn payload<R: Request>(tx: &Transaction<'_>, person: PersonId, provider: &st
     if tx.now() >= f.until {
         return None;
     }
-    decode(&row.request)
+    decode_pending(&row.request)
 }
-fn decode<R: Request>(pending: &Pending) -> Option<R> {
+/// Inspect a request without executing it, including unbound payloads restored
+/// inside saved frame decisions. A mismatched key or invalid payload returns None.
+pub fn decode_pending<R: Request>(pending: &Pending) -> Option<R> {
     if pending.key() != R::KEY {
         return None;
     }
@@ -416,7 +444,7 @@ pub fn decision<R: Request>(tx: &Transaction<'_>, person: PersonId) -> Option<R>
     if !f.tuning.batch_decisions || tx.now() >= f.until {
         return None;
     }
-    decode(f.decisions.get(&person)?)
+    decode_pending(f.decisions.get(&person)?)
 }
 /// Rejected stale opportunities are arbitration conflicts, not personal failures.
 fn stale(

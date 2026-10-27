@@ -5,7 +5,10 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-character-activities.workspace = true
+game-local-interactions.workspace = true
 game-character-clock.workspace = true
+game-character-choices.workspace = true
 game-decision-food.workspace = true
 game-decision-intents.workspace = true
 game-character-state.workspace = true
@@ -15,6 +18,8 @@ serde_json.workspace = true
 game-digestion.workspace = true
 game-choice.workspace = true
 game-cargo.workspace = true
+game-cargo-planning.workspace = true
+game-drafting.workspace = true
 game-utility.workspace = true
 game-food-memory.workspace = true
 game-nutrition.workspace = true
@@ -38,6 +43,9 @@ game-lineage.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+game-mechanics.workspace = true
+game-soma.workspace = true
+game-autonomy-frames.workspace = true
 game-decision-frames.workspace = true
 game-family-life.workspace=true
 game-communication.workspace=true

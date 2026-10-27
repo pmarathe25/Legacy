@@ -1,5 +1,6 @@
 mod pending;
 mod persistence;
+mod scheduled;
 pub use pending::Pending;
 mod registry;
 mod transaction;
@@ -14,7 +15,7 @@ use std::{
     collections::{BTreeMap, VecDeque},
     sync::Arc,
 };
-pub use transaction::Transaction;
+pub use transaction::{AttemptOutcome, Transaction};
 pub type Job = game_contracts::Job<Pending>;
 pub type Action = game_contracts::Action<Pending>;
 pub type Actions = game_contracts::Actions<Pending>;
@@ -97,25 +98,16 @@ impl Host {
             key: R::KEY.into(),
             payload: serde_json::to_value(request).map_err(registry::json_error)?,
         };
-        if let Some(receipt) = self.receipts.get(&sequence) {
-            require(
-                receipt.request == envelope,
-                "sequence reused with different input",
-            )
-            .map_err(|_| Error::SequenceConflict)?;
-            return serde_json::from_value(receipt.response.clone()).map_err(registry::json_error);
+        if let Some(response) =
+            game_contracts::previous_receipt(&self.receipts, sequence, &envelope)?
+        {
+            return Ok(response);
         }
         for guard in &self.registry.guards {
             guard(self, &envelope)?;
         }
         let response = self.run(self.registry.bind(envelope.clone())?, None)?;
-        self.receipts.insert(
-            sequence,
-            Receipt {
-                request: envelope,
-                response: response.clone(),
-            },
-        );
+        game_contracts::record_receipt(&mut self.receipts, sequence, envelope, response.clone());
         serde_json::from_value(response).map_err(registry::json_error)
     }
     fn run(
@@ -131,38 +123,38 @@ impl Host {
             .get(request.key())
             .copied()
             .unwrap_or(1);
-        let request_key = self
-            .registry
-            .decoders
-            .get_key_value(request.key())
-            .map(|(key, _)| key.as_str());
-        let jobs = &self.jobs;
-        let extra = remove.into_iter().flat_map(|first| {
-            jobs.range((std::ops::Bound::Excluded(first), std::ops::Bound::Unbounded))
-                .take(limit - 1)
-                .take_while(move |(key, job)| {
-                    (key.0, key.1) == (first.0, first.1) && Some(job.request.key()) == request_key
-                })
-                .map(|(key, job)| (Some(*key), job.request.clone()))
-        });
-        let requests = std::iter::once((remove, request)).chain(extra);
+        let wave = remove
+            .and_then(|_| self.registry.waves.get(request.key()))
+            .filter(|_| !self.registry.before.contains_key(request.key()));
+        let requests =
+            game_contracts::scheduled_prefix(&self.jobs, remove, request, limit, |a, b| {
+                a.key() == b.key()
+            });
         let mut removed = 0;
         let mut tx = Transaction::owned(self, at, data);
         let response = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut response = Value::Null;
-            for (key, request) in requests {
-                if let Some(key) = key {
-                    // A newly scheduled earlier phase must run before the next
-                    // captured request. Cancellation can remove a captured job.
-                    if tx.precedes(key) {
-                        break;
+            if let Some(wave) = wave {
+                removed = requests.len();
+                wave(
+                    &mut tx,
+                    &requests.iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(),
+                )?;
+            } else {
+                for (key, request) in requests {
+                    if let Some(key) = key {
+                        // A newly scheduled earlier phase must run before the next
+                        // captured request. Cancellation can remove a captured job.
+                        if tx.precedes(key) {
+                            break;
+                        }
+                        removed += 1;
+                        if tx.cancelled(key.2) {
+                            continue;
+                        }
                     }
-                    removed += 1;
-                    if tx.cancelled(key.2) {
-                        continue;
-                    }
+                    response = request.invoke(&mut tx)?;
                 }
-                response = request.invoke(&mut tx)?;
             }
             tx.validate()?;
             Ok(response)
@@ -172,20 +164,13 @@ impl Host {
         let changes = tx.finish(response.is_ok());
         self.data = changes.data;
         let response = response?;
-        for _ in 0..removed {
-            let (key, _) = self.jobs.pop_first().expect("committed due prefix");
-            self.job_keys.remove(&key.2);
-        }
-        for id in changes.cancelled {
-            if let Some(key) = self.job_keys.remove(&id) {
-                self.jobs.remove(&key);
-            }
-        }
-        for job in changes.jobs {
-            let key = (job.at, job.priority, job.id);
-            self.job_keys.insert(job.id, key);
-            self.jobs.insert(key, job);
-        }
+        game_contracts::commit_jobs(
+            &mut self.jobs,
+            &mut self.job_keys,
+            removed,
+            changes.cancelled,
+            changes.jobs,
+        );
         game_contracts::append_notices(&mut self.notices, changes.notices, 1024);
         self.next_id = changes.next_id;
         self.next_notice = changes.next_notice;

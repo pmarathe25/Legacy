@@ -1,5 +1,12 @@
 # game-memory
 
+`ObserveScenes` is an experimental owner-controlled batch for independent
+personal scene updates. It prepares distinct people’s fact and trace rows in
+parallel, then installs them and schedules expiry in input order within one
+transaction. It falls back to the individual request when hooks are registered,
+people repeat or the batch is too small. Failed preparation or application rolls
+back the whole batch. It does not batch `Receive` hooks or stock observations.
+
 The authoritative personal evidence store replaces permanent `Knowledge` retention
 and the separate recollection sample and empirical reasoning queue. `game-knowledge::Knowledge` remains a
 compatibility name for this resource, not a second copy. Perception caches retain

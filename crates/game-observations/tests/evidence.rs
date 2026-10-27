@@ -1,4 +1,64 @@
 mod support;
+
+#[test]
+fn reentrant_departure_keeps_the_replacement_trip_until_its_own_arrival() {
+    let (mut initial, people, _) = support::people(support::builder());
+    let person = people[0];
+    let home = game_transport::area(initial.get().unwrap(), person).unwrap();
+    let away = initial
+        .dispatch(game_land::CreateArea {
+            name: "Away".into(),
+        })
+        .unwrap();
+    initial
+        .dispatch(game_land::Link {
+            from: home,
+            to: away,
+            duration: MINUTE,
+        })
+        .unwrap();
+    let saved = initial.save().unwrap();
+    let mut results = vec![];
+    for workers in [1, 4] {
+        let mut b = support::builder();
+        b.subscribe::<game_transport::Arrived>("aaa.restart", move |tx, e| {
+            if e.person == person && e.area == away {
+                tx.call(game_transport::Move {
+                    person,
+                    destination: home,
+                })?;
+            }
+            Ok(())
+        })
+        .unwrap();
+        let mut h = b.load(&saved, workers).unwrap();
+        let at = h
+            .dispatch(game_transport::Move {
+                person,
+                destination: away,
+            })
+            .unwrap();
+        support::run(&mut h, at);
+        let trip = &h.get::<game_observations::Observations>().unwrap().trips[&person];
+        let value = serde_json::to_value(trip).unwrap();
+        assert_eq!(value["to"], serde_json::json!(home));
+        assert_eq!(value["at"], serde_json::json!(at));
+        let game_transport::Location::Transit { arrives, .. } =
+            h.get::<game_transport::Positions>().unwrap().0[&person]
+        else {
+            panic!("replacement journey")
+        };
+        support::run(&mut h, arrives);
+        assert!(
+            !h.get::<game_observations::Observations>()
+                .unwrap()
+                .trips
+                .contains_key(&person)
+        );
+        results.push(h.save().unwrap());
+    }
+    assert_eq!(results[0], results[1]);
+}
 use game_core::*;
 use game_observations::*;
 fn memories(h: &game_sim::Host, person: PersonId) -> Vec<game_reasoning::Observation> {

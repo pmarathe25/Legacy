@@ -1,4 +1,9 @@
 use crate::*;
+/// Select whether a nested owner operation commits or rolls back its effects.
+pub enum AttemptOutcome<T> {
+    Commit(T),
+    Rollback(T),
+}
 // Independent events in a 20,000-person phase must fit; recursion remains depth-limited.
 pub(super) const MAX_CALLS: usize = 1_000_000;
 pub(crate) struct Changes {
@@ -180,6 +185,13 @@ impl<'a> Transaction<'a> {
         pending.invoke(self)
     }
     pub fn call<R: Request>(&mut self, request: R) -> Result<R::Response> {
+        self.dispatch_request(request, |tx, request, handler| (handler.run)(tx, request))
+    }
+    fn dispatch_request<R: Request, T>(
+        &mut self,
+        request: R,
+        run: impl FnOnce(&mut Transaction<'_>, R, &registry::Typed<R>) -> Result<T>,
+    ) -> Result<T> {
         let _cause = game_contracts::causal::scope("request", R::KEY);
         self.budget("request dispatch limit exceeded")?;
         let host = self.host;
@@ -198,12 +210,31 @@ impl<'a> Transaction<'a> {
                     check(self, &request)?;
                 }
             }
-            self.with_owner(handler.owner, |tx| (handler.run)(tx, request))
+            self.with_owner(handler.owner, |tx| run(tx, request, handler))
         })();
         self.depth -= 1;
         result
     }
     pub fn attempt<R: Request>(&mut self, request: R) -> Result<R::Response> {
+        self.attempt_controlled(|tx| tx.call(request).map(AttemptOutcome::Commit))
+    }
+    /// Run an owner's alternative handler with the target request's normal
+    /// hooks and a savepoint. Foreign owners may not replace its handler.
+    pub fn attempt_owned_request<R: Request, T>(
+        &mut self,
+        request: R,
+        body: impl FnOnce(&mut Transaction<'_>, R) -> Result<AttemptOutcome<T>>,
+    ) -> Result<T> {
+        require(
+            self.host.registry.request_owners.get(R::KEY) == Some(&self.owner),
+            "request belongs to another owner",
+        )?;
+        self.attempt_controlled(|tx| tx.dispatch_request(request, |tx, r, _| body(tx, r)))
+    }
+    fn attempt_controlled<T>(
+        &mut self,
+        body: impl FnOnce(&mut Transaction<'_>) -> Result<AttemptOutcome<T>>,
+    ) -> Result<T> {
         let checkpoint = (
             self.jobs.len(),
             self.cancelled.len(),
@@ -213,10 +244,11 @@ impl<'a> Transaction<'a> {
             self.next_notice,
         );
         self.frames.push(HashMap::default());
-        let result = self.call(request);
+        let result = body(self);
         let frame = self.frames.pop().expect("attempt frame");
-        self.resolve(frame, result.is_ok());
-        if result.is_err() {
+        let commit = matches!(&result, Ok(AttemptOutcome::Commit(_)));
+        self.resolve(frame, commit);
+        if !commit {
             self.jobs.truncate(checkpoint.0);
             self.cancelled.truncate(checkpoint.1);
             self.notices.truncate(checkpoint.2);
@@ -224,7 +256,10 @@ impl<'a> Transaction<'a> {
             self.next_id = checkpoint.4;
             self.next_notice = checkpoint.5;
         }
-        result
+        match result {
+            Ok(AttemptOutcome::Commit(value) | AttemptOutcome::Rollback(value)) => Ok(value),
+            Err(error) => Err(error),
+        }
     }
     pub fn schedule<R: Request>(
         &mut self,
@@ -373,16 +408,7 @@ impl<'a> Transaction<'a> {
         while let Some(frame) = self.frames.pop() {
             self.resolve(frame, commit);
         }
-        if !self.cancelled_jobs.is_empty() {
-            self.cancelled_jobs.sort_unstable();
-            self.cancelled_jobs.dedup();
-            let mut i = 0;
-            self.jobs.retain(|_| {
-                let keep = self.cancelled_jobs.binary_search(&i).is_err();
-                i += 1;
-                keep
-            });
-        }
+        game_contracts::remove_cancelled(&mut self.jobs, &mut self.cancelled_jobs);
         Changes {
             data: self.data.take().expect("writable transaction"),
             jobs: self.jobs,

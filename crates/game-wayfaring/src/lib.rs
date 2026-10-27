@@ -18,6 +18,11 @@ pub struct Wayfaring {
     pub next: Table<PersonId, SimTime>,
     pub visits: Table<PersonId, Table<AreaId, SimTime>>,
     pub completed: u64,
+    /// Optional experimental delay before starting another completed round trip.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trip_cooldown: Option<SimDuration>,
+    #[serde(default, skip_serializing_if = "Table::is_empty")]
+    pub completed_at: Table<PersonId, SimTime>,
 }
 impl Resource for Wayfaring {
     const KEY: &'static str = "wayfaring.journeys";
@@ -26,6 +31,12 @@ impl Resource for Wayfaring {
 pub struct Enable;
 impl Request for Enable {
     const KEY: &'static str = "wayfaring.enable";
+    type Response = ();
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ConfigureTripCooldown(pub SimDuration);
+impl Request for ConfigureTripCooldown {
+    const KEY: &'static str = "wayfaring.configure-trip-cooldown";
     type Response = ();
 }
 #[derive(Clone, Serialize, Deserialize)]
@@ -65,6 +76,14 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
     choices::register(b)?;
     b.request::<Enable>(|tx, _| {
         tx.edit::<Wayfaring>()?.enabled = true;
+        Ok(())
+    })?;
+    b.request::<ConfigureTripCooldown>(|tx, r| {
+        let state = tx.edit::<Wayfaring>()?;
+        state.trip_cooldown = (r.0.0 > 0).then_some(r.0);
+        if state.trip_cooldown.is_none() {
+            state.completed_at = Table::new();
+        }
         Ok(())
     })?;
     b.request::<Consider>(|tx, r| consider(tx, r.person))?;
@@ -112,15 +131,20 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         {
             t.leave_at = Some(until);
         }
-        let home = tx
-            .get::<Wayfaring>()?
-            .trips
-            .get(&e.person)
-            .is_some_and(|t| t.returning && t.home == e.area);
+        let home = {
+            let state = tx.get::<Wayfaring>()?;
+            state
+                .trips
+                .get(&e.person)
+                .is_some_and(|t| t.home == e.area && (t.returning || state.trip_cooldown.is_some()))
+        };
         if home {
             let s = tx.edit::<Wayfaring>()?;
             s.trips.remove(&e.person);
             s.completed = s.completed.saturating_add(1);
+            if s.trip_cooldown.is_some() {
+                s.completed_at.insert(e.person, now);
+            }
         }
         tx.edit::<Wayfaring>()?.next.insert(e.person, now);
         Ok(())
@@ -129,6 +153,7 @@ pub fn plugin(b: &mut Builder) -> Result<()> {
         let s = tx.edit::<Wayfaring>()?;
         s.trips.remove(&e.person);
         s.next.remove(&e.person);
+        s.completed_at.remove(&e.person);
         Ok(())
     })?;
     b.validate_save(|h| {

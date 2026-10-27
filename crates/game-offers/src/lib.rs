@@ -3,7 +3,7 @@ mod planning;
 use game_core::*;
 use game_sim::*;
 pub use game_utility::Candidate;
-pub use planning::{defer, planning, with_provider};
+pub use planning::{defer, fast_review, planning, with_provider};
 use serde::{Deserialize, Serialize};
 mod collection;
 use collection::Collection;
@@ -46,6 +46,8 @@ pub struct Offers {
     #[serde(skip)]
     fanout: bool,
     #[serde(skip)]
+    fast_review: bool,
+    #[serde(skip)]
     effects: Vec<Pending>,
     #[serde(skip)]
     source: Option<String>,
@@ -69,7 +71,10 @@ pub struct Offers {
 impl Resource for Offers {
     const KEY: &'static str = "choice.offers";
     fn validate(&self) -> Result<()> {
-        require(self.active.is_none(), "unfinished choice collection")?;
+        require(
+            self.active.is_none() && !self.fast_review,
+            "unfinished choice collection",
+        )?;
         require(
             self.frame.as_ref().is_none_or(|f| {
                 f.interval.0 > 0
@@ -77,6 +82,8 @@ impl Resource for Offers {
                     && f.tuning.minimum_cohort <= 100_000
                     && f.tuning.commit_batch <= 128
                     && (f.tuning.commit_batch == 0 || f.tuning.batch_decisions)
+                    && (!f.tuning.meal_arbitration || f.tuning.commit_batch > 0)
+                    && f.tuning.valid_experiments()
             }),
             "invalid decision frame",
         )
@@ -165,16 +172,6 @@ pub fn offer<R: Request>(
         proposal: Proposal::new(key, motive, request)?,
     })?;
     Ok(true)
-}
-/// Keep query errors deferred until the caller has checked the resulting actor state.
-pub fn collect_with<T: Send>(
-    tx: &mut Transaction<'_>,
-    person: PersonId,
-    query: impl Fn(&Transaction<'_>) -> Result<T> + Sync,
-) -> Result<(Vec<Proposal>, Result<T>)> {
-    // Providers may observe or update the world. Finish their ordered effects
-    // before preparing food (or another caller-owned query) on that world.
-    Ok((tx.call(Collect { person })?, query(tx)))
 }
 pub fn motive(need: i64, goal: i64, value: i64, effort: i64, risk: i64) -> Candidate {
     Candidate {
@@ -282,6 +279,8 @@ pub fn register(b: &mut Builder) -> Result<()> {
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameState {
+    #[serde(default, skip_serializing_if = "zero_round")]
+    pub meal_round: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock: Option<FrameClock>,
     pub interval: SimDuration,
@@ -302,31 +301,15 @@ pub struct FrameState {
     pub prepared: u64,
     pub effectful: u64,
 }
+fn zero_round(value: &u64) -> bool {
+    *value == 0
+}
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameClock {
     pub pending: Option<(SimTime, ScheduleId)>,
     pub ticks: u64,
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct FrameTuning {
-    pub recover_idle: bool,
-    pub recheck_conflicts: bool,
-    pub batch_food: bool,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub batch_decisions: bool,
-    #[serde(default, skip_serializing_if = "zero_cohort")]
-    pub minimum_cohort: usize,
-    #[serde(default, skip_serializing_if = "zero_cohort")]
-    pub commit_batch: usize,
-}
-fn zero_cohort(value: &usize) -> bool {
-    *value == 0
-}
-impl FrameTuning {
-    pub fn ordinary(&self) -> bool {
-        *self == Self::default()
-    }
-}
+pub use game_frame_tuning::{FrameTier, FrameTuning};
 impl Offers {
     pub fn scratch(person: PersonId, ongoing: Option<u64>) -> Self {
         Self {
