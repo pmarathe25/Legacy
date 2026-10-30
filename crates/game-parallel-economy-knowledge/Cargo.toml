@@ -1,0 +1,16 @@
+[package]
+name = "game-parallel-economy-knowledge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-knowledge = { path = "../game-parallel-knowledge" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-economy-campaign = { path = "../game-parallel-economy-campaign" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-social = { path = "../game-parallel-social" }
+rayon.workspace = true

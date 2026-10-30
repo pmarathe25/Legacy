@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-autonomy-columns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-autonomy = { path = "../game-parallel-autonomy" }
+game-parallel-knowledge = { path = "../game-parallel-knowledge" }
+rayon.workspace = true

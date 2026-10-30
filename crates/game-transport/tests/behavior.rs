@@ -123,3 +123,11 @@ fn an_existing_direct_road_remains_usable_when_an_indirect_route_is_faster() {
         Location::At(f.away)
     );
 }
+
+#[path = "support/arrival_wave.rs"]
+mod arrival_wave;
+
+#[path = "support/arrival_window.rs"]
+mod arrival_window;
+#[path = "support/passengers.rs"]
+mod passengers;

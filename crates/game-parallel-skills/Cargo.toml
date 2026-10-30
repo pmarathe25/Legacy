@@ -1,0 +1,14 @@
+[package]
+name = "game-parallel-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-skill-model = { path = "../game-parallel-skill-model" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+

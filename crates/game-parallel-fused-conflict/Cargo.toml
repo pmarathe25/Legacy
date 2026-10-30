@@ -1,0 +1,16 @@
+[package]
+name = "game-parallel-fused-conflict"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-conflict-overlay = { path = "../game-parallel-conflict-overlay" }
+game-parallel-tactics = { path = "../game-parallel-tactics" }
+game-parallel-conflict-packed = { path = "../game-parallel-conflict-packed" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+
+game-parallel-fused-index = { path = "../game-parallel-fused-index" }

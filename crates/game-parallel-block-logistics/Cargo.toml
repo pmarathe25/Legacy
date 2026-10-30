@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-block-logistics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-logistics = { path = "../game-parallel-logistics" }
+rayon.workspace = true

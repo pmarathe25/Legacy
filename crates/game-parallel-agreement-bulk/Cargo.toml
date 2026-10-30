@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-agreement-bulk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

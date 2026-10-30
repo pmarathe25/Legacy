@@ -44,3 +44,8 @@ fn repeated_substance_consumption_builds_tolerance_and_withdrawal_then_fades() {
     assert_eq!(d.learned[&GoodId(1)].effects.mood, last.mood);
     assert!(!d.learned.contains_key(&GoodId(2)));
 }
+
+#[path = "support/evaluation.rs"]
+mod evaluation;
+#[path = "support/transactions.rs"]
+mod transactions;

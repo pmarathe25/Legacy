@@ -1,0 +1,20 @@
+[package]
+name = "game-parallel-fused-needs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-food-select = { path = "../game-parallel-food-select" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-people = { path = "../game-parallel-people" }
+rayon.workspace = true
+
+game-parallel-environment = { path = "../game-parallel-environment" }
+
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-fatigue = { path = "../game-parallel-fatigue" }
+game-parallel-disease = { path = "../game-parallel-disease" }
+
+
+game-parallel-fused-disease = { path = "../game-parallel-fused-disease" }

@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-family-columns"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-family-model = { path = "../game-parallel-family-model" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+rayon.workspace = true

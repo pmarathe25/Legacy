@@ -1,0 +1,22 @@
+[package]
+name = "game-parallel-lot-projection"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-market = { path = "../game-parallel-market" }
+game-parallel-market-auto = { path = "../game-parallel-market-auto" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+rayon.workspace = true
+
+[dev-dependencies]
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }

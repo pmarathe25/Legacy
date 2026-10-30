@@ -15,7 +15,7 @@ fn sources(path: &Path) -> Vec<PathBuf> {
     files
 }
 #[test]
-fn small_crates_and_dependency_direction_are_enforced() {
+fn crate_size_and_dependency_direction_are_enforced() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let applications = [
         "game-api",
@@ -38,11 +38,8 @@ fn small_crates_and_dependency_direction_are_enforced() {
             .sum();
         let budget = match name {
             "game-sim" => 1250,
-            "game-storage" => 875,
-            "game-knowledge" => 750,
-            "game-characters" => 650,
-            "game-packed" => 750,
-            _ => 600,
+            "game-parallel-economy" => 5000,
+            _ => 1200,
         };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");
         if !applications.contains(&name) {

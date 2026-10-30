@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-economy-player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy = { path = "../game-parallel-economy" }
+game-parallel-economy-campaign = { path = "../game-parallel-economy-campaign" }
+game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-missions = { path = "../game-parallel-missions" }
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-economy-combat = { path = "../game-parallel-economy-combat" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

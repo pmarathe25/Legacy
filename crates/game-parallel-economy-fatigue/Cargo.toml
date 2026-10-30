@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-economy-fatigue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-fatigue = { path = "../game-parallel-fatigue" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

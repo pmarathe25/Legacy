@@ -1,0 +1,17 @@
+[package]
+name = "game-parallel-block-cli-civic"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-physical = { path = "../game-parallel-fused-physical" }
+game-parallel-observation = { path = "../game-parallel-observation" }
+
+game-parallel-block-cli-goals = { path = "../game-parallel-block-cli-goals" }
+
+game-parallel-block-cli-caregiving = { path = "../game-parallel-block-cli-caregiving" }
+
+game-parallel-block-cli-missions = { path = "../game-parallel-block-cli-missions" }
+
+game-parallel-block-cli-interface = { path = "../game-parallel-block-cli-interface" }

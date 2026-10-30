@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-lot-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-lot-content = { path = "../game-parallel-lot-content" }
+game-parallel-lot-work = { path = "../game-parallel-lot-work" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-parallel-content-import = { path = "../game-parallel-content-import" }
+game-parallel-production = { path = "../game-parallel-production" }
+serde_json.workspace = true

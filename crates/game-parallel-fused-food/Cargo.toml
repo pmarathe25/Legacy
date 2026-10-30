@@ -1,0 +1,17 @@
+[package]
+name = "game-parallel-fused-food"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-fused-diet = { path = "../game-parallel-fused-diet" }
+game-parallel-fused-store-build = { path = "../game-parallel-fused-store-build" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
+game-parallel-fused-dependent-care = { path = "../game-parallel-fused-dependent-care" }
+game-parallel-fused-cargo = { path = "../game-parallel-fused-cargo" }
+game-parallel-fused-food-aid = { path = "../game-parallel-fused-food-aid" }
+rayon.workspace = true
+
+game-parallel-fused-food-deposit = { path = "../game-parallel-fused-food-deposit" }

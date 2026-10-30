@@ -1,5 +1,7 @@
 use game_core::*;
 use game_information::*;
+#[path = "support/validation.rs"]
+mod validation;
 use game_sim::*;
 fn builder() -> Builder {
     let mut b = Builder::new();

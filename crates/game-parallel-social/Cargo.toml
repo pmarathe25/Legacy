@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-social"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-social-pressure = { path = "../game-parallel-social-pressure" }
+rayon.workspace = true
+serde.workspace = true
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }

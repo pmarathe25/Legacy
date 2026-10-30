@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-production-packed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-production-output = { path = "../game-parallel-production-output" }
+rayon.workspace = true
+smallvec = "1.16"
+
+game-parallel-packed-jobs-model = { path = "../game-parallel-packed-jobs-model" }
+game-parallel-production-contended = { path = "../game-parallel-production-contended" }
+game-parallel-production-receipts = { path = "../game-parallel-production-receipts" }
+[dev-dependencies]
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-production-admission = { path = "../game-parallel-production-admission" }
+

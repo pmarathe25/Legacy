@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-production-receipts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-packed-jobs-model = { path = "../game-parallel-packed-jobs-model" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-production-output = { path = "../game-parallel-production-output" }
+rayon.workspace = true

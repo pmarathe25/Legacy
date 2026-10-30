@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-opinions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-opinions-model = { path = "../game-parallel-opinions-model" }
+rayon.workspace = true
+serde.workspace = true
+game-parallel-social = { path = "../game-parallel-social" }

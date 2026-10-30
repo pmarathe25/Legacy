@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-tactical-choices"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-tactics = { path = "../game-parallel-tactics" }
+rayon.workspace = true

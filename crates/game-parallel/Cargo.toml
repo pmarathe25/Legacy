@@ -1,0 +1,80 @@
+[package]
+name = "game-parallel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-social-pressure = { path = "../game-parallel-social-pressure" }
+game-parallel-nutrition = { path = "../game-parallel-nutrition" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-agriculture = { path = "../game-parallel-agriculture" }
+game-parallel-logistics = { path = "../game-parallel-logistics" }
+game-parallel-cargo = { path = "../game-parallel-cargo" }
+game-parallel-cargo-actions = { path = "../game-parallel-cargo-actions" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-packing = { path = "../game-parallel-packing" }
+game-parallel-departure = { path = "../game-parallel-departure" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-knowledge = { path = "../game-parallel-knowledge" }
+game-parallel-autonomy = { path = "../game-parallel-autonomy" }
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+
+
+
+
+
+
+
+
+
+
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+game-parallel-validation = { path = "../game-parallel-validation" }
+game-parallel-market = { path = "../game-parallel-market" }
+game-parallel-family-host = { path = "../game-parallel-family-host" }
+game-parallel-market-auto = { path = "../game-parallel-market-auto" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-lineage = { path = "../game-parallel-lineage" }
+game-parallel-institutions = { path = "../game-parallel-institutions" }
+game-parallel-property = { path = "../game-parallel-property" }
+game-parallel-guardians = { path = "../game-parallel-guardians" }
+game-parallel-goods-actions = { path = "../game-parallel-goods-actions" }
+game-parallel-production-actions = { path = "../game-parallel-production-actions" }
+
+
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+
+game-parallel-care = { path = "../game-parallel-care" }
+
+game-parallel-environment = { path = "../game-parallel-environment" }
+game-parallel-skills = { path = "../game-parallel-skills" }
+game-parallel-fatigue = { path = "../game-parallel-fatigue" }
+game-parallel-tactics = { path = "../game-parallel-tactics" }
+game-parallel-disease = { path = "../game-parallel-disease" }
+
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+
+game-parallel-agreement-host = { path = "../game-parallel-agreement-host" }
+
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+
+game-parallel-goals = { path = "../game-parallel-goals" }
+
+game-parallel-purpose = { path = "../game-parallel-purpose" }
+
+game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
+
+game-parallel-dreams = { path = "../game-parallel-dreams" }
+
+game-parallel-civic-auto = { path = "../game-parallel-civic-auto" }
+
+game-parallel-missions = { path = "../game-parallel-missions" }
+
+game-parallel-personality = { path = "../game-parallel-personality" }

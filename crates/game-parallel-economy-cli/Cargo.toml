@@ -1,0 +1,32 @@
+[package]
+name = "game-parallel-economy-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-combat = { path = "../game-parallel-economy-combat" }
+game-parallel-economy-dynamics = { path = "../game-parallel-economy-dynamics" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-economy-agriculture = { path = "../game-parallel-economy-agriculture" }
+game-parallel-economy = { path = "../game-parallel-economy" }
+game-parallel-economy-cli-commands = { path = "../game-parallel-economy-cli-commands" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-content-import = { path = "../game-parallel-content-import" }
+game-parallel-skill-catalog = { path = "../game-parallel-skill-catalog" }
+game-parallel-lot-content = { path = "../game-parallel-lot-content" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-persistence = { path = "../game-parallel-persistence" }
+game-parallel-production = { path = "../game-parallel-production" }
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+rayon.workspace = true
+game-parallel-economy-player = { path = "../game-parallel-economy-player" }
+game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-disease = { path = "../game-parallel-disease" }
+game-parallel-fatigue = { path = "../game-parallel-fatigue" }

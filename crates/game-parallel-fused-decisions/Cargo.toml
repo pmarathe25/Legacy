@@ -1,0 +1,40 @@
+[package]
+name = "game-parallel-fused-decisions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-fused-social-pressure = { path = "../game-parallel-fused-social-pressure" }
+game-parallel-fused-autonomy = { path = "../game-parallel-fused-autonomy" }
+game-parallel-social-edges = { path = "../game-parallel-social-edges" }
+game-parallel-knowledge-columns = { path = "../game-parallel-knowledge-columns" }
+game-parallel-family-lifecycle = { path = "../game-parallel-family-lifecycle" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-index = { path = "../game-parallel-fused-index" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-fused-autowork = { path = "../game-parallel-fused-autowork" }
+game-parallel-fused-conflict = { path = "../game-parallel-fused-conflict" }
+game-parallel-market-auto = { path = "../game-parallel-market-auto" }
+rayon.workspace = true
+
+game-parallel-fused-care = { path = "../game-parallel-fused-care" }
+game-parallel-lineage = { path = "../game-parallel-lineage" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-knowledge = { path = "../game-parallel-knowledge" }
+game-parallel-autonomy = { path = "../game-parallel-autonomy" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+
+game-parallel-agreement-auto = { path = "../game-parallel-agreement-auto" }
+
+game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
+
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+
+game-parallel-fused-missions = { path = "../game-parallel-fused-missions" }
+
+game-parallel-fused-dependent-care = { path = "../game-parallel-fused-dependent-care" }
+
+game-parallel-fused-trade = { path = "../game-parallel-fused-trade" }
+
+game-parallel-fused-confrontation = { path = "../game-parallel-fused-confrontation" }

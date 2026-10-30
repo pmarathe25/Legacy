@@ -1,0 +1,15 @@
+[package]
+name = "game-parallel-lot-diet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-nutrition = { path = "../game-parallel-nutrition" }
+rayon.workspace = true
+
+[dev-dependencies]
+game-parallel-lot-content = { path = "../game-parallel-lot-content" }

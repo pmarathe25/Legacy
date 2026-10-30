@@ -436,3 +436,6 @@ fn source_recall_expands_with_intelligence_while_personal_supplies_remain_availa
         .unwrap();
     assert_eq!(f.host.query(Choices(f.other)).unwrap().len(), 21);
 }
+
+#[path = "support/frontiers.rs"]
+mod frontiers;

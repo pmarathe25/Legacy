@@ -1,0 +1,17 @@
+[package]
+name = "game-parallel-fused-family"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-family-lifecycle = { path = "../game-parallel-family-lifecycle" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-people = { path = "../game-parallel-people" }
+rayon.workspace = true
+
+game-parallel = { path = "../game-parallel" }
+
+game-parallel-family-model = { path = "../game-parallel-family-model" }

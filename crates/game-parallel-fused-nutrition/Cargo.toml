@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-fused-nutrition"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-needs = { path = "../game-parallel-fused-needs" }
+game-parallel-fused-diet = { path = "../game-parallel-fused-diet" }
+rayon.workspace = true

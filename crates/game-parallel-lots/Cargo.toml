@@ -1,0 +1,15 @@
+[package]
+name = "game-parallel-lots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lot-batches = { path = "../game-parallel-lot-batches" }
+game-parallel-lot-allocation = { path = "../game-parallel-lot-allocation" }
+game-parallel-lot-model = { path = "../game-parallel-lot-model" }
+game-parallel-lot-planning = { path = "../game-parallel-lot-planning" }
+rayon.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

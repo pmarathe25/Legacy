@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-family-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-family-model = { path = "../game-parallel-family-model" }
+rayon.workspace = true

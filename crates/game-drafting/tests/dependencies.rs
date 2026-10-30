@@ -1,4 +1,6 @@
 use game_drafting::*;
+#[path = "support/arbitration.rs"]
+mod arbitration;
 #[test]
 fn negative_reads_and_nested_reads_invalidate_after_attempted_writes() {
     struct Missing;

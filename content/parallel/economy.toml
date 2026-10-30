@@ -1,0 +1,372 @@
+# A small fresh economic scenario. Goods and recipes come from content/objects and content/workshop.
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[missions]
+next_id = 1
+entries = []
+
+[skills]
+rules = []
+
+[skills.catalog_training]
+completions_per_level = 2
+max_level = 5
+work_per_level = 1
+
+[knowledge]
+max_records = 4
+
+
+[environment]
+
+[[environment.regions]]
+region = 1
+damage = 1
+shelter = 16
+shelter_reduction = 1
+shelter_good = "reed-shelter-kit"
+
+[[environment.regions]]
+region = 2
+damage = 1
+shelter = 8
+shelter_reduction = 1
+shelter_good = "reed-shelter-kit"
+
+[[environment.seasons]]
+name = "growing season"
+duration = 72
+food_growth_per_thousand = 1000
+exposure_per_thousand = 1000
+planting_allowed = true
+tending_allowed = true
+harvest_allowed = true
+
+[[environment.seasons]]
+name = "cold season"
+duration = 24
+food_growth_per_thousand = 500
+exposure_per_thousand = 2000
+planting_allowed = false
+tending_allowed = true
+harvest_allowed = true
+
+[purpose]
+people = [{ person = 1, deprivation = 0 }, { person = 2, deprivation = 0 }]
+
+[purpose.rules]
+max = 100
+per_tick = 1
+blocked_increase = 1
+completion_relief = 10
+damage_threshold = 90
+damage = 1
+
+[recovery]
+interval = 4
+health_per_interval = 1
+rest_bonus = 1
+max_hunger = 20
+
+[gathering]
+inherit_births = true
+max_hunger = 20
+policies = [{ person = 2, node = 2, willing = true }]
+
+[[gathering.nodes]]
+id = 1
+region = 1
+good = "timber"
+available = 20
+capacity = 40
+regrowth = 1
+yield_per_action = 3
+
+[[gathering.nodes]]
+id = 2
+region = 2
+good = "timber"
+available = 15
+capacity = 30
+regrowth = 1
+yield_per_action = 3
+
+[food_search]
+inherit_births = true
+min_hunger = 15
+min_report_food = 1
+max_report_age = 72
+retry_ticks = 12
+people = [{ person = 2, enabled = true }]
+
+[giving]
+asking = [{ person = 2, target = 1, min_hunger = 15, enabled = true, retry_ticks = 12, request_lifetime = 6 }]
+
+[hauling]
+policies = [{ person = 2, source = 2, destination = 1, good = "bread", quantity = 2, willing = true, requires_request = true, request_pressure_threshold = 3 }]
+
+[[giving.learning]]
+person = 2
+enabled = true
+threshold = 3
+capacity = 12
+reciprocate_hunger = 20
+ask_helper = { min_hunger = 20, retry_ticks = 5, request_lifetime = 3 }
+
+[[giving.responses]]
+person = 2
+good = "bread"
+quantity = 1
+recipient_hunger_at_least = 15
+willing = true
+
+[medical]
+
+[[medical.policies]]
+person = 2
+patient = 1
+medicine = "medicine"
+quantity = 1
+willing = true
+
+[fatigue.rules]
+capacity = 30
+baseline_gain = 1
+work_gain = 2
+travel_gain = 1
+idle_recovery = 1
+rest_recovery = 5
+rest_at = 15
+resume_at = 5
+exhaustion_at = 25
+exhaustion_damage = 1
+
+[[knowledge.minds]]
+person = 1
+
+[[knowledge.minds]]
+person = 2
+
+[dynamics.claims]
+
+[[dynamics.claims.preferences]]
+person = 1
+assert_outputs = true
+
+[[dynamics.claims.preferences]]
+person = 2
+assert_outputs = true
+desperate_hunger = 35
+
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 20
+familiarity_gain = 1
+familiarity_max = 100
+relationship_retention = 64
+
+[dynamics.social.needs.rules]
+capacity = 100
+isolation_gain = 1
+encounter_relief = 5
+
+[dynamics.personality]
+social_urgency_per_isolation = 20
+inherit_births = true
+
+[[dynamics.personality.people]]
+person = 1
+sociability = 600
+diligence = 800
+
+[[dynamics.personality.people]]
+person = 2
+sociability = 800
+diligence = 700
+
+[[dynamics.social.participants]]
+person = 1
+willing = true
+
+[[dynamics.social.participants]]
+person = 2
+willing = true
+
+[[dynamics.disease.strains]]
+id = 1
+name = "fever"
+incubation = 1
+infectious_ticks = 3
+immunity_ticks = 4
+damage_per_tick = 5
+transmission_per_million = 500000
+
+[[remedies]]
+strain = 1
+medicine = "medicine"
+quantity = 1
+people = [1, 2]
+willing = true
+
+[agreements]
+next_id = 1
+policies = [{ person = 2, accept = true, honor = true, obligation_honor_threshold = 3 }]
+
+[[promise_offering]]
+person = 2
+recipient = 1
+good = "bread"
+quantity = 1
+due_after = 8
+retry_ticks = 6
+willing = false
+
+[work_requests]
+next_id = 1
+memory_limit = 4
+preferences = [{ person = 2, effort = 5, help_value = 2 }]
+
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 2
+theft_loss = 2
+encounter_gain = 1
+fear_per_damage = 1
+fear_decay_per_tick = 1
+gratitude_gain = 1
+affinity = { limit = 10, encounter_change = 1, help_change = 2, harm_change_per_damage = -1, pressured_encounter_change = 0 }
+obligation_relief = 1
+minimum_report_trust = -10
+
+[[opinions.sensitivities]]
+person = 2
+gratitude_gain = 0
+
+[combat]
+damage = 10
+reactions = [{ person = 2, response = "fight", retreat_at_or_below = 20, pursue = true }]
+protection = [{ good = "cloak", reduction = 1 }]
+weapons = [{ good = "stone-tools", bonus = 2 }]
+
+[combat.map_rules]
+width = 100
+height = 100
+obstacle_count = 8
+max_obstacle_size = 10
+movement = 5
+attack_range = 3
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 100, grain-seed = 30, timber = 20, medicine = 2, reed-shelter-kit = 1 }
+
+[[regions]]
+id = 2
+stock = { bread = 20 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 3
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 3
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+recipe = "mill-grain"
+goods = { bread = 20 }
+
+[family]
+next_id = 3
+last_tick = 0
+
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[family.members]]
+id = 2
+age = 18
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[care]
+inherit_births = true
+policies = [{ person = 1, willing = true }, { person = 2, willing = true }]
+
+[care.rules]
+dependent_until = 6
+max_caregiver_hunger = 20
+neglect_damage = 1
+feed_from_cargo = true
+fetch_local_food = true
+pressure_threshold = 3
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+goods = { bread = 20 }
+
+[[aspirations]]
+person = 2
+recipe = "fixture-tool"
+priority = 1
+batch = 1
+review_interval = 3
+
+[cultivation]
+max_hunger = 20
+policies = [{ person = 2, willing = true }]
+
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "grain"

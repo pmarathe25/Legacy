@@ -1,0 +1,13 @@
+version = 1
+source = "example.toml"
+seed = 7
+ticks = 240
+sample_every = 24
+checkpoint_every = 120
+max_samples = 1000
+max_events = 10000
+
+[calendar]
+minutes_per_tick = 60
+days_per_year = 365
+epoch_year = 0

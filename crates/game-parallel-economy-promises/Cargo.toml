@@ -1,0 +1,14 @@
+[package]
+name = "game-parallel-economy-promises"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-work-requests = { path = "../game-parallel-work-requests" }
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-lot-projection = { path = "../game-parallel-lot-projection" }
+rayon.workspace = true

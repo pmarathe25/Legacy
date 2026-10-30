@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-block-export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-block-data = { path = "../game-parallel-block-data" }

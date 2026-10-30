@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-block-departure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+rayon.workspace = true

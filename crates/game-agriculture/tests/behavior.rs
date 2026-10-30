@@ -198,3 +198,6 @@ fn regional_climate_changes_real_crop_output() {
         Phase::Ripe { yield_units: 0 }
     );
 }
+
+#[path = "support/seasonal.rs"]
+mod seasonal;

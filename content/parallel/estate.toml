@@ -1,0 +1,218 @@
+# Accelerated generational fixture: ages, gestation and lifespan are in simulation ticks.
+# This is a testable authored model, not a claim that one tick is one real year.
+tick = 0
+seed = 42
+[rules]
+food_growth = 100
+food_capacity = 10000
+food_per_meal = 2
+hunger_per_tick = 1
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 1
+max_health = 100
+[[regions]]
+id = 1
+food = 100
+people = [{ id=1, hunger=0, health=100 }, { id=2, hunger=0, health=100 }, { id=3, hunger=0, health=100 }, { id=4, hunger=0, health=100 }]
+[[regions]]
+id = 2
+food = 100
+people = [{ id=5, hunger=0, health=100 }, { id=6, hunger=0, health=100 }, { id=7, hunger=0, health=100 }, { id=8, hunger=0, health=100 }]
+[[routes]]
+source=1
+destination=2
+ticks=5
+[[routes]]
+source=2
+destination=1
+ticks=5
+[families]
+next_id = 9
+last_tick = 0
+[families.rules]
+adult_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 8
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+
+[[families.members]]
+id = 1
+age = 18
+partner = 2
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 2
+age = 59
+partner = 1
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 3
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 4
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 5
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 6
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 7
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 8
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[lineage]
+current = 1
+started = 0
+
+[guardians]
+recovery_per_tick = 10
+max_health = 100
+mentorship_ticks = 3
+
+[[guardians.guardians]]
+id = 1
+region = 2
+health = 100
+
+[[guardians.guardians]]
+id = 2
+region = 2
+health = 0
+confined = true
+
+[social.rules]
+interval = 1
+min_health = 1
+max_hunger = 10
+familiarity_gain = 2
+familiarity_max = 100
+relationship_retention = 64
+
+[[social.participants]]
+person = 1
+willing = true
+
+[[social.participants]]
+person = 2
+willing = true
+
+[[social.participants]]
+person = 3
+willing = true
+
+[social.needs.rules]
+capacity = 12
+isolation_gain = 2
+encounter_relief = 3
+
+[knowledge]
+max_records = 4
+
+[[knowledge.minds]]
+person = 1
+records = [{ region = 2, food = 4, observed_at = 0, witness = 3 }]
+
+[[knowledge.minds]]
+person = 2
+
+[[knowledge.minds]]
+person = 3
+
+[production]
+max_work_hunger = 10
+
+[[production.goods]]
+id = 1
+name = "timber"
+
+[[production.goods]]
+id = 2
+name = "planks"
+
+[[production.recipes]]
+id = 1
+name = "saw planks"
+ticks = 2
+inputs = [{ good = 1, quantity = 3 }]
+outputs = [{ good = 2, quantity = 2 }]
+
+[[production.inventories]]
+region = 1
+stocks = [{ good = 1, quantity = 9, capacity = 20 }, { good = 2, quantity = 0, capacity = 4 }]
+
+[[production.inventories]]
+region = 2
+stocks = [{ good = 1, quantity = 0, capacity = 20 }, { good = 2, quantity = 0, capacity = 20 }]
+
+[goods_cargo]
+capacity = 10
+
+[market]
+next_id = 1
+
+[autowork]
+next_id = 100
+policies = [{ person = 1, recipe = 1, enabled = true }, { person = 2, recipe = 1, enabled = true }]
+
+[property]
+next_id = 1
+
+[[property.claims]]
+region = 1
+good = 1
+owner = 2
+
+[opinions.rules]
+minimum = -5
+maximum = 5
+initial = 0
+fulfilled_gain = 2
+default_loss = 2
+theft_loss = 2
+
+[property.inheritance]
+minimum_age = 12
+prefer_partner = true

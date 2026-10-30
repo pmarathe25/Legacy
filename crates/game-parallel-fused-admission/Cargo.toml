@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-fused-admission"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-production-packed = { path = "../game-parallel-production-packed" }
+rayon.workspace = true
+
+game-parallel-fused-index = { path = "../game-parallel-fused-index" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+
+game-parallel-fused-conflict = { path = "../game-parallel-fused-conflict" }
+
+game-parallel-family-lifecycle = { path = "../game-parallel-family-lifecycle" }

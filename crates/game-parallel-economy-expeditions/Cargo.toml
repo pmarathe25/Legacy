@@ -1,0 +1,17 @@
+[package]
+name = "game-parallel-economy-expeditions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-missions = { path = "../game-parallel-missions" }
+game-parallel-mission-objectives = { path = "../game-parallel-mission-objectives" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+rayon.workspace = true

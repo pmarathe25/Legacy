@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-block-cli-caregiving"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-physical = { path = "../game-parallel-fused-physical" }

@@ -1,5 +1,7 @@
 use game_core::*;
 use game_expression::*;
+#[path = "support/exact.rs"]
+mod exact;
 const YEAR: u64 = 365 * DAY.0;
 const ABILITIES: &[&str] = &[
     "intelligence",

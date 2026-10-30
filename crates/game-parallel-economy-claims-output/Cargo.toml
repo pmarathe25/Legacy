@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-economy-claims-output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-claims = { path = "../game-parallel-economy-claims" }
+game-parallel-economy-agriculture = { path = "../game-parallel-economy-agriculture" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+rayon.workspace = true

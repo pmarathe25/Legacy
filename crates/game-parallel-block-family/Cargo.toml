@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-block-family"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

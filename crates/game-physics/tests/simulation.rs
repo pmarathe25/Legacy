@@ -80,3 +80,8 @@ fn seeded_network_simulations_conserve_work_across_branching_friction_and_load_c
     assert_eq!(cases, 20000);
     assert_eq!(loaded, 5000);
 }
+
+#[path = "support/energy.rs"]
+mod energy;
+#[path = "support/simple_machines.rs"]
+mod simple_machines;

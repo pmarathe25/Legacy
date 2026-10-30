@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-lot-planning"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lot-model = { path = "../game-parallel-lot-model" }
+game-parallel-lot-allocation = { path = "../game-parallel-lot-allocation" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+rayon.workspace = true

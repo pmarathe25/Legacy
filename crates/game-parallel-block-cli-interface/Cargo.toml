@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-block-cli-interface"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-physical = { path = "../game-parallel-fused-physical" }
+game-parallel-worldgen = { path = "../game-parallel-worldgen" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+serde.workspace = true
+toml.workspace = true

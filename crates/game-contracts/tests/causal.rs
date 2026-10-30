@@ -1,4 +1,6 @@
 use game_contracts::causal::{Review, candidates, point, scope, wake};
+#[path = "support/access_trace.rs"]
+mod access_trace;
 #[test]
 fn disabled_tracing_never_evaluates_observers() {
     if std::env::var_os("LEGACY_REVIEW_TRACE").is_some() {

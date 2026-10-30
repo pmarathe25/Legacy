@@ -1,0 +1,21 @@
+[package]
+name = "game-parallel-fused-autowork"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-block-property = { path = "../game-parallel-block-property" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-packed-jobs-model = { path = "../game-parallel-packed-jobs-model" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-production-packed = { path = "../game-parallel-production-packed" }
+rayon.workspace = true
+
+game-parallel-family-lifecycle = { path = "../game-parallel-family-lifecycle" }
+
+game-parallel-goals = { path = "../game-parallel-goals" }
+
+game-parallel-fused-work-experience = { path = "../game-parallel-fused-work-experience" }

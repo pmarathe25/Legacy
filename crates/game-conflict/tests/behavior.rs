@@ -159,3 +159,8 @@ fn newborn_victims_remain_vulnerable_but_never_auto_attack() {
     assert_eq!(bodies.people[&f.ruler].health, 100);
     assert!(bodies.people[&f.other].health < 100);
 }
+
+#[path = "support/control.rs"]
+mod control;
+#[path = "support/geometry.rs"]
+mod geometry;

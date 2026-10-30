@@ -735,3 +735,6 @@ fn an_observed_machine_processes_real_food_that_manual_strength_cannot_process()
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
+
+#[path = "support/sessions.rs"]
+mod sessions;

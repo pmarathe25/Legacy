@@ -359,3 +359,8 @@ fn carrier_lookup_and_drop_ignore_unrelated_inventories_and_rebuild_on_loading()
     }
     assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
 }
+
+#[path = "support/effects.rs"]
+mod effects;
+#[path = "support/planning.rs"]
+mod planning;

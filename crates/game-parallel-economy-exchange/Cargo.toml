@@ -1,0 +1,15 @@
+[package]
+name = "game-parallel-economy-exchange"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lot-projection = { path = "../game-parallel-lot-projection" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-market = { path = "../game-parallel-market" }
+game-parallel-market-proposals = { path = "../game-parallel-market-proposals" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-block-physical"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+game-parallel-people = { path = "../game-parallel-people" }
+rayon.workspace = true

@@ -1,4 +1,6 @@
 use game_worldgen::*;
+#[path = "support/catalog.rs"]
+mod catalog;
 #[test]
 fn seeds_generate_only_physical_and_individual_initial_conditions() {
     let settings = load(&mut game_content::Store::standard()).unwrap();

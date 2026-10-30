@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-institutions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-market = { path = "../game-parallel-market" }
+rayon.workspace = true
+serde.workspace = true
+game-parallel-index = { path = "../game-parallel-index" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }

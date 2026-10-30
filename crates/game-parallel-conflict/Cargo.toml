@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-conflict"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true
+
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }

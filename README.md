@@ -2,12 +2,17 @@
 
 Legacy is a headless simulation game built as a modular Rust 2024 workspace where small, independent crates compose into a single transactional simulation host.
 
-**Why it matters:** Every simulation mechanic—from diploid crop genetics and metabolic hunger to spoken vocabulary and institutional arrangements—lives in an isolated owner crate under [`crates/`](crates/README.md). Features communicate strictly through typed requests and events, keeping the simulation deterministic, testable in isolation, and extensible via runtime TOML data in [`content/`](content/README.md).
+**Why it matters:** Simulation mechanics—from diploid crop genetics and metabolic hunger to spoken vocabulary and personal social choices—live in owner crates under [`crates/`](crates/README.md). Features communicate through typed requests and events, keeping the simulation deterministic, testable in isolation, and extensible via runtime TOML data in [`content/`](content/README.md). Social institutions are patterns of individual action, not actors that compel behavior.
 
 > **Rewrite status:** This workspace is a clean-slate rewrite of an earlier prototype ([`MIGRATION.md`](MIGRATION.md)). Older saves, scenarios, and APIs are incompatible, and portions of the full multigenerational campaign in [`docs/plan.md`](docs/plan.md) and `docs/design/` remain unfinished.
 
 ---
 
+## Parallel engine in development
+
+The [economic runner](crates/game-parallel-economy-cli/README.md), `cargo run -p game-parallel-economy-cli`, is the current parallel-first development host. It composes dated goods, personal work and exchange, family care, cultivation, claims, health, tactical combat, expeditions, lineage, skills and personal food knowledge. Run it with `-- --player` for the ruler-facing interface. It is not yet the complete campaign host. Institutions and labor arrangements are patterns of individual behavior; people may comply from fear or obligation and may break promises.
+
+The earlier [`game-parallel`](crates/game-parallel/README.md) and fused block hosts remain experimental references. They encode institutional bodies and therefore do not satisfy the current social design; they are not the replacement's intended campaign architecture. Full-game scaling has not yet been established.
 ## Quick start
 
 Run from the repository root:
@@ -55,7 +60,7 @@ cargo bench -p game-sim --bench kernel                       # Run kernel benchm
 - **Acyclic interaction:** Callers submit the receiving owner's typed `Request`. Lower features emit typed `Event`s or internal `notify` signals that upper features subscribe to. Read-only queries borrow committed state and reject mutations.
 - **Data-driven catalogs ([`content/`](content/README.md)):** Versioned TOML files define 321 goods, 67 crops, 219 recipes, 18 biomes, 16 climates, 24 pastimes, traits, and rule profiles. [`game-content`](crates/game-content/README.md) loads and fingerprints files; feature owners validate and snapshot them into saves.
 - **Ruler-bound assembly ([`game-assembly`](crates/game-assembly/README.md)):** Installs plugins in dependency order, binds public `Command`s to the active ruler from [`game-lineage`](crates/game-lineage/README.md), and builds subjective `PlayerView` snapshots from the ruler's own memories and witnessed events.
-- **Enforced budgets:** [Architecture tests](crates/game-assembly/tests/architecture.rs) enforce dependency direction, forbid cross-owner mutations, and cap feature crates at ~600 lines of `src/` code.
+- **Enforced budgets:** [Architecture tests](crates/game-assembly/tests/architecture.rs) enforce dependency direction, forbid cross-owner mutations, and generally cap crates at 1,200 lines of `src/` code.
 
 ---
 
@@ -80,3 +85,4 @@ cargo bench -p game-sim --bench kernel                       # Run kernel benchm
 - **Performance benchmarks:** [`tools/performance/README.md`](tools/performance/README.md) — Storage, row-journal, and full-simulation benchmarks.
 - **Compute experiments:** [`tools/compute/README.md`](tools/compute/README.md) — Packed CPU, AVX2 column, and Vulkan GPU utility evaluation.
 - **History runner:** [`tools/history/README.md`](tools/history/README.md) — Unattended multigenerational runs and journals (outputs belong under `target/history/`).
+

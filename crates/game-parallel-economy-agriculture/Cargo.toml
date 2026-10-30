@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-economy-agriculture"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-environment = { path = "../game-parallel-environment" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-economy-claims = { path = "../game-parallel-economy-claims" }
+game-parallel-lot-content = { path = "../game-parallel-lot-content" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true
+toml.workspace = true

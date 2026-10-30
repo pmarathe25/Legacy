@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-fused-contended"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+rayon.workspace = true

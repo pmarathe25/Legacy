@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-autowork"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-work-requests = { path = "../game-parallel-work-requests" }
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-production-admission = { path = "../game-parallel-production-admission" }
+game-parallel-property = { path = "../game-parallel-property" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true

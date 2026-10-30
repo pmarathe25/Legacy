@@ -627,3 +627,33 @@ fn stale_food_reviews_reconsider_during_travel_and_after_road_interruption() {
         }
     }
 }
+
+#[path = "support/local_interaction_observers.rs"]
+mod local_interaction_observers;
+
+#[path = "support/sampling_migration.rs"]
+mod sampling_migration;
+
+#[path = "support/dependent_care.rs"]
+mod dependent_care;
+
+#[path = "support/reader_loading.rs"]
+mod reader_loading;
+
+#[path = "support/frame_clock.rs"]
+mod frame_clock;
+
+#[path = "support/preparation.rs"]
+mod preparation;
+
+#[path = "support/behavior.rs"]
+mod behavior;
+
+#[path = "support/provisioning.rs"]
+mod provisioning;
+
+#[path = "support/content.rs"]
+mod content;
+
+#[path = "support/mod.rs"]
+mod support;

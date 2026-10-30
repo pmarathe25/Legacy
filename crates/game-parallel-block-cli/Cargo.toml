@@ -1,0 +1,20 @@
+[package]
+name = "game-parallel-block-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[[bin]]
+name = "parallel-block-cli"
+path = "src/main.rs"
+[dependencies]
+game-parallel-worldgen = { path = "../game-parallel-worldgen" }
+game-parallel-persistence = { path = "../game-parallel-persistence" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-physical = { path = "../game-parallel-fused-physical" }
+serde_json.workspace = true
+
+game-parallel-block-cli-civic = { path = "../game-parallel-block-cli-civic" }
+
+
+
+game-parallel-block-cli-interface = { path = "../game-parallel-block-cli-interface" }

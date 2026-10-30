@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-disease"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+rayon.workspace = true
+serde.workspace = true
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-social = { path = "../game-parallel-social" }
+[dev-dependencies]
+serde_json.workspace = true

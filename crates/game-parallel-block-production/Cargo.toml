@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-block-production"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-production-packed = { path = "../game-parallel-production-packed" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-block-actions = { path = "../game-parallel-block-actions" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }

@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-family-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-logistics = { path = "../game-parallel-logistics" }
+game-parallel-agriculture = { path = "../game-parallel-agriculture" }
+game-parallel-cargo = { path = "../game-parallel-cargo" }
+game-parallel-families = { path = "../game-parallel-families" }
+rayon.workspace = true
+
+game-parallel-physical-host = { path = "../game-parallel-physical-host" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-knowledge = { path = "../game-parallel-knowledge" }
+game-parallel-autonomy = { path = "../game-parallel-autonomy" }

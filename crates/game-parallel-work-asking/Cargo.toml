@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-work-asking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-goals = { path = "../game-parallel-goals" }
+game-parallel-work-requests = { path = "../game-parallel-work-requests" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-economy-family"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-economy-dynamics = { path = "../game-parallel-economy-dynamics" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-family-model = { path = "../game-parallel-family-model" }
+rayon.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-index"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

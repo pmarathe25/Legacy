@@ -1,0 +1,55 @@
+[package]
+name = "game-parallel-economy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-disease = { path = "../game-parallel-disease" }
+game-parallel-lot-content = { path = "../game-parallel-lot-content" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-purpose = { path = "../game-parallel-purpose" }
+game-parallel-environment = { path = "../game-parallel-environment" }
+game-parallel-economy-read = { path = "../game-parallel-economy-read" }
+game-parallel-economy-fatigue = { path = "../game-parallel-economy-fatigue" }
+game-parallel-economy-combat = { path = "../game-parallel-economy-combat" }
+game-parallel-economy-exchange = { path = "../game-parallel-economy-exchange" }
+game-parallel-economy-agriculture = { path = "../game-parallel-economy-agriculture" }
+game-parallel-economy-goals = { path = "../game-parallel-economy-goals" }
+game-parallel-economy-promises = { path = "../game-parallel-economy-promises" }
+game-parallel-economy-family = { path = "../game-parallel-economy-family" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-economy-work = { path = "../game-parallel-economy-work" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-economy-dynamics = { path = "../game-parallel-economy-dynamics" }
+game-parallel-economy-claims = { path = "../game-parallel-economy-claims" }
+game-parallel-economy-claims-output = { path = "../game-parallel-economy-claims-output" }
+game-parallel-economy-exposure = { path = "../game-parallel-economy-exposure" }
+game-parallel-economy-interaction = { path = "../game-parallel-economy-interaction" }
+game-parallel-economy-expeditions = { path = "../game-parallel-economy-expeditions" }
+game-parallel-economy-campaign = { path = "../game-parallel-economy-campaign" }
+game-parallel-economy-skills = { path = "../game-parallel-economy-skills" }
+game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lot-projection = { path = "../game-parallel-lot-projection" }
+game-parallel-lot-diet = { path = "../game-parallel-lot-diet" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+game-parallel-market = { path = "../game-parallel-market" }
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-goals = { path = "../game-parallel-goals" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-nutrition = { path = "../game-parallel-nutrition" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-parallel-fatigue = { path = "../game-parallel-fatigue" }
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+game-parallel-tactics = { path = "../game-parallel-tactics" }
+game-parallel-dreams = { path = "../game-parallel-dreams" }
+game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-social = { path = "../game-parallel-social" }
+serde_json.workspace = true

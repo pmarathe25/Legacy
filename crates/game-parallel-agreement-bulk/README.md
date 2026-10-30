@@ -1,0 +1,7 @@
+# Bulk agreement fulfillment
+
+Stages multi-recipient fulfillment from real personal custody. `agreements.bulk_debtors` identifies people who can consider several deliveries in a tick; each delivery still depends on that person's own ordinary willingness or fear of the particular recipient. `agreement-policy PERSON bulk` enables ordinary bulk honoring, and `agreement-policy PERSON ignore` disables ordinary honoring. A fear preference can still motivate delivery, and the person can withhold a promise when that fear subsides. Only accepted, unexpired promises qualify; each recipient must be living, available, present with the debtor, and able to carry the full remaining quantity. Player-controlled people remain reserved for player actions.
+
+Shared stock is allocated in contract ID order using chunked prefixes. The allocator selects at most one obligation per recipient and reserves each authorized debtor once, allowing many distinct recipients to be paid in parallel. Claims beyond the available prefix wait for a later tick, even if a smaller later claim would fit the remaining stock. A person who is also an eligible bulk payer does not receive a bulk transfer in the same tick. Ordinary agreement processing can still handle other available participants. Transfers and agreement updates publish together only after the whole tick succeeds.
+
+When a debtor sets `minimum_honor_trust` or `fear_honor_threshold`, each creditor is evaluated against that debtor's own committed opinion before entering the allocation; the same choice applies to ordinary fulfillment.

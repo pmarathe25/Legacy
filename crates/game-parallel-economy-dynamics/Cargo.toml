@@ -1,0 +1,19 @@
+[package]
+name = "game-parallel-economy-dynamics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-personality = { path = "../game-parallel-personality" }
+game-parallel-economy-treatment = { path = "../game-parallel-economy-treatment" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-disease = { path = "../game-parallel-disease" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-economy-claims = { path = "../game-parallel-economy-claims" }
+rayon.workspace = true
+serde.workspace = true

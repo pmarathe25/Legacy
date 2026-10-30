@@ -1,0 +1,7 @@
+# Disease
+
+Data-defined infections spread only through actual social encounters. Incubation, infectious duration, damage, transmission probability and immunity are authored rules. Each round evaluates infectiousness from the committed generation; newly infected people cannot transmit until a later tick. The fused host applies damage and publishes disease state transactionally with other health and lifecycle effects.
+
+The experimental fused host accepts `[disease]` data as illustrated by `content/parallel/disease.toml`. Cases are validated on import; the host stores committed and scratch infection columns with each person, routes encounter exposures in parallel, and commits exposure, damage, and events only after the entire tick succeeds. The administrative block CLI has a `disease` inspection command. The player view reports noticeable symptoms of the current ruler without revealing incubation, infection sources, or another person's condition. The reference and persistent-block hosts reject this owner until they implement it.
+
+Optional `[[disease.treatments]]` entries pair an infection strain with a production good used as medicine. A completed local care course that consumes the matching medicine clears that patient's active case; interrupted treatment does not. Exposure uses the tick-start state, so treatment does not undo encounters already made in that generation. `content/parallel/illness_care.toml` is a runnable example.

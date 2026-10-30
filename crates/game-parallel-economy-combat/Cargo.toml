@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-economy-combat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+game-parallel-conflict-packed = { path = "../game-parallel-conflict-packed" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-tactics = { path = "../game-parallel-tactics" }
+game-parallel-tactical-choices = { path = "../game-parallel-tactical-choices" }
+rayon.workspace = true
+serde.workspace = true

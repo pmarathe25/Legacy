@@ -1,4 +1,18 @@
+#[path = "support/activity_epochs.rs"]
+mod activity_epochs;
+#[path = "support/continuation.rs"]
+mod continuation;
+#[path = "support/failure_learning.rs"]
+mod failure_learning;
+#[path = "support/option_memory.rs"]
+mod option_memory;
+#[path = "support/review_grid.rs"]
+mod review_grid;
+#[path = "support/review_tiers.rs"]
+mod review_tiers;
 mod support;
+#[path = "support/utility.rs"]
+mod utility;
 use game_characters::*;
 use game_core::*;
 use support::*;

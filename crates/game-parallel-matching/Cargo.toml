@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-matching"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+rayon.workspace = true

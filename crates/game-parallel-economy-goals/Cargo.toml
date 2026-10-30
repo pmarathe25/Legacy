@@ -1,0 +1,15 @@
+[package]
+name = "game-parallel-economy-goals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-dreams = { path = "../game-parallel-dreams" }
+game-parallel-goals = { path = "../game-parallel-goals" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-economy-work = { path = "../game-parallel-economy-work" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-cargo-actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-cargo = { path = "../game-parallel-cargo" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }

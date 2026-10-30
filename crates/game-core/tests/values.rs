@@ -7,3 +7,6 @@ fn time_overflow_is_checked_and_randomness_is_independent_of_iteration_order() {
     reverse.reverse();
     assert_eq!(forward, reverse);
 }
+
+#[path = "support/fingerprints.rs"]
+mod fingerprints;

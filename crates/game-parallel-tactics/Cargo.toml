@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-tactics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-tactical-map = { path = "../game-parallel-tactical-map" }
+serde.workspace = true
+rayon.workspace = true
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+
+[dev-dependencies]
+serde_json.workspace = true

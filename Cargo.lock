@@ -2703,6 +2703,2279 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-parallel"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreement-host",
+ "game-parallel-agreements",
+ "game-parallel-agriculture",
+ "game-parallel-autonomy",
+ "game-parallel-autowork",
+ "game-parallel-care",
+ "game-parallel-cargo",
+ "game-parallel-cargo-actions",
+ "game-parallel-civic-auto",
+ "game-parallel-conflict",
+ "game-parallel-departure",
+ "game-parallel-dependent-care",
+ "game-parallel-disease",
+ "game-parallel-dreams",
+ "game-parallel-environment",
+ "game-parallel-families",
+ "game-parallel-family-host",
+ "game-parallel-fatigue",
+ "game-parallel-goals",
+ "game-parallel-goods-actions",
+ "game-parallel-goods-cargo",
+ "game-parallel-guardians",
+ "game-parallel-institutions",
+ "game-parallel-knowledge",
+ "game-parallel-lineage",
+ "game-parallel-logistics",
+ "game-parallel-market",
+ "game-parallel-market-auto",
+ "game-parallel-missions",
+ "game-parallel-nutrition",
+ "game-parallel-opinions",
+ "game-parallel-packing",
+ "game-parallel-people",
+ "game-parallel-personality",
+ "game-parallel-production",
+ "game-parallel-production-actions",
+ "game-parallel-property",
+ "game-parallel-purpose",
+ "game-parallel-skills",
+ "game-parallel-social",
+ "game-parallel-social-pressure",
+ "game-parallel-tactics",
+ "game-parallel-transport",
+ "game-parallel-validation",
+ "rayon",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "game-parallel-agreement-auto"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreement-bulk",
+ "game-parallel-agreements",
+ "game-parallel-goods-cargo",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-agreement-bulk"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-goods-cargo",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-agreement-host"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-goods-cargo",
+ "game-parallel-opinions",
+ "game-parallel-people",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-agreements"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-agriculture"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-autonomy"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-knowledge",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-autonomy-columns"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autonomy",
+ "game-parallel-knowledge",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-autowork"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production",
+ "game-parallel-production-admission",
+ "game-parallel-production-model",
+ "game-parallel-property",
+ "game-parallel-work-requests",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-block-actions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-goods-cargo",
+ "game-parallel-market-auto",
+ "game-parallel-production-admission",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-cli"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-cli-civic",
+ "game-parallel-block-cli-interface",
+ "game-parallel-fused-physical",
+ "game-parallel-persistence",
+ "game-parallel-worldgen",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-block-cli-caregiving"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-physical",
+]
+
+[[package]]
+name = "game-parallel-block-cli-civic"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-cli-caregiving",
+ "game-parallel-block-cli-goals",
+ "game-parallel-block-cli-interface",
+ "game-parallel-block-cli-missions",
+ "game-parallel-fused-physical",
+ "game-parallel-observation",
+]
+
+[[package]]
+name = "game-parallel-block-cli-goals"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-physical",
+ "game-parallel-observation",
+]
+
+[[package]]
+name = "game-parallel-block-cli-interface"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-physical",
+ "game-parallel-genetics",
+ "game-parallel-worldgen",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "game-parallel-block-cli-missions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-physical",
+]
+
+[[package]]
+name = "game-parallel-block-data"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+]
+
+[[package]]
+name = "game-parallel-block-departure"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-data",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-export"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-data",
+]
+
+[[package]]
+name = "game-parallel-block-family"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-block-data",
+ "game-parallel-families",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-food-cargo"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-data",
+ "game-parallel-cargo",
+ "game-parallel-packing",
+ "game-parallel-production-model",
+ "game-parallel-store-witnesses",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-goods"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-actions",
+ "game-parallel-goods-packed",
+ "game-parallel-production-model",
+]
+
+[[package]]
+name = "game-parallel-block-import"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-data",
+ "game-parallel-lineage",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-index"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-block-data",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-institutions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-logistics"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-logistics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-physical"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-block-data",
+ "game-parallel-people",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-block-production"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-autowork",
+ "game-parallel-block-actions",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "game-parallel-production-packed",
+]
+
+[[package]]
+name = "game-parallel-block-property"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-family-lifecycle",
+ "game-parallel-goods-actions",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-blocks"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-agriculture",
+ "game-parallel-autonomy",
+ "game-parallel-autowork",
+ "game-parallel-block-actions",
+ "game-parallel-block-data",
+ "game-parallel-block-departure",
+ "game-parallel-block-export",
+ "game-parallel-block-family",
+ "game-parallel-block-food-cargo",
+ "game-parallel-block-goods",
+ "game-parallel-block-import",
+ "game-parallel-block-index",
+ "game-parallel-block-institutions",
+ "game-parallel-block-logistics",
+ "game-parallel-block-physical",
+ "game-parallel-block-production",
+ "game-parallel-block-property",
+ "game-parallel-family-host",
+ "game-parallel-goods-packed",
+ "game-parallel-institutions",
+ "game-parallel-knowledge",
+ "game-parallel-market-auto",
+ "game-parallel-production-model",
+ "game-parallel-production-packed",
+ "game-parallel-social",
+ "rayon",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-care"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-cargo"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-cargo-actions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-cargo",
+ "game-parallel-people",
+ "game-parallel-transport",
+]
+
+[[package]]
+name = "game-parallel-civic-auto"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-institutions",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-cli"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-conflict"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-conflict-overlay"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-conflict",
+ "game-parallel-conflict-packed",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-conflict-packed"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-conflict",
+ "game-parallel-conflict-receipts",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-conflict-receipts"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-conflict",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-content-import"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production",
+ "toml",
+]
+
+[[package]]
+name = "game-parallel-departure"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-cargo",
+ "game-parallel-packing",
+ "game-parallel-people",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-dependent-care"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-family-columns",
+ "game-parallel-family-model",
+ "game-parallel-genetics",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-disease"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "game-parallel-social",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-dreams"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-goals",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-autowork",
+ "game-parallel-conflict",
+ "game-parallel-dependent-care",
+ "game-parallel-disease",
+ "game-parallel-dreams",
+ "game-parallel-economy-agriculture",
+ "game-parallel-economy-campaign",
+ "game-parallel-economy-claims",
+ "game-parallel-economy-claims-output",
+ "game-parallel-economy-combat",
+ "game-parallel-economy-dynamics",
+ "game-parallel-economy-exchange",
+ "game-parallel-economy-expeditions",
+ "game-parallel-economy-exposure",
+ "game-parallel-economy-family",
+ "game-parallel-economy-fatigue",
+ "game-parallel-economy-goals",
+ "game-parallel-economy-interaction",
+ "game-parallel-economy-knowledge",
+ "game-parallel-economy-person",
+ "game-parallel-economy-promises",
+ "game-parallel-economy-read",
+ "game-parallel-economy-skills",
+ "game-parallel-economy-work",
+ "game-parallel-environment",
+ "game-parallel-families",
+ "game-parallel-fatigue",
+ "game-parallel-genetics",
+ "game-parallel-goals",
+ "game-parallel-goods-cargo",
+ "game-parallel-lot-content",
+ "game-parallel-lot-diet",
+ "game-parallel-lot-projection",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-market",
+ "game-parallel-nutrition",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-purpose",
+ "game-parallel-social",
+ "game-parallel-tactics",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-economy-agriculture"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-claims",
+ "game-parallel-economy-person",
+ "game-parallel-environment",
+ "game-parallel-lot-content",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+ "toml",
+]
+
+[[package]]
+name = "game-parallel-economy-campaign"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-families",
+ "game-parallel-guardians",
+ "game-parallel-lineage",
+ "game-parallel-lots",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-claims"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autowork",
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-claims-output"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-agriculture",
+ "game-parallel-economy-claims",
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-cli"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-autowork",
+ "game-parallel-content-import",
+ "game-parallel-disease",
+ "game-parallel-economy",
+ "game-parallel-economy-agriculture",
+ "game-parallel-economy-cli-commands",
+ "game-parallel-economy-combat",
+ "game-parallel-economy-dynamics",
+ "game-parallel-economy-knowledge",
+ "game-parallel-economy-player",
+ "game-parallel-fatigue",
+ "game-parallel-lot-content",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-persistence",
+ "game-parallel-production",
+ "game-parallel-skill-catalog",
+ "rayon",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "game-parallel-economy-cli-commands"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy",
+ "game-parallel-economy-combat",
+ "game-parallel-economy-player",
+]
+
+[[package]]
+name = "game-parallel-economy-combat"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-conflict",
+ "game-parallel-conflict-packed",
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-tactical-choices",
+ "game-parallel-tactics",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-dynamics"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-disease",
+ "game-parallel-economy-claims",
+ "game-parallel-economy-person",
+ "game-parallel-economy-treatment",
+ "game-parallel-genetics",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-personality",
+ "game-parallel-social",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-exchange"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-projection",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-market",
+ "game-parallel-market-proposals",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-expeditions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-mission-objectives",
+ "game-parallel-missions",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-social",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-exposure"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-economy-work",
+ "game-parallel-genetics",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-social",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-family"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-dynamics",
+ "game-parallel-economy-person",
+ "game-parallel-families",
+ "game-parallel-family-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-fatigue"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-fatigue",
+ "game-parallel-lot-runtime",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-goals"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autowork",
+ "game-parallel-dreams",
+ "game-parallel-economy-person",
+ "game-parallel-economy-work",
+ "game-parallel-goals",
+ "game-parallel-lot-runtime",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-interaction"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-social",
+]
+
+[[package]]
+name = "game-parallel-economy-knowledge"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-campaign",
+ "game-parallel-economy-person",
+ "game-parallel-families",
+ "game-parallel-knowledge",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-social",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-person"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-diet",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-nutrition",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-player"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-autowork",
+ "game-parallel-economy",
+ "game-parallel-economy-campaign",
+ "game-parallel-economy-combat",
+ "game-parallel-economy-knowledge",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-missions",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-promises"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-economy-person",
+ "game-parallel-lot-projection",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-work-requests",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-read"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-autowork",
+ "game-parallel-economy-agriculture",
+ "game-parallel-economy-campaign",
+ "game-parallel-economy-combat",
+ "game-parallel-economy-dynamics",
+ "game-parallel-economy-expeditions",
+ "game-parallel-economy-fatigue",
+ "game-parallel-economy-knowledge",
+ "game-parallel-economy-person",
+ "game-parallel-environment",
+ "game-parallel-lot-runtime",
+ "game-parallel-purpose",
+]
+
+[[package]]
+name = "game-parallel-economy-skills"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-campaign",
+ "game-parallel-economy-person",
+ "game-parallel-families",
+ "game-parallel-lot-runtime",
+ "game-parallel-skills",
+ "game-parallel-social",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-economy-treatment"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-disease",
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-work"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autowork",
+ "game-parallel-dependent-care",
+ "game-parallel-economy-claims",
+ "game-parallel-economy-person",
+ "game-parallel-families",
+ "game-parallel-family-columns",
+ "game-parallel-goals",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "game-parallel-work-asking",
+ "game-parallel-work-requests",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-environment"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-families"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-family-index",
+ "game-parallel-family-model",
+ "game-parallel-genetics",
+ "game-parallel-matching",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-family-columns"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-family-model",
+ "game-parallel-genetics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-family-host"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agriculture",
+ "game-parallel-autonomy",
+ "game-parallel-cargo",
+ "game-parallel-families",
+ "game-parallel-knowledge",
+ "game-parallel-logistics",
+ "game-parallel-people",
+ "game-parallel-physical-host",
+ "game-parallel-social",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-family-index"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-family-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-family-lifecycle"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-families",
+ "game-parallel-family-columns",
+ "game-parallel-family-model",
+ "game-parallel-family-pairing",
+ "game-parallel-family-receipts",
+ "game-parallel-genetics",
+ "rayon",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-family-model"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-family-pairing"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-families",
+ "game-parallel-family-columns",
+ "game-parallel-family-model",
+ "game-parallel-genetics",
+ "game-parallel-matching",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-family-receipts"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-families",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fatigue"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-food-select"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-fused-data",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-actions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "game-parallel-fused-metadata",
+]
+
+[[package]]
+name = "game-parallel-fused-admission"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-family-lifecycle",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "game-parallel-fused-index",
+ "game-parallel-fused-metadata",
+ "game-parallel-production-model",
+ "game-parallel-production-packed",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-agriculture"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-agriculture",
+ "game-parallel-fused-data",
+ "game-parallel-genetics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-autonomy"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autonomy",
+ "game-parallel-autonomy-columns",
+ "game-parallel-fused-data",
+ "game-parallel-people",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-autowork"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-autowork",
+ "game-parallel-block-property",
+ "game-parallel-family-lifecycle",
+ "game-parallel-fused-data",
+ "game-parallel-fused-metadata",
+ "game-parallel-fused-work-experience",
+ "game-parallel-goals",
+ "game-parallel-packed-jobs-model",
+ "game-parallel-production-model",
+ "game-parallel-production-packed",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-care"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-care",
+ "game-parallel-fused-data",
+ "game-parallel-fused-index",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-cargo"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-food-cargo",
+ "game-parallel-fused-data",
+ "game-parallel-packing",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-civic"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-institutions",
+ "game-parallel-fused-data",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-conflict"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-conflict",
+ "game-parallel-conflict-overlay",
+ "game-parallel-conflict-packed",
+ "game-parallel-fused-data",
+ "game-parallel-fused-index",
+ "game-parallel-production-model",
+ "game-parallel-tactics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-confrontation"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-contended"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-fused-metadata",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-data"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-block-data",
+ "game-parallel-fused-metadata",
+ "game-parallel-people",
+]
+
+[[package]]
+name = "game-parallel-fused-decisions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-agreement-auto",
+ "game-parallel-autonomy",
+ "game-parallel-dependent-care",
+ "game-parallel-family-lifecycle",
+ "game-parallel-fused-autonomy",
+ "game-parallel-fused-autowork",
+ "game-parallel-fused-care",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-confrontation",
+ "game-parallel-fused-data",
+ "game-parallel-fused-dependent-care",
+ "game-parallel-fused-index",
+ "game-parallel-fused-metadata",
+ "game-parallel-fused-missions",
+ "game-parallel-fused-social-pressure",
+ "game-parallel-fused-trade",
+ "game-parallel-knowledge",
+ "game-parallel-knowledge-columns",
+ "game-parallel-lineage",
+ "game-parallel-market-auto",
+ "game-parallel-opinions",
+ "game-parallel-production-model",
+ "game-parallel-social",
+ "game-parallel-social-edges",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-departure"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-data",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "game-parallel-fused-disease",
+ "game-parallel-fused-family",
+ "game-parallel-fused-goods",
+ "game-parallel-fused-import",
+ "game-parallel-fused-metadata",
+ "game-parallel-fused-needs",
+ "game-parallel-fused-nutrition",
+ "game-parallel-goods-packed",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-dependent-care"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-dependent-care",
+ "game-parallel-family-lifecycle",
+ "game-parallel-fused-data",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-diet"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-cargo",
+ "game-parallel-fused-data",
+ "game-parallel-nutrition",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-disease"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-disease",
+ "game-parallel-fused-data",
+ "game-parallel-genetics",
+ "game-parallel-social",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-family"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-data",
+ "game-parallel-families",
+ "game-parallel-family-lifecycle",
+ "game-parallel-family-model",
+ "game-parallel-fused-data",
+ "game-parallel-fused-metadata",
+ "game-parallel-people",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-food"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-dependent-care",
+ "game-parallel-fused-cargo",
+ "game-parallel-fused-data",
+ "game-parallel-fused-dependent-care",
+ "game-parallel-fused-diet",
+ "game-parallel-fused-food-aid",
+ "game-parallel-fused-food-deposit",
+ "game-parallel-fused-store-build",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-food-aid"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-cargo",
+ "game-parallel-food-select",
+ "game-parallel-fused-data",
+ "game-parallel-genetics",
+ "game-parallel-store-witnesses",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-food-deposit"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-food-select",
+ "game-parallel-fused-data",
+ "game-parallel-genetics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-goods"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-goods",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "game-parallel-fused-index",
+ "game-parallel-goods-packed",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-import"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-agreements",
+ "game-parallel-block-data",
+ "game-parallel-family-host",
+ "game-parallel-fused-autonomy",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "game-parallel-fused-disease",
+ "game-parallel-fused-family",
+ "game-parallel-fused-goods",
+ "game-parallel-fused-metadata",
+ "game-parallel-fused-needs",
+ "game-parallel-fused-nutrition",
+ "game-parallel-fused-store-build",
+ "game-parallel-goods-packed",
+ "game-parallel-knowledge-columns",
+ "game-parallel-production-receipts",
+ "game-parallel-social-edges",
+ "game-parallel-social-pressure",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-index"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-fused-data",
+ "game-parallel-packed-jobs-model",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-metadata"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-packed-jobs-model",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-missions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "game-parallel-mission-objectives",
+ "game-parallel-missions",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-needs"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-disease",
+ "game-parallel-environment",
+ "game-parallel-fatigue",
+ "game-parallel-food-select",
+ "game-parallel-fused-data",
+ "game-parallel-fused-disease",
+ "game-parallel-genetics",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-nutrition"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "game-parallel-fused-diet",
+ "game-parallel-fused-needs",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-output"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-contended",
+ "game-parallel-fused-data",
+ "game-parallel-fused-metadata",
+ "game-parallel-production-output",
+ "game-parallel-production-receipts",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-physical"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-agreement-host",
+ "game-parallel-autonomy",
+ "game-parallel-block-actions",
+ "game-parallel-block-food-cargo",
+ "game-parallel-block-logistics",
+ "game-parallel-block-property",
+ "game-parallel-blocks",
+ "game-parallel-disease",
+ "game-parallel-family-host",
+ "game-parallel-fused-actions",
+ "game-parallel-fused-admission",
+ "game-parallel-fused-agriculture",
+ "game-parallel-fused-autonomy",
+ "game-parallel-fused-autowork",
+ "game-parallel-fused-care",
+ "game-parallel-fused-cargo",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-confrontation",
+ "game-parallel-fused-data",
+ "game-parallel-fused-decisions",
+ "game-parallel-fused-departure",
+ "game-parallel-fused-dependent-care",
+ "game-parallel-fused-diet",
+ "game-parallel-fused-family",
+ "game-parallel-fused-food",
+ "game-parallel-fused-food-aid",
+ "game-parallel-fused-food-deposit",
+ "game-parallel-fused-goods",
+ "game-parallel-fused-import",
+ "game-parallel-fused-index",
+ "game-parallel-fused-metadata",
+ "game-parallel-fused-missions",
+ "game-parallel-fused-needs",
+ "game-parallel-fused-output",
+ "game-parallel-fused-store-build",
+ "game-parallel-fused-tick",
+ "game-parallel-fused-work-experience",
+ "game-parallel-goal-host",
+ "game-parallel-goods-packed",
+ "game-parallel-market-auto",
+ "game-parallel-observation",
+ "game-parallel-production-model",
+ "game-parallel-production-output",
+ "game-parallel-production-packed",
+ "game-parallel-production-receipts",
+ "game-parallel-skill-host",
+ "game-parallel-store-witnesses",
+ "rayon",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-fused-purpose"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-social-pressure"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "game-parallel-genetics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-store-build"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-tick"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-block-logistics",
+ "game-parallel-fused-agriculture",
+ "game-parallel-fused-care",
+ "game-parallel-fused-cargo",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+ "game-parallel-fused-decisions",
+ "game-parallel-fused-dependent-care",
+ "game-parallel-fused-diet",
+ "game-parallel-fused-disease",
+ "game-parallel-fused-family",
+ "game-parallel-fused-food",
+ "game-parallel-fused-food-aid",
+ "game-parallel-fused-food-deposit",
+ "game-parallel-fused-metadata",
+ "game-parallel-fused-needs",
+ "game-parallel-fused-nutrition",
+ "game-parallel-fused-output",
+ "game-parallel-fused-purpose",
+ "game-parallel-fused-store-build",
+ "game-parallel-fused-work-experience",
+ "game-parallel-production-receipts",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-trade"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "game-parallel-market-auto",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-fused-work-experience"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-data",
+ "game-parallel-fused-metadata",
+ "game-parallel-production-model",
+ "game-parallel-work-asking",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-genetics"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-goal-host"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-fused-conflict",
+ "game-parallel-fused-data",
+]
+
+[[package]]
+name = "game-parallel-goals"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autowork",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-goods-actions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-goods-cargo",
+ "game-parallel-opinions",
+ "game-parallel-people",
+ "game-parallel-production",
+ "game-parallel-property",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-goods-cargo"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-index",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-goods-packed"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-goods-cargo",
+ "game-parallel-production-model",
+ "rayon",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-guardians"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-index"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-institutions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-index",
+ "game-parallel-market",
+ "game-parallel-people",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-invocation"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-knowledge"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "game-parallel-social",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-knowledge-columns"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-knowledge",
+ "game-parallel-opinions",
+ "game-parallel-social",
+ "rayon",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-lineage"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-families",
+ "game-parallel-invocation",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-logistics"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-lot-allocation"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-lot-batches"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-model",
+ "game-parallel-lot-planning",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-lot-content"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-content-import",
+ "game-parallel-lot-model",
+ "game-parallel-lots",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-lot-diet"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-content",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-nutrition",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-lot-model"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-lot-planning"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "game-parallel-lot-allocation",
+ "game-parallel-lot-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-lot-projection"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-autowork",
+ "game-parallel-economy-person",
+ "game-parallel-goods-cargo",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-market",
+ "game-parallel-market-auto",
+ "game-parallel-opinions",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-lot-runtime"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-content-import",
+ "game-parallel-lot-content",
+ "game-parallel-lot-work",
+ "game-parallel-lots",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-lot-work"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-content",
+ "game-parallel-lot-model",
+ "game-parallel-lot-planning",
+ "game-parallel-lots",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-lots"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-lot-allocation",
+ "game-parallel-lot-batches",
+ "game-parallel-lot-model",
+ "game-parallel-lot-planning",
+ "rayon",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-market"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-market-auto"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autowork",
+ "game-parallel-goods-cargo",
+ "game-parallel-market",
+ "game-parallel-market-proposals",
+ "game-parallel-opinions",
+ "game-parallel-people",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "game-parallel-property",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-market-proposals"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-goods-cargo",
+ "game-parallel-market",
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-matching"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-mission-objectives"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-missions",
+ "game-parallel-social",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-missions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-missions-model",
+ "game-parallel-production-model",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-missions-model"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-nutrition"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-observation"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+]
+
+[[package]]
+name = "game-parallel-opinions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-opinions-model",
+ "game-parallel-social",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-opinions-model"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-packed-jobs-model"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-packing"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-cargo",
+ "game-parallel-people",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-people"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-persistence"
+version = "0.2.0"
+dependencies = [
+ "windows-sys",
+]
+
+[[package]]
+name = "game-parallel-personality"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-physical-host"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-cargo",
+ "game-parallel-logistics",
+ "game-parallel-people",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-production"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-index",
+ "game-parallel-people",
+ "game-parallel-production-admission",
+ "game-parallel-production-model",
+ "game-parallel-production-output",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-production-actions"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-autowork",
+ "game-parallel-people",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "game-parallel-property",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-production-admission"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "rayon",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-production-contended"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-packed-jobs-model",
+ "game-parallel-production-output",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-production-model"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-production-output"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-production-packed"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-packed-jobs-model",
+ "game-parallel-production",
+ "game-parallel-production-admission",
+ "game-parallel-production-contended",
+ "game-parallel-production-model",
+ "game-parallel-production-output",
+ "game-parallel-production-receipts",
+ "rayon",
+ "smallvec",
+]
+
+[[package]]
+name = "game-parallel-production-receipts"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-packed-jobs-model",
+ "game-parallel-production-model",
+ "game-parallel-production-output",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-property"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-goods-cargo",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-purpose"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-skill-catalog"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-production-model",
+ "game-parallel-skills",
+]
+
+[[package]]
+name = "game-parallel-skill-host"
+version = "0.2.0"
+
+[[package]]
+name = "game-parallel-skill-model"
+version = "0.2.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-skills"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-skill-model",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-social"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-people",
+ "game-parallel-social-pressure",
+ "game-parallel-transport",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-social-edges"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-social",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-social-pressure"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-store-witnesses"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-cargo",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-tactical-choices"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-conflict",
+ "game-parallel-economy-person",
+ "game-parallel-tactics",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-tactical-map"
+version = "0.2.0"
+dependencies = [
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-tactics"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-conflict",
+ "game-parallel-tactical-map",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "game-parallel-transport"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-cargo",
+ "game-parallel-people",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-validation"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-agreements",
+ "game-parallel-agriculture",
+ "game-parallel-autonomy",
+ "game-parallel-care",
+ "game-parallel-cargo",
+ "game-parallel-conflict",
+ "game-parallel-disease",
+ "game-parallel-environment",
+ "game-parallel-families",
+ "game-parallel-family-host",
+ "game-parallel-fatigue",
+ "game-parallel-guardians",
+ "game-parallel-institutions",
+ "game-parallel-knowledge",
+ "game-parallel-lineage",
+ "game-parallel-logistics",
+ "game-parallel-opinions",
+ "game-parallel-people",
+ "game-parallel-production",
+ "game-parallel-purpose",
+ "game-parallel-skills",
+ "game-parallel-social",
+ "game-parallel-tactics",
+ "game-parallel-transport",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-work-asking"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-goals",
+ "game-parallel-production-model",
+ "game-parallel-work-requests",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-work-requests"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-opinions",
+ "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-worldgen"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-content-import",
+ "game-parallel-fused-physical",
+ "game-parallel-genetics",
+ "game-parallel-skill-catalog",
+ "game-parallel-worldgen-food",
+ "game-parallel-worldgen-owners",
+ "rayon",
+ "serde",
+ "serde_json",
+ "toml",
+]
+
+[[package]]
+name = "game-parallel-worldgen-food"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-genetics",
+ "game-parallel-worldgen-owners",
+ "rayon",
+]
+
+[[package]]
+name = "game-parallel-worldgen-owners"
+version = "0.2.0"
+dependencies = [
+ "game-parallel",
+ "game-parallel-genetics",
+ "rayon",
+ "serde",
+ "toml",
+]
+
+[[package]]
 name = "game-parenthood"
 version = "0.2.0"
 dependencies = [
@@ -4020,6 +6293,9 @@ name = "smallvec"
 version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5b3dc8af474f516a851ff4bd12db780f948b9250ad37211e4eec0bccea54e01b"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "spirv"
@@ -4367,6 +6643,15 @@ checksum = "4cd9b125c486025df0eabcb585e62173c6c9eddcec5d117d3b6e8c30e2ee4d10"
 dependencies = [
  "windows-result",
  "windows-targets",
+]
+
+[[package]]
+name = "windows-sys"
+version = "0.61.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
+dependencies = [
+ "windows-link",
 ]
 
 [[package]]

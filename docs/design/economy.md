@@ -80,13 +80,13 @@ Tasks use `Open`, `Blocked`, `Completed`, and `Cancelled` states. Claims reserve
 
 ## Labor arrangements
 
-An employment offer specifies duties, location, duration or output target, working conditions, compensation, payment schedule, supplied tools and provisions, cancellation, and any enforcement terms. In-kind food, output shares, and reciprocal work are valid before money exists.
+People can make personal offers describing duties, location, expected output, conditions, compensation, supplies, and consequences. Repeated patterns may be described as employment; there is no employment or payroll entity. In-kind food, output shares, and reciprocal work are possible before money exists.
 
 Acceptance creates obligations and access permissions. Each worker still decides whether to attend, continue, demand payment, leave, or refuse unsafe conditions. An employer may default or dismiss workers. Physical coercion, where attempted, belongs to the conflict system rather than a forced assignment flag.
 
-Paid time is actual eligible work time; production pay uses attributable output. Travel, training, and breaks are paid only when the terms include them. Record work once so several contracts cannot accidentally pay for the same exclusive minute.
+People may observe work and form expectations of compensation based on time or output. Payment requires a later personal decision and a physical transfer; it may be withheld or disputed. Record actual work once so different observers can reason about the same activity without creating extra work.
 
-Apprenticeship exchanges time and work for teaching, access, support, and future opportunities. Household and communal obligations use the same contribution accounting without requiring every relationship to be a wage contract.
+Apprenticeship, household contribution, and communal obligation describe interactions among people, including work, teaching, access, and support. They do not require universal contribution accounting or a wage contract.
 
 ## Agreements
 
@@ -105,11 +105,11 @@ Each agreement records parties, authorized signatories, terms, knowledge or witn
 
 Validate responses against authority and each term's meaning, recording whether participation was willing or compelled. A coerced signature or apparent agreement based on deception does not establish private approval or universal legitimacy. Acceptance atomically creates the agreement and any immediately effective rights or claim transfers. Only transfers physically possible at that moment occur immediately. A promised delivery from a distant store becomes an obligation and task, never an instant stock relocation.
 
-Output shares accrue from attributed gross production under a stated fraction. Accrual creates an amount owed; delivery or an agreed on-site division discharges it. Keep integer remainders so a stream of small harvests pays the same share as one large harvest.
+People can remember promised shares of attributed production and decide whether to deliver, demand, withhold, dispute, or forgive them. Any division must move actual goods.
 
-Automatic division is possible when the parties have arranged shared custody, an accountable storekeeper, or escrow that actually controls the goods. It is not universal perfect enforcement. A sole custodian can conceal or withhold output, subject to detection and consequences.
+Division occurs through the actual actions of people controlling the goods. A custodian can conceal or withhold output, subject to detection and consequences.
 
-Death, incapacity, destroyed property, and political change do not silently settle a contract. The agreement's terms and recognized institutions determine inheritance, substitution, renegotiation, or unresolved claims.
+Death, incapacity, destroyed property, and political change do not silently settle a promise. People interpret its terms and decide whether to pursue, honor, substitute, renegotiate, or abandon claims.
 
 ## Exchange, markets, money, and credit
 
@@ -125,9 +125,7 @@ A project represents an intended result, sponsor, beneficiaries, proposed owners
 
 Use states `Draft`, `SeekingSupport`, `Ready`, `Active`, `Blocked`, `Completed`, `Abandoned`, and `Failed`. A rejected funding proposal does not necessarily kill the project: the sponsor may revise it, find another partner, delay, or abandon it. Require a material change or a cooldown before repeating an identical rejected offer.
 
-An enterprise is an ongoing organization of assets, rights, people, knowledge, production, obligations, and accounts. It can be personal, household, communal, governmental, guild-based, or jointly organized. Its arrangement follows actual agreements and institutions.
-
-Enterprise accounting references physical goods and claims in the common ledger. It does not maintain a second authoritative inventory. Insolvency, loss of access, owner death, and unavailable labor can block operations; they do not delete obligations or physical property.
+An enterprise is a description of ongoing interactions among people, assets, knowledge, production, and personal commitments. It is not an actor or a second authoritative inventory. Loss of access, death, and unavailable labor can change or end the pattern without deleting physical property.
 
 ## First complete farm example
 
@@ -140,8 +138,8 @@ This scenario demonstrates the systems; private ownership is one possible result
 5. Accepted terms create obligations, permissions, procurement tasks, and deliveries.
 6. Workers voluntarily accept roles or face an explicit coercive attempt; inputs physically reach the site.
 7. Construction and cultivation progress through real work. The project can stall or fail.
-8. The completed enterprise posts recurring production, maintenance, sales, and delivery tasks.
-9. Harvest enters actual custody. Shares and wages accrue, then are delivered, withheld, disputed, or renegotiated.
+8. People may continue proposing production, maintenance, sales, and delivery work.
+9. Harvest enters actual custody. People may deliver, withhold, dispute, or renegotiate expected shares.
 10. Outcomes change wealth, trust, livelihoods, institutions, and future project choices.
 
 ## Acceptance scenarios

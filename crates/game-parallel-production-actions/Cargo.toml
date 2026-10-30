@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-production-actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-property = { path = "../game-parallel-property" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+rayon.workspace = true

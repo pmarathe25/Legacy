@@ -1,0 +1,67 @@
+[package]
+name = "game-parallel-fused-physical"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-fused-diet = { path = "../game-parallel-fused-diet" }
+game-parallel-fused-store-build = { path = "../game-parallel-fused-store-build" }
+game-parallel-store-witnesses = { path = "../game-parallel-store-witnesses" }
+game-parallel-fused-autonomy = { path = "../game-parallel-fused-autonomy" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-production-output = { path = "../game-parallel-production-output" }
+rayon.workspace = true
+
+game-parallel-production-receipts = { path = "../game-parallel-production-receipts" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-production-packed = { path = "../game-parallel-production-packed" }
+game-parallel-fused-index = { path = "../game-parallel-fused-index" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-admission = { path = "../game-parallel-fused-admission" }
+game-parallel-fused-actions = { path = "../game-parallel-fused-actions" }
+game-parallel-fused-import = { path = "../game-parallel-fused-import" }
+game-parallel-fused-departure = { path = "../game-parallel-fused-departure" }
+game-parallel-fused-agriculture = { path = "../game-parallel-fused-agriculture" }
+game-parallel-block-logistics = { path = "../game-parallel-block-logistics" }
+game-parallel-fused-cargo = { path = "../game-parallel-fused-cargo" }
+game-parallel-block-food-cargo = { path = "../game-parallel-block-food-cargo" }
+game-parallel-fused-output = { path = "../game-parallel-fused-output" }
+game-parallel-fused-family = { path = "../game-parallel-fused-family" }
+game-parallel-autonomy = { path = "../game-parallel-autonomy" }
+game-parallel-fused-autowork = { path = "../game-parallel-fused-autowork" }
+game-parallel-fused-needs = { path = "../game-parallel-fused-needs" }
+game-parallel-market-auto = { path = "../game-parallel-market-auto" }
+game-parallel-block-actions = { path = "../game-parallel-block-actions" }
+game-parallel-fused-goods = { path = "../game-parallel-fused-goods" }
+game-parallel-goods-packed = { path = "../game-parallel-goods-packed" }
+game-parallel-fused-conflict = { path = "../game-parallel-fused-conflict" }
+game-parallel-fused-decisions = { path = "../game-parallel-fused-decisions" }
+game-parallel-fused-tick = { path = "../game-parallel-fused-tick" }
+game-parallel-fused-care = { path = "../game-parallel-fused-care" }
+game-parallel-block-property = { path = "../game-parallel-block-property" }
+game-parallel-family-host = { path = "../game-parallel-family-host" }
+game-parallel-agreement-host = { path = "../game-parallel-agreement-host" }
+game-parallel-goal-host = { path = "../game-parallel-goal-host" }
+game-parallel-skill-host = { path = "../game-parallel-skill-host" }
+game-parallel-fused-dependent-care = { path = "../game-parallel-fused-dependent-care" }
+game-parallel-fused-missions = { path = "../game-parallel-fused-missions" }
+game-parallel-fused-food-aid = { path = "../game-parallel-fused-food-aid" }
+game-parallel-fused-food = { path = "../game-parallel-fused-food" }
+game-parallel-fused-food-deposit = { path = "../game-parallel-fused-food-deposit" }
+game-parallel-fused-confrontation = { path = "../game-parallel-fused-confrontation" }
+game-parallel-fused-work-experience = { path = "../game-parallel-fused-work-experience" }
+[dev-dependencies]
+game-parallel-observation = { path = "../game-parallel-observation" }
+game-parallel-blocks = { path = "../game-parallel-blocks" }
+serde_json.workspace = true
+
+
+
+
+
+
+game-parallel-disease = { path = "../game-parallel-disease" }
+
+
+

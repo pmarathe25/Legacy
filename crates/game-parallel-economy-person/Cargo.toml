@@ -1,0 +1,14 @@
+[package]
+name = "game-parallel-economy-person"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lot-diet = { path = "../game-parallel-lot-diet" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-nutrition = { path = "../game-parallel-nutrition" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "game-parallel-worldgen"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-skill-catalog = { path = "../game-parallel-skill-catalog" }
+game-parallel-content-import = { path = "../game-parallel-content-import" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+rayon.workspace = true
+serde.workspace = true
+toml.workspace = true
+game-parallel-worldgen-owners = { path = "../game-parallel-worldgen-owners" }
+game-parallel-worldgen-food = { path = "../game-parallel-worldgen-food" }
+[dev-dependencies]
+game-parallel-fused-physical = { path = "../game-parallel-fused-physical" }
+serde_json.workspace = true

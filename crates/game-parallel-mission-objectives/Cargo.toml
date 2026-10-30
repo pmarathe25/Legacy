@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-mission-objectives"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-missions = { path = "../game-parallel-missions" }
+game-parallel-social = { path = "../game-parallel-social" }
+rayon.workspace = true

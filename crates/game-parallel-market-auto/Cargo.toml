@@ -1,0 +1,17 @@
+[package]
+name = "game-parallel-market-auto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-property = { path = "../game-parallel-property" }
+game-parallel-market = { path = "../game-parallel-market" }
+game-parallel-market-proposals = { path = "../game-parallel-market-proposals" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }

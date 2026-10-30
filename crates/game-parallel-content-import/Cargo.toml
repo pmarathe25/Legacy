@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-content-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-production = { path = "../game-parallel-production" }
+toml.workspace = true

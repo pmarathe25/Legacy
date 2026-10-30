@@ -1,0 +1,744 @@
+//! Load new economic scenarios from authored content and retain lot ages in saves.
+use game_parallel_autowork::{Autowork, Policy};
+use game_parallel_economy::{
+    Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Economy, Families,
+    FarmPolicy, Field, Goals, Person, Route, Rules, State, Travel,
+};
+use game_parallel_economy_agriculture::content as crop_content;
+use game_parallel_lot_content::Catalog;
+use game_parallel_lot_runtime::Snapshot;
+use game_parallel_lots::{Container, Place};
+use game_parallel_production::{Inventory, Production};
+use serde::Deserialize;
+use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Scenario {
+    seed: u64,
+    tick_millis: u64,
+    stock_capacity: u64,
+    food_relief_divisor: u32,
+    rules: Rules,
+    regions: Vec<Region>,
+    people: Vec<Resident>,
+    #[serde(default)]
+    routes: Vec<Route>,
+    #[serde(default)]
+    family: Option<Families>,
+    #[serde(default)]
+    care: Option<DependentCare>,
+    #[serde(default)]
+    agreements: Option<Agreements>,
+    #[serde(default)]
+    promise_offering: Vec<PromiseOfferConfig>,
+    #[serde(default)]
+    work_requests: Option<game_parallel_autowork::requests::Requests>,
+    #[serde(default)]
+    opinions: Option<game_parallel_opinions::Opinions>,
+    #[serde(default)]
+    aspirations: Vec<Aspiration>,
+    #[serde(default)]
+    cultivation: Option<Cultivation>,
+    #[serde(default)]
+    dynamics: Option<game_parallel_economy::Dynamics>,
+    #[serde(default)]
+    remedies: Vec<game_parallel_economy_dynamics::treatment::Remedy>,
+    #[serde(default)]
+    missions: Option<game_parallel_economy::Missions>,
+    #[serde(default)]
+    campaign: Option<game_parallel_economy::Campaign>,
+    #[serde(default)]
+    skills: Option<game_parallel_economy::Skills>,
+    #[serde(default)]
+    knowledge: Option<game_parallel_economy::Knowledge>,
+    #[serde(default)]
+    combat: Option<game_parallel_economy_combat::Config>,
+    #[serde(default)]
+    fatigue: Option<game_parallel_economy::Fatigue>,
+    #[serde(default)]
+    environment: Option<EnvironmentConfig>,
+    #[serde(default)]
+    purpose: Option<game_parallel_economy::Purpose>,
+    #[serde(default)]
+    recovery: Option<game_parallel_economy::RecoveryRules>,
+    #[serde(default)]
+    gathering: Option<GatheringConfig>,
+    #[serde(default)]
+    food_search: Option<game_parallel_economy::FoodSearch>,
+    #[serde(default)]
+    giving: Option<GivingConfig>,
+    #[serde(default)]
+    medical: Option<MedicalConfig>,
+    #[serde(default)]
+    hauling: Option<HaulingConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PromiseOfferConfig {
+    person: u64,
+    recipient: u64,
+    good: String,
+    quantity: u64,
+    due_after: u64,
+    retry_ticks: u64,
+    willing: bool,
+    #[serde(default)]
+    recipient_hunger_at_least: u32,
+    #[serde(default)]
+    minimum_trust: Option<i32>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+    #[serde(default)]
+    after_work_recipe: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HaulingConfig {
+    #[serde(default)]
+    policies: Vec<HaulingPolicyConfig>,
+    #[serde(default)]
+    asking: Vec<HaulingAskingConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HaulingAskingConfig {
+    person: u64,
+    carrier: u64,
+    source: u64,
+    destination: u64,
+    good: String,
+    enabled: bool,
+    retry_ticks: u64,
+    request_lifetime: u64,
+    #[serde(default)]
+    next_review: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HaulingPolicyConfig {
+    person: u64,
+    source: u64,
+    destination: u64,
+    good: String,
+    quantity: u64,
+    willing: bool,
+    #[serde(default)]
+    requires_request: bool,
+    #[serde(default)]
+    request_pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pressured_by: Option<u64>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EnvironmentConfig {
+    regions: Vec<HazardConfig>,
+    #[serde(default)]
+    seasons: Vec<game_parallel_economy::Season>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HazardConfig {
+    region: u64,
+    damage: u32,
+    shelter: u32,
+    shelter_reduction: u32,
+    #[serde(default)]
+    shelter_good: Option<GoodReference>,
+}
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum GoodReference {
+    Name(String),
+    Id(u32),
+}
+fn resolve_environment(
+    config: EnvironmentConfig,
+    goods: &BTreeMap<&str, u32>,
+) -> Result<game_parallel_economy::Environment, String> {
+    let regions = config
+        .regions
+        .into_iter()
+        .map(|hazard| {
+            let shelter_good = hazard
+                .shelter_good
+                .map(|reference| match reference {
+                    GoodReference::Id(id) => Ok(id),
+                    GoodReference::Name(name) => goods
+                        .get(name.as_str())
+                        .copied()
+                        .ok_or_else(|| format!("unknown shelter good {name}")),
+                })
+                .transpose()?;
+            Ok(game_parallel_economy::Hazard {
+                region: hazard.region,
+                damage: hazard.damage,
+                shelter: hazard.shelter,
+                shelter_reduction: hazard.shelter_reduction,
+                shelter_good,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(game_parallel_economy::Environment {
+        regions,
+        seasons: config.seasons,
+    })
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GatheringConfig {
+    max_hunger: u32,
+    #[serde(default)]
+    inherit_births: bool,
+    nodes: Vec<ResourceConfig>,
+    #[serde(default)]
+    policies: Vec<game_parallel_economy::GatherPolicy>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResourceConfig {
+    id: u64,
+    region: u64,
+    good: String,
+    available: u64,
+    capacity: u64,
+    regrowth: u64,
+    yield_per_action: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GivingConfig {
+    #[serde(default)]
+    policies: Vec<GivingPolicyConfig>,
+    #[serde(default)]
+    responses: Vec<FoodResponseConfig>,
+    #[serde(default)]
+    learning: Vec<game_parallel_economy::SharingLearning>,
+    #[serde(default)]
+    asking: Vec<game_parallel_economy::FoodAsking>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FoodResponseConfig {
+    person: u64,
+    good: String,
+    quantity: u64,
+    recipient_hunger_at_least: u32,
+    willing: bool,
+    #[serde(default)]
+    minimum_trust: Option<i32>,
+    #[serde(default)]
+    affinity_threshold: Option<i32>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GivingPolicyConfig {
+    person: u64,
+    recipient: u64,
+    good: String,
+    quantity: u64,
+    recipient_hunger_at_least: u32,
+    willing: bool,
+    #[serde(default)]
+    requires_request: bool,
+    #[serde(default)]
+    pressured_by: Option<u64>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MedicalConfig {
+    policies: Vec<MedicalPolicyConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MedicalPolicyConfig {
+    person: u64,
+    patient: u64,
+    medicine: String,
+    quantity: u64,
+    willing: bool,
+    #[serde(default)]
+    pressured_by: Option<u64>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Cultivation {
+    max_hunger: u32,
+    fields: Vec<CultivatedField>,
+    policies: Vec<FarmPolicy>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CultivatedField {
+    id: u64,
+    region: u64,
+    crop: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Aspiration {
+    person: u64,
+    recipe: String,
+    priority: i32,
+    batch: u64,
+    review_interval: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Region {
+    id: u64,
+    #[serde(default)]
+    stock: BTreeMap<String, u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Resident {
+    id: u64,
+    region: u64,
+    health: u32,
+    hunger: u32,
+    willing_to_work: bool,
+    seek_meals: bool,
+    #[serde(default)]
+    controlled: bool,
+    #[serde(default)]
+    recipe: Option<String>,
+    #[serde(default)]
+    goods: BTreeMap<String, u64>,
+}
+
+/// Construct fresh custody only for a new scenario, never for a saved world.
+pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
+    let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+    let mut regions = HashSet::new();
+    if scenario
+        .regions
+        .iter()
+        .any(|r| r.id == 0 || !regions.insert(r.id))
+        || scenario.people.iter().any(|p| !regions.contains(&p.region))
+    {
+        return Err("invalid scenario regions".into());
+    }
+    let mut production = Production {
+        max_work_hunger: scenario.rules.max_work_hunger,
+        goods: vec![],
+        recipes: vec![],
+        recipe_categories: vec![],
+        inventories: scenario
+            .regions
+            .iter()
+            .map(|r| Inventory {
+                region: r.id,
+                stocks: vec![],
+            })
+            .collect(),
+        jobs: vec![],
+        events: vec![],
+    };
+    game_parallel_content_import::augment(
+        &mut production,
+        &content.join("objects"),
+        &content.join("workshop"),
+        scenario.tick_millis,
+        scenario.stock_capacity,
+        scenario.food_relief_divisor,
+    )?;
+    let mut skills = scenario.skills;
+    if let Some(skills) = &mut skills {
+        game_parallel_skill_catalog::configure(skills, &production.recipe_categories)?;
+    }
+    let goods: BTreeMap<_, _> = production
+        .goods
+        .iter()
+        .map(|good| (good.name.as_str(), good.id))
+        .collect();
+    let recipes: BTreeMap<_, _> = production
+        .recipes
+        .iter()
+        .map(|recipe| (recipe.name.as_str(), recipe.id))
+        .collect();
+    let mut agreements = scenario.agreements;
+    if !scenario.promise_offering.is_empty() {
+        let owner = agreements
+            .as_mut()
+            .ok_or("promise offering requires agreements")?;
+        let offering = scenario
+            .promise_offering
+            .into_iter()
+            .map(|p| {
+                Ok(game_parallel_economy::PromiseOfferPolicy {
+                    person: p.person,
+                    recipient: p.recipient,
+                    good: *goods
+                        .get(p.good.as_str())
+                        .ok_or_else(|| format!("unknown promise good {}", p.good))?,
+                    quantity: p.quantity,
+                    due_after: p.due_after,
+                    retry_ticks: p.retry_ticks,
+                    willing: p.willing,
+                    recipient_hunger_at_least: p.recipient_hunger_at_least,
+                    minimum_trust: p.minimum_trust,
+                    pressure_threshold: p.pressure_threshold,
+                    next_review: 0,
+                    after_work_recipe: p
+                        .after_work_recipe
+                        .as_deref()
+                        .map(|name| {
+                            recipes
+                                .get(name)
+                                .copied()
+                                .ok_or_else(|| format!("unknown promise work recipe {name}"))
+                        })
+                        .transpose()?,
+                    last_work_offer_at: None,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        owner.offering.extend(offering);
+    }
+    let dynamics = game_parallel_economy_dynamics::configure_remedies!(scenario, goods);
+    for (inventory, region) in production.inventories.iter_mut().zip(&scenario.regions) {
+        for (name, quantity) in &region.stock {
+            let good = *goods
+                .get(name.as_str())
+                .ok_or_else(|| format!("unknown good {name}"))?;
+            let stock = inventory
+                .stocks
+                .iter_mut()
+                .find(|row| row.good == good)
+                .ok_or("missing stock")?;
+            stock.quantity = *quantity;
+        }
+    }
+    let catalog = Catalog::from_tick_millis(&production.goods, scenario.tick_millis)?;
+    let environment = scenario
+        .environment
+        .map(|config| resolve_environment(config, &goods))
+        .transpose()?;
+    let giving = scenario
+        .giving
+        .map(|config| -> Result<_, String> {
+            let policies = config
+                .policies
+                .into_iter()
+                .map(|p| {
+                    Ok(game_parallel_economy::GivingPolicy {
+                        person: p.person,
+                        recipient: p.recipient,
+                        good: *goods
+                            .get(p.good.as_str())
+                            .ok_or_else(|| format!("unknown giving good {}", p.good))?,
+                        quantity: p.quantity,
+                        recipient_hunger_at_least: p.recipient_hunger_at_least,
+                        willing: p.willing,
+                        requires_request: p.requires_request,
+                        pressured_by: p.pressured_by,
+                        pressure_threshold: p.pressure_threshold,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let responses = config
+                .responses
+                .into_iter()
+                .map(|p| {
+                    Ok(game_parallel_economy::FoodResponse {
+                        person: p.person,
+                        good: *goods
+                            .get(p.good.as_str())
+                            .ok_or_else(|| format!("unknown giving good {}", p.good))?,
+                        quantity: p.quantity,
+                        recipient_hunger_at_least: p.recipient_hunger_at_least,
+                        willing: p.willing,
+                        minimum_trust: p.minimum_trust,
+                        affinity_threshold: p.affinity_threshold,
+                        pressure_threshold: p.pressure_threshold,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(game_parallel_economy::Giving {
+                policies,
+                responses,
+                learning: config.learning,
+                asking: config.asking,
+                requests: vec![],
+            })
+        })
+        .transpose()?;
+    let hauling = scenario
+        .hauling
+        .map(|config| -> Result<_, String> {
+            let policies = config
+                .policies
+                .into_iter()
+                .map(|p| {
+                    Ok(game_parallel_economy::HaulingPolicy {
+                        person: p.person,
+                        source: p.source,
+                        destination: p.destination,
+                        good: *goods
+                            .get(p.good.as_str())
+                            .ok_or_else(|| format!("unknown hauling good {}", p.good))?,
+                        quantity: p.quantity,
+                        willing: p.willing,
+                        requires_request: p.requires_request,
+                        request_pressure_threshold: p.request_pressure_threshold,
+                        pressured_by: p.pressured_by,
+                        pressure_threshold: p.pressure_threshold,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let asking = config
+                .asking
+                .into_iter()
+                .map(|p| {
+                    Ok(game_parallel_economy::HaulingAsking {
+                        person: p.person,
+                        carrier: p.carrier,
+                        source: p.source,
+                        destination: p.destination,
+                        good: *goods
+                            .get(p.good.as_str())
+                            .ok_or_else(|| format!("unknown hauling good {}", p.good))?,
+                        enabled: p.enabled,
+                        retry_ticks: p.retry_ticks,
+                        request_lifetime: p.request_lifetime,
+                        next_review: p.next_review,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(game_parallel_economy::Hauling {
+                policies,
+                asking,
+                requests: vec![],
+            })
+        })
+        .transpose()?;
+    let medical = scenario
+        .medical
+        .map(|config| -> Result<_, String> {
+            let policies = config
+                .policies
+                .into_iter()
+                .map(|p| {
+                    Ok(game_parallel_economy::MedicalPolicy {
+                        person: p.person,
+                        patient: p.patient,
+                        medicine: *goods
+                            .get(p.medicine.as_str())
+                            .ok_or_else(|| format!("unknown medicine {}", p.medicine))?,
+                        quantity: p.quantity,
+                        willing: p.willing,
+                        pressured_by: p.pressured_by,
+                        pressure_threshold: p.pressure_threshold,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(game_parallel_economy::Medical { policies })
+        })
+        .transpose()?;
+    let gathering = scenario
+        .gathering
+        .map(|config| -> Result<_, String> {
+            let nodes = config
+                .nodes
+                .into_iter()
+                .map(|node| {
+                    Ok(game_parallel_economy::ResourceNode {
+                        id: node.id,
+                        region: node.region,
+                        good: *goods
+                            .get(node.good.as_str())
+                            .ok_or_else(|| format!("unknown resource good {}", node.good))?,
+                        available: node.available,
+                        capacity: node.capacity,
+                        regrowth: node.regrowth,
+                        yield_per_action: node.yield_per_action,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(game_parallel_economy::Gathering {
+                max_hunger: config.max_hunger,
+                inherit_births: config.inherit_births,
+                nodes,
+                policies: config.policies,
+            })
+        })
+        .transpose()?;
+    let combat = scenario
+        .combat
+        .map(|config| {
+            config.build(
+                &scenario.regions.iter().map(|r| r.id).collect::<Vec<_>>(),
+                scenario.seed,
+                |name| goods.get(name).copied(),
+            )
+        })
+        .transpose()?;
+    let agriculture = scenario
+        .cultivation
+        .map(|state| -> Result<_, String> {
+            let crops = crop_content::load(
+                &content.join("agriculture"),
+                &production.goods,
+                scenario.tick_millis,
+            )?;
+            let fields = state
+                .fields
+                .into_iter()
+                .map(|field| {
+                    let crop = crops
+                        .get(&field.crop)
+                        .ok_or_else(|| format!("unknown crop {}", field.crop))?
+                        .id;
+                    Ok(Field {
+                        id: field.id,
+                        region: field.region,
+                        crop,
+                        phase: CropPhase::Fallow,
+                        remaining: 0,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(Agriculture {
+                crops: crops.into_values().collect(),
+                fields,
+                policies: state.policies,
+                max_hunger: state.max_hunger,
+            })
+        })
+        .transpose()?;
+    let mut custody = catalog.fresh_world(&production.inventories, 0)?;
+    let mut people = Vec::new();
+    let mut policies = Vec::new();
+    let dreams: Vec<_> = scenario
+        .aspirations
+        .iter()
+        .map(|dream| {
+            let recipe = *recipes
+                .get(dream.recipe.as_str())
+                .ok_or_else(|| format!("unknown recipe {}", dream.recipe))?;
+            Ok(Dream {
+                person: dream.person,
+                recipe,
+                priority: dream.priority,
+                batch: dream.batch,
+                review_interval: dream.review_interval,
+                next_review: 0,
+                enabled: true,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    for resident in scenario.people {
+        let mut lots = Vec::new();
+        for (name, quantity) in resident.goods {
+            let good = *goods
+                .get(name.as_str())
+                .ok_or_else(|| format!("unknown good {name}"))?;
+            lots.push(catalog.fresh(good, quantity, 0)?);
+        }
+        custody.containers.push(Container::new(
+            Place::Person(resident.id),
+            scenario.rules.carrying_capacity,
+            lots,
+        )?);
+        if let Some(name) = resident.recipe {
+            let recipe = *recipes
+                .get(name.as_str())
+                .ok_or_else(|| format!("unknown recipe {name}"))?;
+            policies.push(Policy {
+                person: resident.id,
+                recipe,
+                enabled: true,
+                disregard_claims: false,
+            });
+        }
+        people.push(Person {
+            id: resident.id,
+            region: Some(resident.region),
+            health: resident.health,
+            hunger: resident.hunger,
+            willing_to_work: resident.willing_to_work,
+            seek_meals: resident.seek_meals,
+            controlled: resident.controlled,
+        });
+    }
+    Economy::compile(State {
+        seed: scenario.seed,
+        physical: Snapshot {
+            custody,
+            goods: production.goods,
+            recipes: production.recipes,
+            tick_millis: scenario.tick_millis,
+            work: vec![],
+        },
+        people,
+        rules: scenario.rules,
+        market: None,
+        agreements,
+        opinions: scenario.opinions,
+        autowork: Some(Autowork {
+            next_id: 1,
+            policies,
+            requests: scenario.work_requests,
+        }),
+        goals: (!dreams.is_empty()).then_some(Goals {
+            retry_interval: 3,
+            plan_inputs: true,
+            people: vec![],
+            events: vec![],
+        }),
+        dreams: (!dreams.is_empty()).then_some(Dreams {
+            people: dreams,
+            events: vec![],
+        }),
+        nutrition: None,
+        pending_food: vec![],
+        travel: (!scenario.routes.is_empty()).then_some(Travel {
+            routes: scenario.routes,
+            journeys: vec![],
+        }),
+        family: scenario.family,
+        care: scenario.care,
+        agriculture,
+        dynamics,
+        missions: scenario.missions,
+        campaign: scenario.campaign,
+        skills,
+        knowledge: scenario.knowledge,
+        combat,
+        fatigue: scenario.fatigue,
+        environment,
+        purpose: scenario.purpose,
+        recovery: scenario.recovery,
+        gathering,
+        food_search: scenario.food_search,
+        giving,
+        medical,
+        hauling,
+    })
+}
+
+pub fn save(world: &Economy, path: &Path) -> Result<(), String> {
+    let data = serde_json::to_vec(&world.snapshot()).map_err(|error| error.to_string())?;
+    game_parallel_persistence::save(path, &data)
+}
+pub fn load(path: &Path) -> Result<Economy, String> {
+    let data = std::fs::read(path).map_err(|error| error.to_string())?;
+    let state = serde_json::from_slice(&data).map_err(|error| error.to_string())?;
+    Economy::compile(state)
+}
+
+#[cfg(test)]
+#[path = "../tests/support/scenario.rs"]
+mod tests;

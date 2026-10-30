@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-goods-actions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-property = { path = "../game-parallel-property" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+rayon.workspace = true

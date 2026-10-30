@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-conflict-packed"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-conflict-receipts = { path = "../game-parallel-conflict-receipts" }
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

@@ -1,0 +1,20 @@
+[package]
+name = "game-parallel-economy-read"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-purpose = { path = "../game-parallel-purpose" }
+game-parallel-environment = { path = "../game-parallel-environment" }
+game-parallel-agreements = { path = "../game-parallel-agreements" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-economy-campaign = { path = "../game-parallel-economy-campaign" }
+game-parallel-economy-agriculture = { path = "../game-parallel-economy-agriculture" }
+game-parallel-economy-combat = { path = "../game-parallel-economy-combat" }
+game-parallel-economy-dynamics = { path = "../game-parallel-economy-dynamics" }
+game-parallel-economy-fatigue = { path = "../game-parallel-economy-fatigue" }
+game-parallel-economy-expeditions = { path = "../game-parallel-economy-expeditions" }
+game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }

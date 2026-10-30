@@ -37,7 +37,7 @@ Recent extensions have separate owners:
 
 - **One owner per resource:** Only the plugin that declares a resource may mutate it.
 - **Acyclic dependencies:** Lower crates emit events/notifications; upper crates subscribe and send typed requests downward.
-- **Enforced budgets:** [Architecture tests](game-assembly/tests/architecture.rs) verify dependency direction and source-size limits (typically ≤600 lines in `src/`). See [`docs/design/feature-ownership.md`](../docs/design/feature-ownership.md) for boundary rationales.
+- **Enforced budgets:** [Architecture tests](game-assembly/tests/architecture.rs) verify dependency direction and source-size limits (typically ≤1,200 lines in `src/`). See [`docs/design/feature-ownership.md`](../docs/design/feature-ownership.md) for boundary rationales.
 - **Isolated verification:** Check or test any crate directly:
   ```sh
   cargo check -p game-agriculture --lib
@@ -225,3 +225,45 @@ Recent extensions have separate owners:
 | [game-food-inquiry](game-food-inquiry/README.md) | Personal food samples, rotating inspections, and finite storage experiments | `game-core`, `game-sim`, `game-storage`, `game-inquiry`, `game-reasoning`, `game-knowledge`, `game-choice`, `game-cargo`, `game-objects`, `game-food-storage`, `game-preservation`, `game-transport`, `game-physiology`, `game-vitality` |
 | [game-information](game-information/README.md) | Information interests, local questions, voluntary replies, and remembered-record consultation | `game-core`, `game-sim`, `game-storage`, `game-choice`, `game-knowledge`, `game-testimony`, `game-communication`, `game-transport`, `game-social-life`, `game-relationships`, `game-physiology`, `game-vitality`, `game-ecology`, `game-inquiry`, `game-literacy` |
 | [game-search](game-search/README.md) | Finite remembered-route searches for displaced people and needed goods | `game-information`, `game-ecology`, `game-choice`, `game-social-life`, `game-relationships`, `game-cargo`, `game-property`, `game-core`, `game-sim`, `game-storage`, `game-knowledge`, `game-signals`, `game-transport`, `game-land`, `game-physiology`, `game-vitality` |
+
+## Experimental parallel runtime
+
+The independent [`game-parallel`](game-parallel/README.md) runtime composes data-defined owners for [people](game-parallel-people/README.md), [agriculture](game-parallel-agriculture/README.md), [cargo](game-parallel-cargo/README.md) and [cargo actions](game-parallel-cargo-actions/README.md), [packing](game-parallel-packing/README.md), [departure admission](game-parallel-departure/README.md), [physical validation](game-parallel-validation/README.md), [production](game-parallel-production/README.md), [goods cargo](game-parallel-goods-cargo/README.md), [market offers](game-parallel-market/README.md), and its [data model](game-parallel-production-model/README.md), [transport](game-parallel-transport/README.md), [logistics](game-parallel-logistics/README.md), [genetics](game-parallel-genetics/README.md), [matching](game-parallel-matching/README.md), [families](game-parallel-families/README.md) and [family staging](game-parallel-family-host/README.md), [social encounters](game-parallel-social/README.md), [personal knowledge](game-parallel-knowledge/README.md), and [autonomous travel](game-parallel-autonomy/README.md). Its administrative client is [game-parallel-cli](game-parallel-cli/README.md). It is under development and has not replaced the existing simulation or achieved the full feature and scaling requirements.
+
+The [compiled block runtime](game-parallel-blocks/README.md) uses the `game-parallel-block-*` owners for persistent physical storage, import/export, actions, family staging, food cargo, shipments and departures. Its client is [game-parallel-block-cli](game-parallel-block-cli/README.md). The experimental feature owners also include [autonomous work](game-parallel-autowork/README.md), [automatic trade](game-parallel-market-auto/README.md), [lineage](game-parallel-lineage/README.md), and [guardians](game-parallel-guardians/README.md). This runtime remains incomplete and the integrated workloads have not yet reached the scaling target.
+
+Stock claims, delegated access, and consensual transfers are owned by [game-parallel-property](game-parallel-property/README.md). The compiled host uses packed [jobs](game-parallel-production-packed/README.md), [cargo](game-parallel-goods-packed/README.md), [contested production arbitration](game-parallel-production-contended/README.md), and [event receipts](game-parallel-production-receipts/README.md).
+
+The fused host adds data-defined [conflict](game-parallel-conflict/README.md), [care](game-parallel-care/README.md), [fatigue](game-parallel-fatigue/README.md), [personal skills](game-parallel-skills/README.md), and [environmental exposure](game-parallel-environment/README.md), with restricted [player observations](game-parallel-observation/README.md). The block CLI offers a player mode alongside its administrative interface.
+
+Individual [nutrition](game-parallel-nutrition/README.md) uses [person-owned fused columns](game-parallel-fused-nutrition/README.md) for digestion and deficiency. [Social pressure](game-parallel-social-pressure/README.md) records personal fear- and obligation-based responses without treating compliance as consent or authority.
+
+The [skill model](game-parallel-skill-model/README.md) and [catalog adapter](game-parallel-skill-catalog/README.md) keep related authored recipes connected to individual craft experience.
+
+Optional tactical encounters are owned by [game-parallel-tactics](game-parallel-tactics/README.md), with versioned persistent local maps and fixed-point visibility in [game-parallel-tactical-map](game-parallel-tactical-map/README.md). Combat receipts remain lazy and independent of later tactical movement.
+
+Packed combat uses [shared receipts](game-parallel-conflict-receipts/README.md) and [bounded order overlays](game-parallel-conflict-overlay/README.md) so ordinary retarget/defend commands preserve compiled topology and prior attributed events.
+
+The fused runtime also composes [disease and treatment](game-parallel-disease/README.md), [delivery agreements](game-parallel-agreements/README.md), [automatic agreement decisions](game-parallel-agreement-auto/README.md), persistent [family columns](game-parallel-family-columns/README.md), [lifecycle receipts](game-parallel-family-receipts/README.md), [knowledge columns](game-parallel-knowledge-columns/README.md), and [autonomous review columns](game-parallel-autonomy-columns/README.md) with a [physical binding](game-parallel-fused-autonomy/README.md). Owner-specific data and transactional drafts remain separate from the physical host.
+
+[Directed opinions](game-parallel-opinions/README.md) attach bounded personal trust to experienced agreement outcomes and acceptance policies.
+[Personal assessment data](game-parallel-opinions-model/README.md) defines saved individual feelings and sensitivities. [Work requests](game-parallel-work-requests/README.md) address physical work to a person without requiring their compliance; responses and real production are resolved independently.
+The fused runtime supports data-defined [personal craft goals](game-parallel-goals/README.md), which generate work policies and gain progress only from completed production.
+
+Optional [purpose needs](game-parallel-purpose/README.md) track personal deprivation from time and blocked goals, relieve it through real goal progress, and apply configured health effects through the [fused adapter](game-parallel-fused-purpose/README.md). The [goal host](game-parallel-goal-host/README.md) validates personal edits; the [goal CLI](game-parallel-block-cli-goals/README.md) exposes them to the session interface.
+
+Dependent care uses [willing local caregivers](game-parallel-dependent-care/README.md), sharded arbitration, and [staged health effects](game-parallel-fused-dependent-care/README.md); parents can also care for children traveling on the same journey.
+The [caregiving CLI](game-parallel-block-cli-caregiving/README.md) exposes voluntary caregiver preferences and participant-visible care events.
+
+[Personal aspirations](game-parallel-dreams/README.md) periodically create or renew concrete work goals; goal completion still requires actual production, and disabled goals are not overridden.
+
+The replacement host rejects preset civic bodies; person-owned cooperation and responses are modeled directly.
+
+The [lot-based economic host](game-parallel-economy/README.md) combines dated physical custody, [cultivation](game-parallel-economy-agriculture/README.md), family life, aspirations, promises, exchange, [individual claims](game-parallel-economy-claims/README.md), health, [expeditions](game-parallel-economy-expeditions/README.md), and [ruler continuity](game-parallel-economy-campaign/README.md). Its [runner](game-parallel-economy-cli/README.md) loads authored goods, recipes, crops, routes and individual preferences. Other campaign features have not yet all been migrated to this host.
+
+[Personal expeditions](game-parallel-missions/README.md) use real routes, custody and observations; their [fused adapter](game-parallel-fused-missions/README.md) reserves and rechecks departures, the [meeting objective owner](game-parallel-mission-objectives/README.md) records real consenting encounters, and the [mission CLI](game-parallel-block-cli-missions/README.md) exposes expedition and objective commands.
+[Personal journey data](game-parallel-missions-model/README.md) records willingness separately from participation under pressure.
+
+[Generated owner state](game-parallel-worldgen-owners/README.md) creates founding field layouts, social participation, and personal reports for the parallel world generator.
+
+Individual food access and aid use [personal cargo](game-parallel-cargo/README.md) and [parallel aid decisions](game-parallel-fused-food-aid/README.md), with conserved custody changes published by the fused host.

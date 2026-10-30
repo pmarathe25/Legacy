@@ -1,0 +1,40 @@
+[package]
+name = "game-parallel-blocks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+rayon.workspace = true
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-market-auto = { path = "../game-parallel-market-auto" }
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+game-parallel-block-departure = { path = "../game-parallel-block-departure" }
+game-parallel-block-actions = { path = "../game-parallel-block-actions" }
+game-parallel-agriculture = { path = "../game-parallel-agriculture" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-knowledge = { path = "../game-parallel-knowledge" }
+game-parallel-autonomy = { path = "../game-parallel-autonomy" }
+game-parallel-block-family = { path = "../game-parallel-block-family" }
+game-parallel-block-export = { path = "../game-parallel-block-export" }
+game-parallel-block-logistics = { path = "../game-parallel-block-logistics" }
+game-parallel-block-import = { path = "../game-parallel-block-import" }
+game-parallel-block-food-cargo = { path = "../game-parallel-block-food-cargo" }
+game-parallel-block-physical = { path = "../game-parallel-block-physical" }
+game-parallel-block-index = { path = "../game-parallel-block-index" }
+game-parallel-block-production = { path = "../game-parallel-block-production" }
+game-parallel-production-packed = { path = "../game-parallel-production-packed" }
+game-parallel-block-goods = { path = "../game-parallel-block-goods" }
+game-parallel-goods-packed = { path = "../game-parallel-goods-packed" }
+game-parallel-block-property = { path = "../game-parallel-block-property" }
+game-parallel-institutions = { path = "../game-parallel-institutions" }
+game-parallel-block-institutions = { path = "../game-parallel-block-institutions" }
+game-parallel-family-host = { path = "../game-parallel-family-host" }
+[dev-dependencies]
+serde_json.workspace = true
+
+
+
+
+

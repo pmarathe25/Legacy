@@ -1,0 +1,7 @@
+[package]
+name = "game-parallel-observation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }

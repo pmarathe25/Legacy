@@ -1,0 +1,80 @@
+tick = 0
+seed = 1
+
+[rules]
+food_growth = 3
+food_capacity = 100
+food_per_meal = 2
+hunger_per_tick = 1
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 1
+max_health = 100
+
+[[regions]]
+id = 1
+food = 0
+people = [{ id = 1, hunger = 0, health = 100 }, { id = 2, hunger = 7, health = 100 }]
+
+[[regions]]
+id = 2
+food = 4
+people = [{ id = 3, hunger = 3, health = 100 }]
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 2
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 2
+
+[social.rules]
+interval = 2
+min_health = 1
+max_hunger = 10
+familiarity_gain = 2
+familiarity_max = 100
+relationship_retention = 64
+
+[[social.participants]]
+person = 1
+willing = true
+
+[[social.participants]]
+person = 2
+willing = true
+
+[[social.participants]]
+person = 3
+willing = true
+
+[knowledge]
+max_records = 4
+
+[[knowledge.minds]]
+person = 1
+records = [{ region = 2, food = 4, observed_at = 0, witness = 3 }]
+
+[[knowledge.minds]]
+person = 2
+
+[[knowledge.minds]]
+person = 3
+
+[autonomy.rules]
+review_interval = 2
+min_health = 1
+min_hunger = 1
+min_destination_food = 1
+min_food_gain = 1
+max_observation_age = 20
+
+[[autonomy.actors]]
+person = 2
+enabled = true
+
+

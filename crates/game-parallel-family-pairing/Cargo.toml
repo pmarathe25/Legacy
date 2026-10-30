@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-family-pairing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-family-columns = { path = "../game-parallel-family-columns" }
+game-parallel-family-model = { path = "../game-parallel-family-model" }
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-matching = { path = "../game-parallel-matching" }
+rayon.workspace = true

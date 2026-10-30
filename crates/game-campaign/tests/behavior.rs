@@ -1531,3 +1531,14 @@ fn a_food_delivery_can_search_known_roads_after_the_recipient_leaves() {
     }
     assert_eq!(h.save().unwrap(), loaded.save().unwrap());
 }
+
+#[path = "support/institutional_continuity.rs"]
+mod institutional_continuity;
+#[path = "support/voluntary_care.rs"]
+mod voluntary_care;
+
+#[path = "support/attraction.rs"]
+mod attraction;
+
+#[path = "support/reproductive_choices.rs"]
+mod reproductive_choices;

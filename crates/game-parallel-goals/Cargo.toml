@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-goals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-autowork = { path = "../game-parallel-autowork" }
+game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true

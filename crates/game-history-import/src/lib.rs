@@ -86,14 +86,14 @@ fn audit(root: &Value) -> Result<ImportReport, String> {
         }
     }
     for key in ["world.actions", "cargo.inventories"] {
-        if let Some(value) = resources.get(key) {
-            if value.as_object().is_none_or(|a| !a.is_empty()) {
-                issue(
-                    &mut report,
-                    format!("resources.{key}"),
-                    "active actions and inventory identity/goods conversion not implemented",
-                );
-            }
+        if let Some(value) = resources.get(key)
+            && value.as_object().is_none_or(|a| !a.is_empty())
+        {
+            issue(
+                &mut report,
+                format!("resources.{key}"),
+                "active actions and inventory identity/goods conversion not implemented",
+            );
         }
     }
     if let Some(bodies) = resources

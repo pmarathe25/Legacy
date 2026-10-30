@@ -1,0 +1,9 @@
+[package]
+name = "game-parallel-family-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+serde.workspace = true
+smallvec = { version = "1.16", features = ["serde"] }

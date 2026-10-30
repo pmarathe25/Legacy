@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-production-output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

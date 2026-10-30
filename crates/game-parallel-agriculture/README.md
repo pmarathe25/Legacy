@@ -1,0 +1,9 @@
+# Parallel agriculture owner
+
+Owns data-defined fields and regional farming arbitration for the parallel engine. Each tick allocates seed, storage and worker claims from a committed regional snapshot in deterministic field-ID order. See the parallel runtime README for current behavior and limitations.
+
+Optional `volunteers = [PERSON, ...]` on `[agriculture]` limits farm labor to those people. An empty list means nobody volunteers; omitting the field retains unrestricted labor for existing scenarios. In the fused CLI, `farm-status PERSON` shows a person's setting, and `farm-policy PERSON enable|disable` changes it. A player-controlled person remains reserved for explicit player actions, so volunteering alone does not make the ruler farm automatically. Generated populations do not inherit template-person consent. For a volunteer-only template, the world-generation setting `farming_percent` assigns individual founding volunteers deterministically (default zero); the player-controlled founder is excluded. See `content/parallel/farming_volunteers.toml`.
+
+For voluntary farms, optional `[agriculture.recruitment]` rules (`interval` and `one_in`) allow healthy, eligible, unoccupied locals at farms with fields to make seeded decisions to volunteer. New volunteers begin supplying labor on the next tick. `farm-policy PERSON disable` records an enduring refusal to volunteer automatically; enabling clears that refusal. Recruitment uses the fused host, and the comparison hosts reject scenarios that enable it. See `content/parallel/farming_volunteers_auto.toml`.
+
+An optional `leave_one_in` on recruitment rules lets an unoccupied volunteer choose to leave during a review; zero (the default) disables this. A voluntary departure is not a permanent refusal, so the person may choose to rejoin at a later review. Leaving and joining use the same tick-start snapshot, and a departure supplies no farm labor that tick.

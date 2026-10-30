@@ -187,3 +187,20 @@ fn batched_physiology_matches_individual_ticks_across_boundaries_and_saturation(
         );
     }
 }
+
+#[path = "support/forecast.rs"]
+mod forecast;
+#[path = "support/satiety.rs"]
+mod satiety;
+
+#[path = "support/assent.rs"]
+mod assent;
+#[path = "support/development.rs"]
+mod development;
+#[path = "support/metabolism.rs"]
+mod metabolism;
+
+#[path = "support/local_meals.rs"]
+mod local_meals;
+#[path = "support/self_meal_wave.rs"]
+mod self_meal_wave;

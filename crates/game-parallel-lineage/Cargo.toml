@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-lineage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-invocation = { path = "../game-parallel-invocation" }
+rayon.workspace = true
+serde.workspace = true

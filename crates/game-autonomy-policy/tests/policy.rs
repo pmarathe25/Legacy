@@ -1,4 +1,6 @@
 use game_autonomy_policy::{Policy, Rules};
+#[path = "support/review_grid.rs"]
+mod review_grid;
 use game_core::*;
 #[test]
 fn optional_policy_validates_bounds_and_does_not_change_default_wire_fields() {

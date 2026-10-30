@@ -8,7 +8,7 @@ A government is a collection of people, offices, resources, agreements, and inst
 
 A society may become communal because people contribute goods and respect shared access, or become coercive because powerful people take goods and compel labor. These are outcomes of actions and relationships. A label in the UI describes those outcomes; it does not cause them.
 
-Ownership, sharing, and enforcement must work before a formal government exists. Formal institutions make practices more consistent but still depend on people carrying them out.
+Ownership, sharing, and enforcement depend on people carrying them out. Institutions are descriptions of recurring individual conduct, not simulation entities that act or enforce rules.
 
 ## Bounded social invention
 
@@ -16,17 +16,17 @@ People invent arrangements within the facts, experiences, and actions represente
 
 | Capability | Required behavior | Boundary |
 | --- | --- | --- |
-| Invented institutions and rules | Recognize problems, construct new combinations of conditions, rights, obligations, roles, and procedures, propose them, and respond to adoption, refusal, and consequences. | Individual arrangements need not be authored, but their operations must have executable meanings in the simulation. |
+| Invented practices | Recognize problems, propose arrangements to other people, and respond to adoption, refusal, and consequences. | Patterns arise from individual beliefs and actions, without an institutional entity. |
 | Learned values | Acquire attachments to new practices, groups, and ideals grounded in modeled experience; let those values change goals, decisions, and social responses. | Naming an ideal does not create a physiological need or an unmodeled mental capability. |
 | Reasoning from precedents | Compare structured cases, weigh conflicting represented principles, generalize to unfamiliar combinations, and revise judgments from experience. | Use available knowledge and uncertain estimates. Unrestricted human-like interpretation of arbitrary natural-language principles is outside scope. |
 
-Definitions are structured data with stable identities and explicit meanings. Display names and explanations describe them; generated prose does not create behavior. Rules can define new social permissions and duties, but fulfilling or enforcing them still requires actual people, actions, and resources. They cannot add physical abilities or bypass conservation and physical limits. Willing agreement is not a universal precondition for social arrangements: threats, dependence, deception and actual force can produce outward compliance. Track that compliance separately from private approval, loyalty and belief; coercion must have represented means and consequences.
+Personal beliefs and expectations can use structured data with explicit meanings. Display names and explanations describe observed patterns; generated prose does not create behavior. Fulfilling or enforcing an expectation requires actual people, actions, and resources. Expectations cannot add physical abilities or bypass conservation and physical limits. Willing agreement is not a universal precondition for social arrangements: threats, dependence, deception and actual force can produce outward compliance. Track that compliance separately from private approval, loyalty and belief; coercion must have represented means and consequences.
 
 Distinguish representing an idea, proposing it autonomously, and evaluating its consequences. A rule interpreter alone does not implement invention. Start with bounded candidate construction and evaluation once needs, knowledge, agreements, and disputes exist. Choose the concrete search and case-comparison algorithms through implementation and behavioral tests; the kernel does not need a general programming language or language model.
 
 A useful test follows a person recognizing a recurring problem, proposing an arrangement absent from the authored institution list, others adopting or rejecting it, behavior changing, and consequences affecting subsequent choices. Also test a learned value changing a later decision and a relevant precedent changing judgment of a new case. Merely generating a new name or selecting a complete predefined institution does not satisfy these tests.
 
-Share immutable concept/rule definitions, index relevant facts and events, and run expensive proposal search only when due. Keep each person's beliefs, value strengths, and known precedents separate. Bound search by deterministic simulation rules rather than available wall-clock time. Benchmark proposal bursts and accumulated concepts as well as everyday rule evaluation. Performance at 10,000 people remains a target to measure.
+Share immutable vocabulary where useful, index relevant facts and events, and run expensive proposal search only when due. Keep each person's beliefs, value strengths, and known precedents separate. Bound search by deterministic simulation rules rather than available wall-clock time. Benchmark proposal bursts and accumulated concepts as well as everyday decisions. Performance at 10,000 people remains a target to measure.
 
 Technological invention is deferred until production exists, when a concrete domain such as farming or metallurgy can be evaluated. Ordinary recipes, learning, production, and equipment remain in scope. Social procedures may combine existing observations and evidence; discovering new physical sensing or verification techniques belongs to that later technology decision.
 
@@ -55,7 +55,7 @@ A claim does not create an invisible barrier around goods. Physical access depen
 
 Sharing is an owner's or custodian's action or standing permission. Supported arrangements include gifts, household access, communal membership, ration entitlements, rental, lending, and permission for a specific use. Do not make every settlement resident automatically entitled to every government stockpile.
 
-Customary claims can precede written records. Communal property can have a group claimant and membership rules. Use rights can belong to someone other than the claimant of the underlying land or tool.
+Customary claims can precede written records. Communal access can arise when individuals recognize and act on shared expectations. Use rights can be claimed by someone other than the person claiming the underlying land or tool.
 
 ## Negotiation and agreements
 
@@ -67,25 +67,15 @@ Promising a transfer does not perform it. Default, forgiveness, renegotiation, a
 
 ## Institutions and offices
 
-An institution records:
-
-- its purpose, jurisdiction, members, and funding;
-- membership and exit rules;
-- recognized offices and the powers attached to them;
-- how proposals become decisions;
-- how officeholders are appointed, removed, and replaced;
-- its policies, enforcement procedures, and active disputes;
-- the people who currently recognize or oppose its authority.
+An institution or office is a description of observed patterns, not an authoritative record or actor. Individual people may remember roles, promises, precedents, and expectations and respond to them differently. A role has practical effect only when particular people choose to act, defer, comply, resist, or enforce it.
 
 Characters decide whether to consult others and whose opinions matter, including the influence assigned to each participant and the support required to act. Equal voting, unequal consultation, delegation or personal rule can result; these are descriptions, not a prescribed menu. Adoption can follow negotiation, manipulation, intimidation or seizure of power. A claimant can declare rules that others dispute, and practical control depends on who complies, resists, defects or enforces them.
 
-An officeholder can only commit resources or make agreements within their actual authority. Their signature does not bind a competing faction that rejects that authority. Distinguish a valid institutional procedure from whether its result is obeyed.
-
-An institution needs a creation path: people propose a purpose and rules, negotiate participation and contributions, and begin operating as people enact or enforce the terms. Changes, splinter groups, dissolution, and replacement use the same political process. Do not require the player to create every institution.
+Anyone can propose, claim, promise, or attempt to use resources; the response depends on the people who control, recognize, contest, or observe the action. A signature or proclaimed procedure does not bind anyone. Recurring arrangements can change or dissolve as individual behavior changes.
 
 ## Laws, disputes, and enforcement
 
-A law needs a jurisdiction, subjects, conditions, obligations or prohibitions, deciding authority, and response procedure. Initial examples cover property, access, contributions, labor obligations, assault, and agreement disputes. Represent invented laws through the bounded model above and test their actual effects through the same actions and social responses as other rules. Settle detailed adoption, amendment, and adjudication procedures when implementing those behaviors.
+People can express and remember expectations about property, access, contributions, labor, assault, and disputes. Other people may treat such expectations as laws, reject them, or act under pressure. Their effects must flow through individual actions and social responses rather than a law entity.
 
 The enforcement chain is explicit:
 
@@ -116,7 +106,7 @@ Keep these records separate:
 - the current person's identity and abilities;
 - offices held by that person;
 - personal assets and claims;
-- institutions and their property;
+- other people's assets and claims;
 - recognition, loyalty, and relationships.
 
 Recognition by the guardians does not automatically restore a throne, transfer an estate, or compel obedience. A child incarnation does not inherit adult political agency merely because the player controls them.
@@ -127,7 +117,7 @@ The realm interface exposes information and actions available through relationsh
 
 Mayors and governors receive mandates with a jurisdiction, budget or spending rights, goals, limits, reporting duties, and removal procedure. They interpret instructions according to competence, beliefs, loyalty, and interests.
 
-Institutions continue acting while the ruler travels, dies, or grows up. Succession and regency depend on their own rules and political struggles. The guardians' duty to the reincarnating person is distinct from serving any particular government.
+People continue acting while the ruler travels, dies, or grows up. Succession and regency emerge from their choices and political struggles. The guardians' duty to the reincarnating person is distinct from serving any particular government.
 
 ## Acceptance scenarios
 

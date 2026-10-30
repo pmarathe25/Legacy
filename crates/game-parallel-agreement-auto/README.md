@@ -1,0 +1,4 @@
+# Automatic agreement fulfillment
+
+People may attempt delivery of accepted promises from their committed local goods because of their ordinary preference or their directed fear of a particular recipient. Independent proposals are assessed against physical custody and resolve competing actor claims deterministically. Selected transfers and agreement changes are staged until the host publishes the complete tick; a promise never forces a delivery.
+The full fused tick benchmark is `cargo run --release -p game-parallel-fused-physical --example fused_combat_rounds -- 1 100000 spread agreements 5`; repeat with other worker counts and `hot` to measure contention on one creditor. Compilation, snapshot validation, and export are outside the timed tick. Results describe this workload, not the complete game.

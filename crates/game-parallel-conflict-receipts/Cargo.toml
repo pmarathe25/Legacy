@@ -1,0 +1,8 @@
+[package]
+name = "game-parallel-conflict-receipts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+rayon.workspace = true

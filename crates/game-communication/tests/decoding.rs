@@ -130,3 +130,8 @@ fn vocabularies_larger_than_the_cache_budget_keep_every_learned_meaning() {
         Some("concept-00000")
     );
 }
+#[path = "support/incremental_validation.rs"]
+mod incremental_validation;
+
+#[path = "support/learning.rs"]
+mod learning;

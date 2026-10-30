@@ -58,3 +58,44 @@ fn nested_attempts_do_not_clone_resources_they_never_edit() {
     );
     assert_eq!(host.get::<History>().unwrap().values.len(), 20_000);
 }
+
+#[path = "support/action_identity.rs"]
+mod action_identity;
+
+#[path = "support/journals.rs"]
+mod journals;
+
+#[path = "support/owners.rs"]
+mod owners;
+
+#[path = "support/signals.rs"]
+mod signals;
+
+#[path = "support/scheduled_cancellation.rs"]
+mod scheduled_cancellation;
+
+#[path = "support/save_validation.rs"]
+mod save_validation;
+
+#[path = "support/tables.rs"]
+mod tables;
+
+#[path = "support/logs.rs"]
+mod logs;
+
+#[path = "support/pending.rs"]
+mod pending;
+
+#[path = "support/preparation.rs"]
+mod preparation;
+
+#[path = "support/executor.rs"]
+mod executor;
+#[path = "support/immediate.rs"]
+mod immediate;
+
+#[path = "support/batches.rs"]
+mod batches;
+
+#[path = "support/transactions.rs"]
+mod transactions;

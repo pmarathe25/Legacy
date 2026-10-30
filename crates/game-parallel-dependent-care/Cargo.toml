@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-dependent-care"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-family-columns = { path = "../game-parallel-family-columns" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+rayon.workspace = true
+serde.workspace = true
+[dev-dependencies]
+game-parallel-family-model = { path = "../game-parallel-family-model" }

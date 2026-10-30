@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-fused-dependent-care"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+rayon.workspace = true
+
+game-parallel = { path = "../game-parallel" }
+game-parallel-family-lifecycle = { path = "../game-parallel-family-lifecycle" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }

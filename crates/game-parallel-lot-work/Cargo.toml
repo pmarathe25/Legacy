@@ -1,0 +1,16 @@
+[package]
+name = "game-parallel-lot-work"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-lot-model = { path = "../game-parallel-lot-model" }
+game-parallel-lot-content = { path = "../game-parallel-lot-content" }
+game-parallel-lot-planning = { path = "../game-parallel-lot-planning" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-parallel-lots = { path = "../game-parallel-lots" }

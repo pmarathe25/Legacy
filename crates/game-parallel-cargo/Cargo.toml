@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-cargo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rayon.workspace = true
+serde.workspace = true
+game-parallel-production-model = { path = "../game-parallel-production-model" }

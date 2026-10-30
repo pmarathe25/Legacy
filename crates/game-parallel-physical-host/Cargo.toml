@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-physical-host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-people = { path = "../game-parallel-people" }
+game-parallel-cargo = { path = "../game-parallel-cargo" }
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-logistics = { path = "../game-parallel-logistics" }
+rayon.workspace = true

@@ -96,19 +96,17 @@ pub(super) fn settle(
                 if p.hunger >= HUNGER
                     && economy.get(p.area).is_some_and(|s| s.food == 0)
                     && !p.dependent
-                {
-                    if let Some((area, food)) =
+                    && let Some((area, food)) =
                         richest.filter(|(area, food)| *area != p.area && *food > 0)
-                    {
-                        let _ = food;
-                        return Some((
-                            p.id,
-                            Activity::Travel {
-                                destination: area,
-                                until: at.saturating_add(180),
-                            },
-                        ));
-                    }
+                {
+                    let _ = food;
+                    return Some((
+                        p.id,
+                        Activity::Travel {
+                            destination: area,
+                            until: at.saturating_add(180),
+                        },
+                    ));
                 }
                 if p.fatigue >= FATIGUE && !matches!(p.activity, Activity::Rest { .. }) {
                     return Some((
@@ -119,7 +117,7 @@ pub(super) fn settle(
                     ));
                 }
                 if !matches!(p.activity, Activity::Idle)
-                    && !(at % 720 == 0 && matches!(p.activity, Activity::Work { .. }))
+                    && !(at.is_multiple_of(720) && matches!(p.activity, Activity::Work { .. }))
                 {
                     return None;
                 }
@@ -138,9 +136,11 @@ pub(super) fn settle(
     });
     // Ordinary social allocation is deterministic matching; both parties are locally available.
     let mut social = BTreeMap::<u64, Vec<u64>>::new();
-    if at % 720 == 0 {
+    if at.is_multiple_of(720) {
         for &(id, ref activity) in &plans {
-            if matches!(activity, Activity::Work { .. }) && random(seed, id, at / 720) % 4 == 0 {
+            if matches!(activity, Activity::Work { .. })
+                && random(seed, id, at / 720).is_multiple_of(4)
+            {
                 social
                     .entry(pop.get(id).unwrap().area)
                     .or_default()
@@ -150,7 +150,7 @@ pub(super) fn settle(
     }
     let mut paired = BTreeSet::new();
     for peers in social.values() {
-        for pair in peers.chunks_exact(2) {
+        for pair in peers.as_chunks::<2>().0 {
             let until = at.checked_add(60).ok_or("social time overflow")?;
             pop.assign(
                 pair[0],

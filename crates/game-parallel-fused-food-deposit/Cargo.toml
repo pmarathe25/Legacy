@@ -1,0 +1,12 @@
+[package]
+name = "game-parallel-fused-food-deposit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-food-select = { path = "../game-parallel-food-select" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+rayon.workspace = true

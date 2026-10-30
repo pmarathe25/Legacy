@@ -1,0 +1,13 @@
+[package]
+name = "game-parallel-fused-work-experience"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-work-asking = { path = "../game-parallel-work-asking" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

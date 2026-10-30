@@ -311,7 +311,7 @@ impl World {
                 })
                 .collect();
             for mother in adults.iter().filter(|p| p.genome[0] % 2 == 0) {
-                if random(self.seed, mother.id, at / DAY) % 900 != 0
+                if !random(self.seed, mother.id, at / DAY).is_multiple_of(900)
                     || pregnancies.iter().any(|p| p.mother == mother.id)
                 {
                     continue;
@@ -340,7 +340,7 @@ impl World {
                 p.alive
                     && !p.dependent
                     && !p.controlled
-                    && random(self.seed ^ 17, p.id, at / DAY) % 3650 == 0
+                    && random(self.seed ^ 17, p.id, at / DAY).is_multiple_of(3650)
             }) {
                 let idea = random(self.seed ^ 37, p.id, at);
                 society

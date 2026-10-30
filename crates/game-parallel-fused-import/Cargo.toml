@@ -1,0 +1,28 @@
+[package]
+name = "game-parallel-fused-import"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-social-pressure = { path = "../game-parallel-social-pressure" }
+game-parallel-fused-nutrition = { path = "../game-parallel-fused-nutrition" }
+game-parallel-fused-store-build = { path = "../game-parallel-fused-store-build" }
+game-parallel-fused-autonomy = { path = "../game-parallel-fused-autonomy" }
+game-parallel-social-edges = { path = "../game-parallel-social-edges" }
+game-parallel-knowledge-columns = { path = "../game-parallel-knowledge-columns" }
+game-parallel-family-host = { path = "../game-parallel-family-host" }
+game-parallel-fused-family = { path = "../game-parallel-fused-family" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+game-parallel-production-receipts = { path = "../game-parallel-production-receipts" }
+rayon.workspace = true
+game-parallel-fused-goods = { path = "../game-parallel-fused-goods" }
+game-parallel-goods-packed = { path = "../game-parallel-goods-packed" }
+game-parallel-fused-needs = { path = "../game-parallel-fused-needs" }
+game-parallel-fused-conflict = { path = "../game-parallel-fused-conflict" }
+
+game-parallel-fused-disease = { path = "../game-parallel-fused-disease" }
+
+game-parallel-agreements = { path = "../game-parallel-agreements" }

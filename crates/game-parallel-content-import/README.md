@@ -1,0 +1,3 @@
+# Parallel production content import
+
+Loads authored object and workshop definitions into the numeric production catalog. Catalog keys and recipe order are stable; existing template identities are preserved and new numeric IDs are assigned in key order. Inventory stocks are physical and start empty. The current production engine uses ingredient quantities, output quantities, and converted durations; food portions and scaled hunger relief are playable, and nutrient, health-effect and shelf-life metadata are retained. Authored health effects are applied after digestion. Deficiencies, spoilage, tool requirements, shared skill names and special work metadata are not yet simulated.

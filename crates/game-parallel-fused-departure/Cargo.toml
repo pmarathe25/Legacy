@@ -1,0 +1,21 @@
+[package]
+name = "game-parallel-fused-departure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-fused-nutrition = { path = "../game-parallel-fused-nutrition" }
+game-parallel = { path = "../game-parallel" }
+game-parallel-block-data = { path = "../game-parallel-block-data" }
+game-parallel-fused-data = { path = "../game-parallel-fused-data" }
+game-parallel-fused-metadata = { path = "../game-parallel-fused-metadata" }
+rayon.workspace = true
+
+game-parallel-fused-conflict = { path = "../game-parallel-fused-conflict" }
+game-parallel-fused-family = { path = "../game-parallel-fused-family" }
+game-parallel-fused-goods = { path = "../game-parallel-fused-goods" }
+game-parallel-goods-packed = { path = "../game-parallel-goods-packed" }
+game-parallel-fused-needs = { path = "../game-parallel-fused-needs" }
+game-parallel-fused-import = { path = "../game-parallel-fused-import" }
+
+game-parallel-fused-disease = { path = "../game-parallel-fused-disease" }

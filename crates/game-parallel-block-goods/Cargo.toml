@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-block-goods"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel = { path = "../game-parallel" }
+game-parallel-block-actions = { path = "../game-parallel-block-actions" }
+game-parallel-goods-packed = { path = "../game-parallel-goods-packed" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }

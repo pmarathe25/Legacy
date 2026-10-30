@@ -82,7 +82,7 @@ impl Population {
                     || p.born > p.dies_at
                     || p.alive && p.health == 0
                     || p.accounted_work > p.work_minutes
-                    || p.parents.iter().any(|id| *id == p.id)
+                    || p.parents.contains(&p.id)
             })
         {
             return Err("invalid individual population".into());

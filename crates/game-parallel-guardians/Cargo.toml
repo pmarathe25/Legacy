@@ -1,0 +1,10 @@
+[package]
+name = "game-parallel-guardians"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-transport = { path = "../game-parallel-transport" }
+game-parallel-people = { path = "../game-parallel-people" }
+rayon.workspace = true
+serde.workspace = true

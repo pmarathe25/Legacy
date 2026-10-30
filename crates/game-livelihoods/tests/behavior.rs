@@ -537,3 +537,8 @@ fn alternate_inventory_keys_do_not_double_count_a_work_goal() {
         "one remembered container was counted twice"
     );
 }
+
+#[path = "support/continuation.rs"]
+mod continuation;
+#[path = "support/planning_cache.rs"]
+mod planning_cache;

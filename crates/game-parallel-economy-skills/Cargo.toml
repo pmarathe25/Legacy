@@ -1,0 +1,14 @@
+[package]
+name = "game-parallel-economy-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-skills = { path = "../game-parallel-skills" }
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-economy-campaign = { path = "../game-parallel-economy-campaign" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-social = { path = "../game-parallel-social" }
+game-parallel-families = { path = "../game-parallel-families" }
+rayon.workspace = true

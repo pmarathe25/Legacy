@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-conflict-overlay"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-parallel-conflict = { path = "../game-parallel-conflict" }
+game-parallel-conflict-packed = { path = "../game-parallel-conflict-packed" }
+rayon.workspace = true
+[dev-dependencies]
+game-parallel-production-model = { path = "../game-parallel-production-model" }

@@ -1,0 +1,11 @@
+[package]
+name = "game-parallel-market-proposals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
+game-parallel-market = { path = "../game-parallel-market" }
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+rayon.workspace = true

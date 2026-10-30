@@ -208,3 +208,6 @@ fn a_carrier_leaving_with_the_workshop_interrupts_production_after_reload() {
     }
     assert_eq!(f.host.save().unwrap(), loaded.save().unwrap());
 }
+
+#[path = "support/reachability.rs"]
+mod reachability;
