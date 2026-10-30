@@ -36,6 +36,8 @@ struct Scenario {
     #[serde(default)]
     work_requests: Option<game_parallel_autowork::requests::Requests>,
     #[serde(default)]
+    work_tools: Vec<WorkToolConfig>,
+    #[serde(default)]
     opinions: Option<game_parallel_opinions::Opinions>,
     #[serde(default)]
     aspirations: Vec<Aspiration>,
@@ -73,6 +75,13 @@ struct Scenario {
     medical: Option<MedicalConfig>,
     #[serde(default)]
     hauling: Option<HaulingConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkToolConfig {
+    recipe: String,
+    good: String,
+    quantity: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -368,6 +377,21 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
         .iter()
         .map(|recipe| (recipe.name.as_str(), recipe.id))
         .collect();
+    let work_tools = scenario
+        .work_tools
+        .into_iter()
+        .map(|row| {
+            Ok(game_parallel_economy::WorkTool {
+                recipe: *recipes
+                    .get(row.recipe.as_str())
+                    .ok_or_else(|| format!("unknown work tool recipe {}", row.recipe))?,
+                good: *goods
+                    .get(row.good.as_str())
+                    .ok_or_else(|| format!("unknown work tool good {}", row.good))?,
+                quantity: row.quantity,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let mut agreements = scenario.agreements;
     if !scenario.promise_offering.is_empty() {
         let owner = agreements
@@ -692,6 +716,7 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
             policies,
             requests: scenario.work_requests,
         }),
+        work_tools,
         goals: (!dreams.is_empty()).then_some(Goals {
             retry_interval: 3,
             plan_inputs: true,

@@ -20,3 +20,4 @@ game-parallel-production-model = { path = "../game-parallel-production-model" }
 game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
 game-parallel-opinions = { path = "../game-parallel-opinions" }
 rayon.workspace = true
+serde.workspace = true

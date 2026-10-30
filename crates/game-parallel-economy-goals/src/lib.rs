@@ -38,6 +38,8 @@ macro_rules! prepare_work {
                     auto,
                     production: &production,
                     people: &$people,
+                    tool_requirements: &$world.work_tools,
+                    view: &$view,
                     opinions: $world.opinions.as_ref(),
                     claims: $claims.as_ref(),
                     goals: $world.goals.as_ref(),

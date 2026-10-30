@@ -182,6 +182,7 @@ fn fixture() -> State {
             }],
             requests: None,
         }),
+        work_tools: vec![],
         goals: None,
         dreams: None,
         nutrition: Some(Nutrition {
@@ -14584,6 +14585,310 @@ fn concentrated_remembered_work_offers_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let initial = concentrated_remembered_work_offers(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(started.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+fn reusable_tools_gate_work_without_blocking_an_equipped_competitor() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.opinions = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.willing_to_work = true;
+    }
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    initial.autowork.as_mut().unwrap().policies = (1..=2)
+        .map(|person| WorkPolicy {
+            person,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        })
+        .collect();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(events.started.len(), 1);
+                let state = world.snapshot();
+                assert_eq!(state.physical.work[0].job.worker, 2);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut invalid = initial;
+    invalid.work_tools[0].good = 999;
+    assert!(Economy::compile(invalid).is_err());
+}
+
+#[test]
+fn work_pauses_when_a_carried_tool_expires_and_resumes_after_actual_replacement() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.physical.recipes[0].ticks = 3;
+    initial.people[0].controlled = true;
+    initial.people[2].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: Some(3),
+        }],
+    )
+    .unwrap();
+    let spare = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(3))
+        .unwrap();
+    *spare = Container::new(
+        spare.place,
+        spare.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut unequipped = initial.clone();
+    let holder = unequipped
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(holder.place, holder.capacity, vec![]).unwrap();
+    let mut blocked = Economy::compile(unequipped).unwrap();
+    assert!(blocked.start_work(1, 1, 1).unwrap().started.is_empty());
+    assert!(blocked.snapshot().physical.work.is_empty());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.start_work(1, 1, 1).unwrap().started.len(), 1);
+                world.continue_work(1).unwrap();
+                assert_eq!(world.snapshot().physical.work[0].job.remaining, 2);
+                world.continue_work(1).unwrap();
+                let paused = world.snapshot();
+                assert_eq!(paused.physical.work[0].job.remaining, 2);
+                assert_eq!(
+                    paused
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&paused).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.give(3, 1, 3, 1).unwrap());
+                assert!(restored.give(3, 1, 3, 1).unwrap());
+                world.continue_work(1).unwrap();
+                restored.continue_work(1).unwrap();
+                assert_eq!(world.snapshot().physical.work[0].job.remaining, 1);
+                assert_eq!(world.continue_work(1).unwrap().finished.len(), 1);
+                restored.continue_work(1).unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn concentrated_tool_workload(count: u64) -> State {
+    let mut state = concentrated(count);
+    state.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    for holder in &mut state.physical.custody.containers {
+        if let Place::Person(id) = holder.place
+            && id > count / 2
+            && id % 2 == 0
+        {
+            *holder = Container::new(
+                holder.place,
+                holder.capacity,
+                vec![Lot {
+                    good: 3,
+                    quantity: 1,
+                    expires_at: None,
+                }],
+            )
+            .unwrap();
+        }
+    }
+    state
+}
+
+#[test]
+fn concentrated_tool_dependent_work_admits_only_equipped_workers() {
+    let count = 4096;
+    let initial = concentrated_tool_workload(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(events.started.len(), count as usize / 4);
+                let state = world.snapshot();
+                assert!(state.physical.work.iter().all(|w| w.job.worker % 2 == 0));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn concentrated_tool_work_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_tool_workload(count);
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()

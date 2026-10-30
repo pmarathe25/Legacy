@@ -13,3 +13,5 @@ People can ask for food, give supplies, or provide medical care through real loc
 Travelers can eat carried food. People on the same directed route at the same progress are treated as together by this coarse travel model: they can meet autonomously or by choice, ask for food, give supplies, provide care, and independently propose, consider, or physically fulfill promises; contact can transmit disease. Other routes and people at the source remain separate. Each action advances the shared world and the journey.
 
 Individual hauling preferences can move real lots between regions. A carrier can change their mind between pickup, departure, and delivery; fear or obligation may motivate an otherwise unwilling carrier. Routes, claims, carrying capacity, destination capacity, and expiry all remain physical constraints.
+
+Authored reusable tool requirements check personal custody before a work attempt competes for materials and before each work increment. Missing or expired tools pause work without consuming the tool.

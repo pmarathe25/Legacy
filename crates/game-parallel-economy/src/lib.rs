@@ -16,6 +16,7 @@ pub use game_parallel_economy_promises::{
 };
 pub use game_parallel_economy_skills::Skills;
 pub use game_parallel_economy_work::care::DependentCare;
+pub use game_parallel_economy_work::tools::Requirement as WorkTool;
 pub use game_parallel_opinions::{
     ObligationDevelopment, Opinion, RelationshipCase, Sensitivity as OpinionSensitivity,
 };
@@ -65,6 +66,7 @@ pub struct Economy {
     agreements: Option<Agreements>,
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
+    work_tools: Vec<WorkTool>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -544,6 +546,9 @@ impl Economy {
     game_parallel_economy_knowledge::knowledge_methods!();
     pub fn compile(mut state: State) -> Result<Self, String> {
         state.people.par_sort_unstable_by_key(|row| row.id);
+        state
+            .work_tools
+            .par_sort_unstable_by_key(|row| (row.recipe, row.good));
         if state.rules.carrying_capacity == 0
             || state.rules.max_health == 0
             || state.rules.meal_threshold == 0
@@ -649,6 +654,10 @@ impl Economy {
             physical.recipes(),
             physical.tick(),
         )?;
+        if !state.work_tools.is_empty() {
+            let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
+            game_parallel_economy_work::tools::validate(&state.work_tools, &recipes, &goods)?;
+        }
         if let Some(auto) = &state.autowork {
             let production = game_parallel_lot_projection::production(
                 &physical,
@@ -675,6 +684,7 @@ impl Economy {
             agreements: state.agreements,
             opinions: state.opinions,
             autowork: state.autowork,
+            work_tools: state.work_tools,
             goals: state.goals,
             dreams: state.dreams,
             nutrition: state.nutrition,
@@ -711,6 +721,7 @@ impl Economy {
             agreements: self.agreements.clone(),
             opinions: self.opinions.clone(),
             autowork: self.autowork.clone(),
+            work_tools: self.work_tools.clone(),
             goals: self.goals.clone(),
             dreams: self.dreams.clone(),
             nutrition: self.nutrition.clone(),
@@ -1281,8 +1292,44 @@ impl Economy {
             claims,
             claim_uses
         );
-        let (rates, abandon) =
+        let (mut rates, abandon) =
             family::work_rates!(self, meal_candidates, player_work, fighters, resting);
+        let starts = if self.work_tools.is_empty() {
+            starts
+        } else {
+            rates = rates
+                .into_par_iter()
+                .filter(|(id, _)| {
+                    self.physical
+                        .work()
+                        .binary_search_by_key(id, |w| w.job.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            let job = &self.physical.work()[i].job;
+                            game_parallel_economy_work::tools::available(
+                                &self.work_tools,
+                                &view,
+                                job.worker,
+                                job.recipe,
+                            )
+                        })
+                })
+                .collect();
+            std::borrow::Cow::Owned(
+                starts
+                    .par_iter()
+                    .filter(|start| {
+                        game_parallel_economy_work::tools::available(
+                            &self.work_tools,
+                            &view,
+                            start.worker,
+                            start.recipe,
+                        )
+                    })
+                    .copied()
+                    .collect(),
+            )
+        };
         let farm_harvest = farming.as_ref().map_or(&[][..], |p| p.harvest.as_slice());
         let gathered_harvest = gathering_plan
             .as_ref()

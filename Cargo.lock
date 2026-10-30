@@ -3612,6 +3612,7 @@ dependencies = [
  "game-parallel-work-asking",
  "game-parallel-work-requests",
  "rayon",
+ "serde",
 ]
 
 [[package]]

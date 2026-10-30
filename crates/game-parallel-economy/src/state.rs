@@ -25,6 +25,8 @@ pub struct State {
     #[serde(default)]
     pub autowork: Option<Autowork>,
     #[serde(default)]
+    pub work_tools: Vec<game_parallel_economy_work::tools::Requirement>,
+    #[serde(default)]
     pub goals: Option<Goals>,
     #[serde(default)]
     pub dreams: Option<game_parallel_economy_goals::Dreams>,

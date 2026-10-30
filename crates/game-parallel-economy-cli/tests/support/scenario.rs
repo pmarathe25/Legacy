@@ -852,3 +852,39 @@ fn authored_personal_offers_resolve_observed_work_by_recipe_name() {
         "fixture-tool"
     );
 }
+
+#[test]
+fn authored_work_tools_resolve_recipe_and_good_names() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = std::fs::read_to_string(root.join("content/parallel/economy.toml")).unwrap();
+    let configured = format!(
+        "{}\n[[work_tools]]\nrecipe = \"fixture-tool\"\ngood = \"tool\"\nquantity = 1\n",
+        source
+    );
+    let path = std::env::temp_dir().join(format!("legacy-work-tools-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let state = world.snapshot();
+    let tool = &state.work_tools[0];
+    assert_eq!(
+        state
+            .physical
+            .recipes
+            .iter()
+            .find(|r| r.id == tool.recipe)
+            .unwrap()
+            .name,
+        "fixture-tool"
+    );
+    assert_eq!(
+        state
+            .physical
+            .goods
+            .iter()
+            .find(|g| g.id == tool.good)
+            .unwrap()
+            .name,
+        "tool"
+    );
+}

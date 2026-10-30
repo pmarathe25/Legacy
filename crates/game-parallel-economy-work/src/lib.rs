@@ -1,5 +1,6 @@
 //! Personal responses to requested work, separate from physical admission.
 pub mod care;
+pub mod tools;
 use game_parallel_autowork::{Autowork, Plan as WorkPlan, Policy};
 use game_parallel_goals::Goals;
 use game_parallel_lot_runtime::{Events, Phase, Work};
@@ -88,6 +89,8 @@ pub struct Context<'a> {
     pub auto: &'a Autowork,
     pub production: &'a Production,
     pub people: &'a [PersonSnapshot],
+    pub tool_requirements: &'a [tools::Requirement],
+    pub view: &'a game_parallel_lots::View,
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub goals: Option<&'a Goals>,
@@ -103,14 +106,28 @@ impl Context<'_> {
             busy.extend_from_slice(self.unwilling);
             busy.par_sort_unstable();
             busy.dedup();
+            let equipped = (!self.tool_requirements.is_empty()).then(|| Autowork {
+                next_id: self.auto.next_id,
+                policies: self
+                    .auto
+                    .policies
+                    .par_iter()
+                    .filter(|p| {
+                        tools::available(self.tool_requirements, self.view, p.person, p.recipe)
+                    })
+                    .cloned()
+                    .collect(),
+                requests: None,
+            });
+            let base = equipped.as_ref().unwrap_or(self.auto);
             let filtered = game_parallel_economy_claims::filter_work(
-                self.auto,
+                base,
                 self.people,
                 self.production,
                 self.claims,
             );
             return Ok(Plan {
-                work: filtered.as_ref().unwrap_or(self.auto).plan_validated(
+                work: filtered.as_ref().unwrap_or(base).plan_validated(
                     self.people,
                     self.production,
                     &busy,
@@ -192,6 +209,12 @@ impl Context<'_> {
             enabled: true,
             disregard_claims: row.disregard_claims,
         }));
+        if !self.tool_requirements.is_empty() {
+            policies = policies
+                .into_par_iter()
+                .filter(|p| tools::available(self.tool_requirements, self.view, p.person, p.recipe))
+                .collect();
+        }
         let staged = Autowork {
             next_id: self.auto.next_id,
             policies,
