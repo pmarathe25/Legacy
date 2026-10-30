@@ -14910,3 +14910,730 @@ fn concentrated_tool_work_benchmark() {
             );
         });
 }
+
+#[test]
+fn autonomous_workers_obtain_tools_from_real_stock_and_respect_personal_claims() {
+    use game_parallel_economy_claims::{Claim, Claims};
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let pickup = world.snapshot();
+                assert_eq!(
+                    pickup
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(
+                    pickup
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&pickup).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            claims: vec![Claim {
+                person: 1,
+                region: 1,
+                good: 3,
+            }],
+            preferences: vec![],
+            events: vec![],
+        }),
+    });
+    let mut respecting = Economy::compile(initial.clone()).unwrap();
+    respecting.advance().unwrap();
+    assert_eq!(
+        respecting
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        0
+    );
+    initial.autowork.as_mut().unwrap().policies[0].disregard_claims = true;
+    let mut disregarding = Economy::compile(initial).unwrap();
+    disregarding.advance().unwrap();
+    let state = disregarding.snapshot();
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(
+        state
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .claims
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| e.person == 2 && e.good == 3)
+    );
+}
+
+#[test]
+fn tool_pickup_and_gathering_share_one_physical_boundary() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.gathering = Some(Gathering {
+        inherit_births: false,
+        max_hunger: 20,
+        nodes: vec![ResourceNode {
+            id: 1,
+            region: 1,
+            good: 2,
+            available: 1,
+            capacity: 1,
+            regrowth: 0,
+            yield_per_action: 1,
+        }],
+        policies: vec![GatherPolicy {
+            person: 3,
+            node: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.gathering.unwrap().nodes[0].available, 0);
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+            .unwrap()
+            .used,
+        3
+    );
+}
+
+fn concentrated_tool_pickups(count: u64) -> State {
+    let mut state = concentrated(count);
+    state.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: count / 8,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn many_workers_compete_for_real_tools_without_duplicating_them() {
+    let count = 4096;
+    let initial = concentrated_tool_pickups(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .filter(|c| matches!(c.place, Place::Person(id) if id > count / 2)
+                            && c.lots.iter().any(|l| l.good == 3))
+                        .count(),
+                    count as usize / 8
+                );
+                assert_eq!(world.advance().unwrap().started.len(), count as usize / 8);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn concentrated_tool_pickup_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_tool_pickups(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(started.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+fn an_autonomous_worker_replaces_an_expired_tool_only_if_they_continue() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.physical.recipes[0].ticks = 3;
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    for (place, expires_at) in [
+        (Place::Person(2), Some(3)),
+        (Place::Stock { region: 1, good: 3 }, None),
+    ] {
+        let holder = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|c| c.place == place)
+            .unwrap();
+        *holder = Container::new(
+            holder.place,
+            holder.capacity,
+            vec![Lot {
+                good: 3,
+                quantity: 1,
+                expires_at,
+            }],
+        )
+        .unwrap();
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                world.advance().unwrap();
+                let previous = world.snapshot();
+                assert_eq!(previous.physical.work[0].job.remaining, 2);
+                let mut stopped = Economy::compile(previous.clone()).unwrap();
+                stopped.set_work_choice(2, false).unwrap();
+                stopped.advance().unwrap();
+                assert_eq!(
+                    stopped
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .used,
+                    1
+                );
+                world.advance().unwrap();
+                let replaced = world.snapshot();
+                assert_eq!(replaced.physical.work[0].job.remaining, 2);
+                assert_eq!(
+                    replaced
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(
+                    replaced
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&replaced).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.advance().unwrap().finished.len(), 1);
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[1].willing_to_work = false;
+    initial.physical.recipes[0].ticks = 3;
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 5,
+        obligation: 0,
+        affinity: 0,
+    }];
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 2,
+            memory_limit: 1,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 5,
+                help_value: 0,
+                disregard_claims: false,
+            }],
+            askers: vec![],
+            pending: vec![Request {
+                id: 1,
+                requester: 1,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                created_at: 0,
+                expires: 4,
+            }],
+            events: vec![],
+        }),
+    });
+    for (place, expires_at) in [
+        (Place::Person(2), Some(3)),
+        (Place::Stock { region: 1, good: 3 }, None),
+    ] {
+        let container = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|c| c.place == place)
+            .unwrap();
+        *container = Container::new(
+            container.place,
+            container.capacity,
+            vec![Lot {
+                good: 3,
+                quantity: 1,
+                expires_at,
+            }],
+        )
+        .unwrap();
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(!state.people[1].willing_to_work);
+                assert_eq!(state.physical.work[0].job.remaining, 2);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+
+    // Requested work uses the worker's preference for that request, rather than
+    // a different standing preference for their own independent work.
+    use game_parallel_economy_claims::{Claim, Claims};
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    let mut contested = world.snapshot();
+    contested.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            claims: vec![Claim {
+                person: 1,
+                region: 1,
+                good: 3,
+            }],
+            preferences: vec![],
+            events: vec![],
+        }),
+    });
+    contested
+        .autowork
+        .as_mut()
+        .unwrap()
+        .policies
+        .push(WorkPolicy {
+            person: 2,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: true,
+        });
+    let mut respecting = Economy::compile(contested.clone()).unwrap();
+    respecting.advance().unwrap();
+    assert_eq!(
+        respecting
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        1
+    );
+    contested.autowork.as_mut().unwrap().policies[0].disregard_claims = false;
+    contested
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .disregard_claims = true;
+    let mut disregarding = Economy::compile(contested).unwrap();
+    disregarding.advance().unwrap();
+    assert_eq!(
+        disregarding
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+}
+
+#[test]
+fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[1].willing_to_work = false;
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 5,
+        obligation: 0,
+        affinity: 0,
+    }];
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 2,
+            memory_limit: 1,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 5,
+                help_value: 0,
+                disregard_claims: false,
+            }],
+            askers: vec![],
+            pending: vec![Request {
+                id: 1,
+                requester: 1,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                created_at: 0,
+                expires: 4,
+            }],
+            events: vec![],
+        }),
+    });
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let state = world.snapshot();
+                assert!(!state.people[1].willing_to_work);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(
+                    state
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .len(),
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    initial.opinions.as_mut().unwrap().records.clear();
+    let mut refusing = Economy::compile(initial).unwrap();
+    refusing.advance().unwrap();
+    let state = refusing.snapshot();
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        0
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        1
+    );
+}

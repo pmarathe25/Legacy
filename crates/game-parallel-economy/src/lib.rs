@@ -1261,8 +1261,55 @@ impl Economy {
                 ));
             }
         }
+        let (mut rates, abandon) =
+            family::work_rates!(self, meal_candidates, player_work, fighters, resting);
+        let tool_pickup = if !self.work_tools.is_empty() {
+            action_base = action_base
+                .checked_add(
+                    gathering_plan
+                        .as_ref()
+                        .map_or(0, |plan| plan.actions.len() as u64),
+                )
+                .ok_or("action count overflow")?;
+            {
+                let mut unwilling = self
+                    .dynamics
+                    .as_ref()
+                    .and_then(|d| d.personality.as_ref())
+                    .map_or_else(Vec::new, |p| p.work_refusals(self.seed, tick));
+                unwilling.par_sort_unstable();
+                let requests = self
+                    .autowork
+                    .as_ref()
+                    .and_then(|a| a.requests.as_ref())
+                    .filter(|r| !r.pending.is_empty())
+                    .map(|r| r.prepare(&people, self.opinions.as_ref(), &busy, tick));
+                let plan = game_parallel_economy_work::tools::AcquisitionContext {
+                    requirements: &self.work_tools,
+                    auto: self.autowork.as_ref(),
+                    requests: requests.as_ref(),
+                    work: self.physical.work(),
+                    rates: &rates,
+                    people: &self.people,
+                    view: &view,
+                    claims: claims.as_ref(),
+                    busy: &busy,
+                    unwilling: &unwilling,
+                    max_hunger: self.rules.max_work_hunger,
+                }
+                .prepare(action_base)?;
+                game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+                Some(plan)
+            }
+        } else {
+            None
+        };
         game_parallel_economy_claims::include_care_farming!(claim_uses, care, farming);
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
+        if let Some(plan) = tool_pickup {
+            actions.extend(plan.actions);
+            claim_uses.extend(plan.uses);
+        }
         if let Some(plan) = &care {
             actions.extend_from_slice(&plan.actions);
         }
@@ -1292,8 +1339,6 @@ impl Economy {
             claims,
             claim_uses
         );
-        let (mut rates, abandon) =
-            family::work_rates!(self, meal_candidates, player_work, fighters, resting);
         let starts = if self.work_tools.is_empty() {
             starts
         } else {
