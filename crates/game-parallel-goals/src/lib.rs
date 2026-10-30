@@ -239,7 +239,7 @@ impl Goals {
         }
         Ok(Some(Self {
             retry_interval: self.retry_interval,
-            plan_inputs: false,
+            plan_inputs: self.plan_inputs,
             people: rows.into_par_iter().map(|row| row.0).collect(),
             events,
         }))
@@ -259,6 +259,39 @@ mod tests {
             next_review: 0,
             enabled: true,
         }
+    }
+    #[test]
+    fn input_planning_survives_blocked_and_completed_goal_updates() {
+        let goals = Goals {
+            retry_interval: 3,
+            plan_inputs: true,
+            people: vec![goal(1, 1, 1, 2)],
+            events: vec![],
+        };
+        let blocked = goals
+            .prepare(
+                &[],
+                &[Completion {
+                    person: 1,
+                    recipe: 1,
+                }],
+                1,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(blocked.plan_inputs);
+        let completed = blocked
+            .prepare(
+                &[Completion {
+                    person: 1,
+                    recipe: 1,
+                }],
+                &[],
+                2,
+            )
+            .unwrap()
+            .unwrap();
+        assert!(completed.plan_inputs);
     }
     #[test]
     fn completed_work_advances_the_selected_goal_and_blocking_selects_an_alternative() {

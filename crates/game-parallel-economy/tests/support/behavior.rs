@@ -15637,3 +15637,289 @@ fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
         1
     );
 }
+
+#[test]
+fn a_person_can_fetch_a_tool_for_their_own_work_goal() {
+    use game_parallel_goals::{Goal, Goals};
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+        events: vec![],
+    });
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(state.goals.as_ref().unwrap().people[0].progress, 0);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                restored.advance().unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                    1
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    initial.people[1].willing_to_work = false;
+    let mut unwilling = Economy::compile(initial).unwrap();
+    unwilling.advance().unwrap();
+    assert_eq!(
+        unwilling
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        0
+    );
+}
+
+#[test]
+fn goal_input_planning_gets_the_tool_for_the_selected_prerequisite() {
+    use game_parallel_goals::{Goal, Goals};
+    let mut initial = fixture();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.physical.recipes.push(Recipe {
+        id: 4,
+        name: "prepare input".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 1,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+    });
+    initial.work_tools = vec![WorkTool {
+        recipe: 4,
+        good: 3,
+        quantity: 1,
+    }];
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: true,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+        events: vec![],
+    });
+    for (good, quantity) in [(1, 1), (2, 0), (3, 1)] {
+        let stock = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|c| c.place == Place::Stock { region: 1, good })
+            .unwrap();
+        let lots = if quantity == 0 {
+            vec![]
+        } else {
+            vec![Lot {
+                good,
+                quantity,
+                expires_at: None,
+            }]
+        };
+        *stock = Container::new(stock.place, stock.capacity, lots).unwrap();
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                assert_eq!(world.snapshot().physical.work[0].job.recipe, 4);
+                world.advance().unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                assert!(world.snapshot().goals.as_ref().unwrap().plan_inputs);
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                assert_eq!(world.snapshot().physical.work[0].job.recipe, 1);
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                    1
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn concentrated_goal_tool_pickups(count: u64) -> State {
+    use game_parallel_goals::{Goal, Goals};
+    let mut state = concentrated_tool_pickups(count);
+    state.autowork.as_mut().unwrap().policies.clear();
+    state.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: (count / 2 + 1..=count)
+            .map(|person| Goal {
+                person,
+                recipe: 1,
+                priority: 1,
+                target: 1,
+                progress: 0,
+                next_review: 0,
+                enabled: true,
+            })
+            .collect(),
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn many_personal_goals_compete_for_tools_without_duplicate_plans() {
+    let count = 4096;
+    let initial = concentrated_goal_tool_pickups(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .filter(|c| matches!(c.place, Place::Person(id) if id > count / 2)
+                            && c.lots.iter().any(|l| l.good == 3))
+                        .count(),
+                    count as usize / 8
+                );
+                assert_eq!(world.advance().unwrap().started.len(), count as usize / 8);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn concentrated_goal_tool_pickup_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_goal_tool_pickups(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(started.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}

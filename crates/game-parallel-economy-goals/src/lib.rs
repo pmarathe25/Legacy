@@ -9,7 +9,7 @@ use game_parallel_production_model::{PersonSnapshot, Recipe, person_index};
 use rayon::prelude::*;
 #[macro_export]
 macro_rules! prepare_work {
-    ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $tick:expr) => {{
+    ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $tick:expr, $preplanned:expr) => {{
         let mut unwilling: Vec<_> = $world
             .people
             .par_iter()
@@ -43,6 +43,7 @@ macro_rules! prepare_work {
                     opinions: $world.opinions.as_ref(),
                     claims: $claims.as_ref(),
                     goals: $world.goals.as_ref(),
+                    preplanned_goals: $preplanned.as_ref(),
                     busy: &$busy,
                     unwilling: &unwilling,
                     max_job: $world.physical.work().last().map(|row| row.job.id),
@@ -63,10 +64,26 @@ pub fn blocked(
     people: &[PersonSnapshot],
     max_hunger: u32,
     events: &Events,
+    physical_work: &[Work],
 ) -> Vec<Completion> {
     let (Some(goals), Some(auto), Some(plan)) = (goals, auto, plan) else {
         return Vec::new();
     };
+    let mut delivered_workers: Vec<_> = if goals.plan_inputs {
+        events
+            .delivered
+            .par_iter()
+            .filter_map(|id| {
+                physical_work
+                    .binary_search_by_key(id, |w| w.job.id)
+                    .ok()
+                    .map(|i| physical_work[i].job.worker)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    delivered_workers.par_sort_unstable();
     let mut direct: Vec<_> = auto.policies.par_iter().map(|p| p.person).collect();
     direct.par_sort_unstable();
     let mut starts: Vec<_> = plan.work.as_ref().map_or_else(Vec::new, |work| {
@@ -83,6 +100,7 @@ pub fn blocked(
         .filter_map(|policy| {
             if direct.binary_search(&policy.person).is_ok()
                 || plan.occupied.binary_search(&policy.person).is_ok()
+                || delivered_workers.binary_search(&policy.person).is_ok()
             {
                 return None;
             }

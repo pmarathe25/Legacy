@@ -94,6 +94,7 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub goals: Option<&'a Goals>,
+    pub preplanned_goals: Option<&'a Autowork>,
     pub busy: &'a [u64],
     pub unwilling: &'a [u64],
     pub max_job: Option<u64>,
@@ -156,14 +157,22 @@ impl Context<'_> {
             .map_err(str::to_owned)?
             .flatten();
         let mut goal_policies = self
-            .goals
-            .map(|goals| goals.policies(self.auto, self.tick.saturating_sub(1)));
+            .preplanned_goals
+            .is_none()
+            .then(|| {
+                self.goals
+                    .map(|goals| goals.policies(self.auto, self.tick.saturating_sub(1)))
+            })
+            .flatten();
         if self.goals.is_some_and(|goals| goals.plan_inputs)
             && let Some(policies) = &mut goal_policies
         {
             game_parallel_goals::planning::plan(policies, self.auto, self.production, self.people);
         }
-        let base = goal_policies.as_ref().unwrap_or(self.auto);
+        let base = self
+            .preplanned_goals
+            .or(goal_policies.as_ref())
+            .unwrap_or(self.auto);
         let mut selected: Vec<_> = request.as_ref().map_or_else(Vec::new, |draft| {
             draft.decisions.par_iter().filter(|row| row.help).collect()
         });

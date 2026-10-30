@@ -1263,6 +1263,7 @@ impl Economy {
         }
         let (mut rates, abandon) =
             family::work_rates!(self, meal_candidates, player_work, fighters, resting);
+        let mut goal_work = None;
         let tool_pickup = if !self.work_tools.is_empty() {
             action_base = action_base
                 .checked_add(
@@ -1278,6 +1279,25 @@ impl Economy {
                     .and_then(|d| d.personality.as_ref())
                     .map_or_else(Vec::new, |p| p.work_refusals(self.seed, tick));
                 unwilling.par_sort_unstable();
+                goal_work = self
+                    .goals
+                    .as_ref()
+                    .zip(self.autowork.as_ref())
+                    .map(|(goals, auto)| goals.policies(auto, tick.saturating_sub(1)));
+                if self.goals.as_ref().is_some_and(|g| g.plan_inputs)
+                    && let (Some(planned), Some(base)) = (&mut goal_work, &self.autowork)
+                {
+                    let production = game_parallel_lot_projection::production(
+                        &self.physical,
+                        &view,
+                        self.rules.max_work_hunger,
+                    );
+                    game_parallel_goals::planning::plan(planned, base, &production, &people);
+                }
+                let policies = goal_work
+                    .as_ref()
+                    .or(self.autowork.as_ref())
+                    .map_or(&[][..], |a| a.policies.as_slice());
                 let requests = self
                     .autowork
                     .as_ref()
@@ -1287,6 +1307,7 @@ impl Economy {
                 let plan = game_parallel_economy_work::tools::AcquisitionContext {
                     requirements: &self.work_tools,
                     auto: self.autowork.as_ref(),
+                    policies,
                     requests: requests.as_ref(),
                     work: self.physical.work(),
                     rates: &rates,
@@ -1327,8 +1348,9 @@ impl Economy {
         }
         let compact =
             game_parallel_economy_agriculture::append_planting(&mut farming, &mut actions);
-        let work =
-            game_parallel_economy_goals::prepare_work!(self, view, people, claims, busy, tick);
+        let work = game_parallel_economy_goals::prepare_work!(
+            self, view, people, claims, busy, tick, goal_work
+        );
         let starts =
             game_parallel_economy_claims::work_actions!(work, claims, self, claim_uses, busy);
         let (starts, manual_job) = game_parallel_economy_interaction::work_starts!(
@@ -1474,6 +1496,7 @@ impl Economy {
             &people,
             self.rules.max_work_hunger,
             physical.events(),
+            self.physical.work(),
         );
         let mut purpose = purpose::prepare(
             self.purpose.as_ref(),

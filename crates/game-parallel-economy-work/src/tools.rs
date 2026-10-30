@@ -48,6 +48,7 @@ pub fn available(rows: &[Requirement], view: &View, worker: u64, recipe: u32) ->
 pub struct AcquisitionContext<'a> {
     pub requirements: &'a [Requirement],
     pub auto: Option<&'a game_parallel_autowork::Autowork>,
+    pub policies: &'a [game_parallel_autowork::Policy],
     pub requests: Option<&'a game_parallel_work_requests::Draft>,
     pub work: &'a [game_parallel_lot_runtime::Work],
     pub rates: &'a [(u64, u64)],
@@ -65,7 +66,7 @@ pub struct Acquisition {
 }
 impl AcquisitionContext<'_> {
     pub fn prepare(&self, base: u64) -> Result<Acquisition, String> {
-        let policies = self.auto.map_or(&[][..], |a| a.policies.as_slice());
+        let policies = self.policies;
         let mut policy_index: Vec<_> = if self.rates.is_empty() {
             Vec::new()
         } else {
