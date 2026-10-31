@@ -26,12 +26,98 @@ pub struct Profile {
     farm_percent: Option<u8>,
     #[serde(default)]
     food_search_percent: Option<u8>,
+    #[serde(default)]
+    social: Option<SocialProfile>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Overlay {
     pub population: Vec<Profile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SocialProfile {
+    willing_percent: u8,
+    min_sociability: u16,
+    max_sociability: u16,
+    min_diligence: u16,
+    max_diligence: u16,
+    #[serde(default)]
+    pressure_percent: u8,
+    #[serde(default)]
+    fear_at_least: Option<u64>,
+    #[serde(default)]
+    obligation_at_least: Option<u64>,
+}
+
+pub struct SocialRows {
+    pub participants: Vec<game_parallel_social::Participant>,
+    pub personalities: Vec<game_parallel_economy_dynamics::personality::Person>,
+    pub pressures: Vec<game_parallel_social::PressurePolicy>,
+}
+
+pub fn social(seed: u64, profiles: &[Profile]) -> Result<SocialRows, String> {
+    for rule in profiles
+        .iter()
+        .filter_map(|profile| profile.social.as_ref())
+    {
+        if rule.willing_percent > 100
+            || rule.pressure_percent > 100
+            || rule.min_sociability > rule.max_sociability
+            || rule.max_sociability > 1000
+            || rule.min_diligence > rule.max_diligence
+            || rule.max_diligence > 1000
+            || rule.fear_at_least == Some(0)
+            || rule.obligation_at_least == Some(0)
+            || (rule.pressure_percent > 0
+                && rule.fear_at_least.is_none()
+                && rule.obligation_at_least.is_none())
+        {
+            return Err("invalid generated social profile".into());
+        }
+    }
+    let rows: Vec<_> = profiles
+        .par_iter()
+        .filter_map(|profile| profile.social.as_ref().map(|rule| (profile, rule)))
+        .flat_map(|(profile, rule)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let person = profile.start_id + offset;
+                let random = |attribute| {
+                    game_parallel_genetics::random(seed ^ 0x736f6369616c, person, attribute)
+                };
+                let willing = random(0) % 100 < u64::from(rule.willing_percent);
+                let personality = game_parallel_economy_dynamics::personality::Person {
+                    person,
+                    sociability: rule.min_sociability
+                        + (random(1) % u64::from(rule.max_sociability - rule.min_sociability + 1))
+                            as u16,
+                    diligence: rule.min_diligence
+                        + (random(2) % u64::from(rule.max_diligence - rule.min_diligence + 1))
+                            as u16,
+                };
+                let pressure = (random(3) % 100 < u64::from(rule.pressure_percent)).then_some(
+                    game_parallel_social::PressurePolicy {
+                        person,
+                        fear_at_least: rule.fear_at_least,
+                        obligation_at_least: rule.obligation_at_least,
+                        enabled: true,
+                    },
+                );
+                (
+                    game_parallel_economy_dynamics::participant(person, willing),
+                    personality,
+                    pressure,
+                )
+            })
+        })
+        .collect();
+    Ok(SocialRows {
+        participants: rows.par_iter().map(|row| row.0.clone()).collect(),
+        personalities: rows.par_iter().map(|row| row.1.clone()).collect(),
+        pressures: rows.into_par_iter().filter_map(|row| row.2).collect(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -281,6 +367,7 @@ mod tests {
             family: None,
             farm_percent: None,
             food_search_percent: None,
+            social: None,
         }
     }
 
@@ -365,5 +452,21 @@ mod tests {
             reconsider_partnership_percent: 0,
         });
         assert!(founders(7, &[bad]).is_err());
+    }
+
+    #[test]
+    fn pressure_profiles_need_a_personal_fear_or_obligation_threshold() {
+        let mut people = profile();
+        people.social = Some(SocialProfile {
+            willing_percent: 0,
+            min_sociability: 0,
+            max_sociability: 1000,
+            min_diligence: 0,
+            max_diligence: 1000,
+            pressure_percent: 100,
+            fear_at_least: None,
+            obligation_at_least: None,
+        });
+        assert!(social(1, &[people]).is_err());
     }
 }

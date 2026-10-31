@@ -418,6 +418,49 @@ pub fn scenario_with_options(
         &scenario.population,
     )?;
     scenario.people.extend(generated);
+    let mut social_rows = population::social(scenario.seed, &scenario.population)?;
+    if !social_rows.participants.is_empty() {
+        let dynamics = scenario
+            .dynamics
+            .as_mut()
+            .ok_or("generated social preferences require dynamics")?;
+        let personality = dynamics
+            .personality
+            .as_mut()
+            .ok_or("generated social preferences require personality")?;
+        let authored: HashSet<_> = personality.people.iter().map(|row| row.person).collect();
+        social_rows
+            .personalities
+            .retain(|row| !authored.contains(&row.person));
+        personality.people.extend(social_rows.personalities);
+        let social = dynamics
+            .social
+            .as_mut()
+            .ok_or("generated social preferences require social rules")?;
+        if let Some(needs) = &mut social.needs {
+            let authored: HashSet<_> = needs.people.iter().map(|row| row.person).collect();
+            needs.people.extend(
+                social_rows
+                    .participants
+                    .iter()
+                    .filter(|row| !authored.contains(&row.person))
+                    .map(|row| game_parallel_social::Need {
+                        person: row.person,
+                        isolation: 0,
+                    }),
+            );
+        }
+        let authored: HashSet<_> = social.participants.iter().map(|row| row.person).collect();
+        social_rows
+            .participants
+            .retain(|row| !authored.contains(&row.person));
+        social.participants.extend(social_rows.participants);
+        let authored: HashSet<_> = social.pressures.iter().map(|row| row.person).collect();
+        social_rows
+            .pressures
+            .retain(|row| !authored.contains(&row.person));
+        social.pressures.extend(social_rows.pressures);
+    }
     let mut farming = population::farming(scenario.seed, &scenario.population);
     if !farming.is_empty() {
         let cultivation = scenario

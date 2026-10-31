@@ -3368,6 +3368,7 @@ dependencies = [
  "game-parallel-persistence",
  "game-parallel-production",
  "game-parallel-skill-catalog",
+ "game-parallel-social",
  "rayon",
  "serde",
  "serde_json",

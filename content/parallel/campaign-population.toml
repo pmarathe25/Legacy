@@ -23,3 +23,13 @@ max_age = 25
 min_allele = 400
 max_allele = 1000
 reproduction_percent = 80
+
+[population.social]
+willing_percent = 65
+min_sociability = 300
+max_sociability = 900
+min_diligence = 500
+max_diligence = 1000
+pressure_percent = 50
+fear_at_least = 3
+obligation_at_least = 3

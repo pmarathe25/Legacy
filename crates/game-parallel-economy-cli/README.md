@@ -10,6 +10,8 @@ An optional `[population.sensitivity]` table gives each person in that profile i
 
 Optional `farm_percent` and `food_search_percent` independently seed personal farming and food-search choices when the scenario enables cultivation and food search. Individually authored preferences take precedence. Search still depends on each person's own observations and known routes, and farming still requires an available field, actual seed, and physical work.
 
+An optional `[population.social]` table seeds willingness, individual ranges of sociability and diligence, and an optional fraction of people who may respond to fear or felt obligation. It requires the scenario's social and personality owners; it does not create relationships, fear, or obligations. Individually authored preferences take precedence. Social needs, when enabled, start at zero for new participants.
+
 When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.
 
 Profiles can also live in a separate TOML file. For example, `cargo run -p game-parallel-economy-cli -- --player content/parallel/economy-campaign.toml --population content/parallel/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.

@@ -178,6 +178,24 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                         .filter(|p| p.person >= 1000)
                         .all(|p| p.target.is_none())
                 );
+                let dynamics = initial.dynamics.as_ref().unwrap();
+                let social = dynamics.social.as_ref().unwrap();
+                assert_eq!(social.participants.len(), 130);
+                assert!(
+                    social
+                        .participants
+                        .iter()
+                        .any(|p| p.person >= 1000 && p.willing)
+                );
+                assert!(
+                    social
+                        .participants
+                        .iter()
+                        .any(|p| p.person >= 1000 && !p.willing)
+                );
+                assert!(social.pressures.iter().any(|p| p.person >= 1000));
+                assert!(social.relationships.is_empty());
+                assert_eq!(dynamics.personality.as_ref().unwrap().people.len(), 130);
                 let remote: Vec<_> = initial
                     .people
                     .iter()
@@ -198,6 +216,25 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                     state.agriculture.as_ref().unwrap().fields[0].phase,
                     game_parallel_economy::CropPhase::Growing
                 );
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.a >= 1000 || event.b >= 1000)
+                );
+                let social = state.dynamics.as_ref().unwrap().social.as_ref().unwrap();
+                assert!(state.physical.work.iter().all(|job| {
+                    social
+                        .events
+                        .iter()
+                        .all(|event| ![event.a, event.b].contains(&job.job.worker))
+                }));
                 state
             })
     };
@@ -243,6 +280,86 @@ fn generated_campaign_replays_at_scale_across_workers() {
 }
 
 #[test]
+fn generated_unwilling_person_can_respond_to_fear_without_a_felt_obligation() {
+    let mut initial = generated_campaign(128).snapshot();
+    let dynamics = initial.dynamics.as_mut().unwrap();
+    let social = dynamics.social.as_ref().unwrap();
+    let target = social
+        .participants
+        .iter()
+        .find(|p| {
+            p.person >= 1000
+                && !p.willing
+                && social.pressures.iter().any(|rule| rule.person == p.person)
+        })
+        .unwrap()
+        .person;
+    let region = initial
+        .people
+        .iter()
+        .find(|p| p.id == target)
+        .unwrap()
+        .region;
+    let requester = social
+        .participants
+        .iter()
+        .find(|p| {
+            p.person >= 1000
+                && p.willing
+                && p.person != target
+                && initial
+                    .people
+                    .iter()
+                    .any(|person| person.id == p.person && person.region == region)
+        })
+        .unwrap()
+        .person;
+    dynamics
+        .personality
+        .as_mut()
+        .unwrap()
+        .people
+        .iter_mut()
+        .find(|p| p.person == requester)
+        .unwrap()
+        .sociability = 1000;
+    for person in &mut initial.people {
+        person.willing_to_work = false;
+    }
+    for policy in &mut initial.agriculture.as_mut().unwrap().policies {
+        policy.willing = false;
+    }
+    initial
+        .opinions
+        .as_mut()
+        .unwrap()
+        .records
+        .push(game_parallel_economy::Opinion {
+            observer: target,
+            target: requester,
+            trust: 0,
+            fear: 10,
+            obligation: 0,
+            affinity: 0,
+        });
+    let mut world = game_parallel_economy::Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let social = state.dynamics.as_ref().unwrap().social.as_ref().unwrap();
+    assert!(social.events.iter().any(|event| event.pressured == Some(target)
+        && [event.a, event.b].contains(&requester)), "target={target} requester={requester} events={:?}", social.events);
+    assert_eq!(
+        state
+            .opinions
+            .as_ref()
+            .unwrap()
+            .index()
+            .obligation(target, requester),
+        0
+    );
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn generated_campaign_benchmark() {
     let workers = std::env::var("LEGACY_WORKERS")
@@ -265,8 +382,22 @@ fn generated_campaign_benchmark() {
                 for _ in 0..3 {
                     world.advance().unwrap();
                 }
+                let elapsed = start.elapsed().as_secs_f64();
+                let snapshot = world.snapshot();
+                assert!(
+                    snapshot
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.a >= 1000 || event.b >= 1000)
+                );
                 if round > 0 {
-                    samples.push(start.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);

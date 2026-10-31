@@ -21,6 +21,7 @@ game-parallel-persistence = { path = "../game-parallel-persistence" }
 game-parallel-production = { path = "../game-parallel-production" }
 game-parallel-genetics = { path = "../game-parallel-genetics" }
 game-parallel-families = { path = "../game-parallel-families" }
+game-parallel-social = { path = "../game-parallel-social" }
 rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
