@@ -18,7 +18,12 @@ pub struct Plan {
     pub work: Vec<(u64, u32)>,
 }
 
-pub fn prepare(context: Context<'_>, production: &Production, pending: &[u64]) -> Plan {
+pub fn prepare(
+    context: Context<'_>,
+    production: &Production,
+    pending: &[u64],
+    review: u64,
+) -> Plan {
     let capabilities = context.sites.capabilities();
     let mut searches: Vec<_> = context
         .goal_needs
@@ -75,7 +80,7 @@ pub fn prepare(context: Context<'_>, production: &Production, pending: &[u64]) -
         if missing.is_empty() {
             break;
         }
-        let steps = plan_supply(&missing, production, |region, recipe| {
+        let steps = plan_supply(&missing, production, review, |region, recipe| {
             capabilities.permits(region, recipe)
         });
         work.par_extend(

@@ -17228,6 +17228,82 @@ fn a_goal_plan_can_build_two_layers_of_intermediate_sites() {
 }
 
 #[test]
+fn repeated_goal_reviews_eventually_try_later_kit_recipes() {
+    use game_parallel_goals::Goal;
+    let mut initial = construction_fixture();
+    initial.rules.hunger_per_tick = 0;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: true,
+        events: vec![],
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+    });
+    let kit = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *kit = Container::new(kit.place, kit.capacity, vec![]).unwrap();
+    initial.physical.recipes.extend((4..=70).map(|id| Recipe {
+        id,
+        name: format!("kit alternative {id}"),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: if id == 70 { 2 } else { 1 },
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+    }));
+    let construction = initial.construction.as_mut().unwrap();
+    construction.policies.clear();
+    construction.goal_builders = vec![GoalBuilder {
+        person: 2,
+        enabled: true,
+        disregard_claims: false,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert!(world.snapshot().physical.work.is_empty());
+                let saved = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..30 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.goals.as_ref().unwrap().people[0].progress, 1);
+                assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn goal_builders_do_not_build_when_a_suitable_site_already_exists() {
     use game_parallel_goals::Goal;
     let mut initial = construction_fixture();

@@ -1477,7 +1477,9 @@ impl Economy {
                     &view,
                     self.rules.max_work_hunger,
                 );
-                game_parallel_goals::planning::plan(planned, base, &production, &people);
+                let review = tick.saturating_sub(1)
+                    / self.goals.as_ref().expect("goal planning").retry_interval;
+                game_parallel_goals::planning::plan_at(planned, base, &production, &people, review);
             }
         }
         let mut goal_needs: Vec<_> = if goal_building {
@@ -1547,7 +1549,9 @@ impl Economy {
                 &view,
                 self.rules.max_work_hunger,
             );
-            let steps = construction_planning::prepare(context, &production, &pending);
+            let review =
+                tick.saturating_sub(1) / self.goals.as_ref().expect("goal planning").retry_interval;
+            let steps = construction_planning::prepare(context, &production, &pending, review);
             planned.policies.par_iter_mut().for_each(|policy| {
                 if let Ok(index) = steps.work.binary_search_by_key(&policy.person, |row| row.0) {
                     policy.recipe = steps.work[index].1;

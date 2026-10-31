@@ -186,7 +186,15 @@ impl Context<'_> {
         if self.goals.is_some_and(|goals| goals.plan_inputs)
             && let Some(policies) = &mut goal_policies
         {
-            game_parallel_goals::planning::plan(policies, self.auto, self.production, self.people);
+            let review =
+                self.tick.saturating_sub(1) / self.goals.expect("goal planning").retry_interval;
+            game_parallel_goals::planning::plan_at(
+                policies,
+                self.auto,
+                self.production,
+                self.people,
+                review,
+            );
         }
         let base = self
             .preplanned_goals

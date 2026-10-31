@@ -12,9 +12,10 @@ struct Index<'a> {
     recipes: HashMap<u32, &'a Recipe>,
     producers: HashMap<u32, Vec<&'a Recipe>>,
     inventory: HashMap<u64, &'a Inventory>,
+    review: u64,
 }
 impl<'a> Index<'a> {
-    fn new(production: &'a Production) -> Self {
+    fn new(production: &'a Production, review: u64) -> Self {
         let recipes = production
             .recipes
             .iter()
@@ -38,7 +39,16 @@ impl<'a> Index<'a> {
             recipes,
             producers,
             inventory,
+            review,
         }
+    }
+    fn rotated<'b, T>(&self, rows: &'b [T]) -> impl Iterator<Item = &'b T> {
+        let start = if rows.is_empty() {
+            0
+        } else {
+            (self.review % rows.len() as u64) as usize
+        };
+        rows[start..].iter().chain(rows[..start].iter())
     }
     fn choose(
         &self,
@@ -49,14 +59,13 @@ impl<'a> Index<'a> {
         budget: &mut usize,
         allowed: &impl Fn(u32) -> bool,
     ) -> Option<u32> {
-        if *budget == 0
-            || depth >= MAX_DEPTH
-            || visited[..depth].contains(&recipe.id)
-            || !allowed(recipe.id)
-        {
+        if *budget == 0 {
             return None;
         }
         *budget -= 1;
+        if depth >= MAX_DEPTH || visited[..depth].contains(&recipe.id) || !allowed(recipe.id) {
+            return None;
+        }
         visited[depth] = recipe.id;
         let missing = recipe
             .inputs
@@ -70,20 +79,27 @@ impl<'a> Index<'a> {
             })
             .min_by_key(|input| input.good);
         if let Some(input) = missing {
-            self.producers.get(&input.good).and_then(|recipes| {
-                recipes.iter().find_map(|producer| {
-                    let has_space = producer.outputs.iter().all(|output| {
-                        inventory.stocks.iter().any(|stock| {
-                            stock.good == output.good && output.quantity <= stock.capacity
-                        })
-                    });
-                    has_space
-                        .then(|| {
-                            self.choose(producer, inventory, visited, depth + 1, budget, allowed)
-                        })
-                        .flatten()
-                })
-            })
+            for producer in self.rotated(self.producers.get(&input.good)?) {
+                if *budget == 0 {
+                    break;
+                }
+                let has_space = producer.outputs.iter().all(|output| {
+                    inventory
+                        .stocks
+                        .iter()
+                        .any(|stock| stock.good == output.good && output.quantity <= stock.capacity)
+                });
+                if !has_space {
+                    *budget -= 1;
+                    continue;
+                }
+                if let Some(next) =
+                    self.choose(producer, inventory, visited, depth + 1, budget, allowed)
+                {
+                    return Some(next);
+                }
+            }
+            None
         } else {
             Some(recipe.id)
         }
@@ -97,10 +113,13 @@ impl<'a> Index<'a> {
         budget: &mut usize,
         constraints: &SiteConstraints<'_, impl Fn(u32) -> bool>,
     ) -> Option<Step> {
-        if *budget == 0 || depth >= MAX_DEPTH || visited[..depth].contains(&recipe.id) {
+        if *budget == 0 {
             return None;
         }
         *budget -= 1;
+        if depth >= MAX_DEPTH || visited[..depth].contains(&recipe.id) {
+            return None;
+        }
         if !(constraints.allowed)(recipe.id) {
             return (!constraints.visited_sites.contains(&recipe.id))
                 .then_some(Step::Site(recipe.id));
@@ -121,7 +140,10 @@ impl<'a> Index<'a> {
             return Some(Step::Work(recipe.id));
         };
         let mut fallback = None;
-        for producer in self.producers.get(&input.good)? {
+        for producer in self.rotated(self.producers.get(&input.good)?) {
+            if *budget == 0 {
+                break;
+            }
             let has_space = producer.outputs.iter().all(|output| {
                 inventory
                     .stocks
@@ -129,6 +151,7 @@ impl<'a> Index<'a> {
                     .any(|stock| stock.good == output.good && output.quantity <= stock.capacity)
             });
             if !has_space {
+                *budget -= 1;
                 continue;
             }
             match self.choose_step(producer, inventory, visited, depth + 1, budget, constraints) {
@@ -157,8 +180,18 @@ pub fn plan(
     production: &Production,
     people: &[PersonSnapshot],
 ) -> Vec<(u64, u32)> {
-    let explicit: HashSet<_> = base.policies.iter().map(|row| row.person).collect();
-    let index = Index::new(production);
+    plan_at(auto, base, production, people, 0)
+}
+/// Rotate bounded alternatives between reviews so later recipes can be considered.
+pub fn plan_at(
+    auto: &mut Autowork,
+    base: &Autowork,
+    production: &Production,
+    people: &[PersonSnapshot],
+    review: u64,
+) -> Vec<(u64, u32)> {
+    let explicit: HashSet<_> = base.policies.par_iter().map(|row| row.person).collect();
+    let index = Index::new(production, review);
     let mut originals: Vec<_> = auto
         .policies
         .par_iter_mut()
@@ -204,16 +237,17 @@ pub struct SupplyStep {
 pub fn plan_supply(
     needs: &[SupplyNeed],
     production: &Production,
+    review: u64,
     allowed: impl Fn(u64, u32) -> bool + Sync,
 ) -> Vec<SupplyStep> {
-    let index = Index::new(production);
+    let index = Index::new(production, review);
     let mut selected: Vec<_> = needs
         .par_iter()
         .filter_map(|need| {
             let inventory = index.inventory.get(&need.region)?;
             let mut fallback = None;
             let mut budget = MAX_VISITS;
-            for good in &need.goods {
+            for good in index.rotated(&need.goods) {
                 if budget == 0 {
                     break;
                 }
@@ -221,7 +255,7 @@ pub fn plan_supply(
                 let Some(producers) = index.producers.get(good) else {
                     continue;
                 };
-                for recipe in producers {
+                for recipe in index.rotated(producers) {
                     if budget == 0 {
                         break;
                     }
