@@ -44,4 +44,18 @@ Optional `opinions.rules.newborn_obligation_development` supplies a developmenta
 
 `[[work_tools]]` can name a recipe, a required good, and its quantity. A worker must carry each required tool to start or continue that work; the tool is not consumed, and work pauses if it is lost or expires. Equipped workers are considered before competing for inputs. An idle person pursuing a personal work preference or goal may first take a missing tool from local stock; someone choosing to continue an existing job can similarly replace a missing tool. A person may also fetch tools to respond to a request when their own willingness, fear, or felt obligation motivates that response. These are physical actions using shared arbitration and the person's own choice about competing claims, and work resumes on a later boundary.
 
-`[work_sites]` can define fixed physical sites with a region, named kind and finite capacity, plus recipe requirements in slots. Active jobs retain their slots through pauses; only a physically accepted start acquires a slot, and completion, abandonment or interruption releases it. Site and input arbitration are conservative, so a boundary can leave capacity unused. These initial authored sites do not yet model construction, removal, or intra-region transport.
+`[work_sites]` can define fixed physical sites with a region, named kind and finite capacity, plus recipe requirements in slots. Active jobs retain their slots through pauses; only a physically accepted start acquires a slot, and completion, abandonment or interruption releases it. Site and input arbitration are conservative, so a boundary can leave capacity unused. Sites may also be assembled by an individual from an actual local or carried kit using an authored construction blueprint. Removal and intra-region transport are not yet modeled.
+
+`[construction]` defines named building blueprints and optional personal builder preferences. Each successful build consumes the specified kit and creates one physical site; willingness, fear, obligation, and personal claim choices remain independent. A ruler can inspect blueprints in `catalog` and choose `build-site BLUEPRINT`.
+
+For example:
+
+```toml
+[work_sites]
+sites = []
+requirements = [{ recipe = "fixture-tool", kind = "workshop", slots = 1 }]
+
+[construction]
+blueprints = [{ id = 1, name = "workshop", kind = "workshop", capacity = 2, kit = "tool", quantity = 1 }]
+policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
+```

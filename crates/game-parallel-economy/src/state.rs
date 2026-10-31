@@ -29,6 +29,8 @@ pub struct State {
     #[serde(default)]
     pub work_sites: Option<game_parallel_economy_work::sites::Facilities>,
     #[serde(default)]
+    pub construction: Option<game_parallel_economy_building::Construction>,
+    #[serde(default)]
     pub goals: Option<Goals>,
     #[serde(default)]
     pub dreams: Option<game_parallel_economy_goals::Dreams>,

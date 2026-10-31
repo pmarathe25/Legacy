@@ -40,6 +40,8 @@ struct Scenario {
     #[serde(default)]
     work_sites: Option<WorkSitesConfig>,
     #[serde(default)]
+    construction: Option<ConstructionConfig>,
+    #[serde(default)]
     opinions: Option<game_parallel_opinions::Opinions>,
     #[serde(default)]
     aspirations: Vec<Aspiration>,
@@ -77,6 +79,23 @@ struct Scenario {
     medical: Option<MedicalConfig>,
     #[serde(default)]
     hauling: Option<HaulingConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConstructionConfig {
+    blueprints: Vec<BuildingBlueprintConfig>,
+    #[serde(default)]
+    policies: Vec<game_parallel_economy::ConstructionPolicy>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BuildingBlueprintConfig {
+    id: u32,
+    name: String,
+    kind: String,
+    capacity: u64,
+    kit: String,
+    quantity: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -426,9 +445,36 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok::<_, String>(game_parallel_economy::WorkSites {
+                next_id: 0,
                 sites: config.sites,
                 requirements,
                 bindings: vec![],
+            })
+        })
+        .transpose()?;
+    let construction = scenario
+        .construction
+        .map(|config| {
+            let blueprints = config
+                .blueprints
+                .into_iter()
+                .map(|b| {
+                    Ok(game_parallel_economy::BuildingBlueprint {
+                        id: b.id,
+                        name: b.name,
+                        kind: b.kind,
+                        capacity: b.capacity,
+                        kit: *goods
+                            .get(b.kit.as_str())
+                            .ok_or_else(|| format!("unknown construction kit {}", b.kit))?,
+                        quantity: b.quantity,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok::<_, String>(game_parallel_economy::Construction {
+                blueprints,
+                policies: config.policies,
+                events: vec![],
             })
         })
         .transpose()?;
@@ -758,6 +804,7 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
         }),
         work_tools,
         work_sites,
+        construction,
         goals: (!dreams.is_empty()).then_some(Goals {
             retry_interval: 3,
             plan_inputs: true,

@@ -30,6 +30,9 @@ pub struct Binding {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Facilities {
+    /// Next physical site identity; zero is initialized for older authored data.
+    #[serde(default)]
+    pub next_id: u64,
     pub sites: Vec<Site>,
     pub requirements: Vec<Requirement>,
     #[serde(default)]
@@ -38,6 +41,7 @@ pub struct Facilities {
 impl Clone for Facilities {
     fn clone(&self) -> Self {
         Self {
+            next_id: self.next_id,
             sites: self.sites.par_iter().cloned().collect(),
             requirements: self.requirements.par_iter().cloned().collect(),
             bindings: self.bindings.par_iter().cloned().collect(),
@@ -45,10 +49,18 @@ impl Clone for Facilities {
     }
 }
 impl Facilities {
-    pub fn normalize(&mut self) {
+    pub fn normalize(&mut self) -> Result<(), String> {
         self.sites.par_sort_unstable_by_key(|s| s.id);
+        if self.next_id == 0 {
+            self.next_id = self
+                .sites
+                .last()
+                .map_or(Some(1), |s| s.id.checked_add(1))
+                .ok_or("work site identity overflow")?;
+        }
         self.requirements.par_sort_unstable_by_key(|r| r.recipe);
         self.bindings.par_sort_unstable_by_key(|b| b.job);
+        Ok(())
     }
     pub fn validate(
         &self,
@@ -56,7 +68,9 @@ impl Facilities {
         recipes: &HashSet<u32>,
         regions: &HashSet<u64>,
     ) -> Result<(), String> {
-        if self.sites.par_windows(2).any(|w| w[0].id >= w[1].id)
+        if self.next_id == 0
+            || self.sites.last().is_some_and(|s| s.id >= self.next_id)
+            || self.sites.par_windows(2).any(|w| w[0].id >= w[1].id)
             || self.sites.par_iter().any(|s| {
                 s.id == 0 || s.kind.is_empty() || s.capacity == 0 || !regions.contains(&s.region)
             })
@@ -299,6 +313,7 @@ impl Facilities {
             .collect();
         bindings.par_sort_unstable_by_key(|b| b.job);
         Self {
+            next_id: self.next_id,
             sites: self.sites.par_iter().cloned().collect(),
             requirements: self.requirements.par_iter().cloned().collect(),
             bindings,

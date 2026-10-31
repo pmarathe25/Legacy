@@ -1,5 +1,9 @@
 //! Person-driven economic activity over authoritative dated physical goods.
 pub use game_parallel_agreements::OfferPolicy as PromiseOfferPolicy;
+pub use game_parallel_economy_building::{
+    Blueprint as BuildingBlueprint, Construction, Event as ConstructionEvent,
+    Policy as ConstructionPolicy,
+};
 pub use game_parallel_economy_campaign::Campaign;
 pub use game_parallel_economy_combat::Combat;
 pub use game_parallel_economy_dynamics::Dynamics;
@@ -72,6 +76,7 @@ pub struct Economy {
     autowork: Option<Autowork>,
     work_tools: Vec<WorkTool>,
     work_sites: Option<WorkSites>,
+    construction: Option<Construction>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -106,6 +111,7 @@ pub struct Draft {
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
     work_sites: Option<WorkSites>,
+    construction: Option<Construction>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -136,6 +142,50 @@ impl Draft {
     }
 }
 impl Economy {
+    /// Change only this person's voluntary construction preference.
+    pub fn set_construction_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .construction
+            .clone()
+            .ok_or("construction is disabled")?;
+        next.policies
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no construction preference")?
+            .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.construction = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Assemble an authored site blueprint using a real local or carried kit.
+    pub fn build_site(&mut self, person: u64, blueprint: u32) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_parallel_economy_interaction::PhysicalChoice::Build { person, blueprint }),
+        )?;
+        self.commit(draft)?;
+        Ok(self.construction.as_ref().is_some_and(|owner| {
+            owner
+                .events
+                .iter()
+                .any(|e| e.person == person && e.blueprint == blueprint && e.site.is_some())
+        }))
+    }
     pub fn set_hauling_asking_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
             .people
@@ -661,7 +711,7 @@ impl Economy {
             physical.tick(),
         )?;
         if let Some(sites) = &mut state.work_sites {
-            sites.normalize();
+            sites.normalize()?;
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
             let regions: HashSet<_> = view
                 .containers
@@ -672,6 +722,14 @@ impl Economy {
                 })
                 .collect();
             sites.validate(physical.work(), &recipes, &regions)?;
+        }
+        if let Some(owner) = &mut state.construction {
+            owner.normalize();
+            let sites = state
+                .work_sites
+                .as_ref()
+                .ok_or("construction requires work sites")?;
+            owner.validate(&ids, &goods, sites, physical.tick())?;
         }
         if !state.work_tools.is_empty() {
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
@@ -705,6 +763,7 @@ impl Economy {
             autowork: state.autowork,
             work_tools: state.work_tools,
             work_sites: state.work_sites,
+            construction: state.construction,
             goals: state.goals,
             dreams: state.dreams,
             nutrition: state.nutrition,
@@ -743,6 +802,7 @@ impl Economy {
             autowork: self.autowork.clone(),
             work_tools: self.work_tools.clone(),
             work_sites: self.work_sites.clone(),
+            construction: self.construction.clone(),
             goals: self.goals.clone(),
             dreams: self.dreams.clone(),
             nutrition: self.nutrition.clone(),
@@ -1285,7 +1345,13 @@ impl Economy {
         let (mut rates, abandon) =
             family::work_rates!(self, meal_candidates, player_work, fighters, resting);
         let mut goal_work = None;
-        let tool_pickup = if !self.work_tools.is_empty() {
+        if !self.work_tools.is_empty()
+            || self.construction.is_some()
+            || matches!(
+                player_transfer,
+                Some(game_parallel_economy_interaction::PhysicalChoice::Build { .. })
+            )
+        {
             action_base = action_base
                 .checked_add(
                     gathering_plan
@@ -1293,6 +1359,8 @@ impl Economy {
                         .map_or(0, |plan| plan.actions.len() as u64),
                 )
                 .ok_or("action count overflow")?;
+        }
+        let tool_pickup = if !self.work_tools.is_empty() {
             {
                 let mut unwilling = self
                     .dynamics
@@ -1346,11 +1414,65 @@ impl Economy {
         } else {
             None
         };
+        if let Some(plan) = &tool_pickup {
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+        }
+        let manual_build = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::Build {
+                person,
+                blueprint,
+            }) => Some(game_parallel_economy_building::Manual { person, blueprint }),
+            _ => None,
+        };
+        if manual_build.is_some_and(|m| {
+            self.family.as_ref().is_some_and(|f| {
+                f.members
+                    .iter()
+                    .any(|member| member.id == m.person && member.age < f.rules.min_work_age)
+            })
+        }) {
+            return Err("person is too young to build".into());
+        }
+        if manual_build.is_some() && self.construction.is_none() {
+            return Err("construction is disabled".into());
+        }
+        let mut construction_plan = self
+            .construction
+            .as_ref()
+            .map(|owner| {
+                let sites = self
+                    .work_sites
+                    .as_ref()
+                    .expect("validated construction sites");
+                game_parallel_economy_building::Context {
+                    owner,
+                    sites,
+                    people: &self.people,
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    claims: claims.as_ref(),
+                    busy: &busy,
+                    max_hunger: self.rules.max_work_hunger,
+                    tick,
+                    manual: manual_build,
+                }
+                .prepare(action_base)
+            })
+            .transpose()?;
+        if let Some(plan) = &construction_plan {
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+        }
         game_parallel_economy_claims::include_care_farming!(claim_uses, care, farming);
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
         if let Some(plan) = tool_pickup {
             actions.extend(plan.actions);
             claim_uses.extend(plan.uses);
+        }
+        if let Some(plan) = &mut construction_plan {
+            actions.append(&mut plan.actions);
+            claim_uses.append(&mut plan.uses);
         }
         if let Some(plan) = &care {
             actions.extend_from_slice(&plan.actions);
@@ -1646,11 +1768,21 @@ impl Economy {
             })
             .collect();
         self.physical.interrupt_workers_in(&mut physical, &deaths)?;
-        let work_sites = self
+        let mut work_sites = self
             .work_sites
             .as_ref()
             .zip(site_plan.as_ref())
             .map(|(sites, plan)| sites.advance(plan, physical.events()));
+        let mut construction = self.construction.clone();
+        if let (Some(plan), Some(owner), Some(sites)) = (
+            construction_plan,
+            construction.as_mut(),
+            work_sites.as_mut(),
+        ) {
+            plan.publish(owner, sites, physical.events());
+        } else if let Some(owner) = &mut construction {
+            owner.events.clear();
+        }
         game_parallel_economy_combat::finish_world!(combat, person);
         let missions = game_parallel_economy_expeditions::finish_world!(
             self, expedition, person, travel, dynamics, tick
@@ -1736,6 +1868,7 @@ impl Economy {
             opinions: next_opinions,
             autowork,
             work_sites,
+            construction,
             goals,
             dreams,
             nutrition: person.nutrition,
@@ -1777,6 +1910,7 @@ impl Economy {
         self.opinions = draft.opinions;
         self.autowork = draft.autowork;
         self.work_sites = draft.work_sites;
+        self.construction = draft.construction;
         self.goals = draft.goals;
         self.dreams = draft.dreams;
         self.nutrition = draft.nutrition;

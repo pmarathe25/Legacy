@@ -3228,6 +3228,7 @@ dependencies = [
  "game-parallel-disease",
  "game-parallel-dreams",
  "game-parallel-economy-agriculture",
+ "game-parallel-economy-building",
  "game-parallel-economy-campaign",
  "game-parallel-economy-claims",
  "game-parallel-economy-claims-output",
@@ -3284,6 +3285,20 @@ dependencies = [
  "rayon",
  "serde",
  "toml",
+]
+
+[[package]]
+name = "game-parallel-economy-building"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-claims",
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "game-parallel-work-sites",
+ "rayon",
+ "serde",
 ]
 
 [[package]]
@@ -3556,6 +3571,7 @@ dependencies = [
  "game-parallel-agreements",
  "game-parallel-autowork",
  "game-parallel-economy-agriculture",
+ "game-parallel-economy-building",
  "game-parallel-economy-campaign",
  "game-parallel-economy-combat",
  "game-parallel-economy-dynamics",

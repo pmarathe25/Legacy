@@ -184,6 +184,7 @@ fn fixture() -> State {
         }),
         work_tools: vec![],
         work_sites: None,
+        construction: None,
         goals: None,
         dreams: None,
         nutrition: Some(Nutrition {
@@ -15945,6 +15946,7 @@ fn physical_work_sites_limit_jobs_and_paused_jobs_keep_their_slots() {
         })
         .collect();
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![WorkSite {
             id: 7,
             region: 1,
@@ -16023,6 +16025,7 @@ fn denied_physical_starts_do_not_occupy_work_sites() {
     initial.people[0].seek_meals = false;
     initial.people[1].willing_to_work = true;
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![WorkSite {
             id: 7,
             region: 1,
@@ -16104,6 +16107,7 @@ fn multiple_work_sites_enforce_capacity_and_validate_saved_bindings() {
     )
     .unwrap();
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![
             WorkSite {
                 id: 8,
@@ -16172,6 +16176,7 @@ fn multiple_work_sites_enforce_capacity_and_validate_saved_bindings() {
 fn concentrated_work_sites(count: u64) -> State {
     let mut state = concentrated(count);
     state.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![WorkSite {
             id: 1,
             region: 1,
@@ -16274,6 +16279,7 @@ fn a_full_site_does_not_let_blocked_work_monopolize_inputs() {
         disregard_claims: false,
     }];
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![WorkSite {
             id: 7,
             region: 1,
@@ -16341,6 +16347,7 @@ fn a_worker_who_dies_on_start_does_not_keep_a_site_binding() {
         nutrients: [0; 6],
     });
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![WorkSite {
             id: 7,
             region: 1,
@@ -16436,6 +16443,7 @@ fn physical_work_sites_match_local_region_and_recipe_kind() {
     )
     .unwrap();
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![
             WorkSite {
                 id: 1,
@@ -16490,6 +16498,7 @@ fn a_multislot_job_can_use_a_larger_site_after_a_small_one() {
     initial.agreements = None;
     initial.people[0].seek_meals = false;
     initial.work_sites = Some(WorkSites {
+        next_id: 0,
         sites: vec![
             WorkSite {
                 id: 1,
@@ -16517,4 +16526,622 @@ fn a_multislot_job_can_use_a_larger_site_after_a_small_one() {
     assert_eq!(state.work_sites.as_ref().unwrap().bindings[0].site, 2);
     assert_eq!(state.work_sites.as_ref().unwrap().bindings[0].slots, 2);
     Economy::compile(state).unwrap();
+}
+
+fn construction_fixture() -> State {
+    let mut state = fixture();
+    state.agreements = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+    }
+    state.work_sites = Some(WorkSites {
+        next_id: 0,
+        sites: vec![],
+        requirements: vec![WorkSiteRequirement {
+            recipe: 1,
+            kind: "workshop".into(),
+            slots: 1,
+        }],
+        bindings: vec![],
+    });
+    state.construction = Some(Construction {
+        blueprints: vec![BuildingBlueprint {
+            id: 1,
+            name: "workshop kit".into(),
+            kind: "workshop".into(),
+            capacity: 1,
+            kit: 3,
+            quantity: 1,
+        }],
+        policies: vec![ConstructionPolicy {
+            person: 2,
+            blueprint: 1,
+            target_sites: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+            disregard_claims: false,
+        }],
+        events: vec![],
+    });
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn a_person_builds_a_real_site_from_a_kit_before_work_can_use_it() {
+    let initial = construction_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let built = world.snapshot();
+                let sites = built.work_sites.as_ref().unwrap();
+                assert_eq!(
+                    (sites.sites.len(), sites.sites[0].id, sites.next_id),
+                    (1, 1, 2)
+                );
+                assert_eq!(built.construction.as_ref().unwrap().events[0].site, Some(1));
+                assert_eq!(
+                    built
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&built).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().work_sites.as_ref().unwrap().bindings[0].site,
+                    1
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn construction_remains_a_personal_choice_and_may_be_motivated_by_fear() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.construction.as_mut().unwrap().policies[0].willing = false;
+    let mut revoked = initial.clone();
+    revoked.construction.as_mut().unwrap().policies[0].willing = true;
+    let mut revoked = Economy::compile(revoked).unwrap();
+    revoked.set_construction_choice(2, false).unwrap();
+    revoked.advance().unwrap();
+    assert!(
+        revoked
+            .snapshot()
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .sites
+            .is_empty()
+    );
+    let mut refusing = Economy::compile(initial.clone()).unwrap();
+    refusing.advance().unwrap();
+    assert!(
+        refusing
+            .snapshot()
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .sites
+            .is_empty()
+    );
+    assert_eq!(
+        refusing
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        1
+    );
+    initial.construction.as_mut().unwrap().policies[0].pressured_by = Some(1);
+    initial.construction.as_mut().unwrap().policies[0].pressure_threshold = Some(3);
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 4,
+        obligation: 0,
+        affinity: 0,
+    }];
+    let mut pressured = Economy::compile(initial).unwrap();
+    pressured.advance().unwrap();
+    let state = pressured.snapshot();
+    assert!(!state.construction.as_ref().unwrap().policies[0].willing);
+    assert_eq!(state.opinions.as_ref().unwrap().index().obligation(2, 1), 0);
+    assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+}
+
+#[test]
+fn controlled_construction_consumes_a_kit_and_overflow_rolls_back() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    initial.construction.as_mut().unwrap().policies.clear();
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    let state = world.snapshot();
+    assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        0
+    );
+    let before = world.snapshot();
+    assert!(world.build_site(1, 1).is_err());
+    assert_eq!(world.snapshot(), before);
+    initial.work_sites.as_mut().unwrap().next_id = u64::MAX;
+    let mut world = Economy::compile(initial).unwrap();
+    let before = world.snapshot();
+    assert!(world.build_site(1, 1).is_err());
+    assert_eq!(world.snapshot(), before);
+}
+
+fn concentrated_site_construction(count: u64) -> State {
+    let mut state = field_workload(count);
+    state.agriculture = None;
+    state.people[0].controlled = true;
+    state.work_sites = Some(WorkSites {
+        next_id: 0,
+        sites: vec![],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    state.construction = Some(Construction {
+        blueprints: vec![BuildingBlueprint {
+            id: 1,
+            name: "workshop kit".into(),
+            kind: "workshop".into(),
+            capacity: 1,
+            kit: 2,
+            quantity: 1,
+        }],
+        policies: (2..=count)
+            .map(|person| ConstructionPolicy {
+                person,
+                blueprint: 1,
+                target_sites: 1,
+                willing: true,
+                pressured_by: None,
+                pressure_threshold: None,
+                disregard_claims: false,
+            })
+            .collect(),
+        events: vec![],
+    });
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: count / 8,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn concentrated_construction_creates_only_sites_backed_by_consumed_kits() {
+    let count = 4096;
+    let initial = concentrated_site_construction(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state.work_sites.as_ref().unwrap().sites.len(),
+                    count as usize / 8
+                );
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .filter(|e| e.site.is_some())
+                        .count(),
+                    count as usize / 8
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn concentrated_site_construction_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_site_construction(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(started.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+fn construction_respects_personal_claims_and_expiring_materials() {
+    use game_parallel_economy_claims::{Claim, Claims};
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            claims: vec![Claim {
+                person: 1,
+                region: 1,
+                good: 3,
+            }],
+            preferences: vec![],
+            events: vec![],
+        }),
+    });
+    let mut respecting = Economy::compile(initial.clone()).unwrap();
+    respecting.advance().unwrap();
+    assert!(
+        respecting
+            .snapshot()
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .sites
+            .is_empty()
+    );
+    initial.construction.as_mut().unwrap().policies[0].disregard_claims = true;
+    let mut disregarding = Economy::compile(initial.clone()).unwrap();
+    disregarding.advance().unwrap();
+    let state = disregarding.snapshot();
+    assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+    assert!(
+        state
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .claims
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| e.person == 2 && e.good == 3)
+    );
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: Some(1),
+        }],
+    )
+    .unwrap();
+    let mut expired = Economy::compile(initial).unwrap();
+    expired.advance().unwrap();
+    let state = expired.snapshot();
+    assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
+    assert_eq!(state.work_sites.as_ref().unwrap().next_id, 1);
+}
+
+#[test]
+fn a_newly_built_site_is_available_to_other_workers_on_the_next_boundary() {
+    let mut initial = construction_fixture();
+    initial.people[2].willing_to_work = true;
+    initial.autowork.as_mut().unwrap().policies = vec![WorkPolicy {
+        person: 3,
+        recipe: 1,
+        enabled: true,
+        disregard_claims: false,
+    }];
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.advance().unwrap().started.is_empty());
+    assert_eq!(world.snapshot().work_sites.as_ref().unwrap().sites.len(), 1);
+    assert_eq!(world.advance().unwrap().started.len(), 1);
+    assert_eq!(world.snapshot().physical.work[0].job.worker, 3);
+}
+
+#[test]
+fn old_saved_site_state_receives_a_safe_next_identity() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.work_sites = Some(WorkSites {
+        next_id: 0,
+        sites: vec![WorkSite {
+            id: 7,
+            region: 1,
+            kind: "workshop".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    let mut encoded = serde_json::to_value(initial).unwrap();
+    encoded["work_sites"]
+        .as_object_mut()
+        .unwrap()
+        .remove("next_id");
+    let world = Economy::compile(serde_json::from_value(encoded).unwrap()).unwrap();
+    assert_eq!(world.snapshot().work_sites.as_ref().unwrap().next_id, 8);
+}
+
+#[test]
+fn controlled_construction_uses_carried_kits_without_taking_claimed_stock() {
+    use game_parallel_economy_claims::{Claim, Claims};
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    initial.construction.as_mut().unwrap().policies.clear();
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            claims: vec![Claim {
+                person: 2,
+                region: 1,
+                good: 3,
+            }],
+            preferences: vec![],
+            events: vec![],
+        }),
+    });
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    let state = world.snapshot();
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        0
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(
+        state
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .claims
+            .as_ref()
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+fn people_produce_a_kit_build_a_site_and_then_use_it_for_work() {
+    let mut initial = construction_fixture();
+    initial.physical.recipes.push(Recipe {
+        id: 4,
+        name: "make workshop kit".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+    });
+    initial.people[0].willing_to_work = true;
+    initial.people[2].willing_to_work = true;
+    initial.autowork.as_mut().unwrap().policies = vec![
+        WorkPolicy {
+            person: 1,
+            recipe: 4,
+            enabled: true,
+            disregard_claims: false,
+        },
+        WorkPolicy {
+            person: 3,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        },
+    ];
+    let kit_stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *kit_stock = Container::new(kit_stock.place, kit_stock.capacity, vec![]).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                assert_eq!(world.snapshot().physical.work[0].job.recipe, 4);
+                assert_eq!(world.advance().unwrap().finished.len(), 1);
+                world.set_work_choice(1, false).unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .work_sites
+                        .as_ref()
+                        .unwrap()
+                        .sites
+                        .is_empty()
+                );
+                world.advance().unwrap();
+                let delivered = world.snapshot();
+                assert_eq!(
+                    delivered
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .used,
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&delivered).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(world.snapshot().work_sites.as_ref().unwrap().sites.len(), 1);
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .physical
+                        .work
+                        .iter()
+                        .any(|w| w.job.worker == 3 && w.job.recipe == 1)
+                );
+                assert_eq!(state.work_sites.as_ref().unwrap().bindings.len(), 1);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }

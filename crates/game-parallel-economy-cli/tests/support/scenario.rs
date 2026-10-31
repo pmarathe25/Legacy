@@ -943,3 +943,28 @@ fn ruler_observes_only_local_physical_work_sites() {
         (7, 0)
     );
 }
+
+#[test]
+fn ruler_can_build_an_authored_site_from_an_actual_kit() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = format!(
+        "{}\n[work_sites]\nsites = []\nrequirements = []\n[construction]\n[[construction.blueprints]]\nid = 1\nname = \"shelter workshop\"\nkind = \"workshop\"\ncapacity = 1\nkit = \"reed-shelter-kit\"\nquantity = 1\n",
+        source
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-construction-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut world);
+    assert_eq!(
+        player.building_blueprints().unwrap()[0].name,
+        "shelter workshop"
+    );
+    assert!(player.build_site(1).unwrap());
+    let view = player.view().unwrap();
+    assert_eq!(view.work_sites.len(), 1);
+    assert_eq!(view.work_sites[0].site.kind, "workshop");
+}

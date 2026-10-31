@@ -534,6 +534,21 @@ impl<'a> Player<'a> {
                 .map_or_else(Vec::new, |s| s.requirements.clone()),
         ))
     }
+    /// Authored construction blueprints available to the current person.
+    pub fn building_blueprints(
+        &self,
+    ) -> Result<Vec<game_parallel_economy::BuildingBlueprint>, String> {
+        self.current()?;
+        Ok(self
+            .world
+            .read()
+            .construction
+            .map_or_else(Vec::new, |c| c.blueprints.clone()))
+    }
+    /// Assemble a site from an actual local or carried building kit.
+    pub fn build_site(&mut self, blueprint: u32) -> Result<bool, String> {
+        self.world.build_site(self.current()?, blueprint)
+    }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
     pub fn guardians(&self) -> Result<Vec<Guardian>, String> {
         let state = self.world.read();

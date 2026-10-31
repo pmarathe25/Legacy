@@ -9,7 +9,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
         [] => {}
         ["quit"] | ["exit"] => return Ok(false),
         ["help"] => println!(
-            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
+            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["view"] => {
             let view = player.view()?;
@@ -115,12 +115,19 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             for site in sites {
                 println!("work-site-requirement={site:?}");
             }
+            for blueprint in player.building_blueprints()? {
+                println!("building-blueprint={blueprint:?}");
+            }
         }
         ["past-knowledge", life] => {
             for record in player.past_knowledge(life.parse().map_err(|_| "invalid past life")?)? {
                 println!("{record:?}");
             }
         }
+        ["build-site", blueprint] => println!(
+            "built={}",
+            player.build_site(blueprint.parse().map_err(|_| "invalid blueprint")?)?
+        ),
         ["meet", target] => println!(
             "accepted={}",
             player.meet(target.parse().map_err(|_| "invalid target")?)?
