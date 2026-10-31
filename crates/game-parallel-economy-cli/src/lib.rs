@@ -418,6 +418,26 @@ pub fn scenario_with_options(
         &scenario.population,
     )?;
     scenario.people.extend(generated);
+    let mut farming = population::farming(scenario.seed, &scenario.population);
+    if !farming.is_empty() {
+        let cultivation = scenario
+            .cultivation
+            .as_mut()
+            .ok_or("generated farming preferences require cultivation")?;
+        let authored: HashSet<_> = cultivation.policies.iter().map(|row| row.person).collect();
+        farming.retain(|row| !authored.contains(&row.person));
+        cultivation.policies.extend(farming);
+    }
+    let mut food_search = population::food_search(scenario.seed, &scenario.population);
+    if !food_search.is_empty() {
+        let search = scenario
+            .food_search
+            .as_mut()
+            .ok_or("generated food-search preferences require food search")?;
+        let authored: HashSet<_> = search.people.iter().map(|row| row.person).collect();
+        food_search.retain(|row| !authored.contains(&row.person));
+        search.people.extend(food_search);
+    }
     if let Some(family) = scenario.family.as_mut() {
         let mut founders = population::founders(scenario.seed, &scenario.population)?;
         let explicitly_authored: HashSet<_> =

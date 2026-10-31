@@ -22,6 +22,10 @@ pub struct Profile {
     sensitivity: Option<Sensitivity>,
     #[serde(default)]
     family: Option<Founder>,
+    #[serde(default)]
+    farm_percent: Option<u8>,
+    #[serde(default)]
+    food_search_percent: Option<u8>,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +115,47 @@ pub fn has_founders(profiles: &[Profile]) -> bool {
     profiles.iter().any(|profile| profile.family.is_some())
 }
 
+pub fn farming(seed: u64, profiles: &[Profile]) -> Vec<game_parallel_economy::FarmPolicy> {
+    profiles
+        .par_iter()
+        .filter_map(|profile| profile.farm_percent.map(|rate| (profile, rate)))
+        .flat_map(|(profile, rate)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let person = profile.start_id + offset;
+                game_parallel_economy::FarmPolicy {
+                    person,
+                    willing: game_parallel_genetics::random(seed, person, 3) % 100
+                        < u64::from(rate),
+                    pressured_by: None,
+                    pressure_threshold: None,
+                }
+            })
+        })
+        .collect()
+}
+
+pub fn food_search(
+    seed: u64,
+    profiles: &[Profile],
+) -> Vec<game_parallel_economy::FoodSearchPreference> {
+    profiles
+        .par_iter()
+        .filter_map(|profile| profile.food_search_percent.map(|rate| (profile, rate)))
+        .flat_map(|(profile, rate)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let person = profile.start_id + offset;
+                game_parallel_economy::FoodSearchPreference {
+                    person,
+                    enabled: game_parallel_genetics::random(seed, person, 4) % 100
+                        < u64::from(rate),
+                    next_review: 0,
+                    target: None,
+                }
+            })
+        })
+        .collect()
+}
+
 /// Authored individual dispositions, without copied relationships or obligations.
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -174,6 +219,8 @@ pub fn generate(
                 .any(|region| !regions.contains(region))
             || profile.work_percent > 100
             || profile.meal_percent > 100
+            || profile.farm_percent.is_some_and(|rate| rate > 100)
+            || profile.food_search_percent.is_some_and(|rate| rate > 100)
             || usize::try_from(profile.count).is_err()
         {
             return Err("invalid generated population profile".into());
@@ -232,6 +279,8 @@ mod tests {
             goods: BTreeMap::new(),
             sensitivity: None,
             family: None,
+            farm_percent: None,
+            food_search_percent: None,
         }
     }
 
@@ -247,6 +296,9 @@ mod tests {
         let mut overflow = profile();
         overflow.start_id = u64::MAX;
         assert!(generate(1, &regions, &[], &[overflow]).is_err());
+        let mut invalid_farming = profile();
+        invalid_farming.farm_percent = Some(101);
+        assert!(generate(1, &regions, &[], &[invalid_farming]).is_err());
         let authored = Resident {
             id: 10,
             region: 1,

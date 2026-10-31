@@ -164,6 +164,20 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                 let initial = world.snapshot();
                 assert_eq!(initial.people.len(), 130);
                 assert_eq!(initial.family.as_ref().unwrap().next_id, 1128);
+                let farming = &initial.agriculture.as_ref().unwrap().policies;
+                let search = &initial.food_search.as_ref().unwrap().people;
+                assert_eq!(farming.len(), 129);
+                assert_eq!(search.len(), 129);
+                assert!(farming.iter().any(|p| p.person >= 1000 && p.willing));
+                assert!(farming.iter().any(|p| p.person >= 1000 && !p.willing));
+                assert!(search.iter().any(|p| p.person >= 1000 && p.enabled));
+                assert!(search.iter().any(|p| p.person >= 1000 && !p.enabled));
+                assert!(
+                    search
+                        .iter()
+                        .filter(|p| p.person >= 1000)
+                        .all(|p| p.target.is_none())
+                );
                 let remote: Vec<_> = initial
                     .people
                     .iter()
@@ -171,6 +185,7 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                     .map(|p| p.id)
                     .collect();
                 assert!(!remote.is_empty());
+                world.set_farming_choice(2, false).unwrap();
                 {
                     let mut player = game_parallel_economy_player::Player::new(&mut world);
                     let view = player.view().unwrap();
@@ -178,7 +193,12 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                     assert!(view.nearby.iter().all(|id| !remote.contains(id)));
                     player.advance().unwrap();
                 }
-                world.snapshot()
+                let state = world.snapshot();
+                assert_eq!(
+                    state.agriculture.as_ref().unwrap().fields[0].phase,
+                    game_parallel_economy::CropPhase::Growing
+                );
+                state
             })
     };
     assert_eq!(run(1), run(4));
