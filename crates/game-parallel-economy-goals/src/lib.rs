@@ -102,7 +102,7 @@ pub fn blocked(
         .into_par_iter()
         .filter_map(|policy| {
             if direct.binary_search(&policy.person).is_ok()
-                || plan.occupied.binary_search(&policy.person).is_ok()
+                || plan.ineligible.binary_search(&policy.person).is_ok()
                 || delivered_workers.binary_search(&policy.person).is_ok()
             {
                 return None;

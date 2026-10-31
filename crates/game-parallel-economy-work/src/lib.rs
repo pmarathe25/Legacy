@@ -15,6 +15,9 @@ use rayon::prelude::*;
 
 pub struct Plan {
     pub work: Option<WorkPlan>,
+    /// People excluded from considering personal work, including those who declined it.
+    pub ineligible: Vec<u64>,
+    /// People whose time is actually reserved by this boundary's activities.
     pub occupied: Vec<u64>,
     pub site_disregards: Vec<u64>,
     request: Option<RequestDraft>,
@@ -171,9 +174,14 @@ impl Context<'_> {
             } else {
                 base.plan_validated(self.people, self.production, &busy, self.max_job)?
             };
+            let mut occupied = self.busy.to_vec();
+            if let Some(plan) = &work {
+                reserve(&mut occupied, plan.actors.iter().copied());
+            }
             return Ok(Plan {
                 work,
-                occupied: busy,
+                ineligible: busy,
+                occupied,
                 site_disregards: site_disregards(base, self.claims, self.site_classes),
                 request: None,
                 asks: None,
@@ -306,9 +314,23 @@ impl Context<'_> {
         if self.goals.is_some() {
             reserve(&mut busy, selected.iter().map(|row| row.worker));
         }
+        let mut occupied = self.busy.to_vec();
+        if let Some(asks) = &asks {
+            reserve(&mut occupied, asks.actors.iter().copied());
+        }
+        if let Some(request) = &request {
+            reserve(
+                &mut occupied,
+                request.decisions.iter().map(|row| row.worker),
+            );
+        }
+        if let Some(plan) = &work {
+            reserve(&mut occupied, plan.actors.iter().copied());
+        }
         Ok(Plan {
             work,
-            occupied: busy,
+            ineligible: busy,
+            occupied,
             site_disregards: site_disregards(base, self.claims, self.site_classes),
             request,
             asks,

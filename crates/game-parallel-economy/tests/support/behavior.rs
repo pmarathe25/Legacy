@@ -1314,7 +1314,7 @@ fn actual_personal_encounters_transmit_disease_and_survive_reload() {
 fn personal_fear_or_obligation_can_cause_an_unwilling_encounter() {
     use game_parallel_social::{Participant, PressurePolicy, Rules as SocialRules, Social};
     let mut initial = fixture();
-    initial.autowork = None;
+    initial.autowork.as_mut().unwrap().policies.clear();
     initial.agreements = None;
     for person in &mut initial.people {
         person.seek_meals = false;
