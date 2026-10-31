@@ -600,6 +600,7 @@ fn concentrated_requested_work_reserves_shared_inputs_deterministically() {
     inventory.stocks[0].quantity = count / 2 * 3;
     inventory.stocks[1].capacity = count * 2;
     let requests = Requests {
+        inherit_births: false,
         memory_limit: 0,
         work_links: vec![],
         memories: vec![],

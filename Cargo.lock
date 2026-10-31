@@ -4955,6 +4955,7 @@ dependencies = [
 name = "game-parallel-work-requests"
 version = "0.2.0"
 dependencies = [
+ "game-parallel-families",
  "game-parallel-opinions",
  "game-parallel-production",
  "game-parallel-production-model",

@@ -171,6 +171,7 @@ pub fn work_requests(
         .collect();
     Some(Requests {
         next_id: 1,
+        inherit_births: false,
         memory_limit: settings.work_memory_limit,
         work_links: Vec::new(),
         memories: Vec::new(),

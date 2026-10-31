@@ -5079,6 +5079,102 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
 }
 
 #[test]
+fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
+    use game_parallel_autowork::requests::{Asker, Memory, Preference, Requests};
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.willing_to_work = false;
+    }
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 1,
+            inherit_births: true,
+            memory_limit: 4,
+            work_links: vec![],
+            memories: vec![Memory {
+                observer: 1,
+                worker: 2,
+                recipe: 1,
+                successes: 1,
+                failures: 0,
+                last_tick: 0,
+                last_success_at: Some(0),
+            }],
+            preferences: vec![Preference {
+                person: 1,
+                effort: 5,
+                help_value: 2,
+                affinity_weight: -3,
+                disregard_claims: true,
+            }],
+            askers: vec![Asker {
+                person: 1,
+                interval: 3,
+                lifetime: 4,
+            }],
+            pending: vec![],
+            events: vec![],
+        }),
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let requests = state.autowork.as_ref().unwrap().requests.as_ref().unwrap();
+                let preference = requests.preferences.iter().find(|row| row.person == 5);
+                assert_eq!(preference.is_some(), inherit);
+                assert_eq!(requests.askers.iter().any(|row| row.person == 5), inherit);
+                assert!(requests.memories.iter().all(|row| row.observer != 5));
+                assert!(
+                    requests
+                        .pending
+                        .iter()
+                        .all(|row| row.requester != 5 && row.worker != 5)
+                );
+                if let Some(preference) = preference {
+                    assert_eq!(
+                        (
+                            preference.effort,
+                            preference.help_value,
+                            preference.affinity_weight,
+                            preference.disregard_claims
+                        ),
+                        (5, 2, -3, true)
+                    );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn successor_is_an_actual_later_birth_and_guardian_travels_before_mentorship() {
     use game_parallel_economy_campaign::ReleaseDecision;
     let initial = campaign_fixture();
@@ -11239,6 +11335,7 @@ fn fear_can_start_requested_work_and_the_worker_can_leave_when_fear_fades() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 2,
             memory_limit: 0,
             work_links: vec![],
@@ -11395,6 +11492,7 @@ fn affinity_can_motivate_requested_work_and_a_changed_view_can_end_it() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 2,
             memory_limit: 2,
             work_links: vec![],
@@ -11639,6 +11737,7 @@ fn requested_work_is_learned_only_by_a_present_observer() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 2,
             memory_limit: 2,
             work_links: vec![],
@@ -11732,6 +11831,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 1,
             memory_limit: 2,
             work_links: vec![],
@@ -15024,6 +15124,7 @@ fn witnessed_work_can_inspire_a_personal_offer_without_creating_a_duty() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 2,
             memory_limit: 2,
             work_links: vec![],
@@ -15256,6 +15357,7 @@ fn concentrated_remembered_work_offers(count: u64) -> State {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 1,
             memory_limit: 1,
             work_links: vec![],
@@ -16094,6 +16196,7 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 2,
             memory_limit: 1,
             work_links: vec![],
@@ -16271,6 +16374,7 @@ fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
         next_id: 1,
         policies: vec![],
         requests: Some(Requests {
+            inherit_births: false,
             next_id: 2,
             memory_limit: 1,
             work_links: vec![],

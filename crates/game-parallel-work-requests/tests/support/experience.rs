@@ -2,6 +2,7 @@ use game_parallel_work_requests::{Requests, WorkLink};
 
 fn state(limit: usize) -> Requests {
     Requests {
+        inherit_births: false,
         next_id: 100_002,
         memory_limit: limit,
         work_links: vec![],

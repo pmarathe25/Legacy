@@ -229,6 +229,7 @@ willing = false
 
 [work_requests]
 next_id = 1
+inherit_births = true
 memory_limit = 4
 preferences = [{ person = 2, effort = 5, help_value = 2 }]
 

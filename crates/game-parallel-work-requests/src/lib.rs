@@ -12,6 +12,9 @@ use std::collections::HashSet;
 #[serde(deny_unknown_fields)]
 pub struct Requests {
     pub next_id: u64,
+    /// Enroll newborns with general preferences, never another person's experiences.
+    #[serde(default)]
+    pub inherit_births: bool,
     /// Maximum personal work memories per observer; zero disables learning.
     #[serde(default)]
     pub memory_limit: usize,
@@ -32,6 +35,7 @@ impl Clone for Requests {
     fn clone(&self) -> Self {
         Self {
             next_id: self.next_id,
+            inherit_births: self.inherit_births,
             memory_limit: self.memory_limit,
             work_links: self.work_links.par_iter().cloned().collect(),
             memories: self.memories.par_iter().cloned().collect(),
@@ -121,6 +125,67 @@ pub struct Draft {
 }
 
 impl Requests {
+    /// Copy only personal inclinations for actual newborns; no pending requests or memories.
+    pub fn enroll(&mut self, family: &game_parallel_families::Families, tick: u64) {
+        if !self.inherit_births || !family.rules.enroll_births {
+            return;
+        }
+        let newborns: Vec<_> = family
+            .members
+            .par_iter()
+            .filter(|member| member.born == Some(tick))
+            .collect();
+        if newborns.is_empty() {
+            return;
+        }
+        let mut preferences: Vec<_> = self.preferences.par_iter().collect();
+        preferences.par_sort_unstable_by_key(|row| row.person);
+        let mut askers: Vec<_> = self.askers.par_iter().collect();
+        askers.par_sort_unstable_by_key(|row| row.person);
+        let inherited_preferences: Vec<_> = newborns
+            .par_iter()
+            .filter_map(|member| {
+                if preferences
+                    .binary_search_by_key(&member.id, |row| row.person)
+                    .is_ok()
+                {
+                    return None;
+                }
+                let parent = member.parents.iter().find_map(|id| {
+                    preferences
+                        .binary_search_by_key(id, |row| row.person)
+                        .ok()
+                        .map(|i| preferences[i])
+                })?;
+                let mut preference = parent.clone();
+                preference.person = member.id;
+                Some(preference)
+            })
+            .collect();
+        let inherited_askers: Vec<_> = newborns
+            .into_par_iter()
+            .filter_map(|member| {
+                if askers
+                    .binary_search_by_key(&member.id, |row| row.person)
+                    .is_ok()
+                {
+                    return None;
+                }
+                let parent = member.parents.iter().find_map(|id| {
+                    askers
+                        .binary_search_by_key(id, |row| row.person)
+                        .ok()
+                        .map(|i| askers[i])
+                })?;
+                let mut asker = parent.clone();
+                asker.person = member.id;
+                Some(asker)
+            })
+            .collect();
+        self.preferences.par_extend(inherited_preferences);
+        self.askers.par_extend(inherited_askers);
+    }
+
     pub fn validate(
         &self,
         people: &[PersonSnapshot],

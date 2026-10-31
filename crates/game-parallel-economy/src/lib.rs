@@ -2256,6 +2256,13 @@ impl Economy {
         if let (Some(auto), Some(plan)) = (&mut autowork, work) {
             plan.publish(auto, physical.events(), &people);
         }
+        if let Some((requests, family)) = autowork
+            .as_mut()
+            .and_then(|auto| auto.requests.as_mut())
+            .zip(family.as_ref())
+        {
+            requests.enroll(family, tick);
+        }
         game_parallel_economy_interaction::publish_work!(autowork, manual_job);
         let (goals, dreams) = game_parallel_economy_goals::advance(
             self.goals.as_ref(),
