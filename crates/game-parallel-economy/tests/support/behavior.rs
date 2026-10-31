@@ -2194,6 +2194,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -13108,6 +13109,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -13273,6 +13275,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -13442,6 +13445,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -13455,6 +13459,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         pressured_encounter: None,
         site_use: None,
         site_destruction: None,
+        site_salvage: None,
         obligation_gain: None,
         obligation_relief: None,
         promise_obligation_gain: None,
@@ -13507,6 +13512,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -13591,6 +13597,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: Some(ObligationDevelopment {
             until_age: 3,
@@ -13764,6 +13771,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_pressured_encounter: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
+            affinity_site_salvage: None,
             relationship_cases: vec![],
             obligation_development: Some(ObligationDevelopment {
                 until_age: 4,
@@ -13994,6 +14002,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
     };
@@ -14141,6 +14150,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
     }];
@@ -14347,6 +14357,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_pressured_encounter: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
+            affinity_site_salvage: None,
             relationship_cases: vec![],
             obligation_development: None,
         })
@@ -18093,6 +18104,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_pressured_encounter: None,
         affinity_site_use: Some(rate),
         affinity_site_destruction: None,
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
     };
@@ -18105,6 +18117,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         pressured_encounter: None,
         site_use: Some(6),
         site_destruction: None,
+        site_salvage: None,
         obligation_gain: None,
         promise_obligation_gain: None,
         obligation_relief: None,
@@ -18395,6 +18408,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_pressured_encounter: None,
         affinity_site_use: None,
         affinity_site_destruction: Some(5),
+        affinity_site_salvage: None,
         relationship_cases: vec![],
         obligation_development: None,
     }];
@@ -19591,6 +19605,175 @@ fn salvage_can_be_motivated_by_fear_without_a_felt_obligation() {
 }
 
 #[test]
+fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
+    use game_parallel_economy_claims::Claims;
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.autowork = None;
+    let owner = initial.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.blueprints[0].salvage = 1;
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims::default()),
+    });
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 100,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let sensitivity = |person, rate| OpinionSensitivity {
+        person,
+        fear_per_damage: None,
+        gratitude_gain: None,
+        promise_obligation_gain: None,
+        obligation_relief: None,
+        theft_loss: None,
+        confrontation: None,
+        affinity_help: None,
+        affinity_harm_per_damage: None,
+        affinity_encounter: None,
+        affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
+        affinity_site_salvage: Some(rate),
+        relationship_cases: vec![],
+        obligation_development: None,
+    };
+    let mut first = sensitivity(1, 4);
+    first.relationship_cases.push(RelationshipCase {
+        target: 2,
+        help: None,
+        harm_per_damage: None,
+        encounter: None,
+        pressured_encounter: None,
+        site_use: None,
+        site_destruction: None,
+        site_salvage: Some(7),
+        obligation_gain: None,
+        promise_obligation_gain: None,
+        obligation_relief: None,
+    });
+    opinions.sensitivities = vec![first, sensitivity(3, -3)];
+    let run =
+        |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    assert!(world.build_site(1, 1).unwrap());
+                    world.claim_site(1, 1).unwrap();
+                    world.claim_site(3, 1).unwrap();
+                    assert!(world.destroy_site(1, 1).unwrap());
+                    let mut state = world.snapshot();
+                    state.construction.as_mut().unwrap().salvaging = vec![SalvagePolicy {
+                        person: 2,
+                        site: 1,
+                        quantity: 1,
+                        willing: true,
+                        pressured_by: None,
+                        pressure_threshold: None,
+                        disregard_claims: true,
+                    }];
+                    let mut remote = state.clone();
+                    remote.people[2].region = Some(2);
+                    remote.physical.custody.containers.push(
+                        Container::new(Place::Stock { region: 2, good: 1 }, 10, vec![]).unwrap(),
+                    );
+                    remote
+                        .physical
+                        .custody
+                        .containers
+                        .sort_unstable_by_key(|row| row.place);
+                    let mut remote = Economy::compile(remote).unwrap();
+                    remote.advance().unwrap();
+                    let remote = remote.snapshot();
+                    assert_eq!(
+                        remote
+                            .dynamics
+                            .as_ref()
+                            .unwrap()
+                            .claims
+                            .as_ref()
+                            .unwrap()
+                            .site_events
+                            .len(),
+                        1
+                    );
+                    assert_eq!(remote.opinions.as_ref().unwrap().index().affinity(3, 2), 0);
+
+                    let mut blocked = state.clone();
+                    let holder = blocked
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap();
+                    *holder = Container::new(
+                        holder.place,
+                        holder.capacity,
+                        vec![Lot {
+                            good: 1,
+                            quantity: holder.capacity,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap();
+                    let mut blocked = Economy::compile(blocked).unwrap();
+                    blocked.advance().unwrap();
+                    let blocked = blocked.snapshot();
+                    assert!(
+                        blocked
+                            .dynamics
+                            .as_ref()
+                            .unwrap()
+                            .claims
+                            .as_ref()
+                            .unwrap()
+                            .site_events
+                            .is_empty()
+                    );
+                    assert_eq!(blocked.opinions.as_ref().unwrap().index().affinity(1, 2), 0);
+                    let mut world = Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let events = &state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .claims
+                        .as_ref()
+                        .unwrap()
+                        .site_events;
+                    assert_eq!(events.len(), 2);
+                    assert!(
+                        events
+                            .iter()
+                            .all(|event| event.person == 2 && event.salvaged && !event.destroyed)
+                    );
+                    let index = state.opinions.as_ref().unwrap().index();
+                    assert_eq!(index.affinity(1, 2), 7);
+                    assert_eq!(index.affinity(3, 2), -3);
+                    assert_eq!(index.obligation(1, 2), 0);
+                    state
+                })
+        };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn rejected_competing_construction_retires_its_empty_site_custody() {
     let mut initial = construction_fixture();
     initial.autowork = None;
@@ -20252,7 +20435,53 @@ fn concentrated_site_salvage_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = concentrated_site_salvage(count);
+    let mut initial = concentrated_site_salvage(count);
+    let claimed = std::env::var("LEGACY_CLAIMS").is_ok_and(|value| value == "1");
+    if claimed {
+        use game_parallel_economy_claims::{Claims, SiteClaim};
+        initial.dynamics = Some(Dynamics {
+            personality: None,
+            social: None,
+            disease: None,
+            treatment: vec![],
+            claims: Some(Claims {
+                site_claims: (1..=count)
+                    .map(|person| SiteClaim { person, site: 1 })
+                    .collect(),
+                ..Default::default()
+            }),
+        });
+        let mut opinions = fixture().opinions.unwrap();
+        opinions.records.clear();
+        opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+            limit: 100,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        opinions.sensitivities = (1..=count)
+            .map(|person| OpinionSensitivity {
+                person,
+                fear_per_damage: None,
+                gratitude_gain: None,
+                promise_obligation_gain: None,
+                obligation_relief: None,
+                theft_loss: None,
+                confrontation: None,
+                affinity_help: None,
+                affinity_harm_per_damage: None,
+                affinity_encounter: None,
+                affinity_pressured_encounter: None,
+                affinity_site_use: None,
+                affinity_site_destruction: None,
+                affinity_site_salvage: Some(1),
+                relationship_cases: vec![],
+                obligation_development: None,
+            })
+            .collect();
+        initial.opinions = Some(opinions);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -20264,9 +20493,9 @@ fn concentrated_site_salvage_benchmark() {
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = started.elapsed().as_secs_f64();
+                let state = world.snapshot();
                 assert_eq!(
-                    world
-                        .snapshot()
+                    state
                         .construction
                         .unwrap()
                         .salvage_events
@@ -20275,13 +20504,19 @@ fn concentrated_site_salvage_benchmark() {
                         .count(),
                     1
                 );
+                if claimed {
+                    let observations = state.dynamics.unwrap().claims.unwrap().site_events;
+                    assert_eq!(observations.len(), 4);
+                    assert!(observations.iter().all(|event| event.salvaged));
+                    assert_eq!(state.opinions.unwrap().records.len(), 4);
+                }
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 salvage_seconds={:.6}",
+                "workers={workers} people={count} claimed={claimed} ticks=1 salvage_seconds={:.6}",
                 samples[1]
             );
         });

@@ -72,6 +72,20 @@ alleles = [[1000,1000], [200,800], [300,700], [400,600]]
 current = 1
 started = 0
 
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 1
+affinity = { limit = 100 }
+
+[[opinions.sensitivities]]
+person = 1
+affinity_site_salvage = -2
+
+[dynamics.claims]
+
 [work_sites]
 sites = []
 requirements = []
@@ -91,4 +105,4 @@ person = 2
 site = 1
 quantity = 1
 willing = true
-disregard_claims = false
+disregard_claims = true

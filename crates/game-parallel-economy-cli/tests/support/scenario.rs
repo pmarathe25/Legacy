@@ -2173,6 +2173,7 @@ fn salvage_scenario_runs_through_real_player_and_individual_actions() {
         let mut player = game_parallel_economy_player::Player::new(&mut world);
         let good = player.building_blueprints().unwrap()[0].kit;
         assert!(player.build_site(1).unwrap());
+        player.claim_site(1).unwrap();
         assert!(player.destroy_site(1).unwrap());
         assert_eq!(player.view().unwrap().debris[0].site, 1);
         player.salvage_site(1, good, 1).unwrap()
@@ -2188,6 +2189,10 @@ fn salvage_scenario_runs_through_real_player_and_individual_actions() {
         recovered
     );
     assert!(state.construction.as_ref().unwrap().materials.is_empty());
+    assert_eq!(
+        state.opinions.unwrap().index().affinity(1, 2),
+        if recovered { 0 } else { -2 }
+    );
 }
 
 #[test]

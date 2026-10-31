@@ -206,6 +206,7 @@ pub enum AffinityKind {
     PressuredEncounter,
     SiteUse,
     SiteDestruction,
+    SiteSalvage,
 }
 impl AffinityKind {
     fn rate(
@@ -238,6 +239,10 @@ impl AffinityKind {
             Self::SiteDestruction => case
                 .and_then(|c| c.site_destruction)
                 .or_else(|| personal.and_then(|p| p.affinity_site_destruction))
+                .unwrap_or(0),
+            Self::SiteSalvage => case
+                .and_then(|c| c.site_salvage)
+                .or_else(|| personal.and_then(|p| p.affinity_site_salvage))
                 .unwrap_or(0),
         }
     }

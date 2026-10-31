@@ -66,6 +66,7 @@ pub struct SiteObservation {
     pub person: u64,
     pub site: u64,
     pub destroyed: bool,
+    pub salvaged: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
@@ -578,6 +579,7 @@ impl<'a> Player<'a> {
                                 person: event.person,
                                 site: event.site,
                                 destroyed: event.destroyed,
+                                salvaged: event.salvaged,
                             })
                             .collect()
                     })

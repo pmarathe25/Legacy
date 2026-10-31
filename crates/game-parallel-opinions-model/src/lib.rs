@@ -39,6 +39,9 @@ pub struct Sensitivity {
     /// Personal interpretation of another person's witnessed destruction of a claimed site.
     #[serde(default)]
     pub affinity_site_destruction: Option<i32>,
+    /// Personal interpretation of another person's witnessed recovery of claimed debris.
+    #[serde(default)]
+    pub affinity_site_salvage: Option<i32>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -77,6 +80,8 @@ pub struct RelationshipCase {
     pub site_use: Option<i32>,
     #[serde(default)]
     pub site_destruction: Option<i32>,
+    #[serde(default)]
+    pub site_salvage: Option<i32>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]

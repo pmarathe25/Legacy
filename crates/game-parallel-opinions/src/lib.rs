@@ -85,9 +85,22 @@ impl Opinions {
         harm::tracks_affinity(self, harm::AffinityKind::SiteUse)
             || harm::tracks_affinity(self, harm::AffinityKind::SiteDestruction)
     }
+    pub fn tracks_salvage_affinity(&self) -> bool {
+        harm::tracks_affinity(self, harm::AffinityKind::SiteSalvage)
+    }
+    /// Each observer decides how to interpret witnessed recovery of their claimed debris.
+    pub fn learn_salvage_affinity(&mut self, events: &[(u64, u64)]) {
+        if !events.is_empty() && self.tracks_salvage_affinity() {
+            let events: Vec<_> = events
+                .par_iter()
+                .map(|&(observer, actor)| (observer, actor, 1))
+                .collect();
+            harm::affinity(self, &events, harm::AffinityKind::SiteSalvage);
+        }
+    }
     /// Update only from each observer's signed interpretation of witnessed site actions.
     pub fn learn_site_affinity(&mut self, events: &[(u64, u64, bool)]) {
-        if !self.tracks_site_affinity() {
+        if events.is_empty() || !self.tracks_site_affinity() {
             return;
         }
         let use_events: Vec<_> = events
@@ -169,6 +182,7 @@ impl Opinions {
                 affinity_pressured_encounter: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
+                affinity_site_salvage: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),
             })

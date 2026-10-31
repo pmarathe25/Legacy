@@ -2307,6 +2307,7 @@ impl Economy {
                             person,
                             site: binding.site,
                             destroyed: false,
+                            salvaged: false,
                         })
                     }));
                 }
@@ -2315,6 +2316,7 @@ impl Economy {
                         person,
                         site,
                         destroyed: true,
+                        salvaged: false,
                     });
                 }
                 if let Some(construction) = &construction {
@@ -2327,17 +2329,48 @@ impl Economy {
                                 person: e.person,
                                 site: e.site,
                                 destroyed: true,
+                                salvaged: false,
+                            }),
+                    );
+                    uses.par_extend(
+                        construction
+                            .salvage_events
+                            .par_iter()
+                            .filter(|e| e.recovered)
+                            .map(|e| game_parallel_economy_claims::SiteUse {
+                                person: e.person,
+                                site: e.site,
+                                destroyed: false,
+                                salvaged: true,
                             }),
                     );
                 }
             }
-            let sites: Vec<_> = self.work_sites.as_ref().map_or_else(Vec::new, |sites| {
-                sites
-                    .sites
-                    .par_iter()
-                    .map(|site| (site.id, site.region))
-                    .collect()
-            });
+            let mut sites: Vec<_> = if uses.is_empty() {
+                Vec::new()
+            } else {
+                self.work_sites.as_ref().map_or_else(Vec::new, |sites| {
+                    sites
+                        .sites
+                        .par_iter()
+                        .map(|site| (site.id, site.region))
+                        .collect()
+                })
+            };
+            if !uses.is_empty()
+                && let Some(construction) = &self.construction
+            {
+                sites.par_extend(
+                    construction
+                        .materials
+                        .par_iter()
+                        .filter(|material| material.debris)
+                        .map(|material| (material.site, material.region)),
+                );
+                if sites.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+                    sites.par_sort_unstable_by_key(|row| row.0);
+                }
+            }
             game_parallel_economy_claims::publish_site_uses(
                 owner,
                 &uses,
@@ -2357,14 +2390,22 @@ impl Economy {
             .as_ref()
             .and_then(|d| d.claims.as_ref())
             .filter(|c| !c.site_events.is_empty())
-            && let Some(opinions) = next_opinions.as_mut().filter(|o| o.tracks_site_affinity())
+            && let Some(opinions) = next_opinions.as_mut()
         {
             let witnessed: Vec<_> = claims
                 .site_events
                 .par_iter()
+                .filter(|e| !e.salvaged)
                 .map(|e| (e.claimant, e.person, e.destroyed))
                 .collect();
             opinions.learn_site_affinity(&witnessed);
+            let recovered: Vec<_> = claims
+                .site_events
+                .par_iter()
+                .filter(|e| e.salvaged)
+                .map(|e| (e.claimant, e.person))
+                .collect();
+            opinions.learn_salvage_affinity(&recovered);
         }
         if let Some(opinions) = next_opinions
             .as_mut()

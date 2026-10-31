@@ -443,12 +443,15 @@ pub struct SiteUseEvent {
     pub claimant: u64,
     pub site: u64,
     pub destroyed: bool,
+    #[serde(default)]
+    pub salvaged: bool,
 }
 #[derive(Clone, Copy)]
 pub struct SiteUse {
     pub person: u64,
     pub site: u64,
     pub destroyed: bool,
+    pub salvaged: bool,
 }
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -553,6 +556,7 @@ impl Claims {
             || self.site_events.par_iter().any(|e| {
                 e.tick > tick
                     || e.site == 0
+                    || (e.destroyed && e.salvaged)
                     || e.person == e.claimant
                     || !people.contains(&e.person)
                     || !people.contains(&e.claimant)
@@ -819,11 +823,18 @@ pub fn publish_site_uses(
                     claimant: claim.person,
                     site: action.site,
                     destroyed: action.destroyed,
+                    salvaged: action.salvaged,
                 })
         })
         .collect();
     events.par_sort_unstable_by_key(|event| {
-        (event.claimant, event.person, event.site, event.destroyed)
+        (
+            event.claimant,
+            event.person,
+            event.site,
+            event.destroyed,
+            event.salvaged,
+        )
     });
     claims.site_events = events;
 }
