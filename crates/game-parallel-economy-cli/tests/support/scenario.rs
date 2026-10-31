@@ -204,6 +204,79 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
     assert_eq!(run(1), run(4));
 }
 
+fn generated_campaign(count: u64) -> game_parallel_economy::Economy {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let profile = std::fs::read_to_string(root.join("content/parallel/campaign-population.toml"))
+        .unwrap()
+        .replace("count = 128", &format!("count = {count}"));
+    let path = std::env::temp_dir().join(format!(
+        "legacy-campaign-population-{}-{count}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, profile).unwrap();
+    let world = super::scenario_with_options(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+        Some(42),
+        Some(&path),
+    );
+    std::fs::remove_file(path).unwrap();
+    world.unwrap()
+}
+
+#[test]
+fn generated_campaign_replays_at_scale_across_workers() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = generated_campaign(2048);
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn generated_campaign_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000u64);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = generated_campaign(count);
+                let start = std::time::Instant::now();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                if round > 0 {
+                    samples.push(start.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} generated={count} ticks=3 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
 #[test]
 fn authored_scenario_advances_and_resumes_identically_across_worker_counts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

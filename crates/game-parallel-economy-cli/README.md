@@ -14,6 +14,8 @@ When family rules are enabled, each generated population profile also supplies `
 
 Profiles can also live in a separate TOML file. For example, `cargo run -p game-parallel-economy-cli -- --player content/parallel/economy-campaign.toml --population content/parallel/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.
 
+To measure three complete campaign boundaries with generated individuals, set `LEGACY_PEOPLE` and `LEGACY_WORKERS`, then run `cargo test --release -p game-parallel-economy-cli generated_campaign_benchmark -- --ignored --nocapture`. The timed interval excludes scenario loading and reports the median of three warmed samples. It is a concentrated two-region scenario, not a claim about every possible campaign.
+
 For a ruler and guardians in the same dated-goods world, run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-campaign.toml`. `ruler` shows the current incarnation, guardians and any pending invocation warning. `invoke`, `dismiss-invocation`, `accept-warning`, and `guardian-release` operate those personal abilities and choices. A pending warning leaves the simulation time unchanged until it is accepted or invocation is dismissed.
 
 `start-work PERSON RECIPE UNITS` and `continue-work PERSON` let a controlled person spend time starting and working on a real job; `catalog` lists recipe IDs. `meet PERSON TARGET` attempts an actual encounter. `knowledge PERSON` displays that person's bounded food observations and reports, and `past-knowledge LIFE` requires that life to be actively invoked. The default runner is an administrative interface and can inspect other individuals.
