@@ -25,6 +25,9 @@ pub struct Strain {
     pub immunity_ticks: u64,
     pub damage_per_tick: u32,
     pub transmission_per_million: u32,
+    /// Probability for an actual combat strike; zero disables this route.
+    #[serde(default)]
+    pub combat_transmission_per_million: u32,
 }
 /// A completed course of this medicine clears the specified infection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -91,6 +94,7 @@ impl Disease {
                 || strain.infectious_ticks == 0
                 || strain.end().is_none()
                 || strain.transmission_per_million > 1_000_000
+                || strain.combat_transmission_per_million > 1_000_000
         }) {
             return Err("invalid disease strain".into());
         }
@@ -144,6 +148,17 @@ impl Disease {
         &self,
         people: &[Person],
         encounters: &[Encounter],
+        seed: u64,
+        now: u64,
+    ) -> Result<Draft, &'static str> {
+        self.prepare_validated_with_combat(people, encounters, &[], seed, now)
+    }
+    /// Combat pairs are actual strikes supplied by the combat owner, independently configurable per strain.
+    pub fn prepare_validated_with_combat(
+        &self,
+        people: &[Person],
+        encounters: &[Encounter],
+        combat: &[(u64, u64)],
         seed: u64,
         now: u64,
     ) -> Result<Draft, &'static str> {
@@ -213,6 +228,17 @@ impl Disease {
         {
             return Err("invalid disease encounter");
         }
+        let mut combat_pairs: Vec<_> = combat.par_iter().copied().collect();
+        if combat_pairs.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            combat_pairs.par_sort_unstable();
+        }
+        if combat_pairs.par_windows(2).any(|pair| pair[0] == pair[1])
+            || combat_pairs
+                .par_iter()
+                .any(|&(a, b)| a >= b || find_person(a).is_none() || find_person(b).is_none())
+        {
+            return Err("invalid combat exposure");
+        }
         let active = |id: u64| -> Option<(&Case, &Strain)> {
             let case = find_case(id)?;
             let strain = find_strain(case.strain)?;
@@ -220,15 +246,24 @@ impl Disease {
         };
         let mut candidates: Vec<_> = encounters
             .par_iter()
-            .filter_map(|encounter| {
+            .map(|encounter| (encounter.a, encounter.b, false))
+            .chain(combat_pairs.into_par_iter().map(|(a, b)| (a, b, true)))
+            .filter_map(|(a, b, combat)| {
                 let try_infection = |source: u64, target: u64| {
                     let (case, strain) = active(source)?;
+                    let probability = if combat {
+                        strain.combat_transmission_per_million
+                    } else {
+                        strain.transmission_per_million
+                    };
+                    let route_seed = if combat { seed ^ 0x636f6d626174 } else { seed };
                     if !strain.contagious(now - case.infected_at)
                         || active(target).is_some()
                         || find_person(source)?.health == 0
                         || find_person(target)?.health == 0
-                        || game_parallel_genetics::random(seed ^ source, target, next) % 1_000_000
-                            >= u64::from(strain.transmission_per_million)
+                        || game_parallel_genetics::random(route_seed ^ source, target, next)
+                            % 1_000_000
+                            >= u64::from(probability)
                     {
                         return None;
                     }
@@ -239,8 +274,7 @@ impl Disease {
                         source: Some(source),
                     })
                 };
-                let case = try_infection(encounter.a, encounter.b)
-                    .or_else(|| try_infection(encounter.b, encounter.a))?;
+                let case = try_infection(a, b).or_else(|| try_infection(b, a))?;
                 let source = case.source.expect("transmission has a source");
                 let priority = game_parallel_genetics::random(
                     seed ^ case.person,
@@ -355,6 +389,7 @@ mod tests {
                 immunity_ticks: 2,
                 damage_per_tick: 3,
                 transmission_per_million: 1_000_000,
+                combat_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![Case {
@@ -477,6 +512,57 @@ mod tests {
                 .any(|case| case.person == 3 && case.source == Some(1))
         );
         assert!(!next.cases.iter().any(|case| case.person == 4));
+    }
+    #[test]
+    fn combat_transmission_is_a_separate_per_strain_choice() {
+        let people: Vec<_> = (1..=2).map(|id| Person { id, health: 100 }).collect();
+        let mut state = state();
+        state.strains[0].incubation = 0;
+        assert_eq!(
+            state
+                .prepare_validated_with_combat(&people, &[], &[(1, 2)], 7, 0)
+                .unwrap()
+                .state
+                .cases
+                .len(),
+            1
+        );
+        state.strains[0].transmission_per_million = 0;
+        state.strains[0].combat_transmission_per_million = 1_000_000;
+        assert_eq!(
+            state
+                .prepare_validated(&people, &[pair(1, 1, 2)], 7, 0)
+                .unwrap()
+                .state
+                .cases
+                .len(),
+            1
+        );
+        let draft = state
+            .prepare_validated_with_combat(&people, &[], &[(1, 2)], 7, 0)
+            .unwrap();
+        assert!(
+            draft
+                .state
+                .cases
+                .iter()
+                .any(|case| case.person == 2 && case.source == Some(1))
+        );
+        assert!(
+            state
+                .prepare_validated_with_combat(&people, &[], &[(1, 2), (1, 2)], 7, 0)
+                .is_err()
+        );
+    }
+    #[test]
+    fn older_saved_strains_default_to_no_combat_transmission() {
+        let mut saved = serde_json::to_value(state()).unwrap();
+        saved["strains"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("combat_transmission_per_million");
+        let loaded: Disease = serde_json::from_value(saved).unwrap();
+        assert_eq!(loaded.strains[0].combat_transmission_per_million, 0);
     }
     #[test]
     fn simultaneous_infections_choose_one_source_deterministically() {

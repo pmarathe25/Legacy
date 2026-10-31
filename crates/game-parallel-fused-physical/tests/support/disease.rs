@@ -181,6 +181,7 @@ fn staged_disease_matches_validated_reference_for_sparse_shuffled_cases() {
             immunity_ticks: 0,
             damage_per_tick: 3,
             transmission_per_million: 800_000,
+            combat_transmission_per_million: 0,
         },
         DiseaseStrain {
             id: 2,
@@ -190,6 +191,7 @@ fn staged_disease_matches_validated_reference_for_sparse_shuffled_cases() {
             immunity_ticks: 2,
             damage_per_tick: 1,
             transmission_per_million: 600_000,
+            combat_transmission_per_million: 0,
         },
     ];
     disease.cases = (0..200)

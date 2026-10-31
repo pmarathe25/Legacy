@@ -135,7 +135,7 @@ macro_rules! social_choice_method {
 }
 #[macro_export]
 macro_rules! prepare_dynamics {
-    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr) => {{
+    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr) => {{
         let exposure = $world
             .dynamics
             .as_ref()
@@ -154,6 +154,23 @@ macro_rules! prepare_dynamics {
                     $world.travel.as_ref(),
                 )
             });
+        let combat_contacts = if $world
+            .dynamics
+            .as_ref()
+            .and_then(|owner| owner.disease.as_ref())
+            .is_some_and(|disease| {
+                !disease.cases.is_empty()
+                    && disease
+                        .strains
+                        .par_iter()
+                        .any(|strain| strain.combat_transmission_per_million > 0)
+            }) {
+            $combat
+                .as_ref()
+                .map_or_else(Vec::new, |combat| combat.contacts())
+        } else {
+            Vec::new()
+        };
         let mut next = $world
             .dynamics
             .as_ref()
@@ -168,6 +185,7 @@ macro_rules! prepare_dynamics {
                         $interaction
                             .as_ref()
                             .and_then(|plan| plan.encounter.as_ref()),
+                        &combat_contacts,
                     ),
                     ($world.seed, $tick, $world.travel.as_ref()),
                 )
@@ -235,6 +253,7 @@ impl Dynamics {
         encounters: (
             &[game_parallel_social::Encounter],
             Option<&game_parallel_social::Encounter>,
+            &[(u64, u64)],
         ),
         clock: (
             u64,
@@ -243,7 +262,7 @@ impl Dynamics {
         ),
     ) -> Result<Self, String> {
         let (seed, tick, travel) = clock;
-        let (exposure, requested) = encounters;
+        let (exposure, requested, combat) = encounters;
         let mut occupied: Vec<_> = exposure.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
         occupied.par_sort_unstable();
         let locality = self
@@ -318,9 +337,10 @@ impl Dynamics {
             .disease
             .as_ref()
             .map(|disease| {
-                disease.prepare_validated(
+                disease.prepare_validated_with_combat(
                     &disease_people,
                     combined.as_deref().unwrap_or(meetings),
+                    combat,
                     seed,
                     tick - 1,
                 )

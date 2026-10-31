@@ -579,6 +579,28 @@ impl Runtime {
     }
 }
 impl Draft {
+    /// Distinct pairs that actually exchanged strikes in this round.
+    pub fn contacts(&self) -> Vec<(u64, u64)> {
+        let mut pairs: Vec<_> = self
+            .state
+            .conflict
+            .events
+            .par_iter()
+            .map(|event| {
+                (
+                    event.attacker.min(event.target),
+                    event.attacker.max(event.target),
+                )
+            })
+            .collect();
+        if pairs.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            pairs.par_sort_unstable();
+        }
+        pairs
+            .par_chunk_by(|a, b| a == b)
+            .map(|group| group[0])
+            .collect()
+    }
     pub fn apply(&self, people: &mut [Person]) {
         let damage = self.round.damage();
         people.par_iter_mut().for_each(|p| {

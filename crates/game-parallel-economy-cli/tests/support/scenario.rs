@@ -48,6 +48,21 @@ fn generated_population_is_seeded_individual_and_worker_invariant() {
 }
 
 #[test]
+fn campaign_loads_its_per_strain_combat_transmission_rule() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let state = world.snapshot();
+    assert_eq!(
+        state.dynamics.unwrap().disease.unwrap().strains[0].combat_transmission_per_million,
+        500_000
+    );
+}
+
+#[test]
 fn seed_override_controls_both_population_and_simulation_seed() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let path = root.join("content/parallel/economy-generated.toml");

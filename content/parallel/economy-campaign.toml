@@ -207,6 +207,7 @@ infectious_ticks = 3
 immunity_ticks = 4
 damage_per_tick = 5
 transmission_per_million = 500000
+combat_transmission_per_million = 500000
 
 [[remedies]]
 strain = 1

@@ -2035,6 +2035,10 @@ impl Economy {
             effects,
             tick,
         );
+        let mut combat = self
+            .combat
+            .as_ref()
+            .map(|combat| combat.prepare(&people, &self.people, tick, self.seed, &view));
         let mut dynamics = game_parallel_economy_dynamics::prepare_dynamics!(
             self,
             person,
@@ -2044,7 +2048,8 @@ impl Economy {
             physical,
             care,
             interaction,
-            medical_plan
+            medical_plan,
+            combat
         );
         medical_plan.apply(
             dynamics.as_mut().and_then(|d| d.disease.as_mut()),
@@ -2074,7 +2079,9 @@ impl Economy {
             &mut person.people,
             tick,
         );
-        let mut combat = family::stage_combat!(self, people, person, tick, view);
+        if let Some(combat) = &combat {
+            combat.apply(&mut person.people);
+        }
         game_parallel_economy_fatigue::apply(fatigue.as_ref(), &mut person.people);
         environment::apply(
             self.environment.as_ref(),

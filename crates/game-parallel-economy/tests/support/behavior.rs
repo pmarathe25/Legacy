@@ -1188,6 +1188,7 @@ fn infection_from(person: u64) -> Dynamics {
                 immunity_ticks: 0,
                 damage_per_tick: 0,
                 transmission_per_million: 1_000_000,
+                combat_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![Case {
@@ -1252,6 +1253,7 @@ fn actual_personal_encounters_transmit_disease_and_survive_reload() {
                 immunity_ticks: 1,
                 damage_per_tick: 4,
                 transmission_per_million: 1_000_000,
+                combat_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![Case {
@@ -1874,6 +1876,7 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
                 immunity_ticks: 0,
                 damage_per_tick: 1,
                 transmission_per_million: 0,
+                combat_transmission_per_million: 0,
             }],
             treatments: vec![Treatment {
                 strain: 1,
@@ -6376,6 +6379,7 @@ fn disease_workload(count: u64) -> State {
                 immunity_ticks: 2,
                 damage_per_tick: 1,
                 transmission_per_million: 1_000_000,
+                combat_transmission_per_million: 0,
             }],
             cases: (1..=count / 2)
                 .map(|person| Case {
@@ -8947,6 +8951,74 @@ fn attack_interrupts_work_and_applies_simultaneous_harm_without_target_consent()
 }
 
 #[test]
+fn actual_combat_strikes_can_transmit_only_when_the_strain_allows_it() {
+    use game_parallel_economy_combat::Point;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.combat = Some(combat_rules());
+    let mut dynamics = infection_from(2);
+    dynamics.disease.as_mut().unwrap().strains[0].transmission_per_million = 0;
+    initial.dynamics = Some(dynamics);
+    let run = |workers, rate, distant| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .dynamics
+                    .as_mut()
+                    .unwrap()
+                    .disease
+                    .as_mut()
+                    .unwrap()
+                    .strains[0]
+                    .combat_transmission_per_million = rate;
+                let mut world = Economy::compile(state).unwrap();
+                let fight = world.attack(1, 2).unwrap();
+                if distant {
+                    world.combat_move(1, fight, Point { x: 3, y: 0 }).unwrap();
+                }
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let strikes = &state.combat.as_ref().unwrap().conflict.events;
+                assert_eq!(strikes.is_empty(), distant);
+                let cases = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .disease
+                    .as_ref()
+                    .unwrap()
+                    .cases;
+                assert_eq!(
+                    cases
+                        .iter()
+                        .any(|case| case.person == 1 && case.source == Some(2)),
+                    rate > 0 && !distant
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, 1_000_000, false), run(4, 1_000_000, false));
+    assert_eq!(run(1, 0, false), run(4, 0, false));
+    assert_eq!(run(1, 1_000_000, true), run(4, 1_000_000, true));
+}
+
+#[test]
 fn carried_protection_reduces_actual_strikes_and_survives_reload() {
     use game_parallel_economy_combat::Protection;
     let mut initial = fixture();
@@ -9527,7 +9599,15 @@ fn concentrated_combat_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = concentrated_combat(count);
+    let mut initial = concentrated_combat(count);
+    let disease = std::env::var("LEGACY_DISEASE").is_ok_and(|value| value == "1");
+    if disease {
+        let mut dynamics = infection_from(1);
+        let strain = &mut dynamics.disease.as_mut().unwrap().strains[0];
+        strain.transmission_per_million = 0;
+        strain.combat_transmission_per_million = 1_000_000;
+        initial.dynamics = Some(dynamics);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -9540,13 +9620,27 @@ fn concentrated_combat_benchmark() {
                 for _ in 0..3 {
                     world.advance().unwrap();
                 }
+                let elapsed = started.elapsed().as_secs_f64();
+                if disease {
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .dynamics
+                            .unwrap()
+                            .disease
+                            .unwrap()
+                            .cases
+                            .len(),
+                        count as usize
+                    );
+                }
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=3 elapsed={:.6}",
+                "workers={workers} people={count} disease={disease} ticks=3 elapsed={:.6}",
                 samples[1]
             );
         });
