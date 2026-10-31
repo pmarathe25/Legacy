@@ -18,6 +18,54 @@ pub struct Profile {
     recipe: Option<String>,
     #[serde(default)]
     goods: BTreeMap<String, u64>,
+    #[serde(default)]
+    sensitivity: Option<Sensitivity>,
+}
+
+/// Authored individual dispositions, without copied relationships or obligations.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+struct Sensitivity {
+    fear_per_damage: Option<u64>,
+    gratitude_gain: Option<u64>,
+    promise_obligation_gain: Option<u64>,
+    obligation_relief: Option<u64>,
+    theft_loss: Option<u32>,
+    confrontation: Option<game_parallel_opinions::Confrontation>,
+    affinity_help: Option<i32>,
+    affinity_harm_per_damage: Option<i32>,
+    affinity_encounter: Option<i32>,
+    affinity_pressured_encounter: Option<i32>,
+    affinity_site_use: Option<i32>,
+    affinity_site_destruction: Option<i32>,
+    obligation_development: Option<game_parallel_opinions::ObligationDevelopment>,
+}
+pub fn sensitivities(profiles: &[Profile]) -> Vec<game_parallel_opinions::Sensitivity> {
+    profiles
+        .par_iter()
+        .filter_map(|profile| profile.sensitivity.as_ref().map(|rule| (profile, rule)))
+        .flat_map(|(profile, rule)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                game_parallel_opinions::Sensitivity {
+                    person: profile.start_id + offset,
+                    fear_per_damage: rule.fear_per_damage,
+                    gratitude_gain: rule.gratitude_gain,
+                    promise_obligation_gain: rule.promise_obligation_gain,
+                    obligation_relief: rule.obligation_relief,
+                    theft_loss: rule.theft_loss,
+                    confrontation: rule.confrontation.clone(),
+                    affinity_help: rule.affinity_help,
+                    affinity_harm_per_damage: rule.affinity_harm_per_damage,
+                    affinity_encounter: rule.affinity_encounter,
+                    affinity_pressured_encounter: rule.affinity_pressured_encounter,
+                    affinity_site_use: rule.affinity_site_use,
+                    affinity_site_destruction: rule.affinity_site_destruction,
+                    relationship_cases: Vec::new(),
+                    obligation_development: rule.obligation_development.clone(),
+                }
+            })
+        })
+        .collect()
 }
 
 pub fn generate(
@@ -93,6 +141,7 @@ mod tests {
             meal_percent: 50,
             recipe: None,
             goods: BTreeMap::new(),
+            sensitivity: None,
         }
     }
 

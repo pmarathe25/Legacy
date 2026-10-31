@@ -13,6 +13,21 @@ max_health = 100
 carrying_capacity = 100
 max_work_hunger = 20
 
+[opinions.rules]
+minimum = -100
+maximum = 100
+initial = 0
+fulfilled_gain = 1
+default_loss = 1
+gratitude_gain = 2
+affinity = { limit = 100 }
+
+[[opinions.sensitivities]]
+person = 3
+affinity_harm_per_damage = -5
+gratitude_gain = 0
+promise_obligation_gain = 0
+
 [[regions]]
 id = 1
 stock = { grain = 100 }
@@ -42,7 +57,7 @@ goods = { bread = 3 }
 
 [[population]]
 start_id = 2
-count = 128
+count = 64
 regions = [1, 2]
 health = 100
 hunger = 0
@@ -50,3 +65,24 @@ work_percent = 65
 meal_percent = 80
 recipe = "mill-grain"
 goods = { bread = 3 }
+
+[population.sensitivity]
+affinity_harm_per_damage = 2
+gratitude_gain = 0
+promise_obligation_gain = 0
+
+[[population]]
+start_id = 66
+count = 64
+regions = [1, 2]
+health = 100
+hunger = 0
+work_percent = 65
+meal_percent = 80
+recipe = "mill-grain"
+goods = { bread = 3 }
+
+[population.sensitivity]
+affinity_harm_per_damage = -2
+gratitude_gain = 3
+promise_obligation_gain = 1

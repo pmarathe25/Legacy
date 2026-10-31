@@ -402,6 +402,20 @@ pub fn scenario_with_seed(
         &scenario.population,
     )?;
     scenario.people.extend(generated);
+    let mut dispositions = population::sensitivities(&scenario.population);
+    if !dispositions.is_empty() {
+        let opinions = scenario
+            .opinions
+            .as_mut()
+            .ok_or("generated sensitivities require opinions")?;
+        let individually_authored: HashSet<_> = opinions
+            .sensitivities
+            .iter()
+            .map(|row| row.person)
+            .collect();
+        dispositions.retain(|row| !individually_authored.contains(&row.person));
+        opinions.sensitivities.extend(dispositions);
+    }
     let mut production = Production {
         max_work_hunger: scenario.rules.max_work_hunger,
         goods: vec![],

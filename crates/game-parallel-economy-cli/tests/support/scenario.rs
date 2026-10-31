@@ -65,6 +65,27 @@ fn seed_override_controls_both_population_and_simulation_seed() {
 }
 
 #[test]
+fn generated_dispositions_and_individual_overrides_interpret_experiences() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/parallel/economy-generated.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut opinions = world.snapshot().opinions.unwrap();
+    assert_eq!(opinions.sensitivities.len(), 128);
+    opinions.learn_harm(&[(2, 1, 1), (3, 1, 1), (66, 1, 1)]);
+    opinions.learn_help(&[(2, 1), (66, 1)]);
+    opinions.learn_promises(&[(2, 1), (66, 1)]);
+    let index = opinions.index();
+    assert_eq!(index.affinity(2, 1), 2);
+    assert_eq!(index.affinity(3, 1), -5);
+    assert_eq!(index.affinity(66, 1), -2);
+    assert_eq!(index.obligation(2, 1), 0);
+    assert_eq!(index.obligation(66, 1), 4);
+}
+
+#[test]
 fn authored_scenario_advances_and_resumes_identically_across_worker_counts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
