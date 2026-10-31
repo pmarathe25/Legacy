@@ -17,3 +17,5 @@ Individual hauling preferences can move real lots between regions. A carrier can
 Authored reusable tool requirements check personal custody before a work attempt competes for materials and before each work increment. Missing or expired tools pause work without consuming the tool.
 
 Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits and independently choose to destroy specific idle local sites, including when motivated by fear or felt obligation. Competing attempts remove a site only once. Destruction recovers no materials; salvage and within-region transport remain to be implemented.
+
+People with enabled goal-building preferences can select an available blueprint and kit for a site missing from their own current work plan. They respect or disregard personal claims according to their own preference. Producing a missing construction kit specifically for that site is not yet planned automatically.

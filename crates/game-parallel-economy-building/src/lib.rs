@@ -35,6 +35,21 @@ pub struct Policy {
     #[serde(default)]
     pub disregard_claims: bool,
 }
+/// A person's willingness to build sites that their own planned work needs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GoalBuilder {
+    pub person: u64,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub disregard_claims: bool,
+}
+#[derive(Clone, Copy)]
+pub struct GoalNeed {
+    pub person: u64,
+    pub recipe: u32,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Event {
@@ -55,6 +70,8 @@ pub struct Construction {
     pub demolition: Vec<demolition::Policy>,
     #[serde(default)]
     pub demolition_events: Vec<demolition::Event>,
+    #[serde(default)]
+    pub goal_builders: Vec<GoalBuilder>,
 }
 impl Clone for Construction {
     fn clone(&self) -> Self {
@@ -64,6 +81,7 @@ impl Clone for Construction {
             events: self.events.par_iter().cloned().collect(),
             demolition: self.demolition.par_iter().cloned().collect(),
             demolition_events: self.demolition_events.par_iter().cloned().collect(),
+            goal_builders: self.goal_builders.par_iter().cloned().collect(),
         }
     }
 }
@@ -72,6 +90,7 @@ impl Construction {
         self.blueprints.par_sort_unstable_by_key(|b| b.id);
         self.policies.par_sort_unstable_by_key(|p| p.person);
         self.demolition.par_sort_unstable_by_key(|p| p.person);
+        self.goal_builders.par_sort_unstable_by_key(|p| p.person);
     }
     pub fn validate(
         &self,
@@ -80,7 +99,15 @@ impl Construction {
         sites: &Facilities,
         tick: u64,
     ) -> Result<(), String> {
-        if !demolition::valid(&self.demolition, &self.demolition_events, people, tick)
+        if self
+            .goal_builders
+            .par_windows(2)
+            .any(|w| w[0].person >= w[1].person)
+            || self
+                .goal_builders
+                .par_iter()
+                .any(|builder| !people.contains(&builder.person))
+            || !demolition::valid(&self.demolition, &self.demolition_events, people, tick)
             || self.blueprints.par_windows(2).any(|w| w[0].id >= w[1].id)
             || self.blueprints.par_iter().any(|b| {
                 b.id == 0
@@ -157,6 +184,9 @@ pub struct Context<'a> {
     pub max_hunger: u32,
     pub tick: u64,
     pub manual: Option<Manual>,
+    /// Active personal goal plans, sorted by person and excluding direct work policies.
+    pub goal_needs: &'a [GoalNeed],
+    pub unwilling: &'a [u64],
 }
 impl Context<'_> {
     fn source(&self, person: &Person, blueprint: &Blueprint, disregard: bool) -> Option<Place> {
@@ -192,6 +222,8 @@ impl Context<'_> {
                 .policies
                 .par_iter()
                 .any(|p| p.willing || p.pressure_threshold.is_some())
+            && (self.goal_needs.is_empty()
+                || !self.owner.goal_builders.par_iter().any(|p| p.enabled))
         {
             return Ok(Plan {
                 actions: Vec::new(),
@@ -258,6 +290,89 @@ impl Context<'_> {
                 })
             })
             .collect();
+        if !self.goal_needs.is_empty() && !self.owner.goal_builders.is_empty() {
+            let chosen: HashSet<_> = choices.par_iter().map(|choice| choice.person).collect();
+            let mut site_sizes: Vec<_> = self
+                .sites
+                .sites
+                .par_iter()
+                .map(|site| (site.region, site.kind.as_str(), site.capacity))
+                .collect();
+            site_sizes.par_sort_unstable();
+            let mut suitable: Vec<_> = self
+                .sites
+                .requirements
+                .par_iter()
+                .map(|requirement| {
+                    let blueprints: Vec<_> = self
+                        .owner
+                        .blueprints
+                        .iter()
+                        .filter(|blueprint| {
+                            blueprint.kind == requirement.kind
+                                && blueprint.capacity >= requirement.slots
+                        })
+                        .collect();
+                    (requirement.recipe, requirement, blueprints)
+                })
+                .collect();
+            suitable.par_sort_unstable_by_key(|row| row.0);
+            let additions: Vec<_> = self
+                .owner
+                .goal_builders
+                .par_iter()
+                .filter_map(|policy| {
+                    if !policy.enabled
+                        || chosen.contains(&policy.person)
+                        || self.busy.binary_search(&policy.person).is_ok()
+                        || self.unwilling.binary_search(&policy.person).is_ok()
+                    {
+                        return None;
+                    }
+                    let need = self
+                        .goal_needs
+                        .binary_search_by_key(&policy.person, |n| n.person)
+                        .ok()
+                        .map(|i| self.goal_needs[i])?;
+                    let person = self
+                        .people
+                        .binary_search_by_key(&policy.person, |p| p.id)
+                        .ok()
+                        .map(|i| &self.people[i])?;
+                    let region = person.region?;
+                    if person.controlled
+                        || person.health == 0
+                        || !person.willing_to_work
+                        || person.hunger > self.max_hunger
+                    {
+                        return None;
+                    }
+                    let (_, requirement, blueprints) = suitable
+                        .binary_search_by_key(&need.recipe, |row| row.0)
+                        .ok()
+                        .map(|i| &suitable[i])?;
+                    let key = (region, requirement.kind.as_str(), requirement.slots);
+                    let index = site_sizes.partition_point(|row| *row < key);
+                    if site_sizes
+                        .get(index)
+                        .is_some_and(|row| row.0 == region && row.1 == requirement.kind)
+                    {
+                        return None;
+                    }
+                    let (blueprint, source) = blueprints.iter().find_map(|&blueprint| {
+                        self.source(person, blueprint, policy.disregard_claims)
+                            .map(|source| (blueprint, source))
+                    })?;
+                    Some(Choice {
+                        person: person.id,
+                        region,
+                        blueprint,
+                        source,
+                    })
+                })
+                .collect();
+            choices.par_extend(additions);
+        }
         if let Some(manual) = self.manual {
             let person = self
                 .people

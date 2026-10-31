@@ -88,6 +88,8 @@ struct ConstructionConfig {
     policies: Vec<game_parallel_economy::ConstructionPolicy>,
     #[serde(default)]
     demolition: Vec<game_parallel_economy::DemolitionPolicy>,
+    #[serde(default)]
+    goal_builders: Vec<game_parallel_economy::GoalBuilder>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -479,6 +481,7 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
                 events: vec![],
                 demolition: config.demolition,
                 demolition_events: vec![],
+                goal_builders: config.goal_builders,
             })
         })
         .transpose()?;
