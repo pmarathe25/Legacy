@@ -164,6 +164,28 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                 let initial = world.snapshot();
                 assert_eq!(initial.people.len(), 130);
                 assert_eq!(initial.family.as_ref().unwrap().next_id, 1128);
+                let giving = initial.giving.as_ref().unwrap();
+                assert_eq!(giving.responses.len(), 129);
+                assert!(
+                    giving
+                        .responses
+                        .iter()
+                        .any(|p| p.person >= 1000 && p.willing)
+                );
+                assert!(
+                    giving
+                        .responses
+                        .iter()
+                        .any(|p| p.person >= 1000 && !p.willing)
+                );
+                assert!(giving.learning.iter().any(|p| p.person >= 1000));
+                assert!(
+                    giving
+                        .learning
+                        .iter()
+                        .filter(|p| p.person >= 1000)
+                        .all(|p| p.experiences == 0 && p.last_helper.is_none())
+                );
                 let farming = &initial.agriculture.as_ref().unwrap().policies;
                 let search = &initial.food_search.as_ref().unwrap().people;
                 assert_eq!(farming.len(), 129);
@@ -496,6 +518,191 @@ fn generated_person_asserts_a_claim_only_after_their_real_output_arrives() {
                         .any(|claim| claim.person == worker
                             && claim.region == 1
                             && claim.good == flour)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn generated_person_can_give_real_food_from_fear_without_feeling_obligated() {
+    let mut initial = generated_campaign(128).snapshot();
+    let giving = initial.giving.as_ref().unwrap();
+    let target = giving
+        .responses
+        .iter()
+        .find(|response| {
+            response.person >= 1000
+                && !response.willing
+                && response.pressure_threshold == Some(3)
+                && initial
+                    .people
+                    .iter()
+                    .any(|p| p.id == response.person && p.region == Some(1))
+        })
+        .unwrap()
+        .person;
+    let person = initial.people.iter_mut().find(|p| p.id == target).unwrap();
+    person.willing_to_work = false;
+    person.seek_meals = false;
+    let requester = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == game_parallel_lots::Place::Person(1))
+        .unwrap();
+    *requester =
+        game_parallel_lots::Container::new(requester.place, requester.capacity, vec![]).unwrap();
+    initial
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .policies
+        .iter_mut()
+        .find(|p| p.person == target)
+        .unwrap()
+        .willing = false;
+    initial
+        .opinions
+        .as_mut()
+        .unwrap()
+        .records
+        .push(game_parallel_economy::Opinion {
+            observer: target,
+            target: 1,
+            trust: 0,
+            fear: 10,
+            obligation: 0,
+            affinity: 0,
+        });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                let bread = before
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|g| g.name == "bread")
+                    .unwrap()
+                    .id;
+                let amount = |state: &game_parallel_economy::State, person| -> u64 {
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == game_parallel_lots::Place::Person(person))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == bread)
+                        .map(|lot| lot.quantity)
+                        .sum()
+                };
+                let before_sender = amount(&before, target);
+                let before_recipient = amount(&before, 1);
+                world.ask_food(1, target, 4).unwrap();
+                world.advance().unwrap();
+                let after = world.snapshot();
+                assert_eq!(amount(&after, target), before_sender - 1);
+                assert_eq!(amount(&after, 1), before_recipient + 1);
+                assert_eq!(
+                    after
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .index()
+                        .obligation(target, 1),
+                    0
+                );
+                after
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn generated_person_learns_help_only_from_an_actual_food_transfer() {
+    let initial = generated_campaign(128).snapshot();
+    let target = initial
+        .giving
+        .as_ref()
+        .unwrap()
+        .learning
+        .iter()
+        .find(|p| {
+            p.person >= 1000
+                && initial
+                    .people
+                    .iter()
+                    .any(|person| person.id == p.person && person.region == Some(1))
+        })
+        .unwrap()
+        .person;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                let bread = world
+                    .snapshot()
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|g| g.name == "bread")
+                    .unwrap()
+                    .id;
+                assert!(world.give(1, target, bread, 1).unwrap());
+                let learned = world.sharing_learning(target).unwrap();
+                assert_eq!((learned.experiences, learned.last_helper), (1, Some(1)));
+                assert!(!world.give(1, target, bread, 999).unwrap());
+                let learned = world.sharing_learning(target).unwrap();
+                assert_eq!((learned.experiences, learned.last_helper), (1, Some(1)));
+                assert!(world.give(1, target, bread, 1).unwrap());
+                assert_eq!(world.sharing_learning(target).unwrap().experiences, 2);
+                let mut state = world.snapshot();
+                let person = state.people.iter_mut().find(|p| p.id == target).unwrap();
+                person.hunger = 15;
+                person.seek_meals = false;
+                person.willing_to_work = false;
+                state
+                    .agriculture
+                    .as_mut()
+                    .unwrap()
+                    .policies
+                    .iter_mut()
+                    .find(|p| p.person == target)
+                    .unwrap()
+                    .willing = false;
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|c| c.place == game_parallel_lots::Place::Person(target))
+                    .unwrap();
+                *holder = game_parallel_lots::Container::new(holder.place, holder.capacity, vec![])
+                    .unwrap();
+                let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .iter()
+                        .any(|request| request.requester == target && request.target == 1)
                 );
                 state
             })

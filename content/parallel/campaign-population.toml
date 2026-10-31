@@ -39,3 +39,22 @@ assert_outputs_percent = 20
 disregard_percent = 40
 assert_built_sites_percent = 20
 desperate_hunger = 35
+
+[population.help]
+good = "bread"
+quantity = 1
+recipient_hunger_at_least = 0
+willing_percent = 30
+affinity_threshold = 3
+pressure_threshold = 3
+
+[population.help.learning]
+percent = 40
+threshold = 2
+capacity = 8
+reciprocate_hunger = 15
+
+[population.help.learning.ask_helper]
+min_hunger = 15
+retry_ticks = 6
+request_lifetime = 4

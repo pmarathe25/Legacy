@@ -274,7 +274,7 @@ struct GivingConfig {
     #[serde(default)]
     asking: Vec<game_parallel_economy::FoodAsking>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FoodResponseConfig {
     person: u64,
@@ -473,6 +473,24 @@ pub fn scenario_with_options(
         let authored: HashSet<_> = claims.preferences.iter().map(|row| row.person).collect();
         preferences.retain(|row| !authored.contains(&row.person));
         claims.preferences.extend(preferences);
+    }
+    let mut help = population::help(scenario.seed, &scenario.population)?;
+    if !help.responses.is_empty() {
+        let giving = scenario
+            .giving
+            .as_mut()
+            .ok_or("generated help preferences require giving")?;
+        let authored: HashSet<_> = giving
+            .policies
+            .iter()
+            .map(|p| p.person)
+            .chain(giving.responses.iter().map(|p| p.person))
+            .collect();
+        help.responses.retain(|p| !authored.contains(&p.person));
+        giving.responses.extend(help.responses);
+        let authored: HashSet<_> = giving.learning.iter().map(|p| p.person).collect();
+        help.learning.retain(|p| !authored.contains(&p.person));
+        giving.learning.extend(help.learning);
     }
     let mut farming = population::farming(scenario.seed, &scenario.population);
     if !farming.is_empty() {

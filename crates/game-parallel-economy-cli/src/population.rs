@@ -1,5 +1,5 @@
 //! Seeded individuals derived from authored population profiles.
-use super::Resident;
+use super::{FoodResponseConfig, Resident};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -30,6 +30,8 @@ pub struct Profile {
     social: Option<SocialProfile>,
     #[serde(default)]
     claims: Option<ClaimProfile>,
+    #[serde(default)]
+    help: Option<HelpProfile>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +65,103 @@ struct ClaimProfile {
     assert_built_sites_percent: u8,
     #[serde(default)]
     desperate_hunger: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelpProfile {
+    good: String,
+    quantity: u64,
+    recipient_hunger_at_least: u32,
+    willing_percent: u8,
+    #[serde(default)]
+    minimum_trust: Option<i32>,
+    #[serde(default)]
+    affinity_threshold: Option<i32>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+    #[serde(default)]
+    learning: Option<HelpLearning>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HelpLearning {
+    percent: u8,
+    threshold: u32,
+    capacity: u32,
+    #[serde(default)]
+    reciprocate_hunger: Option<u32>,
+    #[serde(default)]
+    ask_helper: Option<game_parallel_economy::HelperAsking>,
+}
+
+pub struct HelpRows {
+    pub responses: Vec<FoodResponseConfig>,
+    pub learning: Vec<game_parallel_economy::SharingLearning>,
+}
+
+pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
+    for rule in profiles.iter().filter_map(|profile| profile.help.as_ref()) {
+        if rule.good.is_empty()
+            || rule.quantity == 0
+            || rule.willing_percent > 100
+            || rule.affinity_threshold.is_some_and(|n| n <= 0)
+            || rule.pressure_threshold == Some(0)
+            || rule.learning.as_ref().is_some_and(|learning| {
+                learning.percent > 100
+                    || learning.threshold == 0
+                    || learning.capacity < learning.threshold
+                    || learning
+                        .ask_helper
+                        .as_ref()
+                        .is_some_and(|a| a.retry_ticks == 0 || a.request_lifetime == 0)
+            })
+        {
+            return Err("invalid generated help preference".into());
+        }
+    }
+    let rows: Vec<_> = profiles
+        .par_iter()
+        .filter_map(|profile| profile.help.as_ref().map(|rule| (profile, rule)))
+        .flat_map(|(profile, rule)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let person = profile.start_id + offset;
+                let random = |attribute| {
+                    game_parallel_genetics::random(seed ^ 0x68656c70, person, attribute)
+                };
+                let response = FoodResponseConfig {
+                    person,
+                    good: rule.good.clone(),
+                    quantity: rule.quantity,
+                    recipient_hunger_at_least: rule.recipient_hunger_at_least,
+                    willing: random(0) % 100 < u64::from(rule.willing_percent),
+                    minimum_trust: rule.minimum_trust,
+                    affinity_threshold: rule.affinity_threshold,
+                    pressure_threshold: rule.pressure_threshold,
+                };
+                let learning = rule
+                    .learning
+                    .as_ref()
+                    .filter(|learning| random(1) % 100 < u64::from(learning.percent))
+                    .map(|learning| game_parallel_economy::SharingLearning {
+                        person,
+                        enabled: true,
+                        threshold: learning.threshold,
+                        capacity: learning.capacity,
+                        experiences: 0,
+                        last_helper: None,
+                        reciprocate_hunger: learning.reciprocate_hunger,
+                        ask_helper: learning.ask_helper.clone(),
+                    });
+                (response, learning)
+            })
+        })
+        .collect();
+    Ok(HelpRows {
+        responses: rows.par_iter().map(|row| row.0.clone()).collect(),
+        learning: rows.into_par_iter().filter_map(|row| row.1).collect(),
+    })
 }
 
 pub fn claims(
@@ -419,6 +518,7 @@ mod tests {
             food_search_percent: None,
             social: None,
             claims: None,
+            help: None,
         }
     }
 
