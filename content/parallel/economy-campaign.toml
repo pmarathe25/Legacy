@@ -368,6 +368,7 @@ review_interval = 3
 
 [cultivation]
 max_hunger = 20
+inherit_births = true
 policies = [{ person = 2, willing = true }]
 
 [[cultivation.fields]]

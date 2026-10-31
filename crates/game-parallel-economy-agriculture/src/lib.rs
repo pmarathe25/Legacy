@@ -49,6 +49,9 @@ pub struct Policy {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agriculture {
+    /// Founders may pass on a personal inclination, not social pressure.
+    #[serde(default)]
+    pub inherit_births: bool,
     pub crops: Vec<Crop>,
     pub fields: Vec<Field>,
     pub policies: Vec<Policy>,
@@ -57,6 +60,7 @@ pub struct Agriculture {
 impl Clone for Agriculture {
     fn clone(&self) -> Self {
         Self {
+            inherit_births: self.inherit_births,
             crops: self.crops.par_iter().cloned().collect(),
             fields: self.fields.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
@@ -64,6 +68,55 @@ impl Clone for Agriculture {
         }
     }
 }
+
+/// Actual newborns may inherit a parent's inclination, never another person's pressure.
+pub fn enroll(
+    owner: Option<&mut Agriculture>,
+    family: Option<&game_parallel_families::Families>,
+    tick: u64,
+) {
+    let Some((owner, family)) = owner
+        .zip(family)
+        .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
+    else {
+        return;
+    };
+    let newborns: Vec<_> = family
+        .members
+        .par_iter()
+        .filter(|member| member.born == Some(tick))
+        .collect();
+    if newborns.is_empty() {
+        return;
+    }
+    let mut policies: Vec<_> = owner.policies.par_iter().collect();
+    policies.par_sort_unstable_by_key(|policy| policy.person);
+    let newborns: Vec<_> = newborns
+        .into_par_iter()
+        .filter_map(|member| {
+            if policies
+                .binary_search_by_key(&member.id, |policy| policy.person)
+                .is_ok()
+            {
+                return None;
+            }
+            let parent = member.parents.iter().find_map(|id| {
+                policies
+                    .binary_search_by_key(id, |policy| policy.person)
+                    .ok()
+                    .map(|i| policies[i])
+            })?;
+            Some(Policy {
+                person: member.id,
+                willing: parent.willing,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+        })
+        .collect();
+    owner.policies.par_extend(newborns);
+}
+
 impl Agriculture {
     pub fn set_choice(
         &self,
@@ -525,6 +578,7 @@ impl Plan {
             })
             .collect::<Result<_, _>>()?;
         Ok(Agriculture {
+            inherit_births: owner.inherit_births,
             crops: owner.crops.par_iter().cloned().collect(),
             fields: rows,
             policies: owner.policies.par_iter().cloned().collect(),

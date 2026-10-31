@@ -327,6 +327,8 @@ struct MedicalPolicyConfig {
 #[serde(deny_unknown_fields)]
 struct Cultivation {
     max_hunger: u32,
+    #[serde(default)]
+    inherit_births: bool,
     fields: Vec<CultivatedField>,
     policies: Vec<FarmPolicy>,
 }
@@ -858,6 +860,7 @@ pub fn scenario_with_options(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Agriculture {
+                inherit_births: state.inherit_births,
                 crops: crops.into_values().collect(),
                 fields,
                 policies: state.policies,

@@ -344,6 +344,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
     }
     initial.people[1].controlled = true;
     initial.agriculture = Some(Agriculture {
+        inherit_births: false,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -2803,6 +2804,7 @@ fn cultivation_retries_another_person_and_observes_claimed_seed_use() {
         claims: Some(Claims::default()),
     });
     initial.agriculture = Some(Agriculture {
+        inherit_births: false,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -4491,6 +4493,93 @@ fn campaign_fixture() -> State {
         }),
     });
     state
+}
+
+#[test]
+fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.agriculture = Some(Agriculture {
+        inherit_births: true,
+        max_hunger: 100,
+        crops: vec![Crop {
+            id: 1,
+            seed: 2,
+            seed_quantity: 1,
+            output: 1,
+            output_quantity: 1,
+            growth_ticks: 2,
+        }],
+        fields: vec![Field {
+            id: 1,
+            region: 1,
+            crop: 1,
+            phase: CropPhase::Fallow,
+            remaining: 0,
+        }],
+        policies: vec![
+            FarmPolicy {
+                person: 1,
+                willing: false,
+                pressured_by: Some(2),
+                pressure_threshold: Some(3),
+            },
+            FarmPolicy {
+                person: 2,
+                willing: false,
+                pressured_by: None,
+                pressure_threshold: None,
+            },
+        ],
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.agriculture.as_mut().unwrap().inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let policy = state
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .policies
+                    .iter()
+                    .find(|policy| policy.person == 5);
+                assert_eq!(policy.is_some(), inherit);
+                if let Some(policy) = policy {
+                    assert!(!policy.willing);
+                    assert_eq!(
+                        (policy.pressured_by, policy.pressure_threshold),
+                        (None, None)
+                    );
+                    world.set_farming_choice(5, true).unwrap();
+                    world.advance().unwrap();
+                    assert_eq!(
+                        world.snapshot().agriculture.unwrap().fields[0].phase,
+                        CropPhase::Fallow
+                    );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
 }
 
 #[test]
@@ -8975,6 +9064,7 @@ fn crops_consume_seed_grow_without_labor_and_harvest_only_from_personal_choice()
         affinity: 0,
     }];
     initial.agriculture = Some(Agriculture {
+        inherit_births: false,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -9184,6 +9274,7 @@ fn field_workload(count: u64) -> State {
     )
     .unwrap();
     initial.agriculture = Some(Agriculture {
+        inherit_births: false,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -9512,6 +9603,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
         p.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        inherit_births: false,
         max_hunger: 20,
         crops: vec![Crop {
             id: 1,

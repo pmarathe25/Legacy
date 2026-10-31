@@ -8,6 +8,7 @@ license.workspace = true
 game-parallel-environment = { path = "../game-parallel-environment" }
 game-parallel-economy-person = { path = "../game-parallel-economy-person" }
 game-parallel-economy-claims = { path = "../game-parallel-economy-claims" }
+game-parallel-families = { path = "../game-parallel-families" }
 game-parallel-lot-content = { path = "../game-parallel-lot-content" }
 game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
 game-parallel-lots = { path = "../game-parallel-lots" }

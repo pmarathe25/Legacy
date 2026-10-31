@@ -1871,7 +1871,7 @@ impl Economy {
                 )
             })
             .transpose()?;
-        let agriculture = game_parallel_economy_agriculture::publish_optional(
+        let mut agriculture = game_parallel_economy_agriculture::publish_optional(
             farming,
             self.agriculture.as_ref(),
             physical.events(),
@@ -2017,6 +2017,7 @@ impl Economy {
             travel.settle_deaths(&mut person.people);
         }
         purpose::enroll(purpose.as_mut(), family.as_ref(), tick)?;
+        game_parallel_economy_agriculture::enroll(agriculture.as_mut(), family.as_ref(), tick);
         gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         let deaths: Vec<_> = person

@@ -270,10 +270,22 @@ fn generated_campaign_replays_at_scale_across_workers() {
             .unwrap()
             .install(|| {
                 let mut world = generated_campaign(2048);
-                for _ in 0..3 {
+                for _ in 0..7 {
                     world.advance().unwrap();
                 }
-                world.snapshot()
+                let state = world.snapshot();
+                assert!(state.family.as_ref().unwrap().totals.births > 0);
+                assert!(state.family.as_ref().unwrap().members.iter().any(|member| {
+                    member.born.is_some()
+                        && state
+                            .agriculture
+                            .as_ref()
+                            .unwrap()
+                            .policies
+                            .iter()
+                            .any(|policy| policy.person == member.id)
+                }));
+                state
             })
     };
     assert_eq!(run(1), run(4));
