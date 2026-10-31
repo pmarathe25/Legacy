@@ -2272,6 +2272,7 @@ impl Economy {
             &person.people,
             &blocked,
         )?;
+        development::enroll_dream_learning(&mut dreams, family.as_ref(), tick);
         if !physical.events().finished.is_empty()
             && let Some(owner) = dreams.as_mut().filter(|owner| !owner.learning.is_empty())
             && let Some(requests) = autowork.as_ref().and_then(|auto| auto.requests.as_ref())

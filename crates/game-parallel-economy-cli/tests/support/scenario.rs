@@ -367,6 +367,10 @@ fn generated_campaign_replays_at_scale_across_workers() {
                 assert!(state.family.as_ref().unwrap().members.iter().any(|member| {
                     member.born.is_some() && work.preferences.iter().any(|p| p.person == member.id)
                 }));
+                let dreams = state.dreams.as_ref().unwrap();
+                assert!(state.family.as_ref().unwrap().members.iter().any(|member| {
+                    member.born.is_some() && dreams.learning.iter().any(|p| p.person == member.id)
+                }));
                 state
             })
     };
@@ -782,6 +786,8 @@ fn generated_person_can_refuse_requested_work_or_do_it_from_fear() {
 fn generated_work_learning_is_an_individual_inclination_not_an_aspiration() {
     let initial = generated_campaign(128).snapshot();
     let dreams = initial.dreams.as_ref().unwrap();
+    assert!(dreams.inherit_births);
+    assert!(dreams.learning.iter().any(|row| row.person == 2));
     assert!(dreams.learning.iter().any(|row| row.person >= 1000));
     assert!(dreams.learning.iter().all(|row| row.max_aspirations == 3));
     let learner = dreams
@@ -803,6 +809,43 @@ fn generated_work_learning_is_an_individual_inclination_not_an_aspiration() {
             .any(|row| row.person == learner)
     );
     assert_eq!(generated_campaign(128).snapshot(), initial);
+}
+
+#[test]
+fn authored_aspiration_learning_overrides_a_generated_disposition() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let contents =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "legacy-aspiration-override-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, format!("{contents}\n[[aspiration_learning]]\nperson = 1000\nmax_aspirations = 1\npriority = 17\nbatch = 2\nreview_interval = 5\n")).unwrap();
+    let world = super::scenario_with_options(
+        &path,
+        &root.join("content"),
+        Some(42),
+        Some(&root.join("content/parallel/campaign-population.toml")),
+    );
+    std::fs::remove_file(path).unwrap();
+    let state = world.unwrap().snapshot();
+    let learning: Vec<_> = state
+        .dreams
+        .as_ref()
+        .unwrap()
+        .learning
+        .iter()
+        .filter(|row| row.person == 1000)
+        .collect();
+    assert_eq!(learning.len(), 1);
+    assert_eq!(
+        (
+            learning[0].max_aspirations,
+            learning[0].priority,
+            learning[0].batch
+        ),
+        (1, 17, 2)
+    );
 }
 
 #[test]

@@ -41,6 +41,9 @@ pub struct Event {
 #[serde(deny_unknown_fields)]
 pub struct Dreams {
     pub people: Vec<Dream>,
+    /// Allow the composed host to enroll actual newborns with a parent's general inclination.
+    #[serde(default)]
+    pub inherit_births: bool,
     /// Individual inclinations to develop aspirations from personally witnessed work.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub learning: Vec<Learning>,
@@ -51,6 +54,7 @@ impl Clone for Dreams {
     fn clone(&self) -> Self {
         Self {
             people: self.people.par_iter().cloned().collect(),
+            inherit_births: self.inherit_births,
             learning: self.learning.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
         }
@@ -299,6 +303,7 @@ impl Dreams {
         Ok(Some(Draft {
             state: Dreams {
                 people,
+                inherit_births: self.inherit_births,
                 learning: self.learning.par_iter().cloned().collect(),
                 events,
             },
@@ -314,6 +319,7 @@ mod tests {
         let mut rejected = dream(1, 2);
         rejected.enabled = false;
         let mut state = Dreams {
+            inherit_births: false,
             people: vec![rejected],
             learning: vec![Learning {
                 person: 1,
@@ -347,6 +353,7 @@ mod tests {
                 .unwrap()
                 .install(|| {
                     let mut state = Dreams {
+                        inherit_births: false,
                         people: vec![],
                         learning: (1..=4096)
                             .map(|person| Learning {
@@ -388,6 +395,7 @@ mod tests {
             .unwrap()
             .install(|| {
                 let initial = Dreams {
+                    inherit_births: false,
                     people: vec![],
                     learning: (1..=count)
                         .map(|person| Learning {
@@ -441,6 +449,7 @@ mod tests {
     #[test]
     fn aspirations_create_and_renew_goals_without_overriding_refusal_or_progress() {
         let dreams = Dreams {
+            inherit_births: false,
             learning: vec![],
             people: vec![dream(1, 4), dream(2, 4)],
             events: vec![],
@@ -475,6 +484,7 @@ mod tests {
     #[test]
     fn aspiration_reviews_are_deterministic_and_overflow_is_rejected() {
         let dreams = Dreams {
+            inherit_births: false,
             learning: vec![],
             people: (1..=10_000).rev().map(|person| dream(person, 1)).collect(),
             events: vec![],

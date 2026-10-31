@@ -3,6 +3,7 @@ seed = 7
 tick_millis = 3600000
 stock_capacity = 1000
 food_relief_divisor = 20
+inherit_aspiration_learning = true
 
 [missions]
 next_id = 1
@@ -365,6 +366,13 @@ goods = { bread = 20 }
 [[aspirations]]
 person = 2
 recipe = "fixture-tool"
+priority = 1
+batch = 1
+review_interval = 3
+
+[[aspiration_learning]]
+person = 2
+max_aspirations = 3
 priority = 1
 batch = 1
 review_interval = 3

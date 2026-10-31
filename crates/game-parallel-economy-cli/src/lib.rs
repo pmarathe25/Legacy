@@ -50,6 +50,10 @@ struct Scenario {
     #[serde(default)]
     aspirations: Vec<Aspiration>,
     #[serde(default)]
+    aspiration_learning: Vec<game_parallel_economy::Learning>,
+    #[serde(default)]
+    inherit_aspiration_learning: bool,
+    #[serde(default)]
     cultivation: Option<Cultivation>,
     #[serde(default)]
     dynamics: Option<game_parallel_economy::Dynamics>,
@@ -530,6 +534,15 @@ pub fn scenario_with_options(
             .retain(|a| !authored.contains(&(a.person, a.recipe.as_str())));
         scenario.aspirations.extend(work_support.aspirations);
     }
+    let authored: HashSet<_> = scenario
+        .aspiration_learning
+        .iter()
+        .map(|row| row.person)
+        .collect();
+    work_support
+        .learning
+        .retain(|row| !authored.contains(&row.person));
+    scenario.aspiration_learning.extend(work_support.learning);
     let mut farming = population::farming(scenario.seed, &scenario.population);
     if !farming.is_empty() {
         let cultivation = scenario
@@ -958,7 +971,7 @@ pub fn scenario_with_options(
             })
         })
         .collect::<Result<_, String>>()?;
-    let has_dreams = !dreams.is_empty() || !work_support.learning.is_empty();
+    let has_dreams = !dreams.is_empty() || !scenario.aspiration_learning.is_empty();
     for resident in scenario.people {
         let mut lots = Vec::new();
         for (name, quantity) in resident.goods {
@@ -1022,7 +1035,8 @@ pub fn scenario_with_options(
             events: vec![],
         }),
         dreams: has_dreams.then_some(Dreams {
-            learning: work_support.learning,
+            inherit_births: scenario.inherit_aspiration_learning,
+            learning: scenario.aspiration_learning,
             people: dreams,
             events: vec![],
         }),

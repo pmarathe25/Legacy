@@ -22,6 +22,8 @@ Optional `[population.work_support]` settings seed individual aspirations, incli
 
 The optional `learning_percent` and `learning_max` settings give selected individuals a bounded inclination to develop new aspirations from successful work they personally observe. They do not grant advance knowledge of a recipe or create an aspiration until the person witnesses work.
 
+Scenarios can also use `[[aspiration_learning]]` to specify an individual's inclination directly; authored entries override generated ones. With `inherit_aspiration_learning = true` and family birth enrollment enabled, actual newborns can acquire a parent's general inclination, without inheriting their aspirations or experiences.
+
 When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.
 
 Profiles can also live in a separate TOML file. For example, `cargo run -p game-parallel-economy-cli -- --player content/parallel/economy-campaign.toml --population content/parallel/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.

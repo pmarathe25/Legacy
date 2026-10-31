@@ -5081,10 +5081,37 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
 #[test]
 fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
     use game_parallel_autowork::requests::{Asker, Memory, Preference, Requests};
+    use game_parallel_dreams::{Dream, Learning};
     let mut initial = campaign_fixture();
     initial.campaign = None;
     initial.pending_food.clear();
     initial.agreements = None;
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![],
+        events: vec![],
+    });
+    initial.dreams = Some(Dreams {
+        inherit_births: true,
+        people: vec![Dream {
+            person: 1,
+            recipe: 1,
+            priority: 1,
+            batch: 1,
+            review_interval: 2,
+            next_review: 0,
+            enabled: false,
+        }],
+        learning: vec![Learning {
+            person: 1,
+            max_aspirations: 2,
+            priority: 4,
+            batch: 1,
+            review_interval: 3,
+        }],
+        events: vec![],
+    });
     for person in &mut initial.people {
         person.seek_meals = false;
         person.willing_to_work = false;
@@ -5129,6 +5156,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
             .unwrap()
             .install(|| {
                 let mut state = initial.clone();
+                state.dreams.as_mut().unwrap().inherit_births = inherit;
                 state
                     .autowork
                     .as_mut()
@@ -5150,6 +5178,20 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
                 assert_eq!(preference.is_some(), inherit);
                 assert_eq!(requests.askers.iter().any(|row| row.person == 5), inherit);
                 assert!(requests.memories.iter().all(|row| row.observer != 5));
+                let dreams = state.dreams.as_ref().unwrap();
+                let learning = dreams.learning.iter().find(|row| row.person == 5);
+                assert_eq!(learning.is_some(), inherit);
+                assert!(dreams.people.iter().all(|row| row.person != 5));
+                if let Some(learning) = learning {
+                    assert_eq!(
+                        (
+                            learning.max_aspirations,
+                            learning.priority,
+                            learning.review_interval
+                        ),
+                        (2, 4, 3)
+                    );
+                }
                 assert!(
                     requests
                         .pending
@@ -9506,6 +9548,7 @@ fn aspirations_form_goals_and_renew_only_after_actual_work() {
         events: vec![],
     });
     initial.dreams = Some(Dreams {
+        inherit_births: false,
         learning: vec![],
         people: vec![Dream {
             person: 2,
@@ -11771,6 +11814,7 @@ fn requested_work_is_learned_only_by_a_present_observer() {
         events: vec![],
     });
     initial.dreams = Some(Dreams {
+        inherit_births: false,
         people: vec![],
         learning: vec![Learning {
             person: 1,
