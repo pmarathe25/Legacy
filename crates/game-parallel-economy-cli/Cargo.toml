@@ -19,12 +19,13 @@ game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
 game-parallel-lots = { path = "../game-parallel-lots" }
 game-parallel-persistence = { path = "../game-parallel-persistence" }
 game-parallel-production = { path = "../game-parallel-production" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+rayon.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
-rayon.workspace = true
 game-parallel-economy-player = { path = "../game-parallel-economy-player" }
 game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }
 game-parallel-agreements = { path = "../game-parallel-agreements" }

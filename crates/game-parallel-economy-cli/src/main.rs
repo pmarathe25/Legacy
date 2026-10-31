@@ -216,21 +216,36 @@ fn advance(world: &mut Economy, count: u64) -> Result<(), String> {
 fn run() -> Result<(), String> {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut args = std::env::args_os().skip(1);
-    let first = args.next();
-    let player_mode = first.as_deref() == Some(std::ffi::OsStr::new("--player"));
-    let scenario = if player_mode { args.next() } else { first }
-        .map(PathBuf::from)
-        .unwrap_or_else(|| {
-            root.join(if player_mode {
-                "content/parallel/economy-campaign.toml"
-            } else {
-                "content/parallel/economy.toml"
-            })
-        });
-    if args.next().is_some() {
-        return Err("unexpected argument".into());
+    let mut player_mode = false;
+    let mut scenario = None;
+    let mut seed = None;
+    while let Some(arg) = args.next() {
+        if arg == "--player" && !player_mode {
+            player_mode = true;
+        } else if arg == "--seed" && seed.is_none() {
+            seed = Some(
+                args.next()
+                    .ok_or("missing seed")?
+                    .to_str()
+                    .ok_or("invalid seed")?
+                    .parse::<u64>()
+                    .map_err(|_| "invalid seed")?,
+            );
+        } else if scenario.is_none() && !arg.to_string_lossy().starts_with("--") {
+            scenario = Some(PathBuf::from(arg));
+        } else {
+            return Err("unexpected argument".into());
+        }
     }
-    let mut world = game_parallel_economy_cli::scenario(&scenario, &root.join("content"))?;
+    let scenario = scenario.unwrap_or_else(|| {
+        root.join(if player_mode {
+            "content/parallel/economy-campaign.toml"
+        } else {
+            "content/parallel/economy.toml"
+        })
+    });
+    let mut world =
+        game_parallel_economy_cli::scenario_with_seed(&scenario, &root.join("content"), seed)?;
     println!("Economic simulation; enter help for commands.");
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();

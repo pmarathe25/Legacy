@@ -1,4 +1,5 @@
 //! Load new economic scenarios from authored content and retain lot ages in saves.
+mod population;
 use game_parallel_autowork::{Autowork, Policy};
 use game_parallel_economy::{
     Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Economy, Families,
@@ -22,7 +23,10 @@ struct Scenario {
     food_relief_divisor: u32,
     rules: Rules,
     regions: Vec<Region>,
+    #[serde(default)]
     people: Vec<Resident>,
+    #[serde(default)]
+    population: Vec<population::Profile>,
     #[serde(default)]
     routes: Vec<Route>,
     #[serde(default)]
@@ -368,8 +372,20 @@ struct Resident {
 
 /// Construct fresh custody only for a new scenario, never for a saved world.
 pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
+    scenario_with_seed(path, content, None)
+}
+
+/// Override the scenario seed for both generation and subsequent simulation choices.
+pub fn scenario_with_seed(
+    path: &Path,
+    content: &Path,
+    seed: Option<u64>,
+) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
-    let scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+    let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+    if let Some(seed) = seed {
+        scenario.seed = seed;
+    }
     let mut regions = HashSet::new();
     if scenario
         .regions
@@ -379,6 +395,13 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
     {
         return Err("invalid scenario regions".into());
     }
+    let generated = population::generate(
+        scenario.seed,
+        &regions,
+        &scenario.people,
+        &scenario.population,
+    )?;
+    scenario.people.extend(generated);
     let mut production = Production {
         max_work_hunger: scenario.rules.max_work_hunger,
         goods: vec![],

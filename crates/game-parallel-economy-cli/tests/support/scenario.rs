@@ -2,6 +2,69 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn generated_population_is_seeded_individual_and_worker_invariant() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/parallel/economy-generated.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let before = world.snapshot();
+                assert_eq!(before.people.len(), 129);
+                assert!(before.people.iter().any(|person| person.region == Some(1)));
+                assert!(before.people.iter().any(|person| person.region == Some(2)));
+                assert!(before.people.iter().any(|person| !person.willing_to_work));
+                assert!(before.people.iter().any(|person| person.willing_to_work));
+                assert!(before.people.iter().any(|person| !person.seek_meals));
+                let events = world.advance().unwrap();
+                assert!(!events.started.is_empty());
+                let after = world.snapshot();
+                assert!(
+                    after
+                        .physical
+                        .work
+                        .iter()
+                        .all(|work| before.people.iter().any(|person| {
+                            person.id == work.job.worker
+                                && person.willing_to_work
+                                && !person.controlled
+                        }))
+                );
+                let saved = serde_json::to_string(&after).unwrap();
+                let restored =
+                    game_parallel_economy::Economy::compile(serde_json::from_str(&saved).unwrap())
+                        .unwrap();
+                assert_eq!(after, restored.snapshot());
+                after
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn seed_override_controls_both_population_and_simulation_seed() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let path = root.join("content/parallel/economy-generated.toml");
+    let load_seed = |seed| {
+        super::scenario_with_seed(&path, &root.join("content"), seed)
+            .unwrap()
+            .snapshot()
+    };
+    let authored = load_seed(None);
+    assert_eq!(authored, load_seed(Some(41)));
+    let other = load_seed(Some(42));
+    assert_eq!(other.seed, 42);
+    assert_ne!(authored.people, other.people);
+    assert_eq!(other, load_seed(Some(42)));
+}
+
+#[test]
 fn authored_scenario_advances_and_resumes_identically_across_worker_counts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

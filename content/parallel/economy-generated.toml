@@ -1,0 +1,52 @@
+# An authored population profile; no organization is created for these people.
+seed = 41
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain = 100 }
+
+[[regions]]
+id = 2
+stock = { grain = 100 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 3
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 3
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+goods = { bread = 3 }
+
+[[population]]
+start_id = 2
+count = 128
+regions = [1, 2]
+health = 100
+hunger = 0
+work_percent = 65
+meal_percent = 80
+recipe = "mill-grain"
+goods = { bread = 3 }
