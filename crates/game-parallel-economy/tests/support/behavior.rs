@@ -16513,6 +16513,99 @@ fn a_worker_missing_inputs_does_not_monopolize_site_capacity() {
 }
 
 #[test]
+fn site_capacity_is_reconsidered_after_virtual_material_contention() {
+    let mut initial = claimed_work_sites_fixture();
+    let sites = initial.work_sites.as_mut().unwrap();
+    sites.sites.retain(|site| site.id == 7);
+    sites.sites[0].capacity = 1;
+    sites.requirements.push(WorkSiteRequirement {
+        recipe: 4,
+        kind: "workshop".into(),
+        slots: 1,
+    });
+    initial.physical.recipes.extend([
+        Recipe {
+            id: 4,
+            name: "other material".into(),
+            ticks: 3,
+            inputs: vec![Amount {
+                good: 1,
+                quantity: 1,
+            }],
+            outputs: vec![Amount {
+                good: 3,
+                quantity: 1,
+            }],
+        },
+        Recipe {
+            id: 5,
+            name: "work without site".into(),
+            ticks: 3,
+            inputs: vec![Amount {
+                good: 2,
+                quantity: 1,
+            }],
+            outputs: vec![Amount {
+                good: 3,
+                quantity: 1,
+            }],
+        },
+    ]);
+    for good in [1, 2] {
+        let stock = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|c| c.place == Place::Stock { region: 1, good })
+            .unwrap();
+        *stock = Container::new(
+            stock.place,
+            stock.capacity,
+            vec![Lot {
+                good,
+                quantity: 1,
+                expires_at: (good == 1).then_some(20),
+            }],
+        )
+        .unwrap();
+    }
+    initial.autowork.as_mut().unwrap().policies = [(1, 5), (2, 1), (3, 4)]
+        .into_iter()
+        .map(|(person, recipe)| WorkPolicy {
+            person,
+            recipe,
+            enabled: true,
+            disregard_claims: false,
+        })
+        .collect();
+    for seed in 1..=32 {
+        initial.seed = seed;
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    assert_eq!(world.advance().unwrap().started.len(), 2, "seed {seed}");
+                    let state = world.snapshot();
+                    let mut workers: Vec<_> = state
+                        .physical
+                        .work
+                        .iter()
+                        .map(|work| work.job.worker)
+                        .collect();
+                    workers.sort_unstable();
+                    assert_eq!(workers, [1, 3], "seed {seed}");
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
 fn a_worker_who_dies_on_start_does_not_keep_a_site_binding() {
     let mut initial = fixture();
     initial.agreements = None;

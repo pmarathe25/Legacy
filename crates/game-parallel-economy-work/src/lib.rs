@@ -152,33 +152,27 @@ impl Context<'_> {
                 self.claims,
             );
             let base = filtered.as_ref().unwrap_or(base);
-            let site_filtered = self
-                .sites
-                .filter(|sites| !sites.requirements.is_empty())
-                .map(|sites| {
-                    site_filter::filter(
-                        sites,
-                        base,
-                        self.people,
-                        &busy,
-                        self.production.max_work_hunger,
-                        site_filter::Selection {
-                            seed: self.seed,
-                            tick: self.tick,
-                            claims: self.claims,
-                            classes: self.site_classes,
-                            recipes: &self.production.recipes,
-                            view: self.view,
-                        },
-                    )
-                });
-            return Ok(Plan {
-                work: site_filtered.as_ref().unwrap_or(base).plan_validated(
+            let work = if let Some(sites) = self.sites.filter(|s| !s.requirements.is_empty()) {
+                site_filter::plan(
+                    sites,
+                    base,
                     self.people,
-                    self.production,
                     &busy,
-                    self.max_job,
-                )?,
+                    site_filter::Selection {
+                        seed: self.seed,
+                        tick: self.tick,
+                        claims: self.claims,
+                        classes: self.site_classes,
+                        production: self.production,
+                        view: self.view,
+                        max_job: self.max_job,
+                    },
+                )?
+            } else {
+                base.plan_validated(self.people, self.production, &busy, self.max_job)?
+            };
+            return Ok(Plan {
+                work,
                 occupied: busy,
                 site_disregards: site_disregards(base, self.claims, self.site_classes),
                 request: None,
@@ -290,32 +284,25 @@ impl Context<'_> {
             self.claims,
         );
         let base = filtered.as_ref().unwrap_or(&staged);
-        let site_filtered = self
-            .sites
-            .filter(|sites| !sites.requirements.is_empty())
-            .map(|sites| {
-                site_filter::filter(
-                    sites,
-                    base,
-                    self.people,
-                    &busy,
-                    self.production.max_work_hunger,
-                    site_filter::Selection {
-                        seed: self.seed,
-                        tick: self.tick,
-                        claims: self.claims,
-                        classes: self.site_classes,
-                        recipes: &self.production.recipes,
-                        view: self.view,
-                    },
-                )
-            });
-        let work = site_filtered.as_ref().unwrap_or(base).plan_validated(
-            self.people,
-            self.production,
-            &busy,
-            self.max_job,
-        )?;
+        let work = if let Some(sites) = self.sites.filter(|s| !s.requirements.is_empty()) {
+            site_filter::plan(
+                sites,
+                base,
+                self.people,
+                &busy,
+                site_filter::Selection {
+                    seed: self.seed,
+                    tick: self.tick,
+                    claims: self.claims,
+                    classes: self.site_classes,
+                    production: self.production,
+                    view: self.view,
+                    max_job: self.max_job,
+                },
+            )?
+        } else {
+            base.plan_validated(self.people, self.production, &busy, self.max_job)?
+        };
         if self.goals.is_some() {
             reserve(&mut busy, selected.iter().map(|row| row.worker));
         }
