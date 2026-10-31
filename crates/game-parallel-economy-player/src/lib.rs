@@ -75,6 +75,7 @@ pub struct View {
     pub claims: Vec<ClaimView>,
     /// The ruler's assertions about sites, including sites since destroyed.
     pub site_claims: Vec<u64>,
+    pub claim_built_sites: Option<bool>,
     pub site_observations: Vec<SiteObservation>,
     pub food_reports: Vec<Record>,
     pub job: Option<Job>,
@@ -526,6 +527,15 @@ impl<'a> Player<'a> {
                         sites
                     })
             }),
+            claim_built_sites: current.and_then(|id| {
+                state.dynamics.and_then(|d| d.claims.as_ref()).map(|owner| {
+                    owner
+                        .preferences
+                        .par_iter()
+                        .find_any(|p| p.person == id)
+                        .is_some_and(|p| p.assert_built_sites)
+                })
+            }),
             site_observations: current.map_or_else(Vec::new, |id| {
                 state
                     .dynamics
@@ -784,6 +794,11 @@ impl<'a> Player<'a> {
     /// Withdraw this person's site assertion, even if the site no longer exists.
     pub fn withdraw_site_claim(&mut self, site: u64) -> Result<(), String> {
         self.world.withdraw_site_claim(self.current()?, site)
+    }
+    /// Choose whether to claim sites this person subsequently builds.
+    pub fn set_built_site_claim_choice(&mut self, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_built_site_claim_choice(self.current()?, enabled)
     }
     /// Withdraw one of the ruler's own assertions, including one made elsewhere.
     pub fn withdraw_claim(&mut self, region: u64, good: u32) -> Result<(), String> {

@@ -2070,6 +2070,17 @@ impl Economy {
         ) {
             owner.demolition_events = plan.publish(tick, prior, site_plan.as_ref(), sites);
         }
+        if let Some(claims) = dynamics.as_mut().and_then(|d| d.claims.as_mut())
+            && let Some(construction) = &construction
+            && claims.preferences.par_iter().any(|p| p.assert_built_sites)
+        {
+            let built: Vec<_> = construction
+                .events
+                .par_iter()
+                .filter_map(|event| event.site.map(|site| (event.person, site)))
+                .collect();
+            game_parallel_economy_claims::publish_built_site_claims(claims, &built, &person.people);
+        }
         if let Some(owner) = dynamics.as_mut().and_then(|d| d.claims.as_mut()) {
             let mut uses = Vec::new();
             if !site_classes.is_empty() {

@@ -2597,6 +2597,7 @@ fn hunger_can_change_one_persons_claim_choice_after_open_food_is_considered() {
                 person: 2,
                 disregard_others: false,
                 assert_outputs: false,
+                assert_built_sites: false,
                 desperate_hunger: Some(7),
             }],
             events: vec![],
@@ -5535,6 +5536,7 @@ fn claim_workload(count: u64) -> State {
                     person,
                     disregard_others: true,
                     assert_outputs: false,
+                    assert_built_sites: false,
                     desperate_hunger: None,
                 })
                 .collect(),
@@ -9700,6 +9702,7 @@ fn gathering_claims_workload(count: u64) -> State {
                     person,
                     disregard_others: false,
                     assert_outputs: true,
+                    assert_built_sites: false,
                     desperate_hunger: None,
                 })
                 .collect(),
@@ -17329,6 +17332,121 @@ fn a_person_builds_a_real_site_from_a_kit_before_work_can_use_it() {
 }
 
 #[test]
+fn builders_can_choose_to_claim_only_sites_they_actually_build() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Default::default()),
+    });
+    let template = initial.construction.as_ref().unwrap().policies[0].clone();
+    initial
+        .construction
+        .as_mut()
+        .unwrap()
+        .policies
+        .push(ConstructionPolicy {
+            person: 3,
+            ..template
+        });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.set_built_site_claim_choice(2, true).unwrap();
+                world.set_built_site_claim_choice(3, true).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.construction.as_ref().unwrap().events;
+                assert_eq!(events.len(), 2);
+                let built = events.iter().find(|event| event.site.is_some()).unwrap();
+                let claims = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .claims
+                    .as_ref()
+                    .unwrap()
+                    .site_claims;
+                assert_eq!(claims.len(), 1);
+                assert_eq!(
+                    (claims[0].person, Some(claims[0].site)),
+                    (built.person, built.site)
+                );
+                let mut old = serde_json::to_value(&state).unwrap();
+                for preference in old["dynamics"]["claims"]["preferences"]
+                    .as_array_mut()
+                    .unwrap()
+                {
+                    preference
+                        .as_object_mut()
+                        .unwrap()
+                        .remove("assert_built_sites");
+                }
+                Economy::compile(serde_json::from_value(old).unwrap()).unwrap();
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+
+    let mut refusing = Economy::compile(initial).unwrap();
+    refusing.set_built_site_claim_choice(2, true).unwrap();
+    refusing.set_built_site_claim_choice(2, false).unwrap();
+    refusing.advance().unwrap();
+    assert!(
+        refusing
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .claims
+            .unwrap()
+            .site_claims
+            .is_empty()
+    );
+}
+
+#[test]
+fn a_builder_who_dies_cannot_assert_a_new_claim_after_death() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.rules.starvation_threshold = 1;
+    initial.rules.starvation_damage = 1;
+    initial.people[1].health = 1;
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Default::default()),
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world.set_built_site_claim_choice(2, true).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.people[1].health, 0);
+    assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+    assert!(
+        state
+            .dynamics
+            .unwrap()
+            .claims
+            .unwrap()
+            .site_claims
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_person_builds_a_needed_site_for_their_own_work_goal() {
     use game_parallel_goals::Goal;
     let mut initial = construction_fixture();
@@ -18535,6 +18653,99 @@ fn concentrated_site_construction(count: u64) -> State {
     )
     .unwrap();
     state
+}
+
+fn concentrated_built_site_claims(count: u64) -> State {
+    use game_parallel_economy_claims::{Claims, Preference};
+    let mut state = concentrated_site_construction(count);
+    state.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            preferences: (2..=count)
+                .map(|person| Preference {
+                    person,
+                    disregard_others: false,
+                    assert_outputs: false,
+                    assert_built_sites: true,
+                    desperate_hunger: None,
+                })
+                .collect(),
+            ..Default::default()
+        }),
+    });
+    state
+}
+
+#[test]
+fn concentrated_builders_claim_only_physically_completed_sites() {
+    let initial = concentrated_built_site_claims(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let sites = &state.work_sites.as_ref().unwrap().sites;
+                let claims = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .claims
+                    .as_ref()
+                    .unwrap()
+                    .site_claims;
+                assert_eq!(sites.len(), 512);
+                assert_eq!(claims.len(), 512);
+                let mut claimed: Vec<_> = claims.iter().map(|claim| claim.site).collect();
+                claimed.sort_unstable();
+                assert_eq!(
+                    claimed,
+                    sites.iter().map(|site| site.id).collect::<Vec<_>>()
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_built_site_claims_benchmark() {
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .unwrap();
+    let initial = concentrated_built_site_claims(100_000);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(initial).unwrap();
+            let started = std::time::Instant::now();
+            world.advance().unwrap();
+            eprintln!(
+                "workers={workers} people=100000 ticks=1 elapsed={:.6}",
+                started.elapsed().as_secs_f64()
+            );
+            assert_eq!(
+                world
+                    .snapshot()
+                    .dynamics
+                    .unwrap()
+                    .claims
+                    .unwrap()
+                    .site_claims
+                    .len(),
+                12_500
+            );
+        });
 }
 
 fn concentrated_goal_construction(count: u64) -> State {

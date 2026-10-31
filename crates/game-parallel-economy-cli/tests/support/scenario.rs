@@ -973,13 +973,15 @@ fn ruler_can_build_an_authored_site_from_an_actual_kit() {
         player.building_blueprints().unwrap()[0].name,
         "shelter workshop"
     );
+    assert_eq!(player.view().unwrap().claim_built_sites, Some(false));
+    player.set_built_site_claim_choice(true).unwrap();
     assert!(player.build_site(1).unwrap());
     let view = player.view().unwrap();
     assert_eq!(view.work_sites.len(), 1);
     assert_eq!(view.work_sites[0].site.kind, "workshop");
     let site = view.work_sites[0].site.id;
-    player.claim_site(site).unwrap();
     assert_eq!(player.view().unwrap().site_claims, vec![site]);
+    assert!(player.claim_site(site).is_err());
     assert!(player.destroy_site(site).unwrap());
     assert_eq!(player.view().unwrap().site_claims, vec![site]);
     player.withdraw_site_claim(site).unwrap();

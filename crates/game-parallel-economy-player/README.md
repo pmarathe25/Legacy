@@ -7,3 +7,5 @@ The interface is an initial playable slice of the economic host, not a complete 
 The ruler can inspect local physical work sites and their occupied capacity, and the recipe catalog exposes authored tool and site requirements.
 
 The ruler can assert a personal claim over local stock or a local work site, inspect their own assertions, and withdraw them even after leaving or after a site is destroyed. The view includes the ruler's locally witnessed uses of their claimed sites. Other people's private claims are not exposed by this view; assertions do not themselves prevent anyone from taking goods or using a site.
+
+The ruler can independently choose whether to assert a claim automatically after personally constructing a site.

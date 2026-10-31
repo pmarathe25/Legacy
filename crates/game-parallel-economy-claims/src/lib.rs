@@ -168,6 +168,7 @@ macro_rules! claim_methods {
                     person,
                     disregard_others,
                     assert_outputs: false,
+                    assert_built_sites: false,
                     desperate_hunger: None,
                 });
             }
@@ -199,6 +200,39 @@ macro_rules! claim_methods {
                     person,
                     disregard_others: false,
                     assert_outputs: enabled,
+                    assert_built_sites: false,
+                    desperate_hunger: None,
+                });
+            }
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Choose whether to assert a personal claim when this person builds a site.
+        pub fn set_built_site_claim_choice(
+            &mut self,
+            person: u64,
+            enabled: bool,
+        ) -> Result<(), String> {
+            if !self.people.iter().any(|p| p.id == person && p.health > 0) {
+                return Err("person must be alive".into());
+            }
+            let claims = self
+                .dynamics
+                .as_mut()
+                .and_then(|d| d.claims.as_mut())
+                .ok_or("claims are disabled")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            if let Some(policy) = claims.preferences.iter_mut().find(|p| p.person == person) {
+                policy.assert_built_sites = enabled;
+            } else {
+                claims.preferences.push($crate::Preference {
+                    person,
+                    disregard_others: false,
+                    assert_outputs: false,
+                    assert_built_sites: enabled,
                     desperate_hunger: None,
                 });
             }
@@ -230,6 +264,7 @@ macro_rules! claim_methods {
                     person,
                     disregard_others: false,
                     assert_outputs: false,
+                    assert_built_sites: false,
                     desperate_hunger: hunger,
                 });
             }
@@ -382,6 +417,9 @@ pub struct Preference {
     pub disregard_others: bool,
     #[serde(default)]
     pub assert_outputs: bool,
+    /// This person's own preference about asserting newly built physical sites.
+    #[serde(default)]
+    pub assert_built_sites: bool,
     /// At this hunger, this individual may take claimed food after considering open food.
     #[serde(default)]
     pub desperate_hunger: Option<u32>,
@@ -734,6 +772,44 @@ pub fn publish_site_uses(
         (event.claimant, event.person, event.site, event.destroyed)
     });
     claims.site_events = events;
+}
+/// People who chose to claim their own work may assert newly completed sites.
+pub fn publish_built_site_claims(claims: &mut Claims, built: &[(u64, u64)], people: &[Person]) {
+    if built.is_empty() || !claims.preferences.par_iter().any(|p| p.assert_built_sites) {
+        return;
+    }
+    let interested: HashSet<_> = claims
+        .preferences
+        .par_iter()
+        .filter(|p| p.assert_built_sites)
+        .map(|p| p.person)
+        .collect();
+    let existing: HashSet<_> = claims
+        .site_claims
+        .par_iter()
+        .map(|c| (c.person, c.site))
+        .collect();
+    let mut choices: Vec<_> = built
+        .par_iter()
+        .copied()
+        .filter(|&(person, site)| {
+            interested.contains(&person)
+                && !existing.contains(&(person, site))
+                && people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .is_some_and(|i| people[i].health > 0)
+        })
+        .collect();
+    choices.par_sort_unstable();
+    let claims_to_add: Vec<_> = choices
+        .par_chunk_by(|a, b| a == b)
+        .map(|group| SiteClaim {
+            person: group[0].0,
+            site: group[0].1,
+        })
+        .collect();
+    claims.site_claims.par_extend(claims_to_add);
 }
 pub fn pickups(plan: &provision::Plan) -> Vec<Use> {
     plan.actions
