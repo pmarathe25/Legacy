@@ -341,6 +341,10 @@ fn generated_campaign_replays_at_scale_across_workers() {
                     member.born.is_some()
                         && claims.preferences.iter().any(|p| p.person == member.id)
                 }));
+                let giving = state.giving.as_ref().unwrap();
+                assert!(state.family.as_ref().unwrap().members.iter().any(|member| {
+                    member.born.is_some() && giving.responses.iter().any(|p| p.person == member.id)
+                }));
                 state
             })
     };

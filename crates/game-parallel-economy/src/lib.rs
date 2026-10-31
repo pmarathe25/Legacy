@@ -38,6 +38,7 @@ mod food_search;
 mod gathering;
 mod giving;
 mod giving_discovery;
+mod giving_inheritance;
 mod hauling;
 mod medical;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
@@ -2045,6 +2046,7 @@ impl Economy {
             family.as_ref(),
             tick,
         );
+        giving_inheritance::enroll(next_giving.as_mut(), family.as_ref(), tick);
         gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         let deaths: Vec<_> = person

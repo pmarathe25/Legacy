@@ -266,6 +266,8 @@ struct ResourceConfig {
 #[serde(deny_unknown_fields)]
 struct GivingConfig {
     #[serde(default)]
+    inherit_births: bool,
+    #[serde(default)]
     policies: Vec<GivingPolicyConfig>,
     #[serde(default)]
     responses: Vec<FoodResponseConfig>,
@@ -755,6 +757,7 @@ pub fn scenario_with_options(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(game_parallel_economy::Giving {
+                inherit_births: config.inherit_births,
                 policies,
                 responses,
                 learning: config.learning,

@@ -27,6 +27,9 @@ pub struct Policy {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Giving {
+    /// Newborns may acquire general preferences, never another person's experiences.
+    #[serde(default)]
+    pub inherit_births: bool,
     pub policies: Vec<Policy>,
     #[serde(default)]
     pub responses: Vec<Response>,
@@ -113,6 +116,7 @@ pub struct Request {
 impl Clone for Giving {
     fn clone(&self) -> Self {
         Self {
+            inherit_births: self.inherit_births,
             policies: self.policies.par_iter().cloned().collect(),
             responses: self.responses.par_iter().cloned().collect(),
             learning: self.learning.par_iter().cloned().collect(),

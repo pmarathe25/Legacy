@@ -103,6 +103,7 @@ retry_ticks = 12
 people = [{ person = 2, enabled = true }]
 
 [giving]
+inherit_births = true
 asking = [{ person = 2, target = 1, min_hunger = 15, enabled = true, retry_ticks = 12, request_lifetime = 6 }]
 
 [hauling]

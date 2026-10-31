@@ -1512,6 +1512,7 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
         }),
     });
     initial.giving = Some(Giving {
+        inherit_births: false,
         policies: vec![],
         learning: vec![],
         asking: vec![],
@@ -1674,6 +1675,7 @@ fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
         }),
     });
     initial.giving = Some(Giving {
+        inherit_births: false,
         policies: vec![],
         responses: vec![],
         learning: vec![],
@@ -4971,6 +4973,112 @@ fn newborn_claim_preferences_do_not_inherit_assertions_or_feelings() {
 }
 
 #[test]
+fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.giving = Some(Giving {
+        inherit_births: true,
+        policies: vec![],
+        responses: vec![FoodResponse {
+            person: 1,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 3,
+            willing: false,
+            minimum_trust: None,
+            affinity_threshold: Some(2),
+            pressure_threshold: Some(3),
+        }],
+        learning: vec![SharingLearning {
+            person: 1,
+            enabled: true,
+            threshold: 2,
+            capacity: 8,
+            experiences: 2,
+            last_helper: Some(2),
+            reciprocate_hunger: None,
+            ask_helper: Some(HelperAsking {
+                min_hunger: 99,
+                retry_ticks: 3,
+                request_lifetime: 4,
+                next_review: 0,
+            }),
+        }],
+        asking: vec![FoodAsking {
+            person: 1,
+            target: 2,
+            alternatives: vec![],
+            next_target: 0,
+            min_hunger: 99,
+            enabled: true,
+            retry_ticks: 3,
+            request_lifetime: 4,
+            next_review: 0,
+        }],
+        requests: vec![],
+        acquaintance_asking: vec![AcquaintanceAsking {
+            person: 1,
+            enabled: true,
+            min_hunger: 99,
+            retry_ticks: 3,
+            request_lifetime: 4,
+            min_familiarity: 1,
+            min_affinity: Some(-2),
+            prefer_affinity: true,
+            next_review: 0,
+            last_target: Some(2),
+        }],
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.giving.as_mut().unwrap().inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let giving = state.giving.as_ref().unwrap();
+                let response = giving.responses.iter().find(|row| row.person == 5);
+                assert_eq!(response.is_some(), inherit);
+                assert!(giving.asking.iter().all(|row| row.person != 5));
+                if let Some(response) = response {
+                    assert!(!response.willing);
+                    assert_eq!(
+                        (response.affinity_threshold, response.pressure_threshold),
+                        (Some(2), Some(3))
+                    );
+                    let learned = giving.learning.iter().find(|row| row.person == 5).unwrap();
+                    assert_eq!((learned.experiences, learned.last_helper), (0, None));
+                    assert_eq!(learned.ask_helper.as_ref().unwrap().next_review, 2);
+                    let asking = giving
+                        .acquaintance_asking
+                        .iter()
+                        .find(|row| row.person == 5)
+                        .unwrap();
+                    assert_eq!((asking.last_target, asking.next_review), (None, 2));
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn successor_is_an_actual_later_birth_and_guardian_travels_before_mentorship() {
     use game_parallel_economy_campaign::ReleaseDecision;
     let initial = campaign_fixture();
@@ -6692,6 +6800,7 @@ fn personal_giving_moves_goods_and_fear_can_motivate_help() {
         affinity: 0,
     }];
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
@@ -6871,6 +6980,7 @@ fn giving_workload(count: u64) -> State {
         }
     }
     state.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
@@ -6942,6 +7052,7 @@ fn food_request_can_be_refused_then_independently_fulfilled_and_survives_reload(
     }
     initial.people[2].hunger = 5;
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
@@ -7063,6 +7174,7 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         policies: vec![],
@@ -7141,6 +7253,7 @@ fn food_asking_workload(count: u64) -> State {
         }
     }
     state.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
@@ -7357,6 +7470,7 @@ fn giving_nonfood_does_not_satisfy_a_food_request() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
@@ -11992,6 +12106,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
@@ -12171,6 +12286,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
         p.seek_meals = false;
     }
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
@@ -12436,6 +12552,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
@@ -12901,6 +13018,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity: 0,
     }];
     initial.giving = Some(Giving {
+        inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
