@@ -11,6 +11,8 @@ pub enum Place {
         good: u32,
     },
     Person(u64),
+    /// Recoverable material physically incorporated into a site or its debris.
+    Site(u64),
     JobInput(u64),
     JobOutput(u64),
 }
@@ -18,9 +20,11 @@ impl Place {
     pub fn valid(self) -> bool {
         match self {
             Self::Stock { region, good } => region != 0 && good != 0,
-            Self::Inventory(id) | Self::Person(id) | Self::JobInput(id) | Self::JobOutput(id) => {
-                id != 0
-            }
+            Self::Inventory(id)
+            | Self::Person(id)
+            | Self::Site(id)
+            | Self::JobInput(id)
+            | Self::JobOutput(id) => id != 0,
         }
     }
     pub fn accepts(self, good: u32) -> bool {

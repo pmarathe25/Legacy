@@ -1,10 +1,11 @@
 //! Personal choices to assemble physical sites from actual local kits.
 pub mod demolition;
+pub mod salvage;
 pub mod site_access;
 use game_parallel_economy_claims::{Index as Claims, Use};
 use game_parallel_economy_person::Person;
 use game_parallel_lot_runtime::Events;
-use game_parallel_lots::{Movement, Place, Transaction, View};
+use game_parallel_lots::{Container, Movement, Place, Transaction, View};
 use game_parallel_opinions::Opinions;
 use game_parallel_work_sites::{Facilities, Site};
 use rayon::prelude::*;
@@ -20,6 +21,9 @@ pub struct Blueprint {
     pub capacity: u64,
     pub kit: u32,
     pub quantity: u64,
+    /// Amount of the kit retained as recoverable physical material.
+    #[serde(default)]
+    pub salvage: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +85,20 @@ pub struct Construction {
     pub demolition_events: Vec<demolition::Event>,
     #[serde(default)]
     pub goal_builders: Vec<GoalBuilder>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub materials: Vec<Material>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub salvaging: Vec<salvage::Policy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub salvage_events: Vec<salvage::Event>,
+}
+/// Physical custody exists separately; this identifies its location and whether the site remains intact.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Material {
+    pub site: u64,
+    pub region: u64,
+    pub debris: bool,
 }
 impl Clone for Construction {
     fn clone(&self) -> Self {
@@ -91,6 +109,9 @@ impl Clone for Construction {
             demolition: self.demolition.par_iter().cloned().collect(),
             demolition_events: self.demolition_events.par_iter().cloned().collect(),
             goal_builders: self.goal_builders.par_iter().cloned().collect(),
+            materials: self.materials.par_iter().cloned().collect(),
+            salvaging: self.salvaging.par_iter().cloned().collect(),
+            salvage_events: self.salvage_events.par_iter().cloned().collect(),
         }
     }
 }
@@ -100,18 +121,68 @@ impl Construction {
         self.policies.par_sort_unstable_by_key(|p| p.person);
         self.demolition.par_sort_unstable_by_key(|p| p.person);
         self.goal_builders.par_sort_unstable_by_key(|p| p.person);
+        self.materials.par_sort_unstable_by_key(|row| row.site);
+        self.salvaging.par_sort_unstable_by_key(|row| row.person);
     }
     pub fn validate(
         &self,
         people: &HashSet<u64>,
         goods: &HashSet<u32>,
         sites: &Facilities,
+        view: &View,
         tick: u64,
     ) -> Result<(), String> {
-        if self
-            .goal_builders
-            .par_windows(2)
-            .any(|w| w[0].person >= w[1].person)
+        let regions: HashSet<_> = if self.materials.is_empty() {
+            HashSet::new()
+        } else {
+            view.containers
+                .par_iter()
+                .filter_map(|c| match c.place {
+                    Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect()
+        };
+        if !salvage::valid(&self.salvaging, &self.salvage_events, people, tick)
+            || self
+                .salvage_events
+                .par_iter()
+                .any(|event| !goods.contains(&event.good) || event.site >= sites.next_id)
+            || self
+                .materials
+                .par_windows(2)
+                .any(|pair| pair[0].site >= pair[1].site)
+            || self.materials.par_iter().any(|row| {
+                let site = sites
+                    .sites
+                    .binary_search_by_key(&row.site, |s| s.id)
+                    .ok()
+                    .map(|i| &sites.sites[i]);
+                row.site == 0
+                    || row.site >= sites.next_id
+                    || row.region == 0
+                    || view.container(Place::Site(row.site)).is_none()
+                    || if row.debris {
+                        site.is_some()
+                    } else {
+                        site.is_none_or(|site| site.region != row.region)
+                    }
+                    || !regions.contains(&row.region)
+            })
+            || view
+                .containers
+                .par_iter()
+                .any(|container| match container.place {
+                    Place::Site(id) => self
+                        .materials
+                        .binary_search_by_key(&id, |row| row.site)
+                        .is_err(),
+                    _ => false,
+                })
+            || self
+                .goal_builders
+                .par_windows(2)
+                .any(|w| w[0].person >= w[1].person)
             || self
                 .goal_builders
                 .par_iter()
@@ -124,6 +195,7 @@ impl Construction {
                     || b.kind.is_empty()
                     || b.capacity == 0
                     || b.quantity == 0
+                    || b.salvage > b.quantity
                     || !goods.contains(&b.kit)
             })
             || self
@@ -177,6 +249,7 @@ struct Row {
 }
 pub struct Plan {
     pub actions: Vec<Transaction>,
+    pub custody: Vec<(u64, Container)>,
     pub actors: Vec<u64>,
     pub uses: Vec<Use>,
     rows: Vec<Row>,
@@ -338,6 +411,7 @@ impl Context<'_> {
         {
             return Ok(Plan {
                 actions: Vec::new(),
+                custody: Vec::new(),
                 actors: Vec::new(),
                 uses: Vec::new(),
                 rows: Vec::new(),
@@ -513,15 +587,28 @@ impl Context<'_> {
             .enumerate()
             .map(|(i, c)| {
                 let id = base + i as u64;
-                Transaction {
-                    id,
-                    movements: vec![Movement {
+                let mut movements = Vec::with_capacity(2);
+                if c.blueprint.salvage > 0 {
+                    movements.push(Movement {
                         id,
+                        from: c.source,
+                        to: Some(Place::Site(self.sites.next_id + i as u64)),
+                        good: c.blueprint.kit,
+                        quantity: c.blueprint.salvage,
+                    });
+                }
+                if c.blueprint.salvage < c.blueprint.quantity {
+                    movements.push(Movement {
+                        id: id + u64::from(c.blueprint.salvage > 0),
                         from: c.source,
                         to: None,
                         good: c.blueprint.kit,
-                        quantity: c.blueprint.quantity,
-                    }],
+                        quantity: c.blueprint.quantity - c.blueprint.salvage,
+                    });
+                }
+                Transaction {
+                    id,
+                    movements,
                     creations: vec![],
                 }
             })
@@ -562,6 +649,20 @@ impl Context<'_> {
         };
         Ok(Plan {
             actions,
+            custody: choices
+                .par_iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    (c.blueprint.salvage > 0).then(|| {
+                        Container::new(
+                            Place::Site(self.sites.next_id + i as u64),
+                            c.blueprint.salvage,
+                            vec![],
+                        )
+                        .map(|container| (base + i as u64, container))
+                    })
+                })
+                .collect::<Result<_, _>>()?,
             actors: choices.par_iter().map(|c| c.person).collect(),
             uses,
             rows,
@@ -584,6 +685,26 @@ impl Plan {
             .filter(|r| accepted.contains(&r.action))
             .map(|r| r.site.clone())
             .collect();
+        let retained: HashSet<_> = self
+            .custody
+            .par_iter()
+            .filter(|(action, _)| accepted.contains(action))
+            .filter_map(|(_, container)| match container.place {
+                Place::Site(id) => Some(id),
+                _ => None,
+            })
+            .collect();
+        owner.materials.par_extend(
+            self.rows
+                .par_iter()
+                .filter(|row| retained.contains(&row.site.id))
+                .map(|row| Material {
+                    site: row.site.id,
+                    region: row.site.region,
+                    debris: false,
+                }),
+        );
+        owner.materials.par_sort_unstable_by_key(|row| row.site);
         owner.events = self
             .rows
             .par_iter()

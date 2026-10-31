@@ -1,0 +1,94 @@
+# A small playable example of construction, destruction, and physical recovery.
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { reed-shelter-kit = 1, bread = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+goods = { bread = 3 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+goods = { bread = 3 }
+
+[family]
+next_id = 3
+
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[family.members]]
+id = 2
+age = 18
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[campaign.lineage]
+current = 1
+started = 0
+
+[work_sites]
+sites = []
+requirements = []
+
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "reed workshop"
+kind = "workshop"
+capacity = 1
+kit = "reed-shelter-kit"
+quantity = 1
+salvage = 1
+
+[[construction.salvaging]]
+person = 2
+site = 1
+quantity = 1
+willing = true
+disregard_claims = false

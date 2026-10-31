@@ -338,6 +338,7 @@ impl Store {
     /// Retire containers only if their post-transaction state will be empty.
     pub fn retire_in(&self, draft: &mut Draft, mut places: Vec<Place>) -> Result<(), String> {
         self.validate_commit(draft)?;
+        places.extend_from_slice(&draft.retire);
         places.par_sort_unstable();
         if places.par_windows(2).any(|pair| pair[0] == pair[1]) {
             return Err("duplicate retired custody".into());

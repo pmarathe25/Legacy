@@ -23,6 +23,7 @@ fn place_seed(place: Place) -> u64 {
         Place::Inventory(id) => id ^ 0x11,
         Place::Stock { region, good } => region.rotate_left(17) ^ u64::from(good) ^ 0x55,
         Place::Person(id) => id ^ 0x22,
+        Place::Site(id) => id ^ 0x66,
         Place::JobInput(id) => id ^ 0x33,
         Place::JobOutput(id) => id ^ 0x44,
     }

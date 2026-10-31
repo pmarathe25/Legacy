@@ -85,6 +85,21 @@ impl Runtime {
             .collect::<Result<Vec<_>, _>>()?;
         self.store.add_empty_in(&mut draft.custody, containers)
     }
+    /// Retire empty non-job custody within the same detached generation.
+    pub fn retire_empty_in(
+        &self,
+        draft: &mut AdvanceDraft,
+        places: Vec<Place>,
+    ) -> Result<(), String> {
+        self.validate_advance(draft)?;
+        if places
+            .par_iter()
+            .any(|place| !matches!(place, Place::Site(_)))
+        {
+            return Err("invalid site custody retirement".into());
+        }
+        self.store.retire_in(&mut draft.custody, places)
+    }
     /// Work rates are voluntary actor decisions made by the enclosing simulation.
     pub fn advance(&mut self, rates: &[(u64, u64)], seed: u64) -> Result<Events, String> {
         self.advance_with_actions(rates, &[], seed)
@@ -136,6 +151,52 @@ impl Runtime {
         growth: Growth<'_>,
         seed: u64,
     ) -> Result<AdvanceDraft, String> {
+        self.prepare_with_growth_and_custody(rates, external, starts, abandon, (growth, &[]), seed)
+    }
+    /// Stage action-owned empty site custody in the same generation as its initiating action.
+    pub fn prepare_with_growth_and_custody(
+        &self,
+        rates: &[(u64, u64)],
+        external: &[Transaction],
+        starts: &[Start],
+        abandon: &[(u64, u64)],
+        (growth, custody): (Growth<'_>, &[(u64, game_parallel_lots::Container)]),
+        seed: u64,
+    ) -> Result<AdvanceDraft, String> {
+        let mut owners: Vec<_> = custody
+            .par_iter()
+            .map(|(action, container)| (*action, container.place))
+            .collect();
+        owners.par_sort_unstable();
+        let mut places: Vec<_> = owners.par_iter().map(|row| row.1).collect();
+        places.par_sort_unstable();
+        let mut external_by_id: Vec<_> = if custody.is_empty() {
+            Vec::new()
+        } else {
+            external.par_iter().collect()
+        };
+        if !custody.is_empty() {
+            external_by_id.par_sort_unstable_by_key(|action| action.id);
+        }
+        if owners.par_windows(2).any(|pair| pair[0].0 == pair[1].0)
+            || places.par_windows(2).any(|pair| pair[0] == pair[1])
+            || custody.par_iter().any(|(id, container)| {
+                !matches!(container.place, Place::Site(_))
+                    || container.used != 0
+                    || external_by_id
+                        .binary_search_by_key(id, |action| action.id)
+                        .ok()
+                        .map(|i| external_by_id[i])
+                        .is_none_or(|action| {
+                            !action
+                                .movements
+                                .iter()
+                                .any(|movement| movement.to == Some(container.place))
+                        })
+            })
+        {
+            return Err("invalid staged site custody".into());
+        }
         game_parallel_lot_work::validate_actions(&self.catalog, external)?;
         let next_tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
         game_parallel_lot_content::validate_growth(&self.catalog, growth.harvest, next_tick)?;
@@ -239,10 +300,12 @@ impl Runtime {
             .collect();
         let mut composed = game_parallel_lots::compose(actions)?;
         let compact = composed.compact_ids(4, growth.compact_consumption)?;
+        let mut containers = start_plan.containers;
+        containers.par_extend(custody.par_iter().map(|(_, container)| container.clone()));
         let mut draft = self.store.prepare_with_empty_compact(
             seed,
             &composed.transactions,
-            start_plan.containers,
+            containers,
             &compact,
             true,
         )?;
@@ -320,7 +383,7 @@ impl Runtime {
         returned_ids.par_sort_unstable();
         output_lost.par_sort_unstable();
         empty_returns.par_sort_unstable();
-        let retire: Vec<_> = finished_ids
+        let mut retire: Vec<_> = finished_ids
             .par_iter()
             .map(|&id| Place::JobInput(id))
             .chain(
@@ -341,6 +404,16 @@ impl Runtime {
                     .flat_map_iter(|&id| [Place::JobInput(id), Place::JobOutput(id)]),
             )
             .collect();
+        if !custody.is_empty() {
+            let accepted_external: std::collections::HashSet<_> = physical_actions
+                .par_iter()
+                .filter(|row| row.accepted)
+                .map(|row| row.id)
+                .collect();
+            retire.par_extend(custody.par_iter().filter_map(|(action, container)| {
+                (!accepted_external.contains(action)).then_some(container.place)
+            }));
+        }
         self.store.retire_in(&mut draft, retire)?;
         next.par_iter_mut()
             .filter(|row| finished_ids.binary_search(&row.job.id).is_ok())

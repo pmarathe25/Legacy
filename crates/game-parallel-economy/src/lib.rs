@@ -3,6 +3,7 @@ pub use game_parallel_agreements::OfferPolicy as PromiseOfferPolicy;
 pub use game_parallel_economy_building::demolition::{
     Event as DemolitionEvent, Policy as DemolitionPolicy,
 };
+pub use game_parallel_economy_building::salvage::{Event as SalvageEvent, Policy as SalvagePolicy};
 pub use game_parallel_economy_building::{
     Blueprint as BuildingBlueprint, Construction, Event as ConstructionEvent, GoalBuilder,
     Policy as ConstructionPolicy,
@@ -203,6 +204,33 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Change a person's willingness to recover debris without changing their feelings.
+    pub fn set_salvage_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .construction
+            .clone()
+            .ok_or("construction is disabled")?;
+        next.salvaging
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no salvage preference")?
+            .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.construction = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Change only this person's voluntary construction preference.
     pub fn set_construction_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
         if self
@@ -261,6 +289,36 @@ impl Economy {
             .work_sites
             .as_ref()
             .is_some_and(|sites| sites.sites.binary_search_by_key(&site, |s| s.id).is_err()))
+    }
+    /// Recover actual material from local debris into this person's custody.
+    pub fn salvage_site(
+        &mut self,
+        person: u64,
+        site: u64,
+        good: u32,
+        quantity: u64,
+    ) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::SalvageSite {
+                    person,
+                    site,
+                    good,
+                    quantity,
+                },
+            ),
+        )?;
+        self.commit(draft)?;
+        Ok(self.construction.as_ref().is_some_and(|owner| {
+            owner
+                .salvage_events
+                .iter()
+                .any(|event| event.person == person && event.site == site && event.recovered)
+        }))
     }
     pub fn set_hauling_asking_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
@@ -820,7 +878,13 @@ impl Economy {
                 .work_sites
                 .as_ref()
                 .ok_or("construction requires work sites")?;
-            owner.validate(&ids, &goods, sites, physical.tick())?;
+            owner.validate(&ids, &goods, sites, &view, physical.tick())?;
+        } else if view
+            .containers
+            .par_iter()
+            .any(|c| matches!(c.place, game_parallel_lots::Place::Site(_)))
+        {
+            return Err("site custody requires construction metadata".into());
         }
         if !state.work_tools.is_empty() {
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
@@ -1730,6 +1794,60 @@ impl Economy {
         {
             game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
+        let manual_salvage = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::SalvageSite {
+                person,
+                site,
+                good,
+                quantity,
+            }) => {
+                if self.family.as_ref().is_some_and(|f| {
+                    f.members
+                        .iter()
+                        .any(|m| m.id == person && m.age < f.rules.min_work_age)
+                }) || self.physical.work().iter().any(|w| {
+                    w.job.worker == person && w.phase == game_parallel_lot_runtime::Phase::Working
+                }) {
+                    return Err("person cannot salvage while underage or working".into());
+                }
+                Some(game_parallel_economy_building::salvage::Manual {
+                    person,
+                    site,
+                    good,
+                    quantity,
+                })
+            }
+            _ => None,
+        };
+        if manual_salvage.is_some() && self.construction.is_none() {
+            return Err("site salvage is disabled".into());
+        }
+        if let Some(plan) = &construction_plan {
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+        }
+        let salvage_plan = self
+            .construction
+            .as_ref()
+            .map(|owner| {
+                game_parallel_economy_building::salvage::Context {
+                    policies: &owner.salvaging,
+                    materials: &owner.materials,
+                    people: &self.people,
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    claims: claims.as_ref(),
+                    busy: &busy,
+                    max_hunger: self.rules.max_work_hunger,
+                    manual: manual_salvage,
+                }
+                .prepare(action_base)
+            })
+            .transpose()?;
+        if let Some(plan) = &salvage_plan {
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+        }
         game_parallel_economy_claims::include_care_farming!(claim_uses, care, farming);
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
         if let Some(plan) = tool_pickup {
@@ -1739,6 +1857,9 @@ impl Economy {
         if let Some(plan) = &mut construction_plan {
             actions.append(&mut plan.actions);
             claim_uses.append(&mut plan.uses);
+        }
+        if let Some(plan) = &salvage_plan {
+            actions.extend_from_slice(&plan.actions);
         }
         if let Some(plan) = &care {
             actions.extend_from_slice(&plan.actions);
@@ -1850,15 +1971,21 @@ impl Economy {
                 .collect()
         });
         let harvest = combined_harvest.as_deref().unwrap_or(farm_harvest);
-        let mut physical = self.physical.prepare_with_growth(
+        let staged_custody = construction_plan
+            .as_ref()
+            .map_or(&[][..], |plan| plan.custody.as_slice());
+        let mut physical = self.physical.prepare_with_growth_and_custody(
             &rates,
             &actions,
             &starts,
             &abandon,
-            game_parallel_lot_runtime::Growth {
-                harvest,
-                compact_consumption: &compact,
-            },
+            (
+                game_parallel_lot_runtime::Growth {
+                    harvest,
+                    compact_consumption: &compact,
+                },
+                staged_custody,
+            ),
             self.seed,
         )?;
         let fatigue = game_parallel_economy_fatigue::prepare_world!(
@@ -2099,6 +2226,49 @@ impl Economy {
             work_sites.as_mut(),
         ) {
             owner.demolition_events = plan.publish(tick, prior, site_plan.as_ref(), sites);
+        }
+        if let Some(owner) = &mut construction {
+            let mut destroyed: Vec<_> = owner
+                .demolition_events
+                .par_iter()
+                .filter(|event| event.destroyed)
+                .map(|event| event.site)
+                .chain(manually_destroyed.map(|(_, site)| site).into_par_iter())
+                .collect();
+            if !destroyed.is_empty() {
+                destroyed.par_sort_unstable();
+                owner
+                    .materials
+                    .par_iter_mut()
+                    .filter(|material| destroyed.binary_search(&material.site).is_ok())
+                    .for_each(|material| material.debris = true);
+            }
+        }
+        if let Some(owner) = &mut construction {
+            owner.salvage_events =
+                salvage_plan.map_or_else(Vec::new, |plan| plan.publish(tick, physical.events()));
+        }
+        if let Some((prior, owner)) = self.construction.as_ref().zip(construction.as_mut())
+            && !prior.materials.is_empty()
+        {
+            let mut exhausted = game_parallel_economy_building::salvage::exhausted(
+                &prior.materials,
+                &view,
+                &owner.salvage_events,
+            );
+            if !exhausted.is_empty() {
+                exhausted.par_sort_unstable();
+                self.physical
+                    .retire_empty_in(&mut physical, exhausted.clone())?;
+                owner.materials = std::mem::take(&mut owner.materials)
+                    .into_par_iter()
+                    .filter(|row| {
+                        exhausted
+                            .binary_search(&game_parallel_lots::Place::Site(row.site))
+                            .is_err()
+                    })
+                    .collect();
+            }
         }
         if let Some(claims) = dynamics.as_mut().and_then(|d| d.claims.as_mut())
             && let Some(construction) = &construction

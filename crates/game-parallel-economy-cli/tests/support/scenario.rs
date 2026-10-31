@@ -2162,12 +2162,41 @@ fn ruler_observes_only_local_physical_work_sites() {
 }
 
 #[test]
+fn salvage_scenario_runs_through_real_player_and_individual_actions() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-salvage.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let recovered = {
+        let mut player = game_parallel_economy_player::Player::new(&mut world);
+        let good = player.building_blueprints().unwrap()[0].kit;
+        assert!(player.build_site(1).unwrap());
+        assert!(player.destroy_site(1).unwrap());
+        assert_eq!(player.view().unwrap().debris[0].site, 1);
+        player.salvage_site(1, good, 1).unwrap()
+    };
+    let state = world.snapshot();
+    let events = &state.construction.as_ref().unwrap().salvage_events;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events.iter().filter(|event| event.recovered).count(), 1);
+    assert_eq!(
+        events
+            .iter()
+            .any(|event| event.person == 1 && event.recovered),
+        recovered
+    );
+    assert!(state.construction.as_ref().unwrap().materials.is_empty());
+}
+
+#[test]
 fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = format!(
-        "{}\n[work_sites]\nsites = []\nrequirements = []\n[construction]\n[[construction.blueprints]]\nid = 1\nname = \"shelter workshop\"\nkind = \"workshop\"\ncapacity = 1\nkit = \"reed-shelter-kit\"\nquantity = 1\n[[construction.demolition]]\nperson = 2\nsite = 10\nwilling = false\npressured_by = 1\npressure_threshold = 3\n[[construction.goal_builders]]\nperson = 2\nenabled = false\n",
+        "{}\n[work_sites]\nsites = []\nrequirements = []\n[construction]\n[[construction.blueprints]]\nid = 1\nname = \"shelter workshop\"\nkind = \"workshop\"\ncapacity = 1\nkit = \"reed-shelter-kit\"\nquantity = 1\nsalvage = 1\n[[construction.demolition]]\nperson = 2\nsite = 10\nwilling = false\npressured_by = 1\npressure_threshold = 3\n[[construction.goal_builders]]\nperson = 2\nenabled = false\n",
         source
     );
     let path =
@@ -2200,6 +2229,19 @@ fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     assert_eq!(player.view().unwrap().site_claims, vec![site]);
     assert!(player.claim_site(site).is_err());
     assert!(player.destroy_site(site).unwrap());
+    let debris = player.view().unwrap().debris;
+    assert_eq!(debris.len(), 1);
+    assert_eq!(debris[0].site, site);
+    let good = debris[0].lots[0].good;
+    assert!(player.salvage_site(site, good, 1).unwrap());
+    assert!(
+        player
+            .view()
+            .unwrap()
+            .possessions
+            .iter()
+            .any(|lot| lot.good == good)
+    );
     assert_eq!(player.view().unwrap().site_claims, vec![site]);
     player.withdraw_site_claim(site).unwrap();
     assert!(player.view().unwrap().site_claims.is_empty());

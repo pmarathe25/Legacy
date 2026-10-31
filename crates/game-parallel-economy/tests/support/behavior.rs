@@ -17844,7 +17844,11 @@ fn construction_fixture() -> State {
         bindings: vec![],
     });
     state.construction = Some(Construction {
+        materials: vec![],
+        salvaging: vec![],
+        salvage_events: vec![],
         blueprints: vec![BuildingBlueprint {
+            salvage: 0,
             id: 1,
             name: "workshop kit".into(),
             kind: "workshop".into(),
@@ -18271,6 +18275,9 @@ fn demolition_respects_personal_site_claims_unless_the_actor_disregards_them() {
     let mut initial = claimed_work_sites_fixture();
     initial.autowork = None;
     initial.construction = Some(Construction {
+        materials: vec![],
+        salvaging: vec![],
+        salvage_events: vec![],
         blueprints: vec![],
         policies: vec![],
         events: vec![],
@@ -18349,6 +18356,9 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
     let mut initial = claimed_work_sites_fixture();
     initial.autowork = None;
     initial.construction = Some(Construction {
+        materials: vec![],
+        salvaging: vec![],
+        salvage_events: vec![],
         blueprints: vec![],
         policies: vec![],
         events: vec![],
@@ -18661,6 +18671,7 @@ fn goal_builders_choose_a_sufficient_blueprint_with_an_available_kit() {
         disregard_claims: false,
     }];
     construction.blueprints.push(BuildingBlueprint {
+        salvage: 0,
         id: 2,
         name: "unavailable".into(),
         kind: "workshop".into(),
@@ -18669,6 +18680,7 @@ fn goal_builders_choose_a_sufficient_blueprint_with_an_available_kit() {
         quantity: 1,
     });
     construction.blueprints.push(BuildingBlueprint {
+        salvage: 0,
         id: 3,
         name: "usable".into(),
         kind: "workshop".into(),
@@ -18873,6 +18885,7 @@ fn a_person_builds_an_intermediate_site_to_make_their_goal_site_kit() {
         disregard_claims: false,
     }];
     construction.blueprints.push(BuildingBlueprint {
+        salvage: 0,
         id: 2,
         name: "forge kit".into(),
         kind: "forge".into(),
@@ -18992,6 +19005,7 @@ fn mutually_dependent_sites_do_not_create_kits_or_loop() {
         disregard_claims: false,
     }];
     construction.blueprints.push(BuildingBlueprint {
+        salvage: 0,
         id: 2,
         name: "forge kit".into(),
         kind: "forge".into(),
@@ -19113,6 +19127,7 @@ fn a_goal_plan_can_build_two_layers_of_intermediate_sites() {
     }];
     construction.blueprints.extend([
         BuildingBlueprint {
+            salvage: 0,
             id: 2,
             name: "forge kit".into(),
             kind: "forge".into(),
@@ -19121,6 +19136,7 @@ fn a_goal_plan_can_build_two_layers_of_intermediate_sites() {
             quantity: 1,
         },
         BuildingBlueprint {
+            salvage: 0,
             id: 3,
             name: "kiln kit".into(),
             kind: "kiln".into(),
@@ -19375,6 +19391,361 @@ fn controlled_construction_consumes_a_kit_and_overflow_rolls_back() {
     let before = world.snapshot();
     assert!(world.build_site(1, 1).is_err());
     assert_eq!(world.snapshot(), before);
+}
+
+#[test]
+fn site_materials_keep_real_cohorts_after_building_and_destruction() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.autowork = None;
+    let owner = initial.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.blueprints[0].quantity = 2;
+    owner.blueprints[0].salvage = 1;
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![
+            Lot {
+                good: 3,
+                quantity: 1,
+                expires_at: Some(10),
+            },
+            Lot {
+                good: 3,
+                quantity: 1,
+                expires_at: Some(20),
+            },
+        ],
+    )
+    .unwrap();
+    let run =
+        |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    assert!(world.build_site(1, 1).unwrap());
+                    let built = world.snapshot();
+                    let material = built
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Site(1))
+                        .unwrap();
+                    assert_eq!(
+                        material.lots,
+                        vec![Lot {
+                            good: 3,
+                            quantity: 1,
+                            expires_at: Some(10)
+                        }]
+                    );
+                    assert!(!built.construction.as_ref().unwrap().materials[0].debris);
+                    assert!(world.destroy_site(1, 1).unwrap());
+                    let destroyed = world.snapshot();
+                    assert!(destroyed.construction.as_ref().unwrap().materials[0].debris);
+                    assert!(destroyed.work_sites.as_ref().unwrap().sites.is_empty());
+                    let restored = Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&destroyed).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(restored.snapshot(), destroyed);
+                    let mut invalid = destroyed.clone();
+                    invalid.construction.as_mut().unwrap().materials[0].debris = false;
+                    assert!(Economy::compile(invalid).is_err());
+                    assert!(!world.salvage_site(1, 1, 3, 100).unwrap());
+                    assert!(world.salvage_site(1, 1, 3, 1).unwrap());
+                    let recovered = world.snapshot();
+                    let holder = recovered
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap();
+                    assert!(holder.lots.iter().any(|lot| lot.good == 3
+                        && lot.quantity == 1
+                        && lot.expires_at == Some(10)));
+                    assert!(
+                        recovered
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .all(|row| row.place != Place::Site(1))
+                    );
+                    assert!(
+                        recovered
+                            .construction
+                            .as_ref()
+                            .unwrap()
+                            .materials
+                            .is_empty()
+                    );
+                    recovered
+                })
+        };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn competing_salvagers_cannot_recover_the_same_material_twice() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.autowork = None;
+    let construction = initial.construction.as_mut().unwrap();
+    construction.policies.clear();
+    construction.blueprints[0].salvage = 1;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    assert!(world.destroy_site(1, 1).unwrap());
+    let mut initial = world.snapshot();
+    initial.people[0].controlled = false;
+    initial.construction.as_mut().unwrap().salvaging = [2, 3]
+        .into_iter()
+        .map(|person| SalvagePolicy {
+            person,
+            site: 1,
+            quantity: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+            disregard_claims: true,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.construction.as_ref().unwrap().salvage_events;
+                assert_eq!(events.len(), 2);
+                assert_eq!(events.iter().filter(|event| event.recovered).count(), 1);
+                let total: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|row| matches!(row.place, Place::Person(2 | 3)))
+                    .flat_map(|row| &row.lots)
+                    .filter(|lot| lot.good == 3)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(total, 1);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn salvage_can_be_motivated_by_fear_without_a_felt_obligation() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.autowork = None;
+    let owner = initial.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.blueprints[0].salvage = 1;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    assert!(world.destroy_site(1, 1).unwrap());
+    let mut state = world.snapshot();
+    state.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 5,
+        obligation: 0,
+        affinity: 0,
+    }];
+    state.construction.as_mut().unwrap().salvaging = vec![SalvagePolicy {
+        person: 2,
+        site: 1,
+        quantity: 1,
+        willing: false,
+        pressured_by: Some(1),
+        pressure_threshold: Some(5),
+        disregard_claims: true,
+    }];
+    let mut world = Economy::compile(state).unwrap();
+    world.set_salvage_choice(2, false).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.construction.as_ref().unwrap().salvage_events[0].recovered);
+    assert_eq!(state.opinions.unwrap().index().obligation(2, 1), 0);
+}
+
+#[test]
+fn rejected_competing_construction_retires_its_empty_site_custody() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    let owner = initial.construction.as_mut().unwrap();
+    owner.blueprints[0].salvage = 1;
+    let mut second = owner.policies[0].clone();
+    second.person = 3;
+    owner.policies.push(second);
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+    assert_eq!(state.construction.as_ref().unwrap().materials.len(), 1);
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .filter(|row| matches!(row.place, Place::Site(_)))
+            .count(),
+        1
+    );
+    Economy::compile(state).unwrap();
+}
+
+#[test]
+fn expired_site_material_cannot_be_recovered() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.autowork = None;
+    let owner = initial.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.blueprints[0].salvage = 1;
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: Some(3),
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    assert!(world.destroy_site(1, 1).unwrap());
+    assert!(!world.salvage_site(1, 1, 3, 1).unwrap());
+    let state = world.snapshot();
+    assert!(state.construction.as_ref().unwrap().materials.is_empty());
+    assert!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .all(|row| row.place != Place::Site(1))
+    );
+    assert!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .filter(|row| row.place == Place::Person(1))
+            .flat_map(|row| &row.lots)
+            .all(|lot| lot.good != 3)
+    );
+}
+
+#[test]
+fn salvage_cleanup_preserves_simultaneous_finished_job_cleanup() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.people[1].willing_to_work = false;
+    initial.work_sites.as_mut().unwrap().requirements.clear();
+    let owner = initial.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.blueprints[0].salvage = 1;
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![WorkPolicy {
+            person: 2,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        }],
+        requests: None,
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    assert!(world.destroy_site(1, 1).unwrap());
+    world.set_work_choice(2, true).unwrap();
+    assert_eq!(world.advance().unwrap().started, vec![1]);
+    assert!(world.salvage_site(1, 1, 3, 1).unwrap());
+    let state = world.snapshot();
+    assert!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .all(|row| !matches!(row.place, Place::Site(1) | Place::JobInput(1)))
+    );
+    Economy::compile(state).unwrap();
+}
+
+#[test]
+fn later_failure_rolls_back_staged_site_material_and_construction() {
+    use game_parallel_dreams::Dream;
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    let owner = initial.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.blueprints[0].salvage = 1;
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![],
+        events: vec![],
+    });
+    initial.dreams = Some(Dreams {
+        inherit_births: false,
+        learning: vec![],
+        people: vec![Dream {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            batch: 1,
+            review_interval: u64::MAX,
+            next_review: 0,
+            enabled: true,
+        }],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    let before = world.snapshot();
+    assert!(world.build_site(1, 1).is_err());
+    assert_eq!(world.snapshot(), before);
+    assert!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .all(|row| !matches!(row.place, Place::Site(_)))
+    );
 }
 
 #[test]
@@ -19640,6 +20011,9 @@ fn concentrated_site_destruction(count: u64) -> State {
         bindings: vec![],
     });
     initial.construction = Some(Construction {
+        materials: vec![],
+        salvaging: vec![],
+        salvage_events: vec![],
         blueprints: vec![],
         policies: vec![],
         events: vec![],
@@ -19731,7 +20105,11 @@ fn concentrated_site_construction(count: u64) -> State {
         bindings: vec![],
     });
     state.construction = Some(Construction {
+        materials: vec![],
+        salvaging: vec![],
+        salvage_events: vec![],
         blueprints: vec![BuildingBlueprint {
+            salvage: 0,
             id: 1,
             name: "workshop kit".into(),
             kind: "workshop".into(),
@@ -19773,6 +20151,140 @@ fn concentrated_site_construction(count: u64) -> State {
     )
     .unwrap();
     state
+}
+
+fn concentrated_site_salvage(count: u64) -> State {
+    let mut state = concentrated_site_construction(count);
+    state.work_sites.as_mut().unwrap().next_id = 2;
+    let owner = state.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.materials = vec![game_parallel_economy_building::Material {
+        site: 1,
+        region: 1,
+        debris: true,
+    }];
+    owner.salvaging = (2..=count)
+        .map(|person| SalvagePolicy {
+            person,
+            site: 1,
+            quantity: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+            disregard_claims: true,
+        })
+        .collect();
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: count / 8 - 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state.physical.custody.containers.push(
+        Container::new(
+            Place::Site(1),
+            1,
+            vec![Lot {
+                good: 2,
+                quantity: 1,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    );
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    state
+}
+
+#[test]
+fn concentrated_salvage_has_one_winner_across_worker_counts() {
+    let initial = concentrated_site_salvage(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .salvage_events
+                        .iter()
+                        .filter(|row| row.recovered)
+                        .count(),
+                    1
+                );
+                assert!(state.construction.as_ref().unwrap().materials.is_empty());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_site_salvage_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_site_salvage(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .construction
+                        .unwrap()
+                        .salvage_events
+                        .iter()
+                        .filter(|row| row.recovered)
+                        .count(),
+                    1
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 salvage_seconds={:.6}",
+                samples[1]
+            );
+        });
 }
 
 fn concentrated_built_site_claims(count: u64) -> State {
@@ -19951,6 +20463,7 @@ fn concentrated_intermediate_site_planning(count: u64) -> State {
         .unwrap()
         .blueprints
         .push(BuildingBlueprint {
+            salvage: 0,
             id: 2,
             name: "forge kit".into(),
             kind: "forge".into(),
@@ -20200,7 +20713,11 @@ fn concentrated_site_construction_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = concentrated_site_construction(count);
+    let mut initial = concentrated_site_construction(count);
+    let retain = std::env::var("LEGACY_SALVAGE").is_ok_and(|value| value == "1");
+    if retain {
+        initial.construction.as_mut().unwrap().blueprints[0].salvage = 1;
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -20211,13 +20728,20 @@ fn concentrated_site_construction_benchmark() {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                if retain {
+                    assert_eq!(
+                        world.snapshot().construction.unwrap().materials.len(),
+                        count as usize / 8
+                    );
+                }
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                "workers={workers} people={count} retained={retain} ticks=1 elapsed={:.6}",
                 samples[1]
             );
         });

@@ -98,6 +98,8 @@ struct ConstructionConfig {
     demolition: Vec<game_parallel_economy::DemolitionPolicy>,
     #[serde(default)]
     goal_builders: Vec<game_parallel_economy::GoalBuilder>,
+    #[serde(default)]
+    salvaging: Vec<game_parallel_economy::SalvagePolicy>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -108,6 +110,8 @@ struct BuildingBlueprintConfig {
     capacity: u64,
     kit: String,
     quantity: u64,
+    #[serde(default)]
+    salvage: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -684,6 +688,7 @@ pub fn scenario_with_options(
                             .get(b.kit.as_str())
                             .ok_or_else(|| format!("unknown construction kit {}", b.kit))?,
                         quantity: b.quantity,
+                        salvage: b.salvage,
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
@@ -694,6 +699,9 @@ pub fn scenario_with_options(
                 demolition: config.demolition,
                 demolition_events: vec![],
                 goal_builders: config.goal_builders,
+                materials: vec![],
+                salvaging: config.salvaging,
+                salvage_events: vec![],
             })
         })
         .transpose()?;

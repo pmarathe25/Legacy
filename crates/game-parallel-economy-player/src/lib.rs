@@ -22,6 +22,11 @@ pub struct WorkSiteView {
     pub occupied: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DebrisView {
+    pub site: u64,
+    pub lots: Vec<Lot>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FighterView {
     pub person: u64,
     pub side: u32,
@@ -98,6 +103,7 @@ pub struct View {
     pub fields: Vec<game_parallel_economy::Field>,
     pub resource_sites: Vec<game_parallel_economy::ResourceNode>,
     pub work_sites: Vec<WorkSiteView>,
+    pub debris: Vec<DebrisView>,
     pub fatigue: Option<(u32, bool)>,
     pub conditions: Option<Conditions>,
     pub isolation: Option<u32>,
@@ -397,6 +403,28 @@ impl<'a> Player<'a> {
                 })
             })
             .unwrap_or_default();
+        let debris = person
+            .as_ref()
+            .and_then(|p| p.region)
+            .and_then(|region| {
+                state.construction.map(|owner| {
+                    owner
+                        .materials
+                        .par_iter()
+                        .filter(|material| material.debris && material.region == region)
+                        .filter_map(|material| {
+                            state
+                                .physical
+                                .custody(Place::Site(material.site))
+                                .map(|holder| DebrisView {
+                                    site: material.site,
+                                    lots: holder.lots.clone(),
+                                })
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
         let resource_sites =
             person
                 .as_ref()
@@ -579,6 +607,7 @@ impl<'a> Player<'a> {
             fields,
             resource_sites,
             work_sites,
+            debris,
             fatigue,
             conditions,
             isolation,
@@ -630,6 +659,11 @@ impl<'a> Player<'a> {
     /// Destroy an unoccupied local work site without recovering materials.
     pub fn destroy_site(&mut self, site: u64) -> Result<bool, String> {
         self.world.destroy_site(self.current()?, site)
+    }
+    /// Recover locally visible debris into the ruler's actual possessions.
+    pub fn salvage_site(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
+        self.world
+            .salvage_site(self.current()?, site, good, quantity)
     }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
     pub fn guardians(&self) -> Result<Vec<Guardian>, String> {
