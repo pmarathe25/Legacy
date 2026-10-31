@@ -463,6 +463,17 @@ pub fn scenario_with_options(
             .retain(|row| !authored.contains(&row.person));
         social.pressures.extend(social_rows.pressures);
     }
+    let mut preferences = population::claims(scenario.seed, &scenario.population)?;
+    if !preferences.is_empty() {
+        let claims = scenario
+            .dynamics
+            .as_mut()
+            .and_then(|owner| owner.claims.as_mut())
+            .ok_or("generated claim preferences require personal claims")?;
+        let authored: HashSet<_> = claims.preferences.iter().map(|row| row.person).collect();
+        preferences.retain(|row| !authored.contains(&row.person));
+        claims.preferences.extend(preferences);
+    }
     let mut farming = population::farming(scenario.seed, &scenario.population);
     if !farming.is_empty() {
         let cultivation = scenario

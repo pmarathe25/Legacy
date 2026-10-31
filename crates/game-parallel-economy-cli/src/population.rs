@@ -28,6 +28,8 @@ pub struct Profile {
     food_search_percent: Option<u8>,
     #[serde(default)]
     social: Option<SocialProfile>,
+    #[serde(default)]
+    claims: Option<ClaimProfile>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +52,54 @@ struct SocialProfile {
     fear_at_least: Option<u64>,
     #[serde(default)]
     obligation_at_least: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClaimProfile {
+    assert_outputs_percent: u8,
+    disregard_percent: u8,
+    #[serde(default)]
+    assert_built_sites_percent: u8,
+    #[serde(default)]
+    desperate_hunger: Option<u32>,
+}
+
+pub fn claims(
+    seed: u64,
+    profiles: &[Profile],
+) -> Result<Vec<game_parallel_economy_dynamics::claims::Preference>, String> {
+    for rule in profiles
+        .iter()
+        .filter_map(|profile| profile.claims.as_ref())
+    {
+        if rule.assert_outputs_percent > 100
+            || rule.disregard_percent > 100
+            || rule.assert_built_sites_percent > 100
+        {
+            return Err("invalid generated claim preference".into());
+        }
+    }
+    Ok(profiles
+        .par_iter()
+        .filter_map(|profile| profile.claims.as_ref().map(|rule| (profile, rule)))
+        .flat_map(|(profile, rule)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let person = profile.start_id + offset;
+                let random = |attribute| {
+                    game_parallel_genetics::random(seed ^ 0x636c61696d73, person, attribute)
+                };
+                game_parallel_economy_dynamics::claims::Preference {
+                    person,
+                    disregard_others: random(0) % 100 < u64::from(rule.disregard_percent),
+                    assert_outputs: random(1) % 100 < u64::from(rule.assert_outputs_percent),
+                    assert_built_sites: random(2) % 100
+                        < u64::from(rule.assert_built_sites_percent),
+                    desperate_hunger: rule.desperate_hunger,
+                }
+            })
+        })
+        .collect())
 }
 
 pub struct SocialRows {
@@ -368,6 +418,7 @@ mod tests {
             farm_percent: None,
             food_search_percent: None,
             social: None,
+            claims: None,
         }
     }
 
@@ -468,5 +519,17 @@ mod tests {
             obligation_at_least: None,
         });
         assert!(social(1, &[people]).is_err());
+    }
+
+    #[test]
+    fn claim_profile_rejects_invalid_probabilities() {
+        let mut people = profile();
+        people.claims = Some(ClaimProfile {
+            assert_outputs_percent: 101,
+            disregard_percent: 0,
+            assert_built_sites_percent: 0,
+            desperate_hunger: None,
+        });
+        assert!(claims(1, &[people]).is_err());
     }
 }

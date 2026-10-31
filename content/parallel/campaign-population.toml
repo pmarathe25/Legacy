@@ -33,3 +33,9 @@ max_diligence = 1000
 pressure_percent = 50
 fear_at_least = 3
 obligation_at_least = 3
+
+[population.claims]
+assert_outputs_percent = 20
+disregard_percent = 40
+assert_built_sites_percent = 20
+desperate_hunger = 35

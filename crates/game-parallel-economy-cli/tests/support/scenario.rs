@@ -180,6 +180,33 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                 );
                 let dynamics = initial.dynamics.as_ref().unwrap();
                 let social = dynamics.social.as_ref().unwrap();
+                let claims = dynamics.claims.as_ref().unwrap();
+                assert_eq!(claims.preferences.len(), 130);
+                assert!(claims.claims.is_empty() && claims.site_claims.is_empty());
+                assert!(
+                    claims
+                        .preferences
+                        .iter()
+                        .any(|p| p.person >= 1000 && p.assert_outputs)
+                );
+                assert!(
+                    claims
+                        .preferences
+                        .iter()
+                        .any(|p| p.person >= 1000 && !p.assert_outputs)
+                );
+                assert!(
+                    claims
+                        .preferences
+                        .iter()
+                        .any(|p| p.person >= 1000 && p.disregard_others)
+                );
+                assert!(
+                    claims
+                        .preferences
+                        .iter()
+                        .any(|p| p.person >= 1000 && !p.disregard_others)
+                );
                 assert_eq!(social.participants.len(), 130);
                 assert!(
                     social
@@ -242,13 +269,15 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
 }
 
 fn generated_campaign(count: u64) -> game_parallel_economy::Economy {
+    static NEXT_FILE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let profile = std::fs::read_to_string(root.join("content/parallel/campaign-population.toml"))
         .unwrap()
         .replace("count = 128", &format!("count = {count}"));
     let path = std::env::temp_dir().join(format!(
-        "legacy-campaign-population-{}-{count}.toml",
-        std::process::id()
+        "legacy-campaign-population-{}-{count}-{}.toml",
+        std::process::id(),
+        NEXT_FILE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     ));
     std::fs::write(&path, profile).unwrap();
     let world = super::scenario_with_options(
@@ -369,6 +398,104 @@ fn generated_unwilling_person_can_respond_to_fear_without_a_felt_obligation() {
             .obligation(target, requester),
         0
     );
+}
+
+#[test]
+fn generated_person_asserts_a_claim_only_after_their_real_output_arrives() {
+    let mut initial = generated_campaign(128).snapshot();
+    let claims = initial.dynamics.as_ref().unwrap().claims.as_ref().unwrap();
+    let worker = initial
+        .people
+        .iter()
+        .find(|person| {
+            person.id >= 1000
+                && person.region == Some(1)
+                && person.willing_to_work
+                && claims
+                    .preferences
+                    .iter()
+                    .any(|p| p.person == person.id && p.assert_outputs)
+        })
+        .unwrap()
+        .id;
+    for person in &mut initial.people {
+        person.willing_to_work = person.id == worker;
+    }
+    for policy in &mut initial.agriculture.as_mut().unwrap().policies {
+        policy.willing = false;
+    }
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .personality
+        .as_mut()
+        .unwrap()
+        .people
+        .iter_mut()
+        .find(|p| p.person == worker)
+        .unwrap()
+        .diligence = 1000;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .dynamics
+                        .unwrap()
+                        .claims
+                        .unwrap()
+                        .claims
+                        .is_empty()
+                );
+                for _ in 0..5 {
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                let flour = state
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|g| g.name == "flour")
+                    .unwrap()
+                    .id;
+                let stock = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|container| {
+                        container.place
+                            == game_parallel_lots::Place::Stock {
+                                region: 1,
+                                good: flour,
+                            }
+                    })
+                    .unwrap();
+                assert!(stock.used > 0);
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .claims
+                        .as_ref()
+                        .unwrap()
+                        .claims
+                        .iter()
+                        .any(|claim| claim.person == worker
+                            && claim.region == 1
+                            && claim.good == flour)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
