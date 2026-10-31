@@ -888,3 +888,58 @@ fn authored_work_tools_resolve_recipe_and_good_names() {
         "tool"
     );
 }
+
+#[test]
+fn authored_work_sites_resolve_recipes_and_preserve_kind_names() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source = std::fs::read_to_string(root.join("content/parallel/economy.toml")).unwrap();
+    let configured = format!(
+        "{}\n[work_sites]\n[[work_sites.sites]]\nid = 7\nregion = 1\nkind = \"forge\"\ncapacity = 2\n[[work_sites.requirements]]\nrecipe = \"fixture-tool\"\nkind = \"forge\"\nslots = 1\n",
+        source
+    );
+    let path = std::env::temp_dir().join(format!("legacy-work-sites-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let state = world.snapshot();
+    let sites = state.work_sites.unwrap();
+    assert_eq!(sites.sites[0].kind, "forge");
+    assert_eq!(sites.requirements[0].kind, "forge");
+    assert_eq!(
+        state
+            .physical
+            .recipes
+            .iter()
+            .find(|r| r.id == sites.requirements[0].recipe)
+            .unwrap()
+            .name,
+        "fixture-tool"
+    );
+}
+
+#[test]
+fn ruler_observes_only_local_physical_work_sites() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = format!(
+        "{}\n[work_sites]\n[[work_sites.sites]]\nid = 7\nregion = 1\nkind = \"forge\"\ncapacity = 2\n[[work_sites.sites]]\nid = 8\nregion = 2\nkind = \"mill\"\ncapacity = 1\n[[work_sites.requirements]]\nrecipe = \"fixture-tool\"\nkind = \"forge\"\nslots = 1\n",
+        source
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-work-sites-view-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let player = game_parallel_economy_player::Player::new(&mut world);
+    let (_, requirements) = player.work_requirements().unwrap();
+    assert_eq!(requirements[0].kind, "forge");
+    let view = player.view().unwrap();
+    assert_eq!(view.work_sites.len(), 1);
+    assert_eq!(
+        (view.work_sites[0].site.id, view.work_sites[0].occupied),
+        (7, 0)
+    );
+}

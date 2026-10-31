@@ -44,6 +44,8 @@ macro_rules! prepare_work {
                     claims: $claims.as_ref(),
                     goals: $world.goals.as_ref(),
                     preplanned_goals: $preplanned.as_ref(),
+                    sites: $world.work_sites.as_ref(),
+                    seed: $world.seed,
                     busy: &$busy,
                     unwilling: &unwilling,
                     max_job: $world.physical.work().last().map(|row| row.job.id),

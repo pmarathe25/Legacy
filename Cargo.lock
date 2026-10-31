@@ -3563,6 +3563,7 @@ dependencies = [
  "game-parallel-economy-fatigue",
  "game-parallel-economy-knowledge",
  "game-parallel-economy-person",
+ "game-parallel-economy-work",
  "game-parallel-environment",
  "game-parallel-lot-runtime",
  "game-parallel-purpose",
@@ -3611,6 +3612,7 @@ dependencies = [
  "game-parallel-production-model",
  "game-parallel-work-asking",
  "game-parallel-work-requests",
+ "game-parallel-work-sites",
  "rayon",
  "serde",
 ]
@@ -4933,6 +4935,18 @@ version = "0.2.0"
 dependencies = [
  "game-parallel-opinions",
  "game-parallel-production",
+ "game-parallel-production-model",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-work-sites"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "game-parallel-lot-allocation",
+ "game-parallel-lot-runtime",
  "game-parallel-production-model",
  "rayon",
  "serde",

@@ -15,3 +15,5 @@ Travelers can eat carried food. People on the same directed route at the same pr
 Individual hauling preferences can move real lots between regions. A carrier can change their mind between pickup, departure, and delivery; fear or obligation may motivate an otherwise unwilling carrier. Routes, claims, carrying capacity, destination capacity, and expiry all remain physical constraints.
 
 Authored reusable tool requirements check personal custody before a work attempt competes for materials and before each work increment. Missing or expired tools pause work without consuming the tool.
+
+Fixed physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Site construction, removal, and within-region transport remain to be implemented.

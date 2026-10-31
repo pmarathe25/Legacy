@@ -64,6 +64,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             for site in view.resource_sites {
                 println!("resource-site={site:?}");
             }
+            for site in view.work_sites {
+                println!("work-site={site:?}");
+            }
             for request in view.pending_work_requests {
                 println!("work-request={request:?}");
             }
@@ -104,6 +107,13 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                     "recipe={} name={} ticks={} inputs={:?} outputs={:?}",
                     recipe.id, recipe.name, recipe.ticks, recipe.inputs, recipe.outputs
                 );
+            }
+            let (tools, sites) = player.work_requirements()?;
+            for tool in tools {
+                println!("work-tool={tool:?}");
+            }
+            for site in sites {
+                println!("work-site-requirement={site:?}");
             }
         }
         ["past-knowledge", life] => {

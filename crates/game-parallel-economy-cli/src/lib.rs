@@ -38,6 +38,8 @@ struct Scenario {
     #[serde(default)]
     work_tools: Vec<WorkToolConfig>,
     #[serde(default)]
+    work_sites: Option<WorkSitesConfig>,
+    #[serde(default)]
     opinions: Option<game_parallel_opinions::Opinions>,
     #[serde(default)]
     aspirations: Vec<Aspiration>,
@@ -75,6 +77,21 @@ struct Scenario {
     medical: Option<MedicalConfig>,
     #[serde(default)]
     hauling: Option<HaulingConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkSitesConfig {
+    #[serde(default)]
+    sites: Vec<game_parallel_economy::WorkSite>,
+    #[serde(default)]
+    requirements: Vec<WorkSiteRequirementConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkSiteRequirementConfig {
+    recipe: String,
+    kind: String,
+    slots: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -392,6 +409,29 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let work_sites = scenario
+        .work_sites
+        .map(|config| {
+            let requirements = config
+                .requirements
+                .into_iter()
+                .map(|r| {
+                    Ok(game_parallel_economy::WorkSiteRequirement {
+                        recipe: *recipes
+                            .get(r.recipe.as_str())
+                            .ok_or_else(|| format!("unknown work site recipe {}", r.recipe))?,
+                        kind: r.kind,
+                        slots: r.slots,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok::<_, String>(game_parallel_economy::WorkSites {
+                sites: config.sites,
+                requirements,
+                bindings: vec![],
+            })
+        })
+        .transpose()?;
     let mut agreements = scenario.agreements;
     if !scenario.promise_offering.is_empty() {
         let owner = agreements
@@ -717,6 +757,7 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
             requests: scenario.work_requests,
         }),
         work_tools,
+        work_sites,
         goals: (!dreams.is_empty()).then_some(Goals {
             retry_interval: 3,
             plan_inputs: true,

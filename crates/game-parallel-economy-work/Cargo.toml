@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-parallel-work-sites = { path = "../game-parallel-work-sites" }
 game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
 game-parallel-family-columns = { path = "../game-parallel-family-columns" }
 game-parallel-families = { path = "../game-parallel-families" }

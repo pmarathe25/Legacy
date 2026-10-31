@@ -16,6 +16,10 @@ pub use game_parallel_economy_promises::{
 };
 pub use game_parallel_economy_skills::Skills;
 pub use game_parallel_economy_work::care::DependentCare;
+pub use game_parallel_economy_work::sites::{
+    Binding as WorkSiteBinding, Facilities as WorkSites, Requirement as WorkSiteRequirement,
+    Site as WorkSite,
+};
 pub use game_parallel_economy_work::tools::Requirement as WorkTool;
 pub use game_parallel_opinions::{
     ObligationDevelopment, Opinion, RelationshipCase, Sensitivity as OpinionSensitivity,
@@ -67,6 +71,7 @@ pub struct Economy {
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
     work_tools: Vec<WorkTool>,
+    work_sites: Option<WorkSites>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -100,6 +105,7 @@ pub struct Draft {
     agreements: Option<Agreements>,
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
+    work_sites: Option<WorkSites>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -654,6 +660,19 @@ impl Economy {
             physical.recipes(),
             physical.tick(),
         )?;
+        if let Some(sites) = &mut state.work_sites {
+            sites.normalize();
+            let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
+            let regions: HashSet<_> = view
+                .containers
+                .par_iter()
+                .filter_map(|c| match c.place {
+                    game_parallel_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            sites.validate(physical.work(), &recipes, &regions)?;
+        }
         if !state.work_tools.is_empty() {
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
             game_parallel_economy_work::tools::validate(&state.work_tools, &recipes, &goods)?;
@@ -685,6 +704,7 @@ impl Economy {
             opinions: state.opinions,
             autowork: state.autowork,
             work_tools: state.work_tools,
+            work_sites: state.work_sites,
             goals: state.goals,
             dreams: state.dreams,
             nutrition: state.nutrition,
@@ -722,6 +742,7 @@ impl Economy {
             opinions: self.opinions.clone(),
             autowork: self.autowork.clone(),
             work_tools: self.work_tools.clone(),
+            work_sites: self.work_sites.clone(),
             goals: self.goals.clone(),
             dreams: self.dreams.clone(),
             nutrition: self.nutrition.clone(),
@@ -1397,6 +1418,16 @@ impl Economy {
                     .collect(),
             )
         };
+        let site_plan = self
+            .work_sites
+            .as_ref()
+            .map(|sites| sites.prepare(&starts, self.seed, tick));
+        let starts = match (&self.work_sites, &site_plan) {
+            (Some(sites), Some(plan)) => {
+                std::borrow::Cow::Owned(sites.filter_starts(&starts, plan))
+            }
+            _ => starts,
+        };
         let farm_harvest = farming.as_ref().map_or(&[][..], |p| p.harvest.as_slice());
         let gathered_harvest = gathering_plan
             .as_ref()
@@ -1615,6 +1646,11 @@ impl Economy {
             })
             .collect();
         self.physical.interrupt_workers_in(&mut physical, &deaths)?;
+        let work_sites = self
+            .work_sites
+            .as_ref()
+            .zip(site_plan.as_ref())
+            .map(|(sites, plan)| sites.advance(plan, physical.events()));
         game_parallel_economy_combat::finish_world!(combat, person);
         let missions = game_parallel_economy_expeditions::finish_world!(
             self, expedition, person, travel, dynamics, tick
@@ -1699,6 +1735,7 @@ impl Economy {
             agreements: next_agreements,
             opinions: next_opinions,
             autowork,
+            work_sites,
             goals,
             dreams,
             nutrition: person.nutrition,
@@ -1739,6 +1776,7 @@ impl Economy {
         self.agreements = draft.agreements;
         self.opinions = draft.opinions;
         self.autowork = draft.autowork;
+        self.work_sites = draft.work_sites;
         self.goals = draft.goals;
         self.dreams = draft.dreams;
         self.nutrition = draft.nutrition;

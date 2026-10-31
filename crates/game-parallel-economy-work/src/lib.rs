@@ -1,5 +1,7 @@
 //! Personal responses to requested work, separate from physical admission.
 pub mod care;
+mod site_filter;
+pub use game_parallel_work_sites as sites;
 pub mod tools;
 use game_parallel_autowork::{Autowork, Plan as WorkPlan, Policy};
 use game_parallel_goals::Goals;
@@ -95,6 +97,8 @@ pub struct Context<'a> {
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub goals: Option<&'a Goals>,
     pub preplanned_goals: Option<&'a Autowork>,
+    pub sites: Option<&'a sites::Facilities>,
+    pub seed: u64,
     pub busy: &'a [u64],
     pub unwilling: &'a [u64],
     pub max_job: Option<u64>,
@@ -127,8 +131,23 @@ impl Context<'_> {
                 self.production,
                 self.claims,
             );
+            let base = filtered.as_ref().unwrap_or(base);
+            let site_filtered = self
+                .sites
+                .filter(|sites| !sites.requirements.is_empty())
+                .map(|sites| {
+                    site_filter::filter(
+                        sites,
+                        base,
+                        self.people,
+                        &busy,
+                        self.production.max_work_hunger,
+                        self.seed,
+                        self.tick,
+                    )
+                });
             return Ok(Plan {
-                work: filtered.as_ref().unwrap_or(base).plan_validated(
+                work: site_filtered.as_ref().unwrap_or(base).plan_validated(
                     self.people,
                     self.production,
                     &busy,
@@ -235,7 +254,22 @@ impl Context<'_> {
             self.production,
             self.claims,
         );
-        let work = filtered.as_ref().unwrap_or(&staged).plan_validated(
+        let base = filtered.as_ref().unwrap_or(&staged);
+        let site_filtered = self
+            .sites
+            .filter(|sites| !sites.requirements.is_empty())
+            .map(|sites| {
+                site_filter::filter(
+                    sites,
+                    base,
+                    self.people,
+                    &busy,
+                    self.production.max_work_hunger,
+                    self.seed,
+                    self.tick,
+                )
+            });
+        let work = site_filtered.as_ref().unwrap_or(base).plan_validated(
             self.people,
             self.production,
             &busy,

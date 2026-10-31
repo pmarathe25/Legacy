@@ -17,6 +17,11 @@ pub struct Job {
     pub remaining: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkSiteView {
+    pub site: game_parallel_economy::WorkSite,
+    pub occupied: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FighterView {
     pub person: u64,
     pub side: u32,
@@ -74,6 +79,7 @@ pub struct View {
     pub infection: Option<InfectionView>,
     pub fields: Vec<game_parallel_economy::Field>,
     pub resource_sites: Vec<game_parallel_economy::ResourceNode>,
+    pub work_sites: Vec<WorkSiteView>,
     pub fatigue: Option<(u32, bool)>,
     pub conditions: Option<Conditions>,
     pub isolation: Option<u32>,
@@ -337,6 +343,42 @@ impl<'a> Player<'a> {
                 })
             })
             .unwrap_or_default();
+        let work_sites = person
+            .as_ref()
+            .and_then(|p| p.region)
+            .and_then(|region| {
+                state.work_sites.map(|owner| {
+                    use std::collections::{HashMap, HashSet};
+                    let local: Vec<_> = owner
+                        .sites
+                        .par_iter()
+                        .filter(|s| s.region == region)
+                        .collect();
+                    let ids: HashSet<_> = local.par_iter().map(|s| s.id).collect();
+                    let used = owner
+                        .bindings
+                        .par_iter()
+                        .filter(|b| ids.contains(&b.site))
+                        .fold(HashMap::new, |mut m, b| {
+                            *m.entry(b.site).or_insert(0u64) += b.slots;
+                            m
+                        })
+                        .reduce(HashMap::new, |mut a, b| {
+                            for (site, slots) in b {
+                                *a.entry(site).or_insert(0) += slots;
+                            }
+                            a
+                        });
+                    local
+                        .par_iter()
+                        .map(|site| WorkSiteView {
+                            site: (*site).clone(),
+                            occupied: used.get(&site.id).copied().unwrap_or(0),
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
         let resource_sites =
             person
                 .as_ref()
@@ -458,6 +500,7 @@ impl<'a> Player<'a> {
             infection,
             fields,
             resource_sites,
+            work_sites,
             fatigue,
             conditions,
             isolation,
@@ -471,6 +514,24 @@ impl<'a> Player<'a> {
         Ok((
             read.physical.goods().to_vec(),
             read.physical.recipes().to_vec(),
+        ))
+    }
+    /// Work requirements for the same recipe catalog visible to the current person.
+    pub fn work_requirements(
+        &self,
+    ) -> Result<
+        (
+            Vec<game_parallel_economy::WorkTool>,
+            Vec<game_parallel_economy::WorkSiteRequirement>,
+        ),
+        String,
+    > {
+        self.current()?;
+        let read = self.world.read();
+        Ok((
+            read.work_tools.to_vec(),
+            read.work_sites
+                .map_or_else(Vec::new, |s| s.requirements.clone()),
         ))
     }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
