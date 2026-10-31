@@ -43,6 +43,7 @@ game-parallel-opinions = { path = "../game-parallel-opinions" }
 game-parallel-goals = { path = "../game-parallel-goals" }
 game-parallel-autowork = { path = "../game-parallel-autowork" }
 game-parallel-nutrition = { path = "../game-parallel-nutrition" }
+game-parallel-social = { path = "../game-parallel-social" }
 rayon.workspace = true
 serde.workspace = true
 
@@ -53,5 +54,4 @@ game-parallel-tactics = { path = "../game-parallel-tactics" }
 game-parallel-dreams = { path = "../game-parallel-dreams" }
 game-parallel-dependent-care = { path = "../game-parallel-dependent-care" }
 game-parallel-families = { path = "../game-parallel-families" }
-game-parallel-social = { path = "../game-parallel-social" }
 serde_json.workspace = true

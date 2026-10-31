@@ -37,6 +37,7 @@ mod environment;
 mod food_search;
 mod gathering;
 mod giving;
+mod giving_discovery;
 mod hauling;
 mod medical;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
@@ -44,6 +45,7 @@ pub use giving::{
     Asking as FoodAsking, Giving, HelperAsking, Policy as GivingPolicy, Request as FoodRequest,
     Response as FoodResponse, SharingLearning,
 };
+pub use giving_discovery::Policy as AcquaintanceAsking;
 pub use hauling::{
     Asking as HaulingAsking, Hauling, Policy as HaulingPolicy, Request as HaulingRequest,
 };
@@ -1111,6 +1113,26 @@ impl Economy {
                 &busy,
                 tick,
                 &locations,
+            )?;
+            game_parallel_economy_work::reserve(&mut busy, askers);
+            let acquaintances = self
+                .dynamics
+                .as_ref()
+                .and_then(|owner| owner.social.as_ref())
+                .map_or(&[][..], |social| social.relationships.as_slice());
+            let askers = giving_discovery::prepare(
+                giving,
+                giving_discovery::Context {
+                    people: &self.people,
+                    goods: self.physical.goods(),
+                    view: &view,
+                    busy: &busy,
+                    relationships: acquaintances,
+                    opinions: self.opinions.as_ref(),
+                    locations: &locations,
+                    seed: self.seed,
+                    tick,
+                },
             )?;
             game_parallel_economy_work::reserve(&mut busy, askers);
         }

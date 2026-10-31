@@ -273,6 +273,8 @@ struct GivingConfig {
     learning: Vec<game_parallel_economy::SharingLearning>,
     #[serde(default)]
     asking: Vec<game_parallel_economy::FoodAsking>,
+    #[serde(default)]
+    acquaintance_asking: Vec<game_parallel_economy::AcquaintanceAsking>,
 }
 #[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -491,6 +493,14 @@ pub fn scenario_with_options(
         let authored: HashSet<_> = giving.learning.iter().map(|p| p.person).collect();
         help.learning.retain(|p| !authored.contains(&p.person));
         giving.learning.extend(help.learning);
+        let authored: HashSet<_> = giving
+            .acquaintance_asking
+            .iter()
+            .map(|p| p.person)
+            .collect();
+        help.acquaintance_asking
+            .retain(|p| !authored.contains(&p.person));
+        giving.acquaintance_asking.extend(help.acquaintance_asking);
     }
     let mut farming = population::farming(scenario.seed, &scenario.population);
     if !farming.is_empty() {
@@ -750,6 +760,7 @@ pub fn scenario_with_options(
                 learning: config.learning,
                 asking: config.asking,
                 requests: vec![],
+                acquaintance_asking: config.acquaintance_asking,
             })
         })
         .transpose()?;

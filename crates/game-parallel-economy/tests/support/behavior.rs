@@ -1449,6 +1449,278 @@ fn personal_fear_or_obligation_can_cause_an_unwilling_encounter() {
 }
 
 #[test]
+fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
+    use game_parallel_social::{Participant, Rules as SocialRules, Social};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    for (id, quantity) in [(1, 0), (2, 2)] {
+        let holder = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == Place::Person(id))
+            .unwrap();
+        *holder = Container::new(
+            holder.place,
+            holder.capacity,
+            if quantity == 0 {
+                vec![]
+            } else {
+                vec![Lot {
+                    good: 1,
+                    quantity,
+                    expires_at: Some(10),
+                }]
+            },
+        )
+        .unwrap();
+    }
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        disease: None,
+        treatment: vec![],
+        claims: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 1,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: vec![
+                Participant {
+                    person: 1,
+                    willing: true,
+                },
+                Participant {
+                    person: 2,
+                    willing: true,
+                },
+            ],
+            pressures: vec![],
+            relationships: vec![],
+            events: vec![],
+            needs: None,
+        }),
+    });
+    initial.giving = Some(Giving {
+        policies: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        responses: vec![FoodResponse {
+            person: 2,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 0,
+            willing: false,
+            minimum_trust: None,
+            affinity_threshold: None,
+            pressure_threshold: None,
+        }],
+        acquaintance_asking: vec![AcquaintanceAsking {
+            person: 1,
+            enabled: true,
+            min_hunger: 5,
+            retry_ticks: 3,
+            request_lifetime: 4,
+            min_familiarity: 1,
+            min_affinity: None,
+            prefer_affinity: false,
+            next_review: 0,
+            last_target: None,
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let mut state = world.snapshot();
+                assert!(state.giving.as_ref().unwrap().requests.is_empty());
+                assert_eq!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .relationships
+                        .len(),
+                    1
+                );
+                state.people[0].hunger = 5;
+                let mut overflow = state.clone();
+                overflow.giving.as_mut().unwrap().acquaintance_asking[0].retry_ticks = u64::MAX;
+                let mut rejected = Economy::compile(overflow).unwrap();
+                let before = rejected.snapshot();
+                assert!(rejected.advance().is_err());
+                assert_eq!(before, rejected.snapshot());
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                let snapshot = world.snapshot();
+                let request = &snapshot.giving.as_ref().unwrap().requests[0];
+                assert_eq!((request.requester, request.target), (1, 2));
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let giver = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                assert_eq!(giver.lots.iter().map(|lot| lot.quantity).sum::<u64>(), 2);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
+    use game_parallel_social::{Participant, Relationship, Rules as SocialRules, Social};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    initial.people[0].hunger = 5;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(holder.place, holder.capacity, vec![]).unwrap();
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 20,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.records.extend([
+        Opinion {
+            observer: 1,
+            target: 2,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: -3,
+        },
+        Opinion {
+            observer: 1,
+            target: 3,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: 4,
+        },
+    ]);
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        disease: None,
+        treatment: vec![],
+        claims: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 10,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: (1..=3)
+                .map(|person| Participant {
+                    person,
+                    willing: true,
+                })
+                .collect(),
+            pressures: vec![],
+            relationships: [(1, 2), (1, 3)]
+                .into_iter()
+                .map(|(a, b)| Relationship {
+                    a,
+                    b,
+                    familiarity: 1,
+                    encounters: 1,
+                    last_met: 0,
+                })
+                .collect(),
+            events: vec![],
+            needs: None,
+        }),
+    });
+    initial.giving = Some(Giving {
+        policies: vec![],
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![AcquaintanceAsking {
+            person: 1,
+            enabled: true,
+            min_hunger: 5,
+            retry_ticks: 1,
+            request_lifetime: 1,
+            min_familiarity: 1,
+            min_affinity: None,
+            prefer_affinity: true,
+            next_review: 0,
+            last_target: None,
+        }],
+    });
+    let run = |workers, minimum| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.giving.as_mut().unwrap().acquaintance_asking[0].min_affinity = minimum;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().giving.as_ref().unwrap().requests[0].target,
+                    3
+                );
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state.giving.as_ref().unwrap().requests[0].target,
+                    if minimum.is_some() { 3 } else { 2 }
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, None), run(4, None));
+    assert_eq!(run(1, Some(0)), run(4, Some(0)));
+}
+
+#[test]
 fn isolation_changes_personal_social_choices_without_compelling_contact() {
     use game_parallel_economy_dynamics::personality::{Person as Disposition, Personality};
     use game_parallel_social::{NeedRules, Needs, Participant, Rules as SocialRules, Social};
@@ -6420,6 +6692,7 @@ fn personal_giving_moves_goods_and_fear_can_motivate_help() {
         affinity: 0,
     }];
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
         policies: vec![GivingPolicy {
@@ -6598,6 +6871,7 @@ fn giving_workload(count: u64) -> State {
         }
     }
     state.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
         policies: (2..=count)
@@ -6668,6 +6942,7 @@ fn food_request_can_be_refused_then_independently_fulfilled_and_survives_reload(
     }
     initial.people[2].hunger = 5;
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
         policies: vec![GivingPolicy {
@@ -6788,6 +7063,7 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
@@ -6865,6 +7141,7 @@ fn food_asking_workload(count: u64) -> State {
         }
     }
     state.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
         policies: vec![],
@@ -7080,6 +7357,7 @@ fn giving_nonfood_does_not_satisfy_a_food_request() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
         policies: vec![],
@@ -11714,6 +11992,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
             person: 2,
@@ -11892,6 +12171,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
         p.seek_meals = false;
     }
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
             person: 2,
@@ -12156,6 +12436,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         policies: vec![],
         responses: vec![FoodResponse {
             person: 2,
@@ -12620,6 +12901,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity: 0,
     }];
     initial.giving = Some(Giving {
+        acquaintance_asking: vec![],
         learning: vec![],
         responses: vec![],
         asking: vec![],

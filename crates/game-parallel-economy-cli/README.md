@@ -16,11 +16,15 @@ An optional `[population.claims]` table independently seeds preferences for asse
 
 An optional `[population.help]` table seeds individual responses to food requests, using a named carried good and independent willingness, trust, affinity, and pressure settings. Optional `[population.help.learning]` settings allow a seeded fraction to develop reciprocal inclinations from their own experiences. The scenario must enable giving. These profiles create neither requests nor obligations, and individually authored choices take precedence.
 
+Optional `[population.help.acquaintance_asking]` settings let people ask someone they have actually met when hungry. They can set a minimum familiarity or affinity and choose to prefer those they like; the recipient remains free to refuse. No remote locations or unobserved acquaintances are revealed.
+
 When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.
 
 Profiles can also live in a separate TOML file. For example, `cargo run -p game-parallel-economy-cli -- --player content/parallel/economy-campaign.toml --population content/parallel/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.
 
 To measure three complete campaign boundaries with generated individuals, set `LEGACY_PEOPLE` and `LEGACY_WORKERS`, then run `cargo test --release -p game-parallel-economy-cli generated_campaign_benchmark -- --ignored --nocapture`. The timed interval excludes scenario loading and reports the median of three warmed samples. It is a concentrated two-region scenario, not a claim about every possible campaign.
+
+`generated_acquaintance_requests_benchmark` uses the same environment variables and measures one boundary after a large generated population has met others and become hungry. It checks that a substantial number of actual requests were made.
 
 For a ruler and guardians in the same dated-goods world, run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-campaign.toml`. `ruler` shows the current incarnation, guardians and any pending invocation warning. `invoke`, `dismiss-invocation`, `accept-warning`, and `guardian-release` operate those personal abilities and choices. A pending warning leaves the simulation time unchanged until it is accepted or invocation is dismissed.
 

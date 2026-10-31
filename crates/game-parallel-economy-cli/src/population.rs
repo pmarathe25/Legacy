@@ -82,6 +82,23 @@ struct HelpProfile {
     pressure_threshold: Option<u64>,
     #[serde(default)]
     learning: Option<HelpLearning>,
+    #[serde(default)]
+    acquaintance_asking: Option<AcquaintanceProfile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AcquaintanceProfile {
+    percent: u8,
+    min_hunger: u32,
+    retry_ticks: u64,
+    request_lifetime: u64,
+    #[serde(default)]
+    min_familiarity: u32,
+    #[serde(default)]
+    min_affinity: Option<i32>,
+    #[serde(default)]
+    prefer_affinity: bool,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +116,7 @@ struct HelpLearning {
 pub struct HelpRows {
     pub responses: Vec<FoodResponseConfig>,
     pub learning: Vec<game_parallel_economy::SharingLearning>,
+    pub acquaintance_asking: Vec<game_parallel_economy::AcquaintanceAsking>,
 }
 
 pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
@@ -116,6 +134,9 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                         .ask_helper
                         .as_ref()
                         .is_some_and(|a| a.retry_ticks == 0 || a.request_lifetime == 0)
+            })
+            || rule.acquaintance_asking.as_ref().is_some_and(|asking| {
+                asking.percent > 100 || asking.retry_ticks == 0 || asking.request_lifetime == 0
             })
         {
             return Err("invalid generated help preference".into());
@@ -154,13 +175,30 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                         reciprocate_hunger: learning.reciprocate_hunger,
                         ask_helper: learning.ask_helper.clone(),
                     });
-                (response, learning)
+                let asking = rule
+                    .acquaintance_asking
+                    .as_ref()
+                    .filter(|asking| random(2) % 100 < u64::from(asking.percent))
+                    .map(|asking| game_parallel_economy::AcquaintanceAsking {
+                        person,
+                        enabled: true,
+                        min_hunger: asking.min_hunger,
+                        retry_ticks: asking.retry_ticks,
+                        request_lifetime: asking.request_lifetime,
+                        min_familiarity: asking.min_familiarity,
+                        min_affinity: asking.min_affinity,
+                        prefer_affinity: asking.prefer_affinity,
+                        next_review: 0,
+                        last_target: None,
+                    });
+                (response, learning, asking)
             })
         })
         .collect();
     Ok(HelpRows {
         responses: rows.par_iter().map(|row| row.0.clone()).collect(),
-        learning: rows.into_par_iter().filter_map(|row| row.1).collect(),
+        learning: rows.par_iter().filter_map(|row| row.1.clone()).collect(),
+        acquaintance_asking: rows.into_par_iter().filter_map(|row| row.2).collect(),
     })
 }
 

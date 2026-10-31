@@ -58,3 +58,11 @@ reciprocate_hunger = 15
 min_hunger = 15
 retry_ticks = 6
 request_lifetime = 4
+
+[population.help.acquaintance_asking]
+percent = 60
+min_hunger = 15
+retry_ticks = 6
+request_lifetime = 4
+min_familiarity = 1
+prefer_affinity = true

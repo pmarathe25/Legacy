@@ -36,6 +36,8 @@ pub struct Giving {
     pub asking: Vec<Asking>,
     #[serde(default)]
     pub requests: Vec<Request>,
+    #[serde(default)]
+    pub acquaintance_asking: Vec<crate::AcquaintanceAsking>,
 }
 /// Personal experience may develop an inclination to help, never a binding rule.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -116,11 +118,13 @@ impl Clone for Giving {
             learning: self.learning.par_iter().cloned().collect(),
             asking: self.asking.par_iter().cloned().collect(),
             requests: self.requests.par_iter().cloned().collect(),
+            acquaintance_asking: self.acquaintance_asking.par_iter().cloned().collect(),
         }
     }
 }
 impl Giving {
     pub fn validate(&self, people: &HashSet<u64>, catalog: &[Good]) -> Result<(), String> {
+        crate::giving_discovery::validate(&self.acquaintance_asking, people)?;
         let goods: HashSet<_> = catalog.iter().map(|g| g.id).collect();
         let food: HashSet<_> = catalog
             .iter()

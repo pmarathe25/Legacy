@@ -711,6 +711,170 @@ fn generated_person_learns_help_only_from_an_actual_food_transfer() {
 }
 
 #[test]
+fn generated_hungry_person_can_ask_a_previously_met_acquaintance() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = generated_campaign(128);
+                world.advance().unwrap();
+                let mut state = world.snapshot();
+                let relationships = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .relationships;
+                let preferences = &state.giving.as_ref().unwrap().acquaintance_asking;
+                let actor = relationships
+                    .iter()
+                    .flat_map(|r| [r.a, r.b])
+                    .find(|id| {
+                        *id >= 1000 && preferences.iter().any(|p| p.person == *id && p.enabled)
+                    })
+                    .unwrap();
+                let known: Vec<_> = relationships
+                    .iter()
+                    .filter_map(|r| {
+                        if r.a == actor {
+                            Some(r.b)
+                        } else if r.b == actor {
+                            Some(r.a)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                let person = state.people.iter_mut().find(|p| p.id == actor).unwrap();
+                person.hunger = 15;
+                person.seek_meals = false;
+                person.willing_to_work = false;
+                state
+                    .agriculture
+                    .as_mut()
+                    .unwrap()
+                    .policies
+                    .iter_mut()
+                    .find(|p| p.person == actor)
+                    .unwrap()
+                    .willing = false;
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|c| c.place == game_parallel_lots::Place::Person(actor))
+                    .unwrap();
+                *holder = game_parallel_lots::Container::new(holder.place, holder.capacity, vec![])
+                    .unwrap();
+                let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let request = state
+                    .giving
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .iter()
+                    .find(|r| r.requester == actor)
+                    .unwrap();
+                assert!(known.contains(&request.target));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn hungry_generated_campaign(count: u64) -> game_parallel_economy::State {
+    let mut world = generated_campaign(count);
+    world.advance().unwrap();
+    let mut state = world.snapshot();
+    for person in &mut state.people {
+        if person.id >= 1000 {
+            person.hunger = 15;
+            person.seek_meals = false;
+            person.willing_to_work = false;
+        }
+    }
+    for policy in &mut state.agriculture.as_mut().unwrap().policies {
+        if policy.person >= 1000 {
+            policy.willing = false;
+        }
+    }
+    for holder in &mut state.physical.custody.containers {
+        if matches!(holder.place, game_parallel_lots::Place::Person(id) if id >= 1000) {
+            *holder =
+                game_parallel_lots::Container::new(holder.place, holder.capacity, vec![]).unwrap();
+        }
+    }
+    state
+}
+
+#[test]
+fn many_hungry_people_ask_known_acquaintances_deterministically() {
+    let initial = hungry_generated_campaign(2048);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let requests = &state.giving.as_ref().unwrap().requests;
+                assert!(requests.len() > 100);
+                let mut actors: Vec<_> = requests.iter().map(|request| request.requester).collect();
+                actors.sort_unstable();
+                actors.dedup();
+                assert_eq!(actors.len(), requests.len());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn generated_acquaintance_requests_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(10_000u64);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let initial = hungry_generated_campaign(count);
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert!(world.snapshot().giving.unwrap().requests.len() > (count / 20) as usize);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} generated={count} hungry_tick_seconds={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn generated_campaign_benchmark() {
     let workers = std::env::var("LEGACY_WORKERS")
