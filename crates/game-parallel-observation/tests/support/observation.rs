@@ -381,6 +381,7 @@ fn view_exposes_only_the_rulers_own_aspirations() {
         enabled: true,
     };
     state.dreams = Some(Dreams {
+        learning: vec![],
         people: vec![dream(1), dream(2)],
         events: vec![],
     });

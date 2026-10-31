@@ -1,6 +1,6 @@
 //! Personal aspirations form goals and gain progress only from real work.
 use game_parallel_autowork::Autowork;
-pub use game_parallel_dreams::{Dream, Dreams};
+pub use game_parallel_dreams::{Dream, Dreams, Learning};
 use game_parallel_economy_person::Person;
 use game_parallel_goals::Completion;
 pub use game_parallel_goals::Goals;

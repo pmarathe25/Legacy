@@ -14,7 +14,7 @@ pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as Mis
 use game_parallel_economy_family as family;
 pub use game_parallel_economy_family::Families;
 pub use game_parallel_economy_fatigue::Fatigue;
-pub use game_parallel_economy_goals::{Dream, Dreams, Goals};
+pub use game_parallel_economy_goals::{Dream, Dreams, Goals, Learning};
 pub use game_parallel_economy_knowledge::Knowledge;
 use game_parallel_economy_person as person;
 pub use game_parallel_economy_person::travel::{Colocation, Departure, Journey, Route, Travel};
@@ -2264,7 +2264,7 @@ impl Economy {
             requests.enroll(family, tick);
         }
         game_parallel_economy_interaction::publish_work!(autowork, manual_job);
-        let (goals, dreams) = game_parallel_economy_goals::advance(
+        let (goals, mut dreams) = game_parallel_economy_goals::advance(
             self.goals.as_ref(),
             self.dreams.as_ref(),
             self.physical.work(),
@@ -2272,6 +2272,27 @@ impl Economy {
             &person.people,
             &blocked,
         )?;
+        if !physical.events().finished.is_empty()
+            && let Some(owner) = dreams.as_mut().filter(|owner| !owner.learning.is_empty())
+            && let Some(requests) = autowork.as_ref().and_then(|auto| auto.requests.as_ref())
+        {
+            let observations: Vec<_> = requests
+                .memories
+                .par_iter()
+                .filter(|memory| memory.last_success_at == Some(tick))
+                .filter(|memory| {
+                    person
+                        .people
+                        .binary_search_by_key(&memory.observer, |p| p.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            person.people[i].health > 0 && !person.people[i].controlled
+                        })
+                })
+                .map(|memory| (memory.observer, memory.recipe))
+                .collect();
+            owner.learn(&observations, tick);
+        }
         Ok(Draft {
             epoch: self.epoch,
             physical,

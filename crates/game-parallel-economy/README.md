@@ -12,6 +12,8 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 An optional personal acquaintance-request preference lets a hungry individual ask someone they have actually met and can currently reach. Familiarity and the requester's signed affinity can guide their choice; unanswered requests can lead them to try another known person. The recipient independently decides whether to help, including under fear or felt obligation.
 
+People with an individual learning inclination can develop a bounded work aspiration after personally witnessing a requested job succeed. Other people's work memories and disabled aspirations are not overwritten; a new aspiration still needs ordinary resources and voluntary action.
+
 With `giving.inherit_births` and family birth enrollment enabled, a newborn may acquire a parent's general helping and acquaintance-request inclinations. Experiences, remembered helpers, previous targets, and target-specific requests are not copied.
 
 Travelers can eat carried food. People on the same directed route at the same progress are treated as together by this coarse travel model: they can meet autonomously or by choice, ask for food, give supplies, provide care, and independently propose, consider, or physically fulfill promises; contact can transmit disease. Other routes and people at the source remain separate. Each action advances the shared world and the journey.

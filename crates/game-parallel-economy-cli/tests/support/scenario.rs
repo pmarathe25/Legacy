@@ -779,6 +779,33 @@ fn generated_person_can_refuse_requested_work_or_do_it_from_fear() {
 }
 
 #[test]
+fn generated_work_learning_is_an_individual_inclination_not_an_aspiration() {
+    let initial = generated_campaign(128).snapshot();
+    let dreams = initial.dreams.as_ref().unwrap();
+    assert!(dreams.learning.iter().any(|row| row.person >= 1000));
+    assert!(dreams.learning.iter().all(|row| row.max_aspirations == 3));
+    let learner = dreams
+        .learning
+        .iter()
+        .find(|row| {
+            row.person >= 1000 && !dreams.people.iter().any(|dream| dream.person == row.person)
+        })
+        .unwrap()
+        .person;
+    let restored: game_parallel_economy::State =
+        serde_json::from_str(&serde_json::to_string(&initial).unwrap()).unwrap();
+    assert!(
+        restored
+            .dreams
+            .unwrap()
+            .learning
+            .iter()
+            .any(|row| row.person == learner)
+    );
+    assert_eq!(generated_campaign(128).snapshot(), initial);
+}
+
+#[test]
 fn generated_aspiration_can_lead_to_an_actual_work_request() {
     let mut initial = generated_campaign(128).snapshot();
     let requests = initial

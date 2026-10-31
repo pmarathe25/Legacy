@@ -958,6 +958,7 @@ pub fn scenario_with_options(
             })
         })
         .collect::<Result<_, String>>()?;
+    let has_dreams = !dreams.is_empty() || !work_support.learning.is_empty();
     for resident in scenario.people {
         let mut lots = Vec::new();
         for (name, quantity) in resident.goods {
@@ -1014,13 +1015,14 @@ pub fn scenario_with_options(
         work_tools,
         work_sites,
         construction,
-        goals: (!dreams.is_empty()).then_some(Goals {
+        goals: has_dreams.then_some(Goals {
             retry_interval: 3,
             plan_inputs: true,
             people: vec![],
             events: vec![],
         }),
-        dreams: (!dreams.is_empty()).then_some(Dreams {
+        dreams: has_dreams.then_some(Dreams {
+            learning: work_support.learning,
             people: dreams,
             events: vec![],
         }),

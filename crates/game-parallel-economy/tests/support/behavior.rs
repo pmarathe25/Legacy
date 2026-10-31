@@ -9506,6 +9506,7 @@ fn aspirations_form_goals_and_renew_only_after_actual_work() {
         events: vec![],
     });
     initial.dreams = Some(Dreams {
+        learning: vec![],
         people: vec![Dream {
             person: 2,
             recipe: 1,
@@ -11722,6 +11723,7 @@ fn recovery_uses_real_rest_and_does_not_revive_or_heal_starving_people() {
 #[test]
 fn requested_work_is_learned_only_by_a_present_observer() {
     use game_parallel_autowork::requests::{Preference, Request, Requests};
+    use game_parallel_dreams::Learning;
     let mut initial = fixture();
     initial.agreements = None;
     initial.people[1].willing_to_work = false;
@@ -11762,6 +11764,23 @@ fn requested_work_is_learned_only_by_a_present_observer() {
             events: vec![],
         }),
     });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![],
+        events: vec![],
+    });
+    initial.dreams = Some(Dreams {
+        people: vec![],
+        learning: vec![Learning {
+            person: 1,
+            max_aspirations: 2,
+            priority: 3,
+            batch: 1,
+            review_interval: 2,
+        }],
+        events: vec![],
+    });
     let mut economy = Economy::compile(initial).unwrap();
     assert_eq!(economy.advance().unwrap().started, vec![1]);
     let present = economy.snapshot();
@@ -11783,6 +11802,22 @@ fn requested_work_is_learned_only_by_a_present_observer() {
     assert_eq!(
         (memory[0].observer, memory[0].worker, memory[0].successes),
         (1, 2, 1)
+    );
+    assert_eq!(present.dreams.as_ref().unwrap().people[0].recipe, 1);
+    assert!(absent.snapshot().dreams.unwrap().people.is_empty());
+    let saved = serde_json::to_string(&present).unwrap();
+    let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    economy.advance().unwrap();
+    restored.advance().unwrap();
+    assert_eq!(economy.snapshot(), restored.snapshot());
+    assert!(
+        economy
+            .snapshot()
+            .goals
+            .unwrap()
+            .people
+            .iter()
+            .any(|goal| goal.person == 1 && goal.recipe == 1)
     );
     assert!(
         absent

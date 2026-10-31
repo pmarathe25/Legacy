@@ -37,12 +37,33 @@ pub struct Event {
     pub recipe: u32,
     pub target: u64,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Dreams {
     pub people: Vec<Dream>,
+    /// Individual inclinations to develop aspirations from personally witnessed work.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub learning: Vec<Learning>,
     #[serde(default)]
     pub events: Vec<Event>,
+}
+impl Clone for Dreams {
+    fn clone(&self) -> Self {
+        Self {
+            people: self.people.par_iter().cloned().collect(),
+            learning: self.learning.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+        }
+    }
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Learning {
+    pub person: u64,
+    pub max_aspirations: usize,
+    pub priority: i32,
+    pub batch: u64,
+    pub review_interval: u64,
 }
 pub struct Draft {
     pub state: Dreams,
@@ -66,6 +87,18 @@ impl Dreams {
             .collect();
         keys.par_sort_unstable();
         if keys.par_windows(2).any(|pair| pair[0] == pair[1])
+            || {
+                let mut learners: Vec<_> = self.learning.par_iter().map(|row| row.person).collect();
+                learners.par_sort_unstable();
+                learners.par_windows(2).any(|pair| pair[0] == pair[1])
+                    || self.learning.par_iter().any(|row| {
+                        !people.contains(&row.person)
+                            || row.max_aspirations == 0
+                            || row.max_aspirations > 32
+                            || row.batch == 0
+                            || row.review_interval == 0
+                    })
+            }
             || self.people.par_iter().any(|dream| {
                 !people.contains(&dream.person)
                     || !recipes.contains(&dream.recipe)
@@ -82,6 +115,60 @@ impl Dreams {
             return Err("invalid personal aspiration");
         }
         Ok(())
+    }
+    /// Learn only from observations supplied by the host, with a bounded personal repertoire.
+    pub fn learn(&mut self, observations: &[(u64, u32)], tick: u64) {
+        if self.learning.is_empty() || observations.is_empty() {
+            return;
+        }
+        let mut known: Vec<_> = self
+            .people
+            .par_iter()
+            .map(|d| (d.person, d.recipe))
+            .collect();
+        known.par_sort_unstable();
+        let mut observed: Vec<_> = observations.par_iter().copied().collect();
+        observed.par_sort_unstable();
+        let mut learners: Vec<_> = self.learning.par_iter().collect();
+        if learners
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            learners.par_sort_unstable_by_key(|rule| rule.person);
+        }
+        let learned: Vec<_> = observed
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .filter_map(|group| {
+                let index = learners
+                    .binary_search_by_key(&group[0].0, |rule| rule.person)
+                    .ok()?;
+                let rule = learners[index];
+                let start = known.partition_point(|row| row.0 < rule.person);
+                let end = known.partition_point(|row| row.0 <= rule.person);
+                let capacity = rule.max_aspirations.saturating_sub(end - start);
+                Some((group, rule, &known[start..end], capacity))
+            })
+            .flat_map_iter(|(group, rule, known, capacity)| {
+                group
+                    .iter()
+                    .enumerate()
+                    .filter(move |(index, row)| {
+                        (*index == 0 || group[*index - 1].1 != row.1)
+                            && known.binary_search(row).is_err()
+                    })
+                    .take(capacity)
+                    .map(move |(_, &(_, recipe))| Dream {
+                        person: rule.person,
+                        recipe,
+                        priority: rule.priority,
+                        batch: rule.batch,
+                        review_interval: rule.review_interval,
+                        next_review: tick,
+                        enabled: true,
+                    })
+            })
+            .collect();
+        self.people.par_extend(learned);
     }
     /// Stage reviews against goals from this boundary and committed personal agency.
     pub fn prepare(
@@ -210,7 +297,11 @@ impl Dreams {
             Some(updated)
         };
         Ok(Some(Draft {
-            state: Dreams { people, events },
+            state: Dreams {
+                people,
+                learning: self.learning.par_iter().cloned().collect(),
+                events,
+            },
             goals: next_goals,
         }))
     }
@@ -218,6 +309,116 @@ impl Dreams {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn learning_respects_personal_boundaries_and_existing_choices() {
+        let mut rejected = dream(1, 2);
+        rejected.enabled = false;
+        let mut state = Dreams {
+            people: vec![rejected],
+            learning: vec![Learning {
+                person: 1,
+                max_aspirations: 2,
+                priority: 4,
+                batch: 1,
+                review_interval: 3,
+            }],
+            events: vec![],
+        };
+        state.learn(&[(2, 1), (1, 3), (1, 2), (1, 3), (1, 4)], 7);
+        assert_eq!(state.people.len(), 2);
+        assert!(!state.people[0].enabled);
+        assert_eq!(
+            (
+                state.people[1].person,
+                state.people[1].recipe,
+                state.people[1].next_review
+            ),
+            (1, 3, 7)
+        );
+        state.learn(&[(1, 4)], 8);
+        assert_eq!(state.people.len(), 2);
+    }
+    #[test]
+    fn parallel_learning_produces_the_same_personal_aspirations() {
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut state = Dreams {
+                        people: vec![],
+                        learning: (1..=4096)
+                            .map(|person| Learning {
+                                person,
+                                max_aspirations: 2,
+                                priority: 1,
+                                batch: 1,
+                                review_interval: 3,
+                            })
+                            .collect(),
+                        events: vec![],
+                    };
+                    let observations: Vec<_> = (1..=4096)
+                        .rev()
+                        .flat_map(|person| [(person, 3), (person, 1), (person, 2), (person, 1)])
+                        .collect();
+                    state.learn(&observations, 4);
+                    assert_eq!(state.people.len(), 8192);
+                    assert!(state.people.iter().all(|dream| dream.recipe <= 2));
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+    #[test]
+    #[ignore = "performance measurement"]
+    fn concentrated_learning_benchmark() {
+        let workers = std::env::var("LEGACY_WORKERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        let count = std::env::var("LEGACY_PEOPLE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000u64);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let initial = Dreams {
+                    people: vec![],
+                    learning: (1..=count)
+                        .map(|person| Learning {
+                            person,
+                            max_aspirations: 2,
+                            priority: 1,
+                            batch: 1,
+                            review_interval: 3,
+                        })
+                        .collect(),
+                    events: vec![],
+                };
+                let observations: Vec<_> = (1..=count).rev().map(|person| (person, 1)).collect();
+                let mut samples = Vec::new();
+                for round in 0..4 {
+                    let mut state = initial.clone();
+                    let start = std::time::Instant::now();
+                    state.learn(&observations, 1);
+                    let elapsed = start.elapsed().as_secs_f64();
+                    assert_eq!(state.people.len(), count as usize);
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} learners={count} elapsed={:.6}",
+                    samples[1]
+                );
+            });
+    }
     fn dream(person: u64, recipe: u32) -> Dream {
         Dream {
             person,
@@ -240,6 +441,7 @@ mod tests {
     #[test]
     fn aspirations_create_and_renew_goals_without_overriding_refusal_or_progress() {
         let dreams = Dreams {
+            learning: vec![],
             people: vec![dream(1, 4), dream(2, 4)],
             events: vec![],
         };
@@ -273,6 +475,7 @@ mod tests {
     #[test]
     fn aspiration_reviews_are_deterministic_and_overflow_is_rejected() {
         let dreams = Dreams {
+            learning: vec![],
             people: (1..=10_000).rev().map(|person| dream(person, 1)).collect(),
             events: vec![],
         };

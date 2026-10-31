@@ -73,6 +73,10 @@ struct ClaimProfile {
 #[serde(deny_unknown_fields)]
 struct WorkSupport {
     aspiration_percent: u8,
+    #[serde(default)]
+    learning_percent: u8,
+    #[serde(default)]
+    learning_max: usize,
     priority: i32,
     batch: u64,
     review_interval: u64,
@@ -90,6 +94,7 @@ struct WorkSupport {
 
 pub struct WorkRows {
     pub aspirations: Vec<Aspiration>,
+    pub learning: Vec<game_parallel_economy::Learning>,
     pub preferences: Vec<game_parallel_autowork::requests::Preference>,
     pub askers: Vec<game_parallel_autowork::requests::Asker>,
 }
@@ -98,6 +103,8 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
     for profile in profiles {
         if let Some(rule) = &profile.work_support
             && (rule.aspiration_percent > 100
+                || rule.learning_percent > 100
+                || (rule.learning_percent > 0 && !(1..=32).contains(&rule.learning_max))
                 || rule.ask_percent > 100
                 || rule.disregard_percent > 100
                 || rule.batch == 0
@@ -146,14 +153,24 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
                         lifetime: rule.request_lifetime,
                     },
                 );
-                (aspiration, preference, asker)
+                let learning = (random(4) % 100 < u64::from(rule.learning_percent)).then_some(
+                    game_parallel_economy::Learning {
+                        person,
+                        max_aspirations: rule.learning_max,
+                        priority: rule.priority,
+                        batch: rule.batch,
+                        review_interval: rule.review_interval,
+                    },
+                );
+                (aspiration, preference, asker, learning)
             })
         })
         .collect();
     Ok(WorkRows {
         aspirations: rows.par_iter().filter_map(|row| row.0.clone()).collect(),
         preferences: rows.par_iter().map(|row| row.1.clone()).collect(),
-        askers: rows.into_par_iter().filter_map(|row| row.2).collect(),
+        askers: rows.par_iter().filter_map(|row| row.2.clone()).collect(),
+        learning: rows.into_par_iter().filter_map(|row| row.3).collect(),
     })
 }
 
@@ -767,6 +784,8 @@ mod tests {
         let mut people = profile();
         people.work_support = Some(WorkSupport {
             aspiration_percent: 100,
+            learning_percent: 0,
+            learning_max: 0,
             priority: 1,
             batch: 1,
             review_interval: 1,
