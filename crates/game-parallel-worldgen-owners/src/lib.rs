@@ -149,6 +149,7 @@ pub fn work_requests(
         .map(|&person| Preference {
             person,
             effort: settings.work_effort,
+            affinity_weight: 0,
             disregard_claims: game_parallel_genetics::random(
                 settings.seed ^ 0x636c61696d,
                 person,

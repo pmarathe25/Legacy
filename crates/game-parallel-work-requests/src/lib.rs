@@ -49,8 +49,21 @@ pub struct Preference {
     pub effort: u64,
     #[serde(default)]
     pub help_value: u64,
+    /// This person's signed motivation per unit of their own directed affinity.
+    #[serde(default)]
+    pub affinity_weight: i64,
     #[serde(default)]
     pub disregard_claims: bool,
+}
+impl Preference {
+    /// No agreement or feeling forces compliance; this is the person's present evaluation.
+    pub fn motivated(&self, fear: u64, obligation: u64, affinity: i32) -> bool {
+        let value = i128::from(self.help_value)
+            + i128::from(fear)
+            + i128::from(obligation)
+            + i128::from(affinity) * i128::from(self.affinity_weight);
+        value >= i128::from(self.effort)
+    }
 }
 /// Periodically ask a local person to help with an active personal goal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -291,16 +304,19 @@ impl Requests {
         }
         let decide = |row: &Request| {
             let preference = preference(row.worker).expect("eligible preference");
-            let social = index.as_ref().map_or(0u128, |index| {
-                u128::from(index.fear(row.worker, row.requester))
-                    + u128::from(index.obligation(row.worker, row.requester))
+            let (fear, obligation, affinity) = index.as_ref().map_or((0, 0, 0), |index| {
+                (
+                    index.fear(row.worker, row.requester),
+                    index.obligation(row.worker, row.requester),
+                    index.affinity(row.worker, row.requester),
+                )
             });
             Decision {
                 request: row.id,
                 worker: row.worker,
                 region: row.region,
                 recipe: row.recipe,
-                help: u128::from(preference.help_value) + social >= u128::from(preference.effort),
+                help: preference.motivated(fear, obligation, affinity),
                 disregard_claims: preference.disregard_claims,
             }
         };
@@ -331,6 +347,29 @@ impl Requests {
 }
 #[cfg(test)]
 extern crate self as game_parallel_work_requests;
+#[cfg(test)]
+mod preference_tests {
+    use super::Preference;
+
+    #[test]
+    fn signed_personal_affinity_can_raise_or_lower_the_value_of_help() {
+        let mut preference = Preference {
+            person: 1,
+            effort: 5,
+            help_value: 0,
+            affinity_weight: 3,
+            disregard_claims: false,
+        };
+        assert!(preference.motivated(0, 0, 2));
+        assert!(!preference.motivated(0, 0, -2));
+        preference.affinity_weight = -3;
+        assert!(preference.motivated(0, 0, -2));
+        assert!(!preference.motivated(0, 0, 2));
+        assert!(preference.motivated(u64::MAX, u64::MAX, i32::MIN));
+        preference.affinity_weight = 0;
+        assert!(!preference.motivated(0, 0, i32::MAX));
+    }
+}
 #[cfg(test)]
 #[path = "../tests/support/experience.rs"]
 mod experience_tests;

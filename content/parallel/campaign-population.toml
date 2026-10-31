@@ -78,4 +78,5 @@ request_lifetime = 4
 effort = 5
 min_help_value = 0
 max_help_value = 10
+affinity_weight = 1
 disregard_percent = 30

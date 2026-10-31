@@ -11247,6 +11247,7 @@ fn fear_can_start_requested_work_and_the_worker_can_leave_when_fear_fades() {
                 person: 2,
                 effort: 5,
                 help_value: 0,
+                affinity_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -11362,6 +11363,92 @@ fn fear_can_start_requested_work_and_the_worker_can_leave_when_fear_fades() {
             .outcome,
         game_parallel_autowork::requests::Outcome::Refused
     ));
+}
+
+#[test]
+fn affinity_can_motivate_requested_work_and_a_changed_view_can_end_it() {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.people[1].willing_to_work = false;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.physical.recipes[0].ticks = 3;
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 20,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 0,
+        obligation: 0,
+        affinity: 2,
+    }];
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 2,
+            memory_limit: 2,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 5,
+                help_value: 0,
+                affinity_weight: 3,
+                disregard_claims: false,
+            }],
+            askers: vec![],
+            pending: vec![Request {
+                id: 1,
+                requester: 1,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                created_at: 0,
+                expires: 3,
+            }],
+            events: vec![],
+        }),
+    });
+    let run = |workers, weight, affinity| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0]
+                    .affinity_weight = weight;
+                state.opinions.as_mut().unwrap().records[0].affinity = affinity;
+                let mut world = Economy::compile(state).unwrap();
+                assert_eq!(world.advance().unwrap().started, vec![1]);
+                let mut state = world.snapshot();
+                state.opinions.as_mut().unwrap().records[0].affinity = -affinity;
+                let mut world = Economy::compile(state).unwrap();
+                assert_eq!(world.advance().unwrap().abandoned, vec![1]);
+                let state = world.snapshot();
+                assert_eq!(state.opinions.as_ref().unwrap().index().obligation(2, 1), 0);
+                state
+            })
+    };
+    assert_eq!(run(1, 3, 2), run(4, 3, 2));
+    assert_eq!(run(1, -3, -2), run(4, -3, -2));
 }
 
 #[test]
@@ -11560,6 +11647,7 @@ fn requested_work_is_learned_only_by_a_present_observer() {
                 person: 2,
                 effort: 5,
                 help_value: 0,
+                affinity_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -11652,6 +11740,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                 person: 2,
                 effort: 5,
                 help_value: 0,
+                affinity_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![Asker {
@@ -14943,6 +15032,7 @@ fn witnessed_work_can_inspire_a_personal_offer_without_creating_a_duty() {
                 person: 2,
                 effort: 5,
                 help_value: 0,
+                affinity_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -16012,6 +16102,7 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
                 person: 2,
                 effort: 5,
                 help_value: 0,
+                affinity_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -16188,6 +16279,7 @@ fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
                 person: 2,
                 effort: 5,
                 help_value: 0,
+                affinity_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],

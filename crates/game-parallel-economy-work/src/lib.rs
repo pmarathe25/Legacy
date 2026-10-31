@@ -353,11 +353,15 @@ pub fn pressured_workers(auto: &Autowork, opinions: Option<&Opinions>) -> Vec<u6
                 .binary_search_by_key(&link.worker, |row| row.person)
                 .ok()
                 .map(|i| prefs[i])?;
-            let social = index.as_ref().map_or(0u128, |index| {
-                u128::from(index.fear(link.worker, link.requester))
-                    + u128::from(index.obligation(link.worker, link.requester))
+            let (fear, obligation, affinity) = index.as_ref().map_or((0, 0, 0), |index| {
+                (
+                    index.fear(link.worker, link.requester),
+                    index.obligation(link.worker, link.requester),
+                    index.affinity(link.worker, link.requester),
+                )
             });
-            (u128::from(pref.help_value) + social >= u128::from(pref.effort)).then_some(link.worker)
+            pref.motivated(fear, obligation, affinity)
+                .then_some(link.worker)
         })
         .collect();
     workers.par_sort_unstable();
