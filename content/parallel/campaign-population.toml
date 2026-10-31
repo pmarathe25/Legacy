@@ -66,3 +66,16 @@ retry_ticks = 6
 request_lifetime = 4
 min_familiarity = 1
 prefer_affinity = true
+
+[population.work_support]
+aspiration_percent = 20
+priority = 1
+batch = 1
+review_interval = 3
+ask_percent = 40
+ask_interval = 3
+request_lifetime = 4
+effort = 5
+min_help_value = 0
+max_help_value = 10
+disregard_percent = 30

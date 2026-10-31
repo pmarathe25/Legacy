@@ -164,6 +164,24 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                 let initial = world.snapshot();
                 assert_eq!(initial.people.len(), 130);
                 assert_eq!(initial.family.as_ref().unwrap().next_id, 1128);
+                let work = initial
+                    .autowork
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(work.preferences.len(), 129);
+                assert!(work.askers.iter().any(|row| row.person >= 1000));
+                assert!(
+                    initial
+                        .dreams
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|row| row.person >= 1000)
+                );
                 let giving = initial.giving.as_ref().unwrap();
                 assert_eq!(giving.responses.len(), 129);
                 assert!(
@@ -627,6 +645,205 @@ fn generated_person_can_give_real_food_from_fear_without_feeling_obligated() {
                     0
                 );
                 after
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn generated_person_can_refuse_requested_work_or_do_it_from_fear() {
+    let mut initial = generated_campaign(128).snapshot();
+    let requests = initial
+        .autowork
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap();
+    let worker = requests
+        .preferences
+        .iter()
+        .find(|preference| {
+            preference.person >= 1000
+                && preference.help_value < preference.effort
+                && initial
+                    .people
+                    .iter()
+                    .any(|person| person.id == preference.person && person.region == Some(1))
+        })
+        .unwrap()
+        .person;
+    for person in &mut initial.people {
+        person.willing_to_work = false;
+        person.seek_meals = false;
+    }
+    for policy in &mut initial.agriculture.as_mut().unwrap().policies {
+        policy.willing = false;
+    }
+    initial
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .askers
+        .clear();
+    initial.goals = None;
+    initial.dreams = None;
+    let run = |workers, fear| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .opinions
+                    .as_mut()
+                    .unwrap()
+                    .records
+                    .push(game_parallel_economy::Opinion {
+                        observer: worker,
+                        target: 1,
+                        trust: 0,
+                        fear,
+                        obligation: 0,
+                        affinity: 0,
+                    });
+                let recipe = state
+                    .physical
+                    .recipes
+                    .iter()
+                    .find(|recipe| recipe.name == "mill-grain")
+                    .unwrap()
+                    .id;
+                let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+                let request = world.ask_work(1, worker, recipe, 4).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let event = state
+                    .autowork
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap()
+                    .events
+                    .iter()
+                    .find(|event| event.request == request)
+                    .unwrap();
+                if fear == 0 {
+                    assert!(matches!(
+                        event.outcome,
+                        game_parallel_autowork::requests::Outcome::Refused
+                    ));
+                    assert!(
+                        state
+                            .physical
+                            .work
+                            .iter()
+                            .all(|work| work.job.worker != worker)
+                    );
+                } else {
+                    assert!(matches!(
+                        event.outcome,
+                        game_parallel_autowork::requests::Outcome::Started { .. }
+                    ));
+                    assert!(
+                        state
+                            .physical
+                            .work
+                            .iter()
+                            .any(|work| work.job.worker == worker)
+                    );
+                }
+                assert_eq!(
+                    state
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .index()
+                        .obligation(worker, 1),
+                    0
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, 0), run(4, 0));
+    assert_eq!(run(1, 10), run(4, 10));
+}
+
+#[test]
+fn generated_aspiration_can_lead_to_an_actual_work_request() {
+    let mut initial = generated_campaign(128).snapshot();
+    let requests = initial
+        .autowork
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap();
+    let asker = requests
+        .askers
+        .iter()
+        .find(|asker| {
+            asker.person >= 1000
+                && initial
+                    .dreams
+                    .as_ref()
+                    .unwrap()
+                    .people
+                    .iter()
+                    .any(|dream| dream.person == asker.person)
+        })
+        .unwrap()
+        .person;
+    initial
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .askers
+        .retain(|row| row.person == asker);
+    initial
+        .dreams
+        .as_mut()
+        .unwrap()
+        .people
+        .retain(|row| row.person == asker);
+    for person in &mut initial.people {
+        person.willing_to_work = false;
+        person.seek_meals = false;
+    }
+    for policy in &mut initial.agriculture.as_mut().unwrap().policies {
+        policy.willing = false;
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                let mut observed = false;
+                for _ in 0..8 {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    observed |= state
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .next_id
+                        > 1;
+                }
+                assert!(observed);
+                world.snapshot()
             })
     };
     assert_eq!(run(1), run(4));

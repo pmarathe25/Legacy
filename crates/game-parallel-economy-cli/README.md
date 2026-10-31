@@ -18,6 +18,8 @@ An optional `[population.help]` table seeds individual responses to food request
 
 Optional `[population.help.acquaintance_asking]` settings let people ask someone they have actually met when hungry. They can set a minimum familiarity or affinity and choose to prefer those they like; the recipient remains free to refuse. No remote locations or unobserved acquaintances are revealed.
 
+Optional `[population.work_support]` settings seed individual aspirations, inclinations to ask for help, and personal evaluations of requested work. The scenario must enable work requests, and aspirations use the profile's named recipe. Requests, refusals, and actual work emerge during simulation; these settings create no employment, institution, or binding agreement.
+
 When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.
 
 Profiles can also live in a separate TOML file. For example, `cargo run -p game-parallel-economy-cli -- --player content/parallel/economy-campaign.toml --population content/parallel/campaign-population.toml --seed 42` adds generated people to the authored ruler campaign. The ordinary ruler view still exposes only locally observed people.

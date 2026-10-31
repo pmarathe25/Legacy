@@ -1,5 +1,5 @@
 //! Seeded individuals derived from authored population profiles.
-use super::{FoodResponseConfig, Resident};
+use super::{Aspiration, FoodResponseConfig, Resident};
 use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
@@ -32,6 +32,8 @@ pub struct Profile {
     claims: Option<ClaimProfile>,
     #[serde(default)]
     help: Option<HelpProfile>,
+    #[serde(default)]
+    work_support: Option<WorkSupport>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +67,91 @@ struct ClaimProfile {
     assert_built_sites_percent: u8,
     #[serde(default)]
     desperate_hunger: Option<u32>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkSupport {
+    aspiration_percent: u8,
+    priority: i32,
+    batch: u64,
+    review_interval: u64,
+    ask_percent: u8,
+    ask_interval: u64,
+    request_lifetime: u64,
+    effort: u64,
+    min_help_value: u64,
+    max_help_value: u64,
+    #[serde(default)]
+    disregard_percent: u8,
+}
+
+pub struct WorkRows {
+    pub aspirations: Vec<Aspiration>,
+    pub preferences: Vec<game_parallel_autowork::requests::Preference>,
+    pub askers: Vec<game_parallel_autowork::requests::Asker>,
+}
+
+pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String> {
+    for profile in profiles {
+        if let Some(rule) = &profile.work_support
+            && (rule.aspiration_percent > 100
+                || rule.ask_percent > 100
+                || rule.disregard_percent > 100
+                || rule.batch == 0
+                || rule.review_interval == 0
+                || rule.ask_interval == 0
+                || rule.request_lifetime == 0
+                || rule.min_help_value > rule.max_help_value
+                || rule.max_help_value - rule.min_help_value == u64::MAX
+                || (rule.aspiration_percent > 0 && profile.recipe.is_none()))
+        {
+            return Err("invalid generated work-support preference".into());
+        }
+    }
+    let rows: Vec<_> = profiles
+        .par_iter()
+        .filter_map(|profile| profile.work_support.as_ref().map(|rule| (profile, rule)))
+        .flat_map(|(profile, rule)| {
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let person = profile.start_id + offset;
+                let random = |attribute| {
+                    game_parallel_genetics::random(seed ^ 0x776f726b737570, person, attribute)
+                };
+                let aspiration = profile
+                    .recipe
+                    .as_ref()
+                    .filter(|_| random(0) % 100 < u64::from(rule.aspiration_percent))
+                    .map(|recipe| Aspiration {
+                        person,
+                        recipe: recipe.clone(),
+                        priority: rule.priority,
+                        batch: rule.batch,
+                        review_interval: rule.review_interval,
+                    });
+                let preference = game_parallel_autowork::requests::Preference {
+                    person,
+                    effort: rule.effort,
+                    help_value: rule.min_help_value
+                        + random(1) % (rule.max_help_value - rule.min_help_value + 1),
+                    disregard_claims: random(2) % 100 < u64::from(rule.disregard_percent),
+                };
+                let asker = (random(3) % 100 < u64::from(rule.ask_percent)).then_some(
+                    game_parallel_autowork::requests::Asker {
+                        person,
+                        interval: rule.ask_interval,
+                        lifetime: rule.request_lifetime,
+                    },
+                );
+                (aspiration, preference, asker)
+            })
+        })
+        .collect();
+    Ok(WorkRows {
+        aspirations: rows.par_iter().filter_map(|row| row.0.clone()).collect(),
+        preferences: rows.par_iter().map(|row| row.1.clone()).collect(),
+        askers: rows.into_par_iter().filter_map(|row| row.2).collect(),
+    })
 }
 
 #[derive(Deserialize)]
@@ -557,6 +644,7 @@ mod tests {
             social: None,
             claims: None,
             help: None,
+            work_support: None,
         }
     }
 
@@ -669,5 +757,24 @@ mod tests {
             desperate_hunger: None,
         });
         assert!(claims(1, &[people]).is_err());
+    }
+
+    #[test]
+    fn work_support_rejects_aspirations_without_a_recipe() {
+        let mut people = profile();
+        people.work_support = Some(WorkSupport {
+            aspiration_percent: 100,
+            priority: 1,
+            batch: 1,
+            review_interval: 1,
+            ask_percent: 50,
+            ask_interval: 1,
+            request_lifetime: 2,
+            effort: 5,
+            min_help_value: 0,
+            max_help_value: 10,
+            disregard_percent: 0,
+        });
+        assert!(work_support(1, &[people]).is_err());
     }
 }

@@ -343,7 +343,7 @@ struct CultivatedField {
     region: u64,
     crop: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Aspiration {
     person: u64,
@@ -503,6 +503,32 @@ pub fn scenario_with_options(
         help.acquaintance_asking
             .retain(|p| !authored.contains(&p.person));
         giving.acquaintance_asking.extend(help.acquaintance_asking);
+    }
+    let mut work_support = population::work_support(scenario.seed, &scenario.population)?;
+    if !work_support.preferences.is_empty() {
+        let requests = scenario
+            .work_requests
+            .as_mut()
+            .ok_or("generated work support requires work requests")?;
+        let authored: HashSet<_> = requests.preferences.iter().map(|p| p.person).collect();
+        work_support
+            .preferences
+            .retain(|p| !authored.contains(&p.person));
+        requests.preferences.extend(work_support.preferences);
+        let authored: HashSet<_> = requests.askers.iter().map(|p| p.person).collect();
+        work_support
+            .askers
+            .retain(|p| !authored.contains(&p.person));
+        requests.askers.extend(work_support.askers);
+        let authored: HashSet<_> = scenario
+            .aspirations
+            .iter()
+            .map(|a| (a.person, a.recipe.as_str()))
+            .collect();
+        work_support
+            .aspirations
+            .retain(|a| !authored.contains(&(a.person, a.recipe.as_str())));
+        scenario.aspirations.extend(work_support.aspirations);
     }
     let mut farming = population::farming(scenario.seed, &scenario.population);
     if !farming.is_empty() {
