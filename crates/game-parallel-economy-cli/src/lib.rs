@@ -381,8 +381,24 @@ pub fn scenario_with_seed(
     content: &Path,
     seed: Option<u64>,
 ) -> Result<Economy, String> {
+    scenario_with_options(path, content, seed, None)
+}
+
+/// Add authored population profiles to a scenario without changing its other content.
+pub fn scenario_with_options(
+    path: &Path,
+    content: &Path,
+    seed: Option<u64>,
+    population_path: Option<&Path>,
+) -> Result<Economy, String> {
     let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut scenario: Scenario = toml::from_str(&source).map_err(|error| error.to_string())?;
+    if let Some(path) = population_path {
+        let source = std::fs::read_to_string(path).map_err(|error| error.to_string())?;
+        let overlay: population::Overlay =
+            toml::from_str(&source).map_err(|error| error.to_string())?;
+        scenario.population.extend(overlay.population);
+    }
     if let Some(seed) = seed {
         scenario.seed = seed;
     }

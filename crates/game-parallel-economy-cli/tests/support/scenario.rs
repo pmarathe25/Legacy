@@ -146,6 +146,45 @@ fn generated_founders_have_individual_lives_and_actual_births_survive_reload() {
 }
 
 #[test]
+fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = super::scenario_with_options(
+                    &root.join("content/parallel/economy-campaign.toml"),
+                    &root.join("content"),
+                    Some(42),
+                    Some(&root.join("content/parallel/campaign-population.toml")),
+                )
+                .unwrap();
+                let initial = world.snapshot();
+                assert_eq!(initial.people.len(), 130);
+                assert_eq!(initial.family.as_ref().unwrap().next_id, 1128);
+                let remote: Vec<_> = initial
+                    .people
+                    .iter()
+                    .filter(|p| p.region == Some(2))
+                    .map(|p| p.id)
+                    .collect();
+                assert!(!remote.is_empty());
+                {
+                    let mut player = game_parallel_economy_player::Player::new(&mut world);
+                    let view = player.view().unwrap();
+                    assert_eq!(view.person.unwrap().id, 1);
+                    assert!(view.nearby.iter().all(|id| !remote.contains(id)));
+                    player.advance().unwrap();
+                }
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_scenario_advances_and_resumes_identically_across_worker_counts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

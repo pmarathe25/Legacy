@@ -219,6 +219,7 @@ fn run() -> Result<(), String> {
     let mut player_mode = false;
     let mut scenario = None;
     let mut seed = None;
+    let mut population = None;
     while let Some(arg) = args.next() {
         if arg == "--player" && !player_mode {
             player_mode = true;
@@ -231,6 +232,10 @@ fn run() -> Result<(), String> {
                     .parse::<u64>()
                     .map_err(|_| "invalid seed")?,
             );
+        } else if arg == "--population" && population.is_none() {
+            population = Some(PathBuf::from(
+                args.next().ok_or("missing population profile")?,
+            ));
         } else if scenario.is_none() && !arg.to_string_lossy().starts_with("--") {
             scenario = Some(PathBuf::from(arg));
         } else {
@@ -244,8 +249,12 @@ fn run() -> Result<(), String> {
             "content/parallel/economy.toml"
         })
     });
-    let mut world =
-        game_parallel_economy_cli::scenario_with_seed(&scenario, &root.join("content"), seed)?;
+    let mut world = game_parallel_economy_cli::scenario_with_options(
+        &scenario,
+        &root.join("content"),
+        seed,
+        population.as_deref(),
+    )?;
     println!("Economic simulation; enter help for commands.");
     let stdin = io::stdin();
     let interactive = stdin.is_terminal();

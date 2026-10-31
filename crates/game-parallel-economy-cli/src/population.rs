@@ -26,6 +26,12 @@ pub struct Profile {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct Overlay {
+    pub population: Vec<Profile>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Founder {
     min_age: u64,
     max_age: u64,
