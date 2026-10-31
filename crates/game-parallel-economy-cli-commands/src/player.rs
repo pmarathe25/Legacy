@@ -9,7 +9,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
         [] => {}
         ["quit"] | ["exit"] => return Ok(false),
         ["help"] => println!(
-            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | claim GOOD | withdraw-claim REGION GOOD | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
+            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["view"] => {
             let view = player.view()?;
@@ -69,6 +69,12 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             }
             for claim in view.claims {
                 println!("claim={claim:?}");
+            }
+            for site in view.site_claims {
+                println!("site-claim={site}");
+            }
+            for observation in view.site_observations {
+                println!("site-observation={observation:?}");
             }
             for request in view.pending_work_requests {
                 println!("work-request={request:?}");
@@ -136,6 +142,10 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             player.destroy_site(site.parse().map_err(|_| "invalid work site")?)?
         ),
         ["claim", good] => player.claim_stock(good.parse().map_err(|_| "invalid good")?)?,
+        ["claim-site", site] => player.claim_site(site.parse().map_err(|_| "invalid site")?)?,
+        ["withdraw-site-claim", site] => {
+            player.withdraw_site_claim(site.parse().map_err(|_| "invalid site")?)?
+        }
         ["withdraw-claim", region, good] => player.withdraw_claim(
             region.parse().map_err(|_| "invalid region")?,
             good.parse().map_err(|_| "invalid good")?,

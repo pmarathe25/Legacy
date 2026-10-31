@@ -56,6 +56,13 @@ pub struct ClaimView {
     pub good: u32,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SiteObservation {
+    pub tick: u64,
+    pub person: u64,
+    pub site: u64,
+    pub destroyed: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub tick: u64,
     pub person: Option<Person>,
@@ -66,6 +73,9 @@ pub struct View {
     pub local_stock: Vec<Lot>,
     /// The ruler's own assertions, including assertions made in other regions.
     pub claims: Vec<ClaimView>,
+    /// The ruler's assertions about sites, including sites since destroyed.
+    pub site_claims: Vec<u64>,
+    pub site_observations: Vec<SiteObservation>,
     pub food_reports: Vec<Record>,
     pub job: Option<Job>,
     pub warning: Option<InvocationWarning>,
@@ -501,6 +511,39 @@ impl<'a> Player<'a> {
                         claims
                     })
             }),
+            site_claims: current.map_or_else(Vec::new, |id| {
+                state
+                    .dynamics
+                    .and_then(|d| d.claims.as_ref())
+                    .map_or_else(Vec::new, |owner| {
+                        let mut sites: Vec<_> = owner
+                            .site_claims
+                            .par_iter()
+                            .filter(|claim| claim.person == id)
+                            .map(|claim| claim.site)
+                            .collect();
+                        sites.par_sort_unstable();
+                        sites
+                    })
+            }),
+            site_observations: current.map_or_else(Vec::new, |id| {
+                state
+                    .dynamics
+                    .and_then(|d| d.claims.as_ref())
+                    .map_or_else(Vec::new, |owner| {
+                        owner
+                            .site_events
+                            .par_iter()
+                            .filter(|event| event.claimant == id)
+                            .map(|event| SiteObservation {
+                                tick: event.tick,
+                                person: event.person,
+                                site: event.site,
+                                destroyed: event.destroyed,
+                            })
+                            .collect()
+                    })
+            }),
             sharing_learning: current
                 .and_then(|id| self.world.sharing_learning(id))
                 .cloned(),
@@ -733,6 +776,14 @@ impl<'a> Player<'a> {
             .and_then(|p| p.region)
             .ok_or("person is traveling")?;
         self.world.claim_stock(person, region, good)
+    }
+    /// Assert a personal claim to a local physical site.
+    pub fn claim_site(&mut self, site: u64) -> Result<(), String> {
+        self.world.claim_site(self.current()?, site)
+    }
+    /// Withdraw this person's site assertion, even if the site no longer exists.
+    pub fn withdraw_site_claim(&mut self, site: u64) -> Result<(), String> {
+        self.world.withdraw_site_claim(self.current()?, site)
     }
     /// Withdraw one of the ruler's own assertions, including one made elsewhere.
     pub fn withdraw_claim(&mut self, region: u64, good: u32) -> Result<(), String> {

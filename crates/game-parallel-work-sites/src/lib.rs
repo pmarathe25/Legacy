@@ -1,4 +1,5 @@
 //! Fixed physical work sites and provisional, capacity-bounded job occupancy.
+pub mod access;
 use game_parallel_lot_runtime::{Events, Phase, Work};
 use game_parallel_production_model::Start;
 use rayon::prelude::*;
@@ -207,6 +208,9 @@ impl Capabilities<'_> {
     }
 }
 impl Plan {
+    pub fn bindings(&self) -> &[Binding] {
+        &self.bindings
+    }
     pub fn permits(&self, job: u64) -> bool {
         self.bindings.binary_search_by_key(&job, |b| b.job).is_ok()
     }

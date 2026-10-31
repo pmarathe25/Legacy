@@ -11,6 +11,73 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[macro_export]
 macro_rules! claim_methods {
     () => {
+        /// Assert a personal claim to a local physical site; this grants no authority.
+        pub fn claim_site(&mut self, person: u64, site: u64) -> Result<(), String> {
+            let sites = self.work_sites.as_ref().ok_or("work sites are disabled")?;
+            let target = sites
+                .sites
+                .binary_search_by_key(&site, |s| s.id)
+                .ok()
+                .map(|i| &sites.sites[i])
+                .ok_or("unknown work site")?;
+            if self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| {
+                    self.people[i].health == 0 || self.people[i].region != Some(target.region)
+                })
+            {
+                return Err("person and site must be local and alive".into());
+            }
+            let claims = self
+                .dynamics
+                .as_mut()
+                .and_then(|d| d.claims.as_mut())
+                .ok_or("claims are disabled")?;
+            if claims
+                .site_claims
+                .iter()
+                .any(|c| c.person == person && c.site == site)
+            {
+                return Err("duplicate personal site claim".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            claims.site_claims.push($crate::SiteClaim { person, site });
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Withdraw only this person's site assertion, even if the site has been destroyed.
+        pub fn withdraw_site_claim(&mut self, person: u64, site: u64) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be alive".into());
+            }
+            let claims = self
+                .dynamics
+                .as_mut()
+                .and_then(|d| d.claims.as_mut())
+                .ok_or("claims are disabled")?;
+            let index = claims
+                .site_claims
+                .iter()
+                .position(|c| c.person == person && c.site == site)
+                .ok_or("unknown personal site claim")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            claims.site_claims.remove(index);
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Make a personal assertion; other people may make conflicting assertions.
         pub fn claim_stock(&mut self, person: u64, region: u64, good: u32) -> Result<(), String> {
             if !self
@@ -251,7 +318,7 @@ macro_rules! prepare_index {
             .dynamics
             .as_ref()
             .and_then(|d| d.claims.as_ref())
-            .filter(|claims| !claims.claims.is_empty())
+            .filter(|claims| !claims.claims.is_empty() || !claims.site_claims.is_empty())
             .map(|claims| claims.index())
     };
 }
@@ -270,7 +337,10 @@ macro_rules! work_actions {
             .as_ref()
             .and_then(|plan| plan.work.as_ref())
             .map_or(&[][..], |plan| plan.requests.as_slice());
-        if $claims.is_some() {
+        if $claims
+            .as_ref()
+            .is_some_and(|index| index.has_stock_claims())
+        {
             $uses.extend($crate::work(starts, $world.physical.recipes())?);
         }
         if let Some(plan) = &$work {
@@ -297,6 +367,13 @@ pub struct Claim {
     pub region: u64,
     pub good: u32,
 }
+/// One person's assertion about a physical site, without authority to enforce it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteClaim {
+    pub person: u64,
+    pub site: u64,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preference {
@@ -320,7 +397,22 @@ pub struct UseEvent {
     pub quantity: u64,
     pub witnessed: bool,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SiteUseEvent {
+    pub tick: u64,
+    pub person: u64,
+    pub claimant: u64,
+    pub site: u64,
+    pub destroyed: bool,
+}
+#[derive(Clone, Copy)]
+pub struct SiteUse {
+    pub person: u64,
+    pub site: u64,
+    pub destroyed: bool,
+}
+#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claims {
     #[serde(default)]
@@ -329,6 +421,21 @@ pub struct Claims {
     pub preferences: Vec<Preference>,
     #[serde(default)]
     pub events: Vec<UseEvent>,
+    #[serde(default)]
+    pub site_claims: Vec<SiteClaim>,
+    #[serde(default)]
+    pub site_events: Vec<SiteUseEvent>,
+}
+impl Clone for Claims {
+    fn clone(&self) -> Self {
+        Self {
+            claims: self.claims.par_iter().cloned().collect(),
+            preferences: self.preferences.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+            site_claims: self.site_claims.par_iter().cloned().collect(),
+            site_events: self.site_events.par_iter().cloned().collect(),
+        }
+    }
 }
 impl Claims {
     pub fn validate(&self, people: &HashSet<u64>, view: &View, tick: u64) -> Result<(), String> {
@@ -340,7 +447,25 @@ impl Claims {
         keys.par_sort_unstable();
         let mut policies: Vec<_> = self.preferences.par_iter().map(|p| p.person).collect();
         policies.par_sort_unstable();
-        if keys.par_windows(2).any(|p| p[0] == p[1])
+        let mut site_keys: Vec<_> = self
+            .site_claims
+            .par_iter()
+            .map(|c| (c.site, c.person))
+            .collect();
+        site_keys.par_sort_unstable();
+        if site_keys.par_windows(2).any(|p| p[0] == p[1])
+            || self
+                .site_claims
+                .par_iter()
+                .any(|c| c.site == 0 || !people.contains(&c.person))
+            || self.site_events.par_iter().any(|e| {
+                e.tick > tick
+                    || e.site == 0
+                    || e.person == e.claimant
+                    || !people.contains(&e.person)
+                    || !people.contains(&e.claimant)
+            })
+            || keys.par_windows(2).any(|p| p[0] == p[1])
             || policies.par_windows(2).any(|p| p[0] == p[1])
             || self.claims.par_iter().any(|c| {
                 !people.contains(&c.person)
@@ -375,17 +500,47 @@ impl Claims {
         claims.par_sort_unstable_by_key(|c| (c.region, c.good, c.person));
         let mut preferences: Vec<_> = self.preferences.par_iter().collect();
         preferences.par_sort_unstable_by_key(|p| p.person);
+        let mut site_claims: Vec<_> = self.site_claims.par_iter().collect();
+        site_claims.par_sort_unstable_by_key(|c| (c.site, c.person));
         Index {
             claims,
             preferences,
+            site_claims,
         }
     }
 }
 pub struct Index<'a> {
     claims: Vec<&'a Claim>,
     preferences: Vec<&'a Preference>,
+    site_claims: Vec<&'a SiteClaim>,
 }
 impl Index<'_> {
+    pub fn has_stock_claims(&self) -> bool {
+        !self.claims.is_empty()
+    }
+    pub fn disregards(&self, actor: u64) -> bool {
+        self.preferences
+            .binary_search_by_key(&actor, |p| p.person)
+            .ok()
+            .is_some_and(|i| self.preferences[i].disregard_others)
+    }
+    /// Sorted claimed sites; None identifies competing assertions by several people.
+    pub fn site_classes(&self) -> Vec<(u64, Option<u64>)> {
+        self.site_claims
+            .par_chunk_by(|a, b| a.site == b.site)
+            .map(|group| (group[0].site, (group.len() == 1).then_some(group[0].person)))
+            .collect()
+    }
+    pub fn allows_site(&self, actor: u64, site: u64) -> bool {
+        if self.disregards(actor) {
+            return true;
+        }
+        let start = self.site_claims.partition_point(|claim| claim.site < site);
+        let end = self.site_claims.partition_point(|claim| claim.site <= site);
+        self.site_claims[start..end]
+            .iter()
+            .all(|claim| claim.person == actor)
+    }
     pub fn food_access(&self, person: &Person, region: u64, good: u32) -> Option<u8> {
         if self.allows(person.id, region, good) {
             return Some(0);
@@ -398,12 +553,7 @@ impl Index<'_> {
             .map(|_| 1)
     }
     pub fn allows(&self, actor: u64, region: u64, good: u32) -> bool {
-        if self
-            .preferences
-            .binary_search_by_key(&actor, |p| p.person)
-            .ok()
-            .is_some_and(|i| self.preferences[i].disregard_others)
-        {
+        if self.disregards(actor) {
             return true;
         }
         let a = self
@@ -434,6 +584,9 @@ pub fn filter_work(
     claims: Option<&Index<'_>>,
 ) -> Option<game_parallel_autowork::Autowork> {
     let claims = claims?;
+    if !claims.has_stock_claims() {
+        return None;
+    }
     let mut recipes: Vec<_> = production.recipes.par_iter().collect();
     recipes.par_sort_unstable_by_key(|r| r.id);
     let policies = auto
@@ -522,6 +675,66 @@ pub struct Use {
     pub quantity: u64,
     pub job: bool,
 }
+/// Record only actual uses witnessed locally by a claimant, bounded per use.
+pub fn publish_site_uses(
+    claims: &mut Claims,
+    uses: &[SiteUse],
+    sites: &[(u64, u64)],
+    people: &[Person],
+    tick: u64,
+) {
+    if claims.site_claims.is_empty() || uses.is_empty() {
+        claims.site_events.clear();
+        return;
+    }
+    let mut observers: Vec<_> = claims
+        .site_claims
+        .par_iter()
+        .filter(|claim| {
+            let Some(region) = sites
+                .binary_search_by_key(&claim.site, |s| s.0)
+                .ok()
+                .map(|i| sites[i].1)
+            else {
+                return false;
+            };
+            people
+                .binary_search_by_key(&claim.person, |p| p.id)
+                .ok()
+                .is_some_and(|i| people[i].health > 0 && people[i].region == Some(region))
+        })
+        .collect();
+    observers.par_sort_unstable_by_key(|claim| (claim.site, claim.person));
+    let observers = &observers;
+    let mut events: Vec<_> = uses
+        .par_iter()
+        .flat_map_iter(|action| {
+            let a = observers.partition_point(|claim| claim.site < action.site);
+            let b = observers.partition_point(|claim| claim.site <= action.site);
+            let count = b - a;
+            let first = if count == 0 {
+                0
+            } else {
+                (tick.wrapping_add(action.person) % count as u64) as usize
+            };
+            (0..count.min(5))
+                .map(move |offset| observers[a + (first + offset) % count])
+                .filter(move |claim| claim.person != action.person)
+                .take(4)
+                .map(move |claim| SiteUseEvent {
+                    tick,
+                    person: action.person,
+                    claimant: claim.person,
+                    site: action.site,
+                    destroyed: action.destroyed,
+                })
+        })
+        .collect();
+    events.par_sort_unstable_by_key(|event| {
+        (event.claimant, event.person, event.site, event.destroyed)
+    });
+    claims.site_events = events;
+}
 pub fn pickups(plan: &provision::Plan) -> Vec<Use> {
     plan.actions
         .par_iter()
@@ -585,6 +798,10 @@ pub fn publish(
     people: &[Person],
     opinions: &mut Option<Opinions>,
 ) {
+    if claims.claims.is_empty() {
+        claims.events.clear();
+        return;
+    }
     // A bounded sample of locally present claimants observes each use. This
     // prevents a crowded stockpile from producing a quadratic event graph.
     let mut observers: Vec<_> = claims

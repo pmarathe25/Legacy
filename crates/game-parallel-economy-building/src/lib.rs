@@ -1,5 +1,6 @@
 //! Personal choices to assemble physical sites from actual local kits.
 pub mod demolition;
+pub mod site_access;
 use game_parallel_economy_claims::{Index as Claims, Use};
 use game_parallel_economy_person::Person;
 use game_parallel_lot_runtime::Events;
@@ -203,13 +204,7 @@ impl Context<'_> {
         if self.goal_needs.is_empty() || self.owner.goal_builders.is_empty() {
             return Vec::new();
         }
-        let mut site_sizes: Vec<_> = self
-            .sites
-            .sites
-            .par_iter()
-            .map(|site| (site.region, site.kind.as_str(), site.capacity))
-            .collect();
-        site_sizes.par_sort_unstable();
+        let sites = site_access::Index::new(self.sites, self.claims);
         let mut suitable: Vec<_> = self
             .sites
             .requirements
@@ -260,12 +255,7 @@ impl Context<'_> {
                     .binary_search_by_key(&need.recipe, |row| row.0)
                     .ok()
                     .map(|i| &suitable[i])?;
-                let key = (region, requirement.kind.as_str(), requirement.slots);
-                let index = site_sizes.partition_point(|row| *row < key);
-                if site_sizes
-                    .get(index)
-                    .is_some_and(|row| row.0 == region && row.1 == requirement.kind)
-                {
+                if sites.permits(person.id, region, requirement.recipe) {
                     return None;
                 }
                 if blueprints.iter().any(|blueprint| {
@@ -413,13 +403,7 @@ impl Context<'_> {
             .collect();
         if !self.goal_needs.is_empty() && !self.owner.goal_builders.is_empty() {
             let chosen: HashSet<_> = choices.par_iter().map(|choice| choice.person).collect();
-            let mut site_sizes: Vec<_> = self
-                .sites
-                .sites
-                .par_iter()
-                .map(|site| (site.region, site.kind.as_str(), site.capacity))
-                .collect();
-            site_sizes.par_sort_unstable();
+            let sites = site_access::Index::new(self.sites, self.claims);
             let mut suitable: Vec<_> = self
                 .sites
                 .requirements
@@ -472,12 +456,7 @@ impl Context<'_> {
                         .binary_search_by_key(&need.recipe, |row| row.0)
                         .ok()
                         .map(|i| &suitable[i])?;
-                    let key = (region, requirement.kind.as_str(), requirement.slots);
-                    let index = site_sizes.partition_point(|row| *row < key);
-                    if site_sizes
-                        .get(index)
-                        .is_some_and(|row| row.0 == region && row.1 == requirement.kind)
-                    {
+                    if sites.permits(person.id, region, requirement.recipe) {
                         return None;
                     }
                     let (blueprint, source) = blueprints.iter().find_map(|&blueprint| {

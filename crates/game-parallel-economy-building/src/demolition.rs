@@ -1,4 +1,5 @@
 //! Personal decisions to destroy particular physical sites.
+use game_parallel_economy_claims::Index as Claims;
 use game_parallel_economy_person::Person;
 use game_parallel_opinions::Opinions;
 use game_parallel_work_sites::{Facilities, Plan as SitePlan};
@@ -17,6 +18,8 @@ pub struct Policy {
     pub pressured_by: Option<u64>,
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pub disregard_claims: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -65,6 +68,7 @@ pub struct Context<'a> {
     pub sites: &'a Facilities,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
+    pub claims: Option<&'a Claims<'a>>,
     pub busy: &'a [u64],
     pub manual_site: Option<u64>,
     pub max_hunger: u32,
@@ -111,6 +115,10 @@ impl Context<'_> {
                     || person.health == 0
                     || person.hunger > self.max_hunger
                     || person.region != Some(site.region)
+                    || (!policy.disregard_claims
+                        && self
+                            .claims
+                            .is_some_and(|c| !c.allows_site(person.id, site.id)))
                 {
                     return None;
                 }

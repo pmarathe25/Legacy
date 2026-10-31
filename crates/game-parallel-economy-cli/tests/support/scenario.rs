@@ -977,6 +977,13 @@ fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     let view = player.view().unwrap();
     assert_eq!(view.work_sites.len(), 1);
     assert_eq!(view.work_sites[0].site.kind, "workshop");
+    let site = view.work_sites[0].site.id;
+    player.claim_site(site).unwrap();
+    assert_eq!(player.view().unwrap().site_claims, vec![site]);
+    assert!(player.destroy_site(site).unwrap());
+    assert_eq!(player.view().unwrap().site_claims, vec![site]);
+    player.withdraw_site_claim(site).unwrap();
+    assert!(player.view().unwrap().site_claims.is_empty());
 }
 
 #[test]
@@ -1030,4 +1037,37 @@ fn ruler_can_assert_and_withdraw_personal_claims_without_seeing_other_minds() {
         .claims;
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0].person, 2);
+}
+
+#[test]
+fn authored_site_claims_remain_personal_and_private_to_the_ruler() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = format!(
+        "{source}\n[work_sites]\nsites = [{{ id = 7, region = 1, kind = \"workshop\", capacity = 1 }}]\nrequirements = []\n[[dynamics.claims.site_claims]]\nperson = 2\nsite = 7\n"
+    );
+    let path = std::env::temp_dir().join(format!("legacy-site-claims-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut world);
+    assert!(player.view().unwrap().site_claims.is_empty());
+    player.claim_site(7).unwrap();
+    assert_eq!(player.view().unwrap().site_claims, vec![7]);
+    player.withdraw_site_claim(7).unwrap();
+    assert!(player.view().unwrap().site_claims.is_empty());
+    let snapshot = world.snapshot();
+    assert_eq!(
+        snapshot
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .claims
+            .as_ref()
+            .unwrap()
+            .site_claims[0]
+            .person,
+        2
+    );
 }

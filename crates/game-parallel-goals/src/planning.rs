@@ -238,7 +238,7 @@ pub fn plan_supply(
     needs: &[SupplyNeed],
     production: &Production,
     review: u64,
-    allowed: impl Fn(u64, u32) -> bool + Sync,
+    allowed: impl Fn(u64, u64, u32) -> bool + Sync,
 ) -> Vec<SupplyStep> {
     let index = Index::new(production, review);
     let mut selected: Vec<_> = needs
@@ -269,7 +269,7 @@ pub fn plan_supply(
                         continue;
                     }
                     let mut visited = [0; MAX_DEPTH];
-                    let site_allowed = |recipe| allowed(need.region, recipe);
+                    let site_allowed = |recipe| allowed(need.person, need.region, recipe);
                     let constraints = SiteConstraints {
                         allowed: &site_allowed,
                         visited_sites: &need.visited_sites,

@@ -16,8 +16,27 @@ use rayon::prelude::*;
 pub struct Plan {
     pub work: Option<WorkPlan>,
     pub occupied: Vec<u64>,
+    pub site_disregards: Vec<u64>,
     request: Option<RequestDraft>,
     asks: Option<asking::Draft>,
+}
+fn site_disregards(
+    auto: &Autowork,
+    claims: Option<&game_parallel_economy_claims::Index<'_>>,
+    classes: &[(u64, Option<u64>)],
+) -> Vec<u64> {
+    if classes.is_empty() {
+        return Vec::new();
+    }
+    let mut people: Vec<_> = auto
+        .policies
+        .par_iter()
+        .filter(|p| p.disregard_claims || claims.is_some_and(|c| c.disregards(p.person)))
+        .map(|p| p.person)
+        .collect();
+    people.par_sort_unstable();
+    people.dedup();
+    people
 }
 pub fn reserve(busy: &mut Vec<u64>, actors: impl IntoIterator<Item = u64>) {
     busy.extend(actors);
@@ -98,6 +117,7 @@ pub struct Context<'a> {
     pub goals: Option<&'a Goals>,
     pub preplanned_goals: Option<&'a Autowork>,
     pub sites: Option<&'a sites::Facilities>,
+    pub site_classes: &'a [(u64, Option<u64>)],
     pub seed: u64,
     pub busy: &'a [u64],
     pub unwilling: &'a [u64],
@@ -142,8 +162,14 @@ impl Context<'_> {
                         self.people,
                         &busy,
                         self.production.max_work_hunger,
-                        self.seed,
-                        self.tick,
+                        site_filter::Selection {
+                            seed: self.seed,
+                            tick: self.tick,
+                            claims: self.claims,
+                            classes: self.site_classes,
+                            recipes: &self.production.recipes,
+                            view: self.view,
+                        },
                     )
                 });
             return Ok(Plan {
@@ -154,6 +180,7 @@ impl Context<'_> {
                     self.max_job,
                 )?,
                 occupied: busy,
+                site_disregards: site_disregards(base, self.claims, self.site_classes),
                 request: None,
                 asks: None,
             });
@@ -273,8 +300,14 @@ impl Context<'_> {
                     self.people,
                     &busy,
                     self.production.max_work_hunger,
-                    self.seed,
-                    self.tick,
+                    site_filter::Selection {
+                        seed: self.seed,
+                        tick: self.tick,
+                        claims: self.claims,
+                        classes: self.site_classes,
+                        recipes: &self.production.recipes,
+                        view: self.view,
+                    },
                 )
             });
         let work = site_filtered.as_ref().unwrap_or(base).plan_validated(
@@ -289,6 +322,7 @@ impl Context<'_> {
         Ok(Plan {
             work,
             occupied: busy,
+            site_disregards: site_disregards(base, self.claims, self.site_classes),
             request,
             asks,
         })

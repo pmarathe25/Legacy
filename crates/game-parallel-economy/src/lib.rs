@@ -796,6 +796,21 @@ impl Economy {
                 .collect();
             sites.validate(physical.work(), &recipes, &regions)?;
         }
+        if let Some(claims) = state.dynamics.as_ref().and_then(|d| d.claims.as_ref())
+            && (claims.site_claims.par_iter().any(|claim| {
+                state
+                    .work_sites
+                    .as_ref()
+                    .is_none_or(|sites| claim.site >= sites.next_id)
+            }) || claims.site_events.par_iter().any(|event| {
+                state
+                    .work_sites
+                    .as_ref()
+                    .is_none_or(|sites| event.site >= sites.next_id)
+            }))
+        {
+            return Err("invalid personal site claim".into());
+        }
         if let Some(owner) = &mut state.construction {
             owner.normalize();
             let sites = state
@@ -959,6 +974,9 @@ impl Economy {
                 None
             };
         let claims = game_parallel_economy_claims::prepare_index!(self);
+        let site_classes = claims
+            .as_ref()
+            .map_or_else(Vec::new, |index| index.site_classes());
         let (fighters, resting, people, meal_candidates, meals, mut busy) = family::prepare_people!(
             self,
             view,
@@ -1675,6 +1693,7 @@ impl Economy {
                     sites,
                     people: &self.people,
                     opinions: self.opinions.as_ref(),
+                    claims: claims.as_ref(),
                     busy: &busy,
                     manual_site: destroy_site.map(|(site, _)| site),
                     max_hunger: self.rules.max_work_hunger,
@@ -1716,7 +1735,14 @@ impl Economy {
         let compact =
             game_parallel_economy_agriculture::append_planting(&mut farming, &mut actions);
         let work = game_parallel_economy_goals::prepare_work!(
-            self, view, people, claims, busy, tick, goal_work
+            self,
+            view,
+            people,
+            claims,
+            busy,
+            tick,
+            goal_work,
+            site_classes
         );
         let starts =
             game_parallel_economy_claims::work_actions!(work, claims, self, claim_uses, busy);
@@ -1764,10 +1790,25 @@ impl Economy {
                     .collect(),
             )
         };
-        let site_plan = self
-            .work_sites
+        let mut site_disregards = work
             .as_ref()
-            .map(|sites| sites.prepare(&starts, self.seed, tick));
+            .map_or_else(Vec::new, |plan| plan.site_disregards.clone());
+        if !site_classes.is_empty() {
+            site_disregards.extend(player_work.map(|choice| choice.actor()));
+            site_disregards.par_sort_unstable();
+            site_disregards.dedup();
+        }
+        let site_plan = self.work_sites.as_ref().map(|sites| {
+            sites.prepare_access(
+                &starts,
+                &game_parallel_economy_work::sites::access::Access {
+                    classes: &site_classes,
+                    disregards: &site_disregards,
+                },
+                self.seed,
+                tick,
+            )
+        });
         let starts = match (&self.work_sites, &site_plan) {
             (Some(sites), Some(plan)) => {
                 std::borrow::Cow::Owned(sites.filter_starts(&starts, plan))
@@ -2007,13 +2048,19 @@ impl Economy {
         } else if let Some(owner) = &mut construction {
             owner.events.clear();
         }
+        let mut manually_destroyed = None;
         if let (Some((site, was_occupied)), Some(sites)) = (destroy_site, &mut work_sites)
             && !was_occupied
             && site_plan
                 .as_ref()
                 .is_none_or(|plan| !plan.reserves_site(site))
+            && sites.destroy_idle(site)
+            && let Some(game_parallel_economy_interaction::PhysicalChoice::DestroySite {
+                person,
+                ..
+            }) = player_transfer
         {
-            sites.destroy_idle(site);
+            manually_destroyed = Some((person, site));
         }
         if let (Some(plan), Some(owner), Some(prior), Some(sites)) = (
             demolition_plan,
@@ -2022,6 +2069,71 @@ impl Economy {
             work_sites.as_mut(),
         ) {
             owner.demolition_events = plan.publish(tick, prior, site_plan.as_ref(), sites);
+        }
+        if let Some(owner) = dynamics.as_mut().and_then(|d| d.claims.as_mut()) {
+            let mut uses = Vec::new();
+            if !site_classes.is_empty() {
+                let mut workers: Vec<_> = starts
+                    .par_iter()
+                    .map(|start| (start.id, start.worker))
+                    .collect();
+                workers.par_sort_unstable_by_key(|row| row.0);
+                if let Some(plan) = &site_plan {
+                    uses.par_extend(plan.bindings().par_iter().filter_map(|binding| {
+                        if physical
+                            .events()
+                            .started
+                            .binary_search(&binding.job)
+                            .is_err()
+                        {
+                            return None;
+                        }
+                        let person = workers
+                            .binary_search_by_key(&binding.job, |row| row.0)
+                            .ok()
+                            .map(|i| workers[i].1)?;
+                        Some(game_parallel_economy_claims::SiteUse {
+                            person,
+                            site: binding.site,
+                            destroyed: false,
+                        })
+                    }));
+                }
+                if let Some((person, site)) = manually_destroyed {
+                    uses.push(game_parallel_economy_claims::SiteUse {
+                        person,
+                        site,
+                        destroyed: true,
+                    });
+                }
+                if let Some(construction) = &construction {
+                    uses.par_extend(
+                        construction
+                            .demolition_events
+                            .par_iter()
+                            .filter(|e| e.destroyed)
+                            .map(|e| game_parallel_economy_claims::SiteUse {
+                                person: e.person,
+                                site: e.site,
+                                destroyed: true,
+                            }),
+                    );
+                }
+            }
+            let sites: Vec<_> = self.work_sites.as_ref().map_or_else(Vec::new, |sites| {
+                sites
+                    .sites
+                    .par_iter()
+                    .map(|site| (site.id, site.region))
+                    .collect()
+            });
+            game_parallel_economy_claims::publish_site_uses(
+                owner,
+                &uses,
+                &sites,
+                &self.people,
+                tick,
+            );
         }
         game_parallel_economy_combat::finish_world!(combat, person);
         let missions = game_parallel_economy_expeditions::finish_world!(

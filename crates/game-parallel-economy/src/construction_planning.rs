@@ -24,7 +24,8 @@ pub fn prepare(
     pending: &[u64],
     review: u64,
 ) -> Plan {
-    let capabilities = context.sites.capabilities();
+    let capabilities =
+        game_parallel_economy_building::site_access::Index::new(context.sites, context.claims);
     let mut searches: Vec<_> = context
         .goal_needs
         .par_iter()
@@ -80,8 +81,8 @@ pub fn prepare(
         if missing.is_empty() {
             break;
         }
-        let steps = plan_supply(&missing, production, review, |region, recipe| {
-            capabilities.permits(region, recipe)
+        let steps = plan_supply(&missing, production, review, |person, region, recipe| {
+            capabilities.permits(person, region, recipe)
         });
         work.par_extend(
             steps
