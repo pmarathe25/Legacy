@@ -86,6 +86,66 @@ fn generated_dispositions_and_individual_overrides_interpret_experiences() {
 }
 
 #[test]
+fn generated_founders_have_individual_lives_and_actual_births_survive_reload() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/parallel/economy-generated.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let initial = world.snapshot();
+                let family = initial.family.as_ref().unwrap();
+                assert_eq!(family.members.len(), 129);
+                assert_eq!(family.next_id, 130);
+                assert!(family.members.iter().all(|member| member.partner.is_none()));
+                assert!(
+                    family
+                        .members
+                        .iter()
+                        .any(|member| !member.reproduction_allowed)
+                );
+                assert!(
+                    family
+                        .members
+                        .iter()
+                        .any(|member| member.reproduction_allowed)
+                );
+                assert!(family.members.iter().any(|member| member.age == 18));
+                assert!(family.members.iter().any(|member| member.age == 25));
+                for _ in 0..2 {
+                    world.advance().unwrap();
+                }
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_parallel_economy::Economy::compile(serde_json::from_str(&saved).unwrap())
+                        .unwrap();
+                for _ in 0..5 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let family = state.family.as_ref().unwrap();
+                assert!(family.totals.births > 0);
+                assert!(
+                    family
+                        .members
+                        .iter()
+                        .any(|member| member.id >= 130 && member.parents.len() == 2)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_scenario_advances_and_resumes_identically_across_worker_counts() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

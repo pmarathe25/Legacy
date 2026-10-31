@@ -20,6 +20,89 @@ pub struct Profile {
     goods: BTreeMap<String, u64>,
     #[serde(default)]
     sensitivity: Option<Sensitivity>,
+    #[serde(default)]
+    family: Option<Founder>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Founder {
+    min_age: u64,
+    max_age: u64,
+    min_allele: u16,
+    max_allele: u16,
+    reproduction_percent: u8,
+    #[serde(default)]
+    reconsider_partnership_percent: u8,
+}
+
+/// Generate individual life histories without founding any partnerships.
+pub fn founders(
+    seed: u64,
+    profiles: &[Profile],
+) -> Result<Vec<game_parallel_families::Member>, String> {
+    for profile in profiles {
+        let rule = profile
+            .family
+            .as_ref()
+            .ok_or("generated population needs a family profile")?;
+        if rule.min_age > rule.max_age
+            || rule.max_age - rule.min_age == u64::MAX
+            || rule.min_allele > rule.max_allele
+            || rule.max_allele > 1000
+            || rule.reproduction_percent > 100
+            || rule.reconsider_partnership_percent > 100
+        {
+            return Err("invalid generated founder profile".into());
+        }
+    }
+    Ok(profiles
+        .par_iter()
+        .flat_map(|profile| {
+            let rule = profile.family.as_ref().expect("validated founder profile");
+            (0..profile.count).into_par_iter().map(move |offset| {
+                let id = profile.start_id + offset;
+                let random = |attribute| {
+                    game_parallel_genetics::random(seed ^ 0x66616d696c79, id, attribute)
+                };
+                let mut alleles = [[0; 2]; 4];
+                for (locus, pair) in alleles.iter_mut().enumerate() {
+                    for (side, allele) in pair.iter_mut().enumerate() {
+                        *allele = rule.min_allele
+                            + (random(10 + (locus * 2 + side) as u64)
+                                % u64::from(rule.max_allele - rule.min_allele + 1))
+                                as u16;
+                    }
+                }
+                game_parallel_families::Member {
+                    id,
+                    born: None,
+                    age: rule.min_age + random(0) % (rule.max_age - rule.min_age + 1),
+                    lifespan_loss: 0,
+                    genome: game_parallel_genetics::Genome {
+                        sex: if random(1) % 2 == 0 {
+                            game_parallel_genetics::Sex::Female
+                        } else {
+                            game_parallel_genetics::Sex::Male
+                        },
+                        alleles,
+                    },
+                    parents: Default::default(),
+                    partner: None,
+                    pregnancy: None,
+                    next_conception: 0,
+                    alive: profile.health > 0,
+                    reproduction_allowed: random(2) % 100 < u64::from(rule.reproduction_percent),
+                    reconsider_partnership: random(3) % 100
+                        < u64::from(rule.reconsider_partnership_percent),
+                }
+            })
+        })
+        .collect())
+}
+
+pub fn has_founders(profiles: &[Profile]) -> bool {
+    profiles.iter().any(|profile| profile.family.is_some())
 }
 
 /// Authored individual dispositions, without copied relationships or obligations.
@@ -142,6 +225,7 @@ mod tests {
             recipe: None,
             goods: BTreeMap::new(),
             sensitivity: None,
+            family: None,
         }
     }
 
@@ -188,5 +272,40 @@ mod tests {
             second.iter().map(|p| p.0).collect::<Vec<_>>()
         );
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn founder_parameters_are_checked_and_reproductive_choices_are_individual() {
+        let mut people = profile();
+        people.family = Some(Founder {
+            min_age: 18,
+            max_age: 25,
+            min_allele: 400,
+            max_allele: 1000,
+            reproduction_percent: 0,
+            reconsider_partnership_percent: 100,
+        });
+        let first = founders(7, &[people]).unwrap();
+        assert_eq!(first.len(), 100);
+        assert!(
+            first
+                .iter()
+                .all(|person| !person.reproduction_allowed && person.reconsider_partnership)
+        );
+        assert!(
+            first
+                .iter()
+                .all(|person| person.partner.is_none() && person.parents.is_empty())
+        );
+        let mut bad = profile();
+        bad.family = Some(Founder {
+            min_age: 26,
+            max_age: 25,
+            min_allele: 0,
+            max_allele: 1000,
+            reproduction_percent: 50,
+            reconsider_partnership_percent: 0,
+        });
+        assert!(founders(7, &[bad]).is_err());
     }
 }

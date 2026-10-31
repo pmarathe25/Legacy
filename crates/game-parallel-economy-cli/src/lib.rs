@@ -402,6 +402,20 @@ pub fn scenario_with_seed(
         &scenario.population,
     )?;
     scenario.people.extend(generated);
+    if let Some(family) = scenario.family.as_mut() {
+        let mut founders = population::founders(scenario.seed, &scenario.population)?;
+        let explicitly_authored: HashSet<_> =
+            family.members.iter().map(|member| member.id).collect();
+        founders.retain(|member| !explicitly_authored.contains(&member.id));
+        if let Some(maximum) = founders.iter().map(|member| member.id).max() {
+            family.next_id = family
+                .next_id
+                .max(maximum.checked_add(1).ok_or("founder identity overflow")?);
+        }
+        family.members.extend(founders);
+    } else if population::has_founders(&scenario.population) {
+        return Err("generated founder profiles require family rules".into());
+    }
     let mut dispositions = population::sensitivities(&scenario.population);
     if !dispositions.is_empty() {
         let opinions = scenario

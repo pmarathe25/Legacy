@@ -28,6 +28,26 @@ affinity_harm_per_damage = -5
 gratitude_gain = 0
 promise_obligation_gain = 0
 
+[family]
+next_id = 2
+members = [{ id = 1, age = 18, genome = { sex = "Female", alleles = [[800, 800], [800, 800], [800, 800], [800, 800]] } }]
+
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = true
+
 [[regions]]
 id = 1
 stock = { grain = 100 }
@@ -71,6 +91,14 @@ affinity_harm_per_damage = 2
 gratitude_gain = 0
 promise_obligation_gain = 0
 
+[population.family]
+min_age = 18
+max_age = 25
+min_allele = 400
+max_allele = 1000
+reproduction_percent = 80
+reconsider_partnership_percent = 20
+
 [[population]]
 start_id = 66
 count = 64
@@ -86,3 +114,11 @@ goods = { bread = 3 }
 affinity_harm_per_damage = -2
 gratitude_gain = 3
 promise_obligation_gain = 1
+
+[population.family]
+min_age = 18
+max_age = 25
+min_allele = 400
+max_allele = 1000
+reproduction_percent = 80
+reconsider_partnership_percent = 20

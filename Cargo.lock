@@ -3358,6 +3358,7 @@ dependencies = [
  "game-parallel-economy-dynamics",
  "game-parallel-economy-knowledge",
  "game-parallel-economy-player",
+ "game-parallel-families",
  "game-parallel-fatigue",
  "game-parallel-genetics",
  "game-parallel-lot-content",
