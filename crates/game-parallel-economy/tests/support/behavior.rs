@@ -16232,6 +16232,144 @@ fn concentrated_work_sites(count: u64) -> State {
     state
 }
 
+fn concentrated_site_refill(count: u64) -> State {
+    let mut state = concentrated_work_sites(count);
+    for person in &mut state.people {
+        person.hunger = 0;
+        person.seek_meals = false;
+        person.willing_to_work = true;
+    }
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 1,
+            quantity: count,
+            expires_at: Some(20),
+        }],
+    )
+    .unwrap();
+    state.physical.recipes.extend([
+        Recipe {
+            id: 4,
+            name: "alternate material".into(),
+            ticks: 3,
+            inputs: vec![Amount {
+                good: 1,
+                quantity: 1,
+            }],
+            outputs: vec![Amount {
+                good: 3,
+                quantity: 1,
+            }],
+        },
+        Recipe {
+            id: 5,
+            name: "open work".into(),
+            ticks: 3,
+            inputs: vec![Amount {
+                good: 2,
+                quantity: 1,
+            }],
+            outputs: vec![Amount {
+                good: 3,
+                quantity: 1,
+            }],
+        },
+    ]);
+    state
+        .work_sites
+        .as_mut()
+        .unwrap()
+        .requirements
+        .push(WorkSiteRequirement {
+            recipe: 4,
+            kind: "workshop".into(),
+            slots: 1,
+        });
+    state.autowork.as_mut().unwrap().policies = (1..=count)
+        .map(|person| WorkPolicy {
+            person,
+            recipe: if person <= count / 4 {
+                5
+            } else if person % 2 == 0 {
+                1
+            } else {
+                4
+            },
+            enabled: true,
+            disregard_claims: false,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn concentrated_site_refills_are_physical_and_deterministic() {
+    let count = 4096;
+    let initial = concentrated_site_refill(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert!(
+                    events.started.len() > (count / 4 + 3 * count / 32) as usize,
+                    "only {} workers started",
+                    events.started.len()
+                );
+                assert!(events.started.len() <= (count / 4 + count / 8) as usize);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_site_refill_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_site_refill(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                let events = world.advance().unwrap();
+                assert!(events.started.len() > (count / 4 + 3 * count / 32) as usize);
+                if round > 0 {
+                    samples.push(start.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
 fn concentrated_claimed_work_site(count: u64) -> State {
     use game_parallel_economy_claims::{Claims, SiteClaim};
     let mut state = concentrated_work_sites(count);
