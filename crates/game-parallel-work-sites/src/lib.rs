@@ -185,6 +185,27 @@ struct SiteGroup<'a> {
 pub struct Plan {
     bindings: Vec<Binding>,
 }
+/// Read-only index for checking whether a region has infrastructure for a recipe.
+pub struct Capabilities<'a> {
+    requirements: &'a [Requirement],
+    sites: Vec<(u64, &'a str, u64)>,
+}
+impl Capabilities<'_> {
+    pub fn permits(&self, region: u64, recipe: u32) -> bool {
+        let Ok(index) = self
+            .requirements
+            .binary_search_by_key(&recipe, |r| r.recipe)
+        else {
+            return true;
+        };
+        let requirement = &self.requirements[index];
+        let key = (region, requirement.kind.as_str(), requirement.slots);
+        let index = self.sites.partition_point(|site| *site < key);
+        self.sites
+            .get(index)
+            .is_some_and(|site| site.0 == region && site.1 == requirement.kind)
+    }
+}
 impl Plan {
     pub fn permits(&self, job: u64) -> bool {
         self.bindings.binary_search_by_key(&job, |b| b.job).is_ok()
@@ -198,6 +219,18 @@ impl Plan {
     }
 }
 impl Facilities {
+    pub fn capabilities(&self) -> Capabilities<'_> {
+        let mut sites: Vec<_> = self
+            .sites
+            .par_iter()
+            .map(|s| (s.region, s.kind.as_str(), s.capacity))
+            .collect();
+        sites.par_sort_unstable();
+        Capabilities {
+            requirements: &self.requirements,
+            sites,
+        }
+    }
     /// Choose provisional slots before inputs move. Bind only physically started jobs.
     pub fn prepare(&self, starts: &[Start], seed: u64, tick: u64) -> Plan {
         if starts.is_empty() || self.requirements.is_empty() {

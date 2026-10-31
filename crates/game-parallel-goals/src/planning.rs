@@ -47,8 +47,13 @@ impl<'a> Index<'a> {
         visited: &mut [u32; MAX_DEPTH],
         depth: usize,
         budget: &mut usize,
+        allowed: &impl Fn(u32) -> bool,
     ) -> Option<u32> {
-        if *budget == 0 || depth >= MAX_DEPTH || visited[..depth].contains(&recipe.id) {
+        if *budget == 0
+            || depth >= MAX_DEPTH
+            || visited[..depth].contains(&recipe.id)
+            || !allowed(recipe.id)
+        {
             return None;
         }
         *budget -= 1;
@@ -73,7 +78,9 @@ impl<'a> Index<'a> {
                         })
                     });
                     has_space
-                        .then(|| self.choose(producer, inventory, visited, depth + 1, budget))
+                        .then(|| {
+                            self.choose(producer, inventory, visited, depth + 1, budget, allowed)
+                        })
                         .flatten()
                 })
             })
@@ -105,7 +112,8 @@ pub fn plan(
             if let Some(region) = person_index(people, policy.person).and_then(|i| people[i].1)
                 && let (Some(recipe), Some(inventory)) =
                     (index.recipes.get(&original), index.inventory.get(&region))
-                && let Some(next) = index.choose(recipe, inventory, &mut visited, 0, &mut budget)
+                && let Some(next) =
+                    index.choose(recipe, inventory, &mut visited, 0, &mut budget, &|_| true)
             {
                 policy.recipe = next;
             }
@@ -116,4 +124,47 @@ pub fn plan(
         originals.par_sort_unstable_by_key(|row| row.0);
     }
     originals
+}
+
+/// A person's alternative physical supplies for an unfinished plan.
+pub struct SupplyNeed {
+    pub person: u64,
+    pub region: u64,
+    pub goods: Vec<u32>,
+}
+
+/// Select a bounded producible prerequisite for each person, without changing their final goal.
+pub fn plan_supply(
+    needs: &[SupplyNeed],
+    production: &Production,
+    allowed: impl Fn(u64, u32) -> bool + Sync,
+) -> Vec<(u64, u32)> {
+    let index = Index::new(production);
+    let mut selected: Vec<_> = needs
+        .par_iter()
+        .filter_map(|need| {
+            let inventory = index.inventory.get(&need.region)?;
+            need.goods.iter().find_map(|good| {
+                index.producers.get(good)?.iter().find_map(|recipe| {
+                    let has_space = recipe.outputs.iter().all(|output| {
+                        inventory.stocks.iter().any(|stock| {
+                            stock.good == output.good && output.quantity <= stock.capacity
+                        })
+                    });
+                    if !has_space {
+                        return None;
+                    }
+                    let mut visited = [0; MAX_DEPTH];
+                    let mut budget = MAX_VISITS;
+                    index
+                        .choose(recipe, inventory, &mut visited, 0, &mut budget, &|recipe| {
+                            allowed(need.region, recipe)
+                        })
+                        .map(|recipe| (need.person, recipe))
+                })
+            })
+        })
+        .collect();
+    selected.par_sort_unstable_by_key(|row| row.0);
+    selected
 }

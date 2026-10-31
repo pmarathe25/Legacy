@@ -50,6 +50,12 @@ pub struct GoalNeed {
     pub person: u64,
     pub recipe: u32,
 }
+/// Missing kit alternatives for a specific person's planned local site.
+pub struct MissingKit {
+    pub person: u64,
+    pub region: u64,
+    pub goods: Vec<u32>,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Event {
@@ -189,6 +195,108 @@ pub struct Context<'a> {
     pub unwilling: &'a [u64],
 }
 impl Context<'_> {
+    /// Find needed site kits that could become accessible through local production.
+    pub fn missing_goal_kits(&self) -> Vec<MissingKit> {
+        if self.goal_needs.is_empty() || self.owner.goal_builders.is_empty() {
+            return Vec::new();
+        }
+        let mut site_sizes: Vec<_> = self
+            .sites
+            .sites
+            .par_iter()
+            .map(|site| (site.region, site.kind.as_str(), site.capacity))
+            .collect();
+        site_sizes.par_sort_unstable();
+        let mut suitable: Vec<_> = self
+            .sites
+            .requirements
+            .par_iter()
+            .map(|requirement| {
+                let blueprints: Vec<_> = self
+                    .owner
+                    .blueprints
+                    .iter()
+                    .filter(|blueprint| {
+                        blueprint.kind == requirement.kind
+                            && blueprint.capacity >= requirement.slots
+                    })
+                    .collect();
+                (requirement.recipe, requirement, blueprints)
+            })
+            .collect();
+        suitable.par_sort_unstable_by_key(|row| row.0);
+        self.owner
+            .goal_builders
+            .par_iter()
+            .filter_map(|policy| {
+                if !policy.enabled
+                    || self.busy.binary_search(&policy.person).is_ok()
+                    || self.unwilling.binary_search(&policy.person).is_ok()
+                {
+                    return None;
+                }
+                let need = self
+                    .goal_needs
+                    .binary_search_by_key(&policy.person, |n| n.person)
+                    .ok()
+                    .map(|i| self.goal_needs[i])?;
+                let person = self
+                    .people
+                    .binary_search_by_key(&policy.person, |p| p.id)
+                    .ok()
+                    .map(|i| &self.people[i])?;
+                let region = person.region?;
+                if person.controlled
+                    || person.health == 0
+                    || !person.willing_to_work
+                    || person.hunger > self.max_hunger
+                {
+                    return None;
+                }
+                let (_, requirement, blueprints) = suitable
+                    .binary_search_by_key(&need.recipe, |row| row.0)
+                    .ok()
+                    .map(|i| &suitable[i])?;
+                let key = (region, requirement.kind.as_str(), requirement.slots);
+                let index = site_sizes.partition_point(|row| *row < key);
+                if site_sizes
+                    .get(index)
+                    .is_some_and(|row| row.0 == region && row.1 == requirement.kind)
+                    || blueprints.iter().any(|blueprint| {
+                        self.source(person, blueprint, policy.disregard_claims)
+                            .is_some()
+                    })
+                {
+                    return None;
+                }
+                let mut goods = Vec::new();
+                for blueprint in blueprints {
+                    let stock = Place::Stock {
+                        region,
+                        good: blueprint.kit,
+                    };
+                    let accessible = policy.disregard_claims
+                        || self
+                            .claims
+                            .is_none_or(|c| c.allows(person.id, region, blueprint.kit));
+                    if accessible
+                        && self
+                            .view
+                            .container(stock)
+                            .is_some_and(|c| c.capacity >= blueprint.quantity)
+                        && !goods.contains(&blueprint.kit)
+                    {
+                        goods.push(blueprint.kit);
+                    }
+                }
+                (!goods.is_empty()).then_some(MissingKit {
+                    person: person.id,
+                    region,
+                    goods,
+                })
+            })
+            .collect()
+    }
     fn source(&self, person: &Person, blueprint: &Blueprint, disregard: bool) -> Option<Place> {
         let region = person.region?;
         let personal = Place::Person(person.id);

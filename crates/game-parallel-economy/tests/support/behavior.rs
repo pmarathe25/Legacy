@@ -16751,6 +16751,121 @@ fn goal_builders_choose_a_sufficient_blueprint_with_an_available_kit() {
 }
 
 #[test]
+fn a_person_plans_a_tool_and_kit_before_building_for_their_work_goal() {
+    use game_parallel_goals::Goal;
+    let mut initial = construction_fixture();
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: true,
+        events: vec![],
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+    });
+    initial.physical.recipes.push(Recipe {
+        id: 4,
+        name: "make building kit".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+    });
+    initial.work_tools = vec![WorkTool {
+        recipe: 4,
+        good: 1,
+        quantity: 1,
+    }];
+    let kit = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *kit = Container::new(kit.place, kit.capacity, vec![]).unwrap();
+    let tools = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *tools = Container::new(
+        tools.place,
+        tools.capacity,
+        vec![Lot {
+            good: 1,
+            quantity: 1,
+            expires_at: Some(20),
+        }],
+    )
+    .unwrap();
+    let construction = initial.construction.as_mut().unwrap();
+    construction.policies.clear();
+    construction.goal_builders = vec![GoalBuilder {
+        person: 2,
+        enabled: true,
+        disregard_claims: false,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                assert_eq!(world.snapshot().physical.work[0].job.recipe, 4);
+                assert_eq!(world.advance().unwrap().finished.len(), 1);
+                assert_eq!(
+                    world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                    0
+                );
+                let saved = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+                assert_eq!(state.goals.as_ref().unwrap().people[0].progress, 1);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn goal_builders_do_not_build_when_a_suitable_site_already_exists() {
     use game_parallel_goals::Goal;
     let mut initial = construction_fixture();
@@ -17327,6 +17442,95 @@ fn concentrated_goal_construction(count: u64) -> State {
         person.willing_to_work = true;
     }
     state
+}
+
+fn concentrated_goal_kit_production(count: u64) -> State {
+    let mut state = concentrated_goal_construction(count);
+    state.goals.as_mut().unwrap().plan_inputs = true;
+    state.construction.as_mut().unwrap().blueprints[0].kit = 3;
+    state.physical.recipes.push(Recipe {
+        id: 4,
+        name: "make site kit".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+    });
+    state
+}
+
+#[test]
+fn concentrated_missing_kit_plans_compete_for_actual_materials() {
+    let initial = concentrated_goal_kit_production(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(events.started.len(), 512);
+                let state = world.snapshot();
+                assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
+                assert!(state.physical.work.iter().all(|work| work.job.recipe == 4));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn missing_kit_planning_does_not_use_a_recipe_requiring_the_missing_site() {
+    let mut initial = concentrated_goal_kit_production(16);
+    initial.physical.recipes.retain(|recipe| recipe.id != 4);
+    let mut world = Economy::compile(initial).unwrap();
+    for _ in 0..4 {
+        assert!(world.advance().unwrap().started.is_empty());
+    }
+    let state = world.snapshot();
+    assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
+    assert!(state.physical.work.is_empty());
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+            .unwrap()
+            .used,
+        2
+    );
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_missing_kit_planning_benchmark() {
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .unwrap();
+    let initial = concentrated_goal_kit_production(100_000);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(initial).unwrap();
+            let started = std::time::Instant::now();
+            let events = world.advance().unwrap();
+            eprintln!(
+                "workers={workers} people=100000 ticks=1 elapsed={:.6}",
+                started.elapsed().as_secs_f64()
+            );
+            assert_eq!(events.started.len(), 12_500);
+        });
 }
 
 #[test]

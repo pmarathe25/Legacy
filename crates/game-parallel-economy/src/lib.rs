@@ -1479,6 +1479,100 @@ impl Economy {
                 game_parallel_goals::planning::plan(planned, base, &production, &people);
             }
         }
+        let mut goal_needs: Vec<_> = if goal_building {
+            let explicit: std::collections::HashSet<_> = self
+                .autowork
+                .as_ref()
+                .map_or_else(std::collections::HashSet::new, |auto| {
+                    auto.policies.par_iter().map(|p| p.person).collect()
+                });
+            goal_work.as_ref().map_or_else(Vec::new, |planned| {
+                planned
+                    .policies
+                    .par_iter()
+                    .filter(|p| p.enabled && !explicit.contains(&p.person))
+                    .map(|p| game_parallel_economy_building::GoalNeed {
+                        person: p.person,
+                        recipe: p.recipe,
+                    })
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
+        goal_needs.par_sort_unstable_by_key(|need| need.person);
+        let mut goal_building_refusals = if goal_building {
+            self.dynamics
+                .as_ref()
+                .and_then(|d| d.personality.as_ref())
+                .map_or_else(Vec::new, |p| p.work_refusals(self.seed, tick))
+        } else {
+            Vec::new()
+        };
+        goal_building_refusals.par_sort_unstable();
+        if goal_building
+            && self.goals.as_ref().is_some_and(|g| g.plan_inputs)
+            && !goal_needs.is_empty()
+            && let (Some(owner), Some(sites), Some(planned)) = (
+                self.construction.as_ref(),
+                self.work_sites.as_ref(),
+                &mut goal_work,
+            )
+        {
+            let missing = game_parallel_economy_building::Context {
+                owner,
+                sites,
+                people: &self.people,
+                view: &view,
+                opinions: self.opinions.as_ref(),
+                claims: claims.as_ref(),
+                busy: &busy,
+                max_hunger: self.rules.max_work_hunger,
+                tick,
+                manual: None,
+                goal_needs: &goal_needs,
+                unwilling: &goal_building_refusals,
+            }
+            .missing_goal_kits();
+            if !missing.is_empty() {
+                let mut pending: Vec<_> = self
+                    .physical
+                    .work()
+                    .par_iter()
+                    .filter(|row| row.phase != game_parallel_lot_runtime::Phase::Working)
+                    .map(|row| row.job.worker)
+                    .collect();
+                pending.par_sort_unstable();
+                let needs: Vec<_> = missing
+                    .into_par_iter()
+                    .filter(|need| pending.binary_search(&need.person).is_err())
+                    .map(|need| game_parallel_goals::planning::SupplyNeed {
+                        person: need.person,
+                        region: need.region,
+                        goods: need.goods,
+                    })
+                    .collect();
+                if !needs.is_empty() {
+                    let production = game_parallel_lot_projection::production(
+                        &self.physical,
+                        &view,
+                        self.rules.max_work_hunger,
+                    );
+                    let capabilities = sites.capabilities();
+                    let chosen = game_parallel_goals::planning::plan_supply(
+                        &needs,
+                        &production,
+                        |region, recipe| capabilities.permits(region, recipe),
+                    );
+                    planned.policies.par_iter_mut().for_each(|policy| {
+                        if let Ok(index) = chosen.binary_search_by_key(&policy.person, |row| row.0)
+                        {
+                            policy.recipe = chosen[index].1;
+                        }
+                    });
+                }
+            }
+        }
         if !self.work_tools.is_empty()
             || self.construction.is_some()
             || matches!(
@@ -1557,37 +1651,6 @@ impl Economy {
         if manual_build.is_some() && self.construction.is_none() {
             return Err("construction is disabled".into());
         }
-        let mut goal_needs: Vec<_> = if goal_building {
-            let explicit: std::collections::HashSet<_> = self
-                .autowork
-                .as_ref()
-                .map_or_else(std::collections::HashSet::new, |auto| {
-                    auto.policies.par_iter().map(|p| p.person).collect()
-                });
-            goal_work.as_ref().map_or_else(Vec::new, |planned| {
-                planned
-                    .policies
-                    .par_iter()
-                    .filter(|p| p.enabled && !explicit.contains(&p.person))
-                    .map(|p| game_parallel_economy_building::GoalNeed {
-                        person: p.person,
-                        recipe: p.recipe,
-                    })
-                    .collect()
-            })
-        } else {
-            Vec::new()
-        };
-        goal_needs.par_sort_unstable_by_key(|need| need.person);
-        let mut goal_building_refusals = if goal_building {
-            self.dynamics
-                .as_ref()
-                .and_then(|d| d.personality.as_ref())
-                .map_or_else(Vec::new, |p| p.work_refusals(self.seed, tick))
-        } else {
-            Vec::new()
-        };
-        goal_building_refusals.par_sort_unstable();
         let mut construction_plan = self
             .construction
             .as_ref()
