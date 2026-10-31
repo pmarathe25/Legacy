@@ -1917,6 +1917,8 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -12224,6 +12226,8 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -12387,6 +12391,8 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -12552,6 +12558,8 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_harm_per_damage: Some(2),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -12563,6 +12571,8 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         harm_per_damage: Some(-1),
         encounter: None,
         pressured_encounter: None,
+        site_use: None,
+        site_destruction: None,
         obligation_gain: None,
         obligation_relief: None,
         promise_obligation_gain: None,
@@ -12613,6 +12623,8 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_harm_per_damage: Some(1),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -12695,6 +12707,8 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: Some(ObligationDevelopment {
             until_age: 3,
@@ -12866,6 +12880,8 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_site_use: None,
+            affinity_site_destruction: None,
             relationship_cases: vec![],
             obligation_development: Some(ObligationDevelopment {
                 until_age: 4,
@@ -13094,6 +13110,8 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
     };
@@ -13239,6 +13257,8 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: None,
         relationship_cases: vec![],
         obligation_development: None,
     }];
@@ -13443,6 +13463,8 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_site_use: None,
+            affinity_site_destruction: None,
             relationship_cases: vec![],
             obligation_development: None,
         })
@@ -16920,6 +16942,85 @@ fn conflicting_site_claims_do_not_imply_permission_from_other_claimants() {
 }
 
 #[test]
+fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
+    let mut initial = claimed_work_sites_fixture();
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 100,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let sensitivity = |person, rate| OpinionSensitivity {
+        person,
+        fear_per_damage: None,
+        gratitude_gain: None,
+        promise_obligation_gain: None,
+        obligation_relief: None,
+        theft_loss: None,
+        confrontation: None,
+        affinity_help: None,
+        affinity_harm_per_damage: None,
+        affinity_encounter: None,
+        affinity_pressured_encounter: None,
+        affinity_site_use: Some(rate),
+        affinity_site_destruction: None,
+        relationship_cases: vec![],
+        obligation_development: None,
+    };
+    let mut first = sensitivity(1, 4);
+    first.relationship_cases.push(RelationshipCase {
+        target: 3,
+        help: None,
+        harm_per_damage: None,
+        encounter: None,
+        pressured_encounter: None,
+        site_use: Some(6),
+        site_destruction: None,
+        obligation_gain: None,
+        promise_obligation_gain: None,
+        obligation_relief: None,
+    });
+    opinions.sensitivities = vec![first, sensitivity(4, -3)];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.claim_site(1, 7).unwrap();
+                world.claim_site(4, 7).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let opinions = state.opinions.as_ref().unwrap().index();
+                assert_eq!(opinions.affinity(1, 3), 6);
+                assert_eq!(opinions.affinity(4, 3), -3);
+                assert_eq!(opinions.obligation(1, 3), 0);
+                assert_eq!(opinions.obligation(4, 3), 0);
+                let mut old = serde_json::to_value(&state).unwrap();
+                for sensitivity in old["opinions"]["sensitivities"].as_array_mut().unwrap() {
+                    let row = sensitivity.as_object_mut().unwrap();
+                    row.remove("affinity_site_use");
+                    row.remove("affinity_site_destruction");
+                    for case in row["relationship_cases"].as_array_mut().unwrap() {
+                        case.as_object_mut().unwrap().remove("site_use");
+                        case.as_object_mut().unwrap().remove("site_destruction");
+                    }
+                }
+                Economy::compile(serde_json::from_value(old).unwrap()).unwrap();
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn a_remote_claimant_does_not_observe_site_use() {
     let mut world = Economy::compile(claimed_work_sites_fixture()).unwrap();
     world.claim_site(1, 7).unwrap();
@@ -17117,6 +17218,67 @@ fn demolition_respects_personal_site_claims_unless_the_actor_disregards_them() {
             .unwrap()
             .site_claims
             .is_empty()
+    );
+}
+
+#[test]
+fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
+    let mut initial = claimed_work_sites_fixture();
+    initial.autowork = None;
+    initial.construction = Some(Construction {
+        blueprints: vec![],
+        policies: vec![],
+        events: vec![],
+        goal_builders: vec![],
+        demolition_events: vec![],
+        demolition: vec![DemolitionPolicy {
+            person: 2,
+            site: 7,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+            disregard_claims: true,
+        }],
+    });
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 100,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = vec![OpinionSensitivity {
+        person: 1,
+        fear_per_damage: None,
+        gratitude_gain: Some(0),
+        promise_obligation_gain: Some(0),
+        obligation_relief: None,
+        theft_loss: None,
+        confrontation: None,
+        affinity_help: None,
+        affinity_harm_per_damage: None,
+        affinity_encounter: None,
+        affinity_pressured_encounter: None,
+        affinity_site_use: None,
+        affinity_site_destruction: Some(5),
+        relationship_cases: vec![],
+        obligation_development: None,
+    }];
+    let mut world = Economy::compile(initial).unwrap();
+    world.claim_site(1, 7).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.opinions.as_ref().unwrap().index().affinity(1, 2), 5);
+    assert_eq!(state.opinions.as_ref().unwrap().index().obligation(1, 2), 0);
+    assert!(
+        state
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .sites
+            .iter()
+            .all(|site| site.id != 7)
     );
 }
 

@@ -2142,6 +2142,19 @@ impl Economy {
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
         development::enroll(&mut next_opinions, family.as_ref(), tick);
+        if let Some(claims) = dynamics
+            .as_ref()
+            .and_then(|d| d.claims.as_ref())
+            .filter(|c| !c.site_events.is_empty())
+            && let Some(opinions) = next_opinions.as_mut().filter(|o| o.tracks_site_affinity())
+        {
+            let witnessed: Vec<_> = claims
+                .site_events
+                .par_iter()
+                .map(|e| (e.claimant, e.person, e.destroyed))
+                .collect();
+            opinions.learn_site_affinity(&witnessed);
+        }
         if let Some(opinions) = next_opinions
             .as_mut()
             .filter(|o| !giving_plan.actions.is_empty() && o.tracks_help())

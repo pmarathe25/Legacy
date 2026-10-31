@@ -33,6 +33,12 @@ pub struct Sensitivity {
     pub affinity_encounter: Option<i32>,
     #[serde(default)]
     pub affinity_pressured_encounter: Option<i32>,
+    /// Personal interpretation of another person's witnessed use of a claimed site.
+    #[serde(default)]
+    pub affinity_site_use: Option<i32>,
+    /// Personal interpretation of another person's witnessed destruction of a claimed site.
+    #[serde(default)]
+    pub affinity_site_destruction: Option<i32>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -67,6 +73,10 @@ pub struct RelationshipCase {
     pub encounter: Option<i32>,
     #[serde(default)]
     pub pressured_encounter: Option<i32>,
+    #[serde(default)]
+    pub site_use: Option<i32>,
+    #[serde(default)]
+    pub site_destruction: Option<i32>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]

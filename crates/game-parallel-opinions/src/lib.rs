@@ -81,6 +81,28 @@ impl Opinions {
         harm::tracks_affinity(self, harm::AffinityKind::Encounter)
             || harm::tracks_affinity(self, harm::AffinityKind::PressuredEncounter)
     }
+    pub fn tracks_site_affinity(&self) -> bool {
+        harm::tracks_affinity(self, harm::AffinityKind::SiteUse)
+            || harm::tracks_affinity(self, harm::AffinityKind::SiteDestruction)
+    }
+    /// Update only from each observer's signed interpretation of witnessed site actions.
+    pub fn learn_site_affinity(&mut self, events: &[(u64, u64, bool)]) {
+        if !self.tracks_site_affinity() {
+            return;
+        }
+        let use_events: Vec<_> = events
+            .par_iter()
+            .filter(|e| !e.2)
+            .map(|e| (e.0, e.1, 1))
+            .collect();
+        let destruction: Vec<_> = events
+            .par_iter()
+            .filter(|e| e.2)
+            .map(|e| (e.0, e.1, 1))
+            .collect();
+        harm::affinity(self, &use_events, harm::AffinityKind::SiteUse);
+        harm::affinity(self, &destruction, harm::AffinityKind::SiteDestruction);
+    }
     pub fn tracks_harm(&self) -> bool {
         self.rules.fear_per_damage > 0
             || harm::tracks_affinity(self, harm::AffinityKind::Harm)
@@ -145,6 +167,8 @@ impl Opinions {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_site_use: None,
+                affinity_site_destruction: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),
             })

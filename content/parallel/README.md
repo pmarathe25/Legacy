@@ -52,6 +52,8 @@ Optional `[[construction.demolition]]` entries name a `person` and `site`, with 
 
 `[dynamics.claims]` can also contain `[[dynamics.claims.site_claims]]` entries with `person` and `site`. Each is an individual's assertion, not a title enforced by the simulation. Workers and demolishers decide whether to respect it, and a ruler can use `claim-site SITE` or `withdraw-site-claim SITE`. Demolition preferences can set `disregard_claims = true` independently of their willingness or pressure.
 
+When affinity is enabled, an `[[opinions.sensitivities]]` row can set signed `affinity_site_use` and `affinity_site_destruction` values for its person. Optional `relationship_cases` can override them for a particular target with `site_use` and `site_destruction`. Only locally witnessed events affect affinity; absent settings impose no change and do not create obligation.
+
 Optional `[[construction.goal_builders]]` entries contain `person`, `enabled`, and optional `disregard_claims`. A person can choose an available blueprint and physical kit when their active planned work needs a site that does not yet exist locally. With goal input planning enabled, they may also produce missing kits and build prerequisite sites through bounded recipe and site planning.
 
 For example:

@@ -107,6 +107,8 @@ pub fn claim_tolerance(
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_site_use: None,
+                affinity_site_destruction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
                 promise_obligation_gain: None,
