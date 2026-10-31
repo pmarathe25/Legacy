@@ -1,5 +1,8 @@
 //! Person-driven economic activity over authoritative dated physical goods.
 pub use game_parallel_agreements::OfferPolicy as PromiseOfferPolicy;
+pub use game_parallel_economy_building::demolition::{
+    Event as DemolitionEvent, Policy as DemolitionPolicy,
+};
 pub use game_parallel_economy_building::{
     Blueprint as BuildingBlueprint, Construction, Event as ConstructionEvent,
     Policy as ConstructionPolicy,
@@ -142,6 +145,33 @@ impl Draft {
     }
 }
 impl Economy {
+    /// Change this person's voluntary preference without changing felt pressure.
+    pub fn set_demolition_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .construction
+            .clone()
+            .ok_or("construction is disabled")?;
+        next.demolition
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no demolition preference")?
+            .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.construction = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Change only this person's voluntary construction preference.
     pub fn set_construction_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
         if self
@@ -1520,6 +1550,29 @@ impl Economy {
         if let Some(plan) = &construction_plan {
             game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
+        let demolition_plan = self
+            .construction
+            .as_ref()
+            .zip(self.work_sites.as_ref())
+            .map(|(owner, sites)| {
+                game_parallel_economy_building::demolition::Context {
+                    policies: &owner.demolition,
+                    sites,
+                    people: &self.people,
+                    opinions: self.opinions.as_ref(),
+                    busy: &busy,
+                    manual_site: destroy_site.map(|(site, _)| site),
+                    max_hunger: self.rules.max_work_hunger,
+                    seed: self.seed,
+                    tick,
+                }
+                .prepare()
+            });
+        if let Some(plan) = &demolition_plan
+            && !plan.actors.is_empty()
+        {
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+        }
         game_parallel_economy_claims::include_care_farming!(claim_uses, care, farming);
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
         if let Some(plan) = tool_pickup {
@@ -1846,6 +1899,14 @@ impl Economy {
                 .is_none_or(|plan| !plan.reserves_site(site))
         {
             sites.destroy_idle(site);
+        }
+        if let (Some(plan), Some(owner), Some(prior), Some(sites)) = (
+            demolition_plan,
+            construction.as_mut(),
+            self.work_sites.as_ref(),
+            work_sites.as_mut(),
+        ) {
+            owner.demolition_events = plan.publish(tick, prior, site_plan.as_ref(), sites);
         }
         game_parallel_economy_combat::finish_world!(combat, person);
         let missions = game_parallel_economy_expeditions::finish_world!(

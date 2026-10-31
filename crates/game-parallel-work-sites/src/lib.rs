@@ -61,6 +61,19 @@ impl Facilities {
             false
         }
     }
+    /// Remove a batch selected by a caller after resolving simultaneous use.
+    pub fn destroy_idle_many(&mut self, ids: &HashSet<u64>) {
+        if ids.is_empty() {
+            return;
+        }
+        let occupied: HashSet<_> = self.bindings.par_iter().map(|b| b.site).collect();
+        self.sites = self
+            .sites
+            .par_iter()
+            .filter(|site| !ids.contains(&site.id) || occupied.contains(&site.id))
+            .cloned()
+            .collect();
+    }
     pub fn normalize(&mut self) -> Result<(), String> {
         self.sites.par_sort_unstable_by_key(|s| s.id);
         if self.next_id == 0 {
@@ -179,6 +192,9 @@ impl Plan {
     /// A provisional reservation prevents simultaneous destruction of the site.
     pub fn reserves_site(&self, site: u64) -> bool {
         self.bindings.par_iter().any(|binding| binding.site == site)
+    }
+    pub fn reserved_sites(&self) -> impl ParallelIterator<Item = u64> + '_ {
+        self.bindings.par_iter().map(|binding| binding.site)
     }
 }
 impl Facilities {

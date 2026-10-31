@@ -86,6 +86,8 @@ struct ConstructionConfig {
     blueprints: Vec<BuildingBlueprintConfig>,
     #[serde(default)]
     policies: Vec<game_parallel_economy::ConstructionPolicy>,
+    #[serde(default)]
+    demolition: Vec<game_parallel_economy::DemolitionPolicy>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -475,6 +477,8 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
                 blueprints,
                 policies: config.policies,
                 events: vec![],
+                demolition: config.demolition,
+                demolition_events: vec![],
             })
         })
         .transpose()?;

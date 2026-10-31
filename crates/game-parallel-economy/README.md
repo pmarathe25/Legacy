@@ -16,4 +16,4 @@ Individual hauling preferences can move real lots between regions. A carrier can
 
 Authored reusable tool requirements check personal custody before a work attempt competes for materials and before each work increment. Missing or expired tools pause work without consuming the tool.
 
-Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits; a controlled person can destroy an idle local site without recovering materials. Autonomous removal, salvage, and within-region transport remain to be implemented.
+Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits and independently choose to destroy specific idle local sites, including when motivated by fear or felt obligation. Competing attempts remove a site only once. Destruction recovers no materials; salvage and within-region transport remain to be implemented.

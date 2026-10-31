@@ -1,4 +1,5 @@
 //! Personal choices to assemble physical sites from actual local kits.
+pub mod demolition;
 use game_parallel_economy_claims::{Index as Claims, Use};
 use game_parallel_economy_person::Person;
 use game_parallel_lot_runtime::Events;
@@ -50,6 +51,10 @@ pub struct Construction {
     pub policies: Vec<Policy>,
     #[serde(default)]
     pub events: Vec<Event>,
+    #[serde(default)]
+    pub demolition: Vec<demolition::Policy>,
+    #[serde(default)]
+    pub demolition_events: Vec<demolition::Event>,
 }
 impl Clone for Construction {
     fn clone(&self) -> Self {
@@ -57,6 +62,8 @@ impl Clone for Construction {
             blueprints: self.blueprints.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
+            demolition: self.demolition.par_iter().cloned().collect(),
+            demolition_events: self.demolition_events.par_iter().cloned().collect(),
         }
     }
 }
@@ -64,6 +71,7 @@ impl Construction {
     pub fn normalize(&mut self) {
         self.blueprints.par_sort_unstable_by_key(|b| b.id);
         self.policies.par_sort_unstable_by_key(|p| p.person);
+        self.demolition.par_sort_unstable_by_key(|p| p.person);
     }
     pub fn validate(
         &self,
@@ -72,7 +80,8 @@ impl Construction {
         sites: &Facilities,
         tick: u64,
     ) -> Result<(), String> {
-        if self.blueprints.par_windows(2).any(|w| w[0].id >= w[1].id)
+        if !demolition::valid(&self.demolition, &self.demolition_events, people, tick)
+            || self.blueprints.par_windows(2).any(|w| w[0].id >= w[1].id)
             || self.blueprints.par_iter().any(|b| {
                 b.id == 0
                     || b.name.is_empty()

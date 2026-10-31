@@ -950,7 +950,7 @@ fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = format!(
-        "{}\n[work_sites]\nsites = []\nrequirements = []\n[construction]\n[[construction.blueprints]]\nid = 1\nname = \"shelter workshop\"\nkind = \"workshop\"\ncapacity = 1\nkit = \"reed-shelter-kit\"\nquantity = 1\n",
+        "{}\n[work_sites]\nsites = []\nrequirements = []\n[construction]\n[[construction.blueprints]]\nid = 1\nname = \"shelter workshop\"\nkind = \"workshop\"\ncapacity = 1\nkit = \"reed-shelter-kit\"\nquantity = 1\n[[construction.demolition]]\nperson = 2\nsite = 10\nwilling = false\npressured_by = 1\npressure_threshold = 3\n",
         source
     );
     let path =
@@ -958,6 +958,12 @@ fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     std::fs::write(&path, configured).unwrap();
     let mut world = scenario(&path, &root.join("content")).unwrap();
     std::fs::remove_file(path).unwrap();
+    let state = world.snapshot();
+    let preference = &state.construction.as_ref().unwrap().demolition[0];
+    assert_eq!(
+        (preference.person, preference.site, preference.pressured_by),
+        (2, 10, Some(1))
+    );
     let mut player = game_parallel_economy_player::Player::new(&mut world);
     assert_eq!(
         player.building_blueprints().unwrap()[0].name,

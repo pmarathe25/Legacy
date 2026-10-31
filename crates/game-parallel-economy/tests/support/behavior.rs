@@ -16563,6 +16563,8 @@ fn construction_fixture() -> State {
             disregard_claims: false,
         }],
         events: vec![],
+        demolition: vec![],
+        demolition_events: vec![],
     });
     let stock = state
         .physical
@@ -16798,6 +16800,265 @@ fn site_destruction_cannot_race_a_start_or_an_occupied_job() {
     assert_eq!(run(1), run(4));
 }
 
+#[test]
+fn autonomous_site_destruction_is_a_revocable_choice_or_a_response_to_fear() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.work_sites.as_mut().unwrap().sites.push(WorkSite {
+        id: 7,
+        region: 1,
+        kind: "workshop".into(),
+        capacity: 1,
+    });
+    let construction = initial.construction.as_mut().unwrap();
+    construction.policies.clear();
+    construction.demolition = vec![DemolitionPolicy {
+        person: 2,
+        site: 7,
+        willing: false,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    let mut refusing = Economy::compile(initial.clone()).unwrap();
+    refusing.advance().unwrap();
+    assert_eq!(
+        refusing.snapshot().work_sites.as_ref().unwrap().sites.len(),
+        1
+    );
+    refusing.set_demolition_choice(2, true).unwrap();
+    refusing.advance().unwrap();
+    assert!(
+        refusing
+            .snapshot()
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .sites
+            .is_empty()
+    );
+    assert!(
+        refusing
+            .snapshot()
+            .construction
+            .as_ref()
+            .unwrap()
+            .demolition_events[0]
+            .destroyed
+    );
+
+    let policy = &mut initial.construction.as_mut().unwrap().demolition[0];
+    policy.pressured_by = Some(1);
+    policy.pressure_threshold = Some(3);
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 4,
+        obligation: 0,
+        affinity: 0,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
+                assert!(!state.construction.as_ref().unwrap().demolition[0].willing);
+                assert_eq!(state.opinions.as_ref().unwrap().index().obligation(2, 1), 0);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn construction_saves_without_demolition_preferences_still_load() {
+    let initial = construction_fixture();
+    let mut value = serde_json::to_value(initial).unwrap();
+    let construction = value["construction"].as_object_mut().unwrap();
+    construction.remove("demolition");
+    construction.remove("demolition_events");
+    let world = Economy::compile(serde_json::from_value(value).unwrap()).unwrap();
+    let state = world.snapshot();
+    let construction = state.construction.unwrap();
+    assert!(construction.demolition.is_empty());
+    assert!(construction.demolition_events.is_empty());
+}
+
+#[test]
+fn competing_personal_site_destructions_remove_the_site_only_once() {
+    let mut initial = construction_fixture();
+    initial.autowork = None;
+    initial.work_sites.as_mut().unwrap().sites.push(WorkSite {
+        id: 7,
+        region: 1,
+        kind: "workshop".into(),
+        capacity: 1,
+    });
+    let construction = initial.construction.as_mut().unwrap();
+    construction.policies.clear();
+    construction.demolition = [2, 3, 4]
+        .into_iter()
+        .map(|person| DemolitionPolicy {
+            person,
+            site: 7,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.construction.as_ref().unwrap().demolition_events;
+                assert_eq!(events.len(), 3);
+                assert_eq!(events.iter().filter(|event| event.destroyed).count(), 1);
+                assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn personal_demolition_cannot_remove_a_site_used_by_simultaneous_work() {
+    let mut initial = construction_fixture();
+    initial.work_sites.as_mut().unwrap().sites.push(WorkSite {
+        id: 7,
+        region: 1,
+        kind: "workshop".into(),
+        capacity: 1,
+    });
+    let construction = initial.construction.as_mut().unwrap();
+    construction.policies.clear();
+    construction.demolition = vec![DemolitionPolicy {
+        person: 3,
+        site: 7,
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(world.advance().unwrap().started.len(), 1);
+    let state = world.snapshot();
+    assert_eq!(state.work_sites.as_ref().unwrap().sites.len(), 1);
+    assert!(!state.construction.as_ref().unwrap().demolition_events[0].destroyed);
+    Economy::compile(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+        .unwrap();
+}
+
+fn concentrated_site_destruction(count: u64) -> State {
+    let mut initial = field_workload(count);
+    initial.agriculture = None;
+    initial.work_sites = Some(WorkSites {
+        next_id: 0,
+        sites: (1..=32)
+            .map(|id| WorkSite {
+                id,
+                region: 1,
+                kind: "shed".into(),
+                capacity: 1,
+            })
+            .collect(),
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.construction = Some(Construction {
+        blueprints: vec![],
+        policies: vec![],
+        events: vec![],
+        demolition_events: vec![],
+        demolition: (1..=count)
+            .map(|person| DemolitionPolicy {
+                person,
+                site: 1 + (person % 32),
+                willing: true,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+    });
+    initial
+}
+
+#[test]
+fn concentrated_site_destruction_resolves_each_physical_site_once() {
+    let count = 4096;
+    let initial = concentrated_site_destruction(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
+                let events = &state.construction.as_ref().unwrap().demolition_events;
+                assert_eq!(events.len(), count as usize);
+                assert_eq!(events.iter().filter(|e| e.destroyed).count(), 32);
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_site_destruction_benchmark() {
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .unwrap();
+    let initial = concentrated_site_destruction(100_000);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(initial).unwrap();
+            let started = std::time::Instant::now();
+            world.advance().unwrap();
+            eprintln!(
+                "workers={workers} people=100000 ticks=1 elapsed={:.6}",
+                started.elapsed().as_secs_f64()
+            );
+            assert_eq!(
+                world
+                    .snapshot()
+                    .construction
+                    .unwrap()
+                    .demolition_events
+                    .iter()
+                    .filter(|event| event.destroyed)
+                    .count(),
+                32
+            );
+        });
+}
+
 fn concentrated_site_construction(count: u64) -> State {
     let mut state = field_workload(count);
     state.agriculture = None;
@@ -16829,6 +17090,8 @@ fn concentrated_site_construction(count: u64) -> State {
             })
             .collect(),
         events: vec![],
+        demolition: vec![],
+        demolition_events: vec![],
     });
     let stock = state
         .physical
