@@ -8,13 +8,12 @@ use game_parallel_lot_runtime::Events;
 use game_parallel_lots::Place;
 use game_parallel_social::Encounter;
 use rayon::prelude::*;
-use std::sync::atomic::{AtomicU8, Ordering};
 
 pub fn prepare(
     events: &Events,
     care: Option<&Plan>,
     people: &[Person],
-    seed: u64,
+    _seed: u64,
     blocked: &[u64],
     medical: &[(u64, u64)],
     travel: Option<&Travel>,
@@ -65,38 +64,21 @@ pub fn prepare(
     if pairs.is_empty() {
         return Vec::new();
     }
-    pairs.par_sort_unstable();
+    if pairs.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        pairs.par_sort_unstable();
+    }
     let pairs: Vec<_> = pairs
         .par_chunk_by(|a, b| a == b)
         .map(|group| group[0])
         .collect();
-    let votes: Vec<_> = (0..pairs.len())
-        .into_par_iter()
-        .map(|_| AtomicU8::new(0))
-        .collect();
-    let mut proposals: Vec<_> = pairs
-        .par_iter()
-        .enumerate()
-        .flat_map_iter(|(index, &(a, b, _))| {
-            let rank = game_parallel_genetics::random(seed ^ a, b, events.tick);
-            [(a, rank, a, b, index), (b, rank, a, b, index)]
-        })
-        .collect();
-    proposals.par_sort_unstable_by_key(|row| (row.0, row.1, row.2, row.3));
-    proposals.par_chunk_by(|a, b| a.0 == b.0).for_each(|group| {
-        votes[group[0].4].fetch_add(1, Ordering::Relaxed);
-    });
     pairs
         .into_par_iter()
-        .enumerate()
-        .filter_map(|(i, (a, b, region))| {
-            (votes[i].load(Ordering::Relaxed) == 2).then_some(Encounter {
-                tick: events.tick,
-                region,
-                a,
-                b,
-                pressured: None,
-            })
+        .map(|(a, b, region)| Encounter {
+            tick: events.tick,
+            region,
+            a,
+            b,
+            pressured: None,
         })
         .collect()
 }
@@ -156,7 +138,7 @@ mod tests {
         (events, people)
     }
     #[test]
-    fn concentrated_contacts_choose_one_disjoint_pair_and_ignore_failed_transfers() {
+    fn concentrated_contacts_preserve_all_actual_pairs_and_ignore_failed_transfers() {
         let (mut events, people) = workload(4096);
         let failed = events.physical_movements.last_mut().unwrap();
         failed.movement.accepted = false;
@@ -172,8 +154,8 @@ mod tests {
                 .install(|| prepare(&events, None, &people, 7, &[], &[], None))
         };
         let one = run(1);
-        assert_eq!(one.len(), 1);
-        assert_ne!(one[0].b, failed_person);
+        assert_eq!(one.len(), people.len() - 2);
+        assert!(one.iter().all(|event| event.b != failed_person));
         assert_eq!(one, run(4));
     }
     #[test]
@@ -196,7 +178,10 @@ mod tests {
                 let mut samples = Vec::new();
                 for round in 0..4 {
                     let started = std::time::Instant::now();
-                    assert_eq!(prepare(&events, None, &people, 7, &[], &[], None).len(), 1);
+                    assert_eq!(
+                        prepare(&events, None, &people, 7, &[], &[], None).len(),
+                        count as usize - 1
+                    );
                     let elapsed = started.elapsed().as_secs_f64();
                     if round > 0 {
                         samples.push(elapsed);

@@ -10,5 +10,4 @@ game-parallel-economy-work = { path = "../game-parallel-economy-work" }
 game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
 game-parallel-lots = { path = "../game-parallel-lots" }
 game-parallel-social = { path = "../game-parallel-social" }
-game-parallel-genetics = { path = "../game-parallel-genetics" }
 rayon.workspace = true

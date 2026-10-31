@@ -7181,6 +7181,61 @@ fn concentrated_gifts_share_actual_recipient_capacity_across_workers() {
 }
 
 #[test]
+fn every_successful_gift_can_expose_its_giver_to_an_infectious_recipient() {
+    let mut initial = giving_workload(64);
+    initial.dynamics = Some(infection_from(1));
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                let mut exposed: Vec<_> = events
+                    .physical_movements
+                    .iter()
+                    .filter_map(|receipt| {
+                        match (
+                            receipt.movement.accepted,
+                            receipt.request.from,
+                            receipt.request.to,
+                        ) {
+                            (true, Place::Person(giver), Some(Place::Person(1))) => Some(giver),
+                            _ => None,
+                        }
+                    })
+                    .collect();
+                exposed.sort_unstable();
+                assert_eq!(exposed.len(), 32);
+                let state = world.snapshot();
+                let cases = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .disease
+                    .as_ref()
+                    .unwrap()
+                    .cases;
+                let mut infected: Vec<_> = cases
+                    .iter()
+                    .filter(|case| case.source == Some(1))
+                    .map(|case| case.person)
+                    .collect();
+                infected.sort_unstable();
+                assert_eq!(infected, exposed);
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn food_request_can_be_refused_then_independently_fulfilled_and_survives_reload() {
     let mut initial = fixture();
     initial.autowork = None;
@@ -7671,7 +7726,11 @@ fn concentrated_giving_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = giving_workload(count);
+    let mut initial = giving_workload(count);
+    let disease = std::env::var("LEGACY_DISEASE").is_ok_and(|value| value == "1");
+    if disease {
+        initial.dynamics = Some(infection_from(1));
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -7682,13 +7741,27 @@ fn concentrated_giving_benchmark() {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                if disease {
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .dynamics
+                            .unwrap()
+                            .disease
+                            .unwrap()
+                            .cases
+                            .len(),
+                        count as usize / 2 + 1
+                    );
+                }
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                "workers={workers} people={count} disease={disease} ticks=1 elapsed={:.6}",
                 samples[1]
             );
         });

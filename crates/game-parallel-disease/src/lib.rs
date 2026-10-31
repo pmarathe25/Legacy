@@ -125,8 +125,8 @@ impl Disease {
         }
         Ok(())
     }
-    /// Snapshot transmission through disjoint encounter pairs. No new infection
-    /// can itself transmit within this generation.
+    /// Evaluate all distinct contacts against the prior generation; newly infected
+    /// people cannot transmit until a later generation.
     pub fn prepare(
         &self,
         people: &[Person],
@@ -148,7 +148,7 @@ impl Disease {
         now: u64,
     ) -> Result<Draft, &'static str> {
         let next = now.checked_add(1).ok_or("tick overflow")?;
-        let mut people = people.to_vec();
+        let mut people: Vec<_> = people.par_iter().copied().collect();
         if people.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             people.par_sort_unstable_by_key(|person| person.id);
         }
@@ -168,11 +168,21 @@ impl Disease {
                 .ok()
                 .map(|i| cases[i])
         };
-        let find_person = |id| {
-            people
-                .binary_search_by_key(&id, |person| person.id)
-                .ok()
-                .map(|i| people[i])
+        let dense = people.first().zip(people.last()).and_then(|(first, last)| {
+            (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
+        });
+        let find_person = |id: u64| {
+            if let Some(first) = dense {
+                id.checked_sub(first)
+                    .and_then(|offset| usize::try_from(offset).ok())
+                    .and_then(|index| people.get(index))
+                    .copied()
+            } else {
+                people
+                    .binary_search_by_key(&id, |person| person.id)
+                    .ok()
+                    .map(|i| people[i])
+            }
         };
         let find_strain = |id| self.strains.iter().find(|strain| strain.id == id);
         if cases
@@ -186,12 +196,14 @@ impl Disease {
         {
             return Err("invalid disease state");
         }
-        let mut actors: Vec<_> = encounters
+        let mut pairs: Vec<_> = encounters
             .par_iter()
-            .flat_map_iter(|event| [event.a, event.b])
+            .map(|event| (event.a, event.b))
             .collect();
-        actors.par_sort_unstable();
-        if actors.par_windows(2).any(|pair| pair[0] == pair[1])
+        if pairs.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            pairs.par_sort_unstable();
+        }
+        if pairs.par_windows(2).any(|pair| pair[0] == pair[1])
             || encounters.par_iter().any(|event| {
                 event.tick != next
                     || event.a >= event.b
@@ -206,7 +218,7 @@ impl Disease {
             let strain = find_strain(case.strain)?;
             (now - case.infected_at < strain.end()?).then_some((case, strain))
         };
-        let infection: Vec<_> = encounters
+        let mut candidates: Vec<_> = encounters
             .par_iter()
             .filter_map(|encounter| {
                 let try_infection = |source: u64, target: u64| {
@@ -227,9 +239,27 @@ impl Disease {
                         source: Some(source),
                     })
                 };
-                try_infection(encounter.a, encounter.b)
-                    .or_else(|| try_infection(encounter.b, encounter.a))
+                let case = try_infection(encounter.a, encounter.b)
+                    .or_else(|| try_infection(encounter.b, encounter.a))?;
+                let source = case.source.expect("transmission has a source");
+                let priority = game_parallel_genetics::random(
+                    seed ^ case.person,
+                    source,
+                    next ^ u64::from(case.strain),
+                );
+                Some((case.person, priority, source, case.strain, case))
             })
+            .collect();
+        let key = |row: &(u64, u64, u64, u32, Case)| (row.0, row.1, row.2, row.3);
+        if candidates
+            .par_windows(2)
+            .any(|pair| key(&pair[0]) > key(&pair[1]))
+        {
+            candidates.par_sort_unstable_by_key(key);
+        }
+        let infection: Vec<_> = candidates
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| group[0].4.clone())
             .collect();
         let damage = cases
             .par_iter()
@@ -266,7 +296,7 @@ impl Disease {
                 kind: EventKind::Infected,
             }))
             .collect();
-        events.par_sort_unstable_by_key(|event| {
+        let event_key = |event: &Event| {
             (
                 event.person,
                 event.strain,
@@ -277,7 +307,13 @@ impl Disease {
                 },
                 event.source,
             )
-        });
+        };
+        if events
+            .par_windows(2)
+            .any(|pair| event_key(&pair[0]) > event_key(&pair[1]))
+        {
+            events.par_sort_unstable_by_key(event_key);
+        }
         let mut retained: Vec<_> = cases
             .par_iter()
             .filter(|case| {
@@ -289,7 +325,12 @@ impl Disease {
             .collect();
         // An expired case may be replaced by an infection from this snapshot.
         retained.par_extend(infection);
-        retained.par_sort_unstable_by_key(|case| case.person);
+        if retained
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            retained.par_sort_unstable_by_key(|case| case.person);
+        }
         Ok(Draft {
             state: Self {
                 strains: self.strains.clone(),
@@ -417,5 +458,96 @@ mod tests {
         assert_eq!(a.state, b.state);
         assert_eq!(a.damage, b.damage);
         assert_eq!(a.state.cases.len(), count as usize);
+    }
+    #[test]
+    fn one_infectious_person_can_expose_many_without_same_tick_cascades() {
+        let people: Vec<_> = (1..=4).map(|id| Person { id, health: 100 }).collect();
+        let mut state = state();
+        state.strains[0].incubation = 0;
+        let contacts = [pair(1, 1, 2), pair(1, 1, 3), pair(1, 2, 4)];
+        let next = state.prepare(&people, &contacts, 7, 0).unwrap().state;
+        assert!(
+            next.cases
+                .iter()
+                .any(|case| case.person == 2 && case.source == Some(1))
+        );
+        assert!(
+            next.cases
+                .iter()
+                .any(|case| case.person == 3 && case.source == Some(1))
+        );
+        assert!(!next.cases.iter().any(|case| case.person == 4));
+    }
+    #[test]
+    fn simultaneous_infections_choose_one_source_deterministically() {
+        let people: Vec<_> = (1..=3).map(|id| Person { id, health: 100 }).collect();
+        let mut state = state();
+        state.strains[0].incubation = 0;
+        let mut other = state.strains[0].clone();
+        other.id = 2;
+        state.strains.push(other);
+        state.cases.push(Case {
+            person: 2,
+            strain: 2,
+            infected_at: 0,
+            source: None,
+        });
+        let run = |workers, contacts: Vec<_>| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| state.prepare(&people, &contacts, 42, 0).unwrap().state)
+        };
+        let first = run(1, vec![pair(1, 1, 3), pair(1, 2, 3)]);
+        let second = run(4, vec![pair(1, 2, 3), pair(1, 1, 3)]);
+        assert_eq!(first, second);
+        assert_eq!(
+            first.cases.iter().filter(|case| case.person == 3).count(),
+            1
+        );
+        assert!(matches!(
+            first
+                .cases
+                .iter()
+                .find(|case| case.person == 3)
+                .unwrap()
+                .source,
+            Some(1 | 2)
+        ));
+    }
+    #[test]
+    #[ignore = "performance measurement"]
+    fn concentrated_infectious_contacts_benchmark() {
+        let workers = std::env::var("LEGACY_WORKERS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(1);
+        let count = std::env::var("LEGACY_PEOPLE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(100_000u64);
+        let people: Vec<_> = (1..=count).map(|id| Person { id, health: 100 }).collect();
+        let contacts: Vec<_> = (2..=count).map(|id| pair(1, 1, id)).collect();
+        let mut state = state();
+        state.strains[0].incubation = 0;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut samples = Vec::new();
+                for round in 0..4 {
+                    let start = std::time::Instant::now();
+                    let draft = state.prepare_validated(&people, &contacts, 7, 0).unwrap();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    assert_eq!(draft.state.cases.len(), count as usize);
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort_by(f64::total_cmp);
+                println!("workers={workers} people={count} seconds={:.6}", samples[1]);
+            });
     }
 }

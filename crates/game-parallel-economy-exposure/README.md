@@ -1,3 +1,3 @@
 # Personal exposure
 
-Creates bounded, deterministic physical contacts from actual caregiving and admitted person-to-person transfers. A person participates in at most one exposure per boundary; repeated or conflicting contacts are matched in parallel.
+Creates deterministic physical contacts from actual caregiving, medical treatment, and admitted person-to-person transfers. Distinct contacts are preserved even when several involve the same person; repeated contacts between the same pair in one boundary are combined. The disease owner resolves simultaneous infection attempts without allowing a newly infected person to transmit in the same boundary.
