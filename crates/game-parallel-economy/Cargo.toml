@@ -35,6 +35,7 @@ game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
 game-parallel-lot-projection = { path = "../game-parallel-lot-projection" }
 game-parallel-lot-diet = { path = "../game-parallel-lot-diet" }
 game-parallel-production-model = { path = "../game-parallel-production-model" }
+game-parallel-production = { path = "../game-parallel-production" }
 game-parallel-goods-cargo = { path = "../game-parallel-goods-cargo" }
 game-parallel-market = { path = "../game-parallel-market" }
 game-parallel-agreements = { path = "../game-parallel-agreements" }

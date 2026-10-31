@@ -50,7 +50,7 @@ Optional `opinions.rules.newborn_obligation_development` supplies a developmenta
 
 Optional `[[construction.demolition]]` entries name a `person` and `site`, with `willing` and optional paired `pressured_by` and `pressure_threshold` fields. Each entry is one individual's changeable preference; no authority can force an action, and a removed site's identity is never reused.
 
-Optional `[[construction.goal_builders]]` entries contain `person`, `enabled`, and optional `disregard_claims`. A person can choose an available blueprint and physical kit when their active planned work needs a site that does not yet exist locally. With goal input planning enabled, they may also produce a missing kit through bounded recipe planning, provided each selected recipe's required site already exists locally.
+Optional `[[construction.goal_builders]]` entries contain `person`, `enabled`, and optional `disregard_claims`. A person can choose an available blueprint and physical kit when their active planned work needs a site that does not yet exist locally. With goal input planning enabled, they may also produce missing kits and build prerequisite sites through bounded recipe and site planning.
 
 For example:
 

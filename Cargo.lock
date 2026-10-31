@@ -3261,6 +3261,7 @@ dependencies = [
  "game-parallel-market",
  "game-parallel-nutrition",
  "game-parallel-opinions",
+ "game-parallel-production",
  "game-parallel-production-model",
  "game-parallel-purpose",
  "game-parallel-social",

@@ -50,10 +50,12 @@ pub struct GoalNeed {
     pub person: u64,
     pub recipe: u32,
 }
-/// Missing kit alternatives for a specific person's planned local site.
-pub struct MissingKit {
+/// Available or missing kit alternatives for a person's planned local site.
+pub struct GoalKit {
     pub person: u64,
     pub region: u64,
+    pub recipe: u32,
+    pub ready: bool,
     pub goods: Vec<u32>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -179,6 +181,7 @@ pub struct Plan {
     rows: Vec<Row>,
     next_id: u64,
 }
+#[derive(Clone, Copy)]
 pub struct Context<'a> {
     pub owner: &'a Construction,
     pub sites: &'a Facilities,
@@ -195,8 +198,8 @@ pub struct Context<'a> {
     pub unwilling: &'a [u64],
 }
 impl Context<'_> {
-    /// Find needed site kits that could become accessible through local production.
-    pub fn missing_goal_kits(&self) -> Vec<MissingKit> {
+    /// Find available and producible site kits for each person's current plan.
+    pub fn goal_kits(&self) -> Vec<GoalKit> {
         if self.goal_needs.is_empty() || self.owner.goal_builders.is_empty() {
             return Vec::new();
         }
@@ -262,12 +265,20 @@ impl Context<'_> {
                 if site_sizes
                     .get(index)
                     .is_some_and(|row| row.0 == region && row.1 == requirement.kind)
-                    || blueprints.iter().any(|blueprint| {
-                        self.source(person, blueprint, policy.disregard_claims)
-                            .is_some()
-                    })
                 {
                     return None;
+                }
+                if blueprints.iter().any(|blueprint| {
+                    self.source(person, blueprint, policy.disregard_claims)
+                        .is_some()
+                }) {
+                    return Some(GoalKit {
+                        person: person.id,
+                        region,
+                        recipe: need.recipe,
+                        ready: true,
+                        goods: Vec::new(),
+                    });
                 }
                 let mut goods = Vec::new();
                 for blueprint in blueprints {
@@ -289,9 +300,11 @@ impl Context<'_> {
                         goods.push(blueprint.kit);
                     }
                 }
-                (!goods.is_empty()).then_some(MissingKit {
+                (!goods.is_empty()).then_some(GoalKit {
                     person: person.id,
                     region,
+                    recipe: need.recipe,
+                    ready: false,
                     goods,
                 })
             })

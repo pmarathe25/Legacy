@@ -31,6 +31,7 @@ pub use game_parallel_economy_work::tools::Requirement as WorkTool;
 pub use game_parallel_opinions::{
     ObligationDevelopment, Opinion, RelationshipCase, Sensitivity as OpinionSensitivity,
 };
+mod construction_planning;
 mod development;
 mod environment;
 mod food_search;
@@ -1519,7 +1520,7 @@ impl Economy {
                 &mut goal_work,
             )
         {
-            let missing = game_parallel_economy_building::Context {
+            let context = game_parallel_economy_building::Context {
                 owner,
                 sites,
                 people: &self.people,
@@ -1532,46 +1533,27 @@ impl Economy {
                 manual: None,
                 goal_needs: &goal_needs,
                 unwilling: &goal_building_refusals,
-            }
-            .missing_goal_kits();
-            if !missing.is_empty() {
-                let mut pending: Vec<_> = self
-                    .physical
-                    .work()
-                    .par_iter()
-                    .filter(|row| row.phase != game_parallel_lot_runtime::Phase::Working)
-                    .map(|row| row.job.worker)
-                    .collect();
-                pending.par_sort_unstable();
-                let needs: Vec<_> = missing
-                    .into_par_iter()
-                    .filter(|need| pending.binary_search(&need.person).is_err())
-                    .map(|need| game_parallel_goals::planning::SupplyNeed {
-                        person: need.person,
-                        region: need.region,
-                        goods: need.goods,
-                    })
-                    .collect();
-                if !needs.is_empty() {
-                    let production = game_parallel_lot_projection::production(
-                        &self.physical,
-                        &view,
-                        self.rules.max_work_hunger,
-                    );
-                    let capabilities = sites.capabilities();
-                    let chosen = game_parallel_goals::planning::plan_supply(
-                        &needs,
-                        &production,
-                        |region, recipe| capabilities.permits(region, recipe),
-                    );
-                    planned.policies.par_iter_mut().for_each(|policy| {
-                        if let Ok(index) = chosen.binary_search_by_key(&policy.person, |row| row.0)
-                        {
-                            policy.recipe = chosen[index].1;
-                        }
-                    });
+            };
+            let mut pending: Vec<_> = self
+                .physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase != game_parallel_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker)
+                .collect();
+            pending.par_sort_unstable();
+            let production = game_parallel_lot_projection::production(
+                &self.physical,
+                &view,
+                self.rules.max_work_hunger,
+            );
+            let steps = construction_planning::prepare(context, &production, &pending);
+            planned.policies.par_iter_mut().for_each(|policy| {
+                if let Ok(index) = steps.work.binary_search_by_key(&policy.person, |row| row.0) {
+                    policy.recipe = steps.work[index].1;
                 }
-            }
+            });
+            goal_needs = steps.builds;
         }
         if !self.work_tools.is_empty()
             || self.construction.is_some()

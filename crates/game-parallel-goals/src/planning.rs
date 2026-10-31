@@ -88,6 +88,66 @@ impl<'a> Index<'a> {
             Some(recipe.id)
         }
     }
+    fn choose_step(
+        &self,
+        recipe: &Recipe,
+        inventory: &Inventory,
+        visited: &mut [u32; MAX_DEPTH],
+        depth: usize,
+        budget: &mut usize,
+        constraints: &SiteConstraints<'_, impl Fn(u32) -> bool>,
+    ) -> Option<Step> {
+        if *budget == 0 || depth >= MAX_DEPTH || visited[..depth].contains(&recipe.id) {
+            return None;
+        }
+        *budget -= 1;
+        if !(constraints.allowed)(recipe.id) {
+            return (!constraints.visited_sites.contains(&recipe.id))
+                .then_some(Step::Site(recipe.id));
+        }
+        visited[depth] = recipe.id;
+        let missing = recipe
+            .inputs
+            .iter()
+            .filter(|input| {
+                inventory
+                    .stocks
+                    .iter()
+                    .find(|stock| stock.good == input.good)
+                    .is_none_or(|stock| stock.quantity < input.quantity)
+            })
+            .min_by_key(|input| input.good);
+        let Some(input) = missing else {
+            return Some(Step::Work(recipe.id));
+        };
+        let mut fallback = None;
+        for producer in self.producers.get(&input.good)? {
+            let has_space = producer.outputs.iter().all(|output| {
+                inventory
+                    .stocks
+                    .iter()
+                    .any(|stock| stock.good == output.good && output.quantity <= stock.capacity)
+            });
+            if !has_space {
+                continue;
+            }
+            match self.choose_step(producer, inventory, visited, depth + 1, budget, constraints) {
+                Some(step @ Step::Work(_)) => return Some(step),
+                Some(step @ Step::Site(_)) if fallback.is_none() => fallback = Some(step),
+                _ => {}
+            }
+        }
+        fallback
+    }
+}
+#[derive(Clone, Copy)]
+enum Step {
+    Work(u32),
+    Site(u32),
+}
+struct SiteConstraints<'a, F> {
+    allowed: &'a F,
+    visited_sites: &'a [u32],
 }
 /// Replace goal-derived policies with the next producible ingredient job. Returns
 /// each person's original goal recipe, so blocked plans back off the right goal.
@@ -131,6 +191,13 @@ pub struct SupplyNeed {
     pub person: u64,
     pub region: u64,
     pub goods: Vec<u32>,
+    pub visited_sites: Vec<u32>,
+}
+
+pub struct SupplyStep {
+    pub person: u64,
+    pub recipe: u32,
+    pub needs_site: bool,
 }
 
 /// Select a bounded producible prerequisite for each person, without changing their final goal.
@@ -138,33 +205,70 @@ pub fn plan_supply(
     needs: &[SupplyNeed],
     production: &Production,
     allowed: impl Fn(u64, u32) -> bool + Sync,
-) -> Vec<(u64, u32)> {
+) -> Vec<SupplyStep> {
     let index = Index::new(production);
     let mut selected: Vec<_> = needs
         .par_iter()
         .filter_map(|need| {
             let inventory = index.inventory.get(&need.region)?;
-            need.goods.iter().find_map(|good| {
-                index.producers.get(good)?.iter().find_map(|recipe| {
+            let mut fallback = None;
+            let mut budget = MAX_VISITS;
+            for good in &need.goods {
+                if budget == 0 {
+                    break;
+                }
+                budget -= 1;
+                let Some(producers) = index.producers.get(good) else {
+                    continue;
+                };
+                for recipe in producers {
+                    if budget == 0 {
+                        break;
+                    }
                     let has_space = recipe.outputs.iter().all(|output| {
                         inventory.stocks.iter().any(|stock| {
                             stock.good == output.good && output.quantity <= stock.capacity
                         })
                     });
                     if !has_space {
-                        return None;
+                        budget -= 1;
+                        continue;
                     }
                     let mut visited = [0; MAX_DEPTH];
-                    let mut budget = MAX_VISITS;
-                    index
-                        .choose(recipe, inventory, &mut visited, 0, &mut budget, &|recipe| {
-                            allowed(need.region, recipe)
-                        })
-                        .map(|recipe| (need.person, recipe))
-                })
-            })
+                    let site_allowed = |recipe| allowed(need.region, recipe);
+                    let constraints = SiteConstraints {
+                        allowed: &site_allowed,
+                        visited_sites: &need.visited_sites,
+                    };
+                    match index.choose_step(
+                        recipe,
+                        inventory,
+                        &mut visited,
+                        0,
+                        &mut budget,
+                        &constraints,
+                    ) {
+                        Some(Step::Work(recipe)) => {
+                            return Some(SupplyStep {
+                                person: need.person,
+                                recipe,
+                                needs_site: false,
+                            });
+                        }
+                        Some(Step::Site(recipe)) if fallback.is_none() => {
+                            fallback = Some(SupplyStep {
+                                person: need.person,
+                                recipe,
+                                needs_site: true,
+                            })
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            fallback
         })
         .collect();
-    selected.par_sort_unstable_by_key(|row| row.0);
+    selected.par_sort_unstable_by_key(|row| row.person);
     selected
 }
