@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 game-parallel-economy-building = { path = "../game-parallel-economy-building" }
+game-parallel-economy-local-transport = { path = "../game-parallel-economy-local-transport" }
 game-parallel-disease = { path = "../game-parallel-disease" }
 game-parallel-lot-content = { path = "../game-parallel-lot-content" }
 game-parallel-genetics = { path = "../game-parallel-genetics" }

@@ -17,6 +17,10 @@ pub use game_parallel_economy_family::Families;
 pub use game_parallel_economy_fatigue::Fatigue;
 pub use game_parallel_economy_goals::{Dream, Dreams, Goals, Learning};
 pub use game_parallel_economy_knowledge::Knowledge;
+pub use game_parallel_economy_local_transport::{
+    Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
+    Policy as LocalTransportPolicy, Store as LocalStore,
+};
 use game_parallel_economy_person as person;
 pub use game_parallel_economy_person::travel::{Colocation, Departure, Journey, Route, Travel};
 pub use game_parallel_economy_promises::{
@@ -108,6 +112,7 @@ pub struct Economy {
     giving: Option<Giving>,
     medical: Option<Medical>,
     hauling: Option<Hauling>,
+    local_transport: Option<LocalTransport>,
     epoch: u64,
 }
 pub struct Draft {
@@ -141,6 +146,7 @@ pub struct Draft {
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
     hauling: Option<Hauling>,
+    local_transport: Option<LocalTransport>,
     given: Option<bool>,
     treated_other: Option<bool>,
 }
@@ -318,6 +324,65 @@ impl Economy {
                 .salvage_events
                 .iter()
                 .any(|event| event.person == person && event.site == site && event.recovered)
+        }))
+    }
+    /// Change one person's willingness to carry goods between local stores.
+    pub fn set_local_carrying_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .local_transport
+            .clone()
+            .ok_or("local transport is disabled")?;
+        next.policies
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no local carrying preference")?
+            .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.local_transport = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Move real goods between a controlled person's custody and a local store.
+    pub fn move_local_store(
+        &mut self,
+        person: u64,
+        store: u64,
+        good: u32,
+        quantity: u64,
+        deposit: bool,
+    ) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::LocalStore {
+                    person,
+                    store,
+                    good,
+                    quantity,
+                    deposit,
+                },
+            ),
+        )?;
+        self.commit(draft)?;
+        Ok(self.local_transport.as_ref().is_some_and(|owner| {
+            owner
+                .events
+                .iter()
+                .any(|event| event.person == person && event.moved)
         }))
     }
     pub fn set_hauling_asking_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
@@ -786,6 +851,16 @@ impl Economy {
         if let Some(hauling) = &state.hauling {
             hauling.validate(&ids, &goods, &view, state.travel.as_ref())?;
         }
+        if let Some(local) = &mut state.local_transport {
+            local.normalize();
+            local.validate(&ids, &goods, &view, physical.tick())?;
+        } else if view
+            .containers
+            .par_iter()
+            .any(|row| matches!(row.place, game_parallel_lots::Place::Inventory(_)))
+        {
+            return Err("local store custody requires location metadata".into());
+        }
         if let Some(medical) = &state.medical {
             medical.validate(
                 &ids,
@@ -942,6 +1017,7 @@ impl Economy {
             giving: state.giving,
             medical: state.medical,
             hauling: state.hauling,
+            local_transport: state.local_transport,
             epoch: 0,
         })
     }
@@ -981,6 +1057,7 @@ impl Economy {
             giving: self.giving.clone(),
             medical: self.medical.clone(),
             hauling: self.hauling.clone(),
+            local_transport: self.local_transport.clone(),
         }
     }
     pub fn tick(&self) -> u64 {
@@ -1457,6 +1534,60 @@ impl Economy {
                     .collect();
             }
         }
+        let manual_local = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::LocalStore {
+                person,
+                store,
+                good,
+                quantity,
+                deposit,
+            }) => {
+                if self.family.as_ref().is_some_and(|f| {
+                    f.members
+                        .iter()
+                        .any(|m| m.id == person && m.age < f.rules.min_work_age)
+                }) || self.physical.work().iter().any(|w| {
+                    w.job.worker == person && w.phase == game_parallel_lot_runtime::Phase::Working
+                }) {
+                    return Err("person cannot carry locally while underage or working".into());
+                }
+                Some(game_parallel_economy_local_transport::Manual {
+                    person,
+                    store,
+                    good,
+                    quantity,
+                    deposit,
+                })
+            }
+            _ => None,
+        };
+        if manual_local.is_some() && self.local_transport.is_none() {
+            return Err("local transport is disabled".into());
+        }
+        let local_plan = self
+            .local_transport
+            .as_ref()
+            .map(|owner| {
+                game_parallel_economy_local_transport::Context {
+                    owner,
+                    people: &self.people,
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    claims: claims.as_ref(),
+                    busy: &busy,
+                    max_hunger: self.rules.max_work_hunger,
+                    manual: manual_local,
+                }
+                .prepare(action_base)
+            })
+            .transpose()?;
+        if let Some(plan) = &local_plan {
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+            claim_uses.par_extend(plan.uses.par_iter().copied());
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+        }
         let expedition =
             game_parallel_economy_expeditions::prepare_world!(self, people, busy, tick);
         let search_plan = self
@@ -1874,6 +2005,9 @@ impl Economy {
         actions.extend_from_slice(&giving_plan.actions);
         actions.extend_from_slice(&medical_plan.actions);
         if let Some(plan) = &hauling_plan {
+            actions.extend_from_slice(&plan.actions);
+        }
+        if let Some(plan) = &local_plan {
             actions.extend_from_slice(&plan.actions);
         }
         let compact =
@@ -2512,6 +2646,11 @@ impl Economy {
                 .collect();
             owner.learn(&observations, tick);
         }
+        let mut next_local_transport = self.local_transport.clone();
+        if let Some(owner) = &mut next_local_transport {
+            owner.events =
+                local_plan.map_or_else(Vec::new, |plan| plan.publish(tick, physical.events()));
+        }
         Ok(Draft {
             epoch: self.epoch,
             physical,
@@ -2543,6 +2682,7 @@ impl Economy {
             food_search,
             giving: next_giving,
             hauling: next_hauling,
+            local_transport: next_local_transport,
             given,
             treated_other,
         })
@@ -2584,6 +2724,7 @@ impl Economy {
         self.food_search = draft.food_search;
         self.giving = draft.giving;
         self.hauling = draft.hauling;
+        self.local_transport = draft.local_transport;
         self.epoch = epoch;
         Ok(events)
     }

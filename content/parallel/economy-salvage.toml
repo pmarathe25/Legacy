@@ -106,3 +106,26 @@ site = 1
 quantity = 1
 willing = true
 disregard_claims = true
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "timber shed"
+capacity = 10
+goods = { timber = 4 }
+
+[[local_transport.stores]]
+id = 2
+region = 1
+name = "workshop store"
+capacity = 10
+
+[[local_transport.policies]]
+person = 2
+region = 1
+source = { kind = "store", id = 1 }
+destination = { kind = "store", id = 2 }
+good = "timber"
+quantity = 1
+willing = false

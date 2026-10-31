@@ -76,4 +76,6 @@ pub struct State {
     pub medical: Option<crate::medical::Medical>,
     #[serde(default)]
     pub hauling: Option<crate::hauling::Hauling>,
+    #[serde(default)]
+    pub local_transport: Option<game_parallel_economy_local_transport::LocalTransport>,
 }

@@ -9,7 +9,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
         [] => {}
         ["quit"] | ["exit"] => return Ok(false),
         ["help"] => println!(
-            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | salvage-site SITE GOOD QUANTITY | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | claim-built-sites on|off | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
+            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | salvage-site SITE GOOD QUANTITY | take-store STORE GOOD QUANTITY | put-store STORE GOOD QUANTITY | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | claim-built-sites on|off | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["view"] => {
             let view = player.view()?;
@@ -69,6 +69,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             }
             for debris in view.debris {
                 println!("debris={debris:?}");
+            }
+            for store in view.local_stores {
+                println!("local-store={store:?}");
             }
             for claim in view.claims {
                 println!("claim={claim:?}");
@@ -153,6 +156,15 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 site.parse().map_err(|_| "invalid site")?,
                 good.parse().map_err(|_| "invalid good")?,
                 quantity.parse().map_err(|_| "invalid quantity")?
+            )?
+        ),
+        [action @ ("take-store" | "put-store"), store, good, quantity] => println!(
+            "moved={}",
+            player.move_local_store(
+                store.parse().map_err(|_| "invalid store")?,
+                good.parse().map_err(|_| "invalid good")?,
+                quantity.parse().map_err(|_| "invalid quantity")?,
+                *action == "put-store"
             )?
         ),
         ["claim", good] => player.claim_stock(good.parse().map_err(|_| "invalid good")?)?,

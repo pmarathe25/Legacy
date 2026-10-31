@@ -10,6 +10,7 @@ use game_parallel_lot_content::Catalog;
 use game_parallel_lot_runtime::Snapshot;
 use game_parallel_lots::{Container, Place};
 use game_parallel_production::{Inventory, Production};
+use rayon::prelude::*;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
@@ -87,6 +88,43 @@ struct Scenario {
     medical: Option<MedicalConfig>,
     #[serde(default)]
     hauling: Option<HaulingConfig>,
+    #[serde(default)]
+    local_transport: Option<LocalTransportConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalTransportConfig {
+    stores: Vec<LocalStoreConfig>,
+    #[serde(default)]
+    policies: Vec<LocalTransportPolicyConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalStoreConfig {
+    id: u64,
+    region: u64,
+    name: String,
+    capacity: u64,
+    #[serde(default)]
+    goods: BTreeMap<String, u64>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LocalTransportPolicyConfig {
+    person: u64,
+    region: u64,
+    source: game_parallel_economy::LocalEndpoint,
+    destination: game_parallel_economy::LocalEndpoint,
+    good: String,
+    quantity: u64,
+    #[serde(default)]
+    willing: bool,
+    #[serde(default)]
+    pressured_by: Option<u64>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+    #[serde(default)]
+    disregard_claims: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -959,6 +997,62 @@ pub fn scenario_with_options(
         })
         .transpose()?;
     let mut custody = catalog.fresh_world(&production.inventories, 0)?;
+    let local_transport = scenario
+        .local_transport
+        .map(|config| {
+            let stores = config
+                .stores
+                .into_iter()
+                .map(|store| {
+                    let lots = store
+                        .goods
+                        .into_iter()
+                        .map(|(name, quantity)| {
+                            let good = *goods
+                                .get(name.as_str())
+                                .ok_or_else(|| format!("unknown stored good {name}"))?;
+                            catalog.fresh(good, quantity, 0)
+                        })
+                        .collect::<Result<Vec<_>, String>>()?;
+                    custody.containers.push(Container::new(
+                        Place::Inventory(store.id),
+                        store.capacity,
+                        lots,
+                    )?);
+                    Ok(game_parallel_economy::LocalStore {
+                        id: store.id,
+                        region: store.region,
+                        name: store.name,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            let policies = config
+                .policies
+                .into_iter()
+                .map(|policy| {
+                    Ok(game_parallel_economy::LocalTransportPolicy {
+                        person: policy.person,
+                        region: policy.region,
+                        source: policy.source,
+                        destination: policy.destination,
+                        good: *goods.get(policy.good.as_str()).ok_or_else(|| {
+                            format!("unknown local transport good {}", policy.good)
+                        })?,
+                        quantity: policy.quantity,
+                        willing: policy.willing,
+                        pressured_by: policy.pressured_by,
+                        pressure_threshold: policy.pressure_threshold,
+                        disregard_claims: policy.disregard_claims,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok::<_, String>(game_parallel_economy::LocalTransport {
+                stores,
+                policies,
+                events: vec![],
+            })
+        })
+        .transpose()?;
     let mut people = Vec::new();
     let mut policies = Vec::new();
     let dreams: Vec<_> = scenario
@@ -1013,6 +1107,9 @@ pub fn scenario_with_options(
             seek_meals: resident.seek_meals,
             controlled: resident.controlled,
         });
+    }
+    if local_transport.is_some() {
+        custody.containers.par_sort_unstable_by_key(|row| row.place);
     }
     Economy::compile(State {
         seed: scenario.seed,
@@ -1072,6 +1169,7 @@ pub fn scenario_with_options(
         giving,
         medical,
         hauling,
+        local_transport,
     })
 }
 

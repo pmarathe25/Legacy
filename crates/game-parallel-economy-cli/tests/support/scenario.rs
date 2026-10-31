@@ -2211,6 +2211,38 @@ fn salvage_scenario_runs_through_real_player_and_individual_actions() {
 }
 
 #[test]
+fn player_carries_dated_goods_between_local_stores_over_two_boundaries() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-salvage.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut world);
+    let before = player.view().unwrap();
+    assert_eq!(before.local_stores.len(), 2);
+    let good = before.local_stores[0].lots[0].good;
+    assert!(player.move_local_store(1, good, 1, false).unwrap());
+    let carrying = player.view().unwrap();
+    assert!(
+        carrying
+            .possessions
+            .iter()
+            .any(|lot| lot.good == good && lot.quantity == 1)
+    );
+    assert!(carrying.local_stores[1].lots.is_empty());
+    assert!(player.move_local_store(2, good, 1, true).unwrap());
+    let delivered = player.view().unwrap();
+    assert_eq!(delivered.tick, before.tick + 2);
+    assert!(
+        delivered.local_stores[1]
+            .lots
+            .iter()
+            .any(|lot| lot.good == good && lot.quantity == 1)
+    );
+}
+
+#[test]
 fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =

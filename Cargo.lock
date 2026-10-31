@@ -3242,6 +3242,7 @@ dependencies = [
  "game-parallel-economy-goals",
  "game-parallel-economy-interaction",
  "game-parallel-economy-knowledge",
+ "game-parallel-economy-local-transport",
  "game-parallel-economy-person",
  "game-parallel-economy-promises",
  "game-parallel-economy-read",
@@ -3527,6 +3528,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-parallel-economy-local-transport"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-claims",
+ "game-parallel-economy-person",
+ "game-parallel-lot-runtime",
+ "game-parallel-lots",
+ "game-parallel-opinions",
+ "rayon",
+ "serde",
+]
+
+[[package]]
 name = "game-parallel-economy-person"
 version = "0.2.0"
 dependencies = [
@@ -3583,6 +3597,7 @@ dependencies = [
  "game-parallel-economy-expeditions",
  "game-parallel-economy-fatigue",
  "game-parallel-economy-knowledge",
+ "game-parallel-economy-local-transport",
  "game-parallel-economy-person",
  "game-parallel-economy-work",
  "game-parallel-environment",

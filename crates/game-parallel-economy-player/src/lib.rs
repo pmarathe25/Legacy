@@ -27,6 +27,12 @@ pub struct DebrisView {
     pub lots: Vec<Lot>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocalStoreView {
+    pub store: game_parallel_economy::LocalStore,
+    pub capacity: u64,
+    pub lots: Vec<Lot>,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FighterView {
     pub person: u64,
     pub side: u32,
@@ -105,6 +111,7 @@ pub struct View {
     pub resource_sites: Vec<game_parallel_economy::ResourceNode>,
     pub work_sites: Vec<WorkSiteView>,
     pub debris: Vec<DebrisView>,
+    pub local_stores: Vec<LocalStoreView>,
     pub fatigue: Option<(u32, bool)>,
     pub conditions: Option<Conditions>,
     pub isolation: Option<u32>,
@@ -426,6 +433,29 @@ impl<'a> Player<'a> {
                 })
             })
             .unwrap_or_default();
+        let local_stores = person
+            .as_ref()
+            .and_then(|p| p.region)
+            .and_then(|region| {
+                state.local_transport.map(|owner| {
+                    owner
+                        .stores
+                        .par_iter()
+                        .filter(|store| store.region == region)
+                        .filter_map(|store| {
+                            state
+                                .physical
+                                .custody(Place::Inventory(store.id))
+                                .map(|holder| LocalStoreView {
+                                    store: store.clone(),
+                                    capacity: holder.capacity,
+                                    lots: holder.lots.clone(),
+                                })
+                        })
+                        .collect()
+                })
+            })
+            .unwrap_or_default();
         let resource_sites =
             person
                 .as_ref()
@@ -610,6 +640,7 @@ impl<'a> Player<'a> {
             resource_sites,
             work_sites,
             debris,
+            local_stores,
             fatigue,
             conditions,
             isolation,
@@ -666,6 +697,17 @@ impl<'a> Player<'a> {
     pub fn salvage_site(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
         self.world
             .salvage_site(self.current()?, site, good, quantity)
+    }
+    /// Carry goods into or out of a local store.
+    pub fn move_local_store(
+        &mut self,
+        store: u64,
+        good: u32,
+        quantity: u64,
+        deposit: bool,
+    ) -> Result<bool, String> {
+        self.world
+            .move_local_store(self.current()?, store, good, quantity, deposit)
     }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
     pub fn guardians(&self) -> Result<Vec<Guardian>, String> {

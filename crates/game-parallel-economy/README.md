@@ -25,7 +25,9 @@ Individual hauling preferences can move real lots between regions. A carrier can
 
 Authored reusable tool requirements check personal custody before a work attempt competes for materials and before each work increment. Missing or expired tools pause work without consuming the tool.
 
-Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits and independently choose to destroy specific idle local sites, including when motivated by fear or felt obligation. Competing attempts remove a site only once. Blueprints may retain a specified portion of the actual dated kit in site custody; after destruction, people can independently recover the remaining local debris, subject to real carrying capacity and contested physical transfers. Within-region transport remains to be implemented.
+Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits and independently choose to destroy specific idle local sites, including when motivated by fear or felt obligation. Competing attempts remove a site only once. Blueprints may retain a specified portion of the actual dated kit in site custody; after destruction, people can independently recover the remaining local debris, subject to real carrying capacity and contested physical transfers.
+
+Named stores within a region have separate physical custody and capacities. A person can pick up goods and later deposit them in another store or regional stock, or stop while still carrying them. Each action takes a boundary; this model does not yet represent walking distances within a region.
 
 A claimant present when their site's debris is recovered can interpret that experience through their own signed affinity setting, independently of their feelings about using or destroying a site.
 

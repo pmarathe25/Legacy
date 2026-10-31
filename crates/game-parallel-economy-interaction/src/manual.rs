@@ -43,6 +43,13 @@ pub enum PhysicalChoice {
         good: u32,
         quantity: u64,
     },
+    LocalStore {
+        person: u64,
+        store: u64,
+        good: u32,
+        quantity: u64,
+        deposit: bool,
+    },
     Gather {
         person: u64,
         node: u64,
@@ -87,6 +94,7 @@ impl PhysicalChoice {
             | Self::Build { person, .. }
             | Self::DestroySite { person, .. }
             | Self::SalvageSite { person, .. }
+            | Self::LocalStore { person, .. }
             | Self::Gather { person, .. }
             | Self::Give { person, .. }
             | Self::AskFood { person, .. }
