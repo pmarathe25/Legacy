@@ -49,6 +49,18 @@ impl Clone for Facilities {
     }
 }
 impl Facilities {
+    /// Destroy an unoccupied physical site without recovering any materials.
+    pub fn destroy_idle(&mut self, id: u64) -> bool {
+        if self.bindings.par_iter().any(|binding| binding.site == id) {
+            return false;
+        }
+        if let Ok(index) = self.sites.binary_search_by_key(&id, |site| site.id) {
+            self.sites.remove(index);
+            true
+        } else {
+            false
+        }
+    }
     pub fn normalize(&mut self) -> Result<(), String> {
         self.sites.par_sort_unstable_by_key(|s| s.id);
         if self.next_id == 0 {
@@ -163,6 +175,10 @@ pub struct Plan {
 impl Plan {
     pub fn permits(&self, job: u64) -> bool {
         self.bindings.binary_search_by_key(&job, |b| b.job).is_ok()
+    }
+    /// A provisional reservation prevents simultaneous destruction of the site.
+    pub fn reserves_site(&self, site: u64) -> bool {
+        self.bindings.par_iter().any(|binding| binding.site == site)
     }
 }
 impl Facilities {

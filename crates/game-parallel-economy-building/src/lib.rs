@@ -104,8 +104,7 @@ impl Construction {
                         .blueprints
                         .binary_search_by_key(&e.blueprint, |b| b.id)
                         .is_err()
-                    || e.site
-                        .is_some_and(|id| sites.sites.binary_search_by_key(&id, |s| s.id).is_err())
+                    || e.site.is_some_and(|id| id == 0 || id >= sites.next_id)
             })
         {
             return Err("invalid personal construction state".into());

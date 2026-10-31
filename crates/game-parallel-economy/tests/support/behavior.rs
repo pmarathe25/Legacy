@@ -16721,6 +16721,83 @@ fn controlled_construction_consumes_a_kit_and_overflow_rolls_back() {
     assert_eq!(world.snapshot(), before);
 }
 
+#[test]
+fn controlled_site_destruction_requires_an_idle_local_site_and_never_creates_salvage() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.autowork = None;
+    initial.construction.as_mut().unwrap().policies.clear();
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.build_site(1, 1).unwrap());
+    let built = world.snapshot();
+    let mut historical = built.clone();
+    historical.work_sites.as_mut().unwrap().sites.clear();
+    Economy::compile(historical).unwrap();
+    assert!(world.destroy_site(1, 1).unwrap());
+    let destroyed = world.snapshot();
+    assert!(destroyed.work_sites.as_ref().unwrap().sites.is_empty());
+    assert_eq!(destroyed.work_sites.as_ref().unwrap().next_id, 2);
+    assert_eq!(
+        destroyed
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        0
+    );
+    Economy::compile(serde_json::from_str(&serde_json::to_string(&destroyed).unwrap()).unwrap())
+        .unwrap();
+    let before = world.snapshot();
+    assert!(world.destroy_site(1, 1).is_err());
+    assert_eq!(world.snapshot(), before);
+}
+
+#[test]
+fn site_destruction_cannot_race_a_start_or_an_occupied_job() {
+    let mut initial = construction_fixture();
+    initial.people[0].controlled = true;
+    initial.physical.recipes[0].ticks = 5;
+    initial.construction.as_mut().unwrap().policies.clear();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.build_site(1, 1).unwrap());
+                assert!(!world.destroy_site(1, 1).unwrap());
+                assert_eq!(
+                    world.snapshot().work_sites.as_ref().unwrap().bindings.len(),
+                    1
+                );
+                assert!(!world.destroy_site(1, 1).unwrap());
+                world.set_work_choice(2, false).unwrap();
+                assert!(!world.destroy_site(1, 1).unwrap());
+                assert!(
+                    world
+                        .snapshot()
+                        .work_sites
+                        .as_ref()
+                        .unwrap()
+                        .bindings
+                        .is_empty()
+                );
+                assert!(world.destroy_site(1, 1).unwrap());
+                let state = world.snapshot();
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 fn concentrated_site_construction(count: u64) -> State {
     let mut state = field_workload(count);
     state.agriculture = None;

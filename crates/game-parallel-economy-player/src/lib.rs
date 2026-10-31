@@ -549,6 +549,10 @@ impl<'a> Player<'a> {
     pub fn build_site(&mut self, blueprint: u32) -> Result<bool, String> {
         self.world.build_site(self.current()?, blueprint)
     }
+    /// Destroy an unoccupied local work site without recovering materials.
+    pub fn destroy_site(&mut self, site: u64) -> Result<bool, String> {
+        self.world.destroy_site(self.current()?, site)
+    }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
     pub fn guardians(&self) -> Result<Vec<Guardian>, String> {
         let state = self.world.read();

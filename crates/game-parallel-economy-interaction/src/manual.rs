@@ -33,6 +33,10 @@ pub enum PhysicalChoice {
         person: u64,
         blueprint: u32,
     },
+    DestroySite {
+        person: u64,
+        site: u64,
+    },
     Gather {
         person: u64,
         node: u64,
@@ -75,6 +79,7 @@ impl PhysicalChoice {
             | Self::Treat { person }
             | Self::Farm { person, .. }
             | Self::Build { person, .. }
+            | Self::DestroySite { person, .. }
             | Self::Gather { person, .. }
             | Self::Give { person, .. }
             | Self::AskFood { person, .. }

@@ -186,6 +186,21 @@ impl Economy {
                 .any(|e| e.person == person && e.blueprint == blueprint && e.site.is_some())
         }))
     }
+    /// Attempt to destroy an idle local site, without recovering its materials.
+    pub fn destroy_site(&mut self, person: u64, site: u64) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_parallel_economy_interaction::PhysicalChoice::DestroySite { person, site }),
+        )?;
+        self.commit(draft)?;
+        Ok(self
+            .work_sites
+            .as_ref()
+            .is_some_and(|sites| sites.sites.binary_search_by_key(&site, |s| s.id).is_err()))
+    }
     pub fn set_hauling_asking_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
             .people
@@ -844,6 +859,47 @@ impl Economy {
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
         let campaign_draft = game_parallel_economy_campaign::prepare_world!(self);
         let view = self.physical.view(tick)?;
+        let destroy_site =
+            if let Some(game_parallel_economy_interaction::PhysicalChoice::DestroySite {
+                person,
+                site,
+            }) = player_transfer
+            {
+                let actor = self
+                    .people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .map(|i| &self.people[i])
+                    .ok_or("unknown person")?;
+                let sites = self.work_sites.as_ref().ok_or("work sites are disabled")?;
+                let target = sites
+                    .sites
+                    .binary_search_by_key(&site, |s| s.id)
+                    .ok()
+                    .map(|i| &sites.sites[i])
+                    .ok_or("unknown work site")?;
+                if !actor.controlled || actor.health == 0 || actor.region != Some(target.region) {
+                    return Err(
+                        "site destruction requires a living controlled person at the site".into(),
+                    );
+                }
+                if self.family.as_ref().is_some_and(|f| {
+                    f.members
+                        .iter()
+                        .any(|m| m.id == person && m.age < f.rules.min_work_age)
+                }) {
+                    return Err("person is too young to destroy a site".into());
+                }
+                Some((
+                    site,
+                    sites
+                        .bindings
+                        .par_iter()
+                        .any(|binding| binding.site == site),
+                ))
+            } else {
+                None
+            };
         let claims = game_parallel_economy_claims::prepare_index!(self);
         let (fighters, resting, people, meal_candidates, meals, mut busy) = family::prepare_people!(
             self,
@@ -1782,6 +1838,14 @@ impl Economy {
             plan.publish(owner, sites, physical.events());
         } else if let Some(owner) = &mut construction {
             owner.events.clear();
+        }
+        if let (Some((site, was_occupied)), Some(sites)) = (destroy_site, &mut work_sites)
+            && !was_occupied
+            && site_plan
+                .as_ref()
+                .is_none_or(|plan| !plan.reserves_site(site))
+        {
+            sites.destroy_idle(site);
         }
         game_parallel_economy_combat::finish_world!(combat, person);
         let missions = game_parallel_economy_expeditions::finish_world!(
