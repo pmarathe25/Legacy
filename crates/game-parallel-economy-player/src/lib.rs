@@ -51,6 +51,11 @@ pub struct BodyView {
     pub possessions: Vec<Lot>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClaimView {
+    pub region: u64,
+    pub good: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub tick: u64,
     pub person: Option<Person>,
@@ -59,6 +64,8 @@ pub struct View {
     pub bodies: Vec<BodyView>,
     pub possessions: Vec<Lot>,
     pub local_stock: Vec<Lot>,
+    /// The ruler's own assertions, including assertions made in other regions.
+    pub claims: Vec<ClaimView>,
     pub food_reports: Vec<Record>,
     pub job: Option<Job>,
     pub warning: Option<InvocationWarning>,
@@ -476,6 +483,24 @@ impl<'a> Player<'a> {
                     .cloned()
                     .collect()
             }),
+            claims: current.map_or_else(Vec::new, |id| {
+                state
+                    .dynamics
+                    .and_then(|d| d.claims.as_ref())
+                    .map_or_else(Vec::new, |owner| {
+                        let mut claims: Vec<_> = owner
+                            .claims
+                            .par_iter()
+                            .filter(|c| c.person == id)
+                            .map(|c| ClaimView {
+                                region: c.region,
+                                good: c.good,
+                            })
+                            .collect();
+                        claims.par_sort_unstable_by_key(|c| (c.region, c.good));
+                        claims
+                    })
+            }),
             sharing_learning: current
                 .and_then(|id| self.world.sharing_learning(id))
                 .cloned(),
@@ -698,6 +723,20 @@ impl<'a> Player<'a> {
             return Err("field is not local".into());
         }
         self.world.farm_field(self.current()?, field)
+    }
+    /// Assert a personal claim over a local stock; this does not compel anyone.
+    pub fn claim_stock(&mut self, good: u32) -> Result<(), String> {
+        let person = self.current()?;
+        let region = self
+            .view()?
+            .person
+            .and_then(|p| p.region)
+            .ok_or("person is traveling")?;
+        self.world.claim_stock(person, region, good)
+    }
+    /// Withdraw one of the ruler's own assertions, including one made elsewhere.
+    pub fn withdraw_claim(&mut self, region: u64, good: u32) -> Result<(), String> {
+        self.world.withdraw_claim(self.current()?, region, good)
     }
     pub fn transfer_stock(
         &mut self,

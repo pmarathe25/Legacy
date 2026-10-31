@@ -974,3 +974,56 @@ fn ruler_can_build_an_authored_site_from_an_actual_kit() {
     assert_eq!(view.work_sites.len(), 1);
     assert_eq!(view.work_sites[0].site.kind, "workshop");
 }
+
+#[test]
+fn ruler_can_assert_and_withdraw_personal_claims_without_seeing_other_minds() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let good = world
+        .snapshot()
+        .physical
+        .goods
+        .iter()
+        .find(|g| g.name == "grain")
+        .unwrap()
+        .id;
+    world.claim_stock(2, 1, good).unwrap();
+    {
+        let mut player = game_parallel_economy_player::Player::new(&mut world);
+        let before = player.view().unwrap();
+        assert!(before.claims.is_empty());
+        player.claim_stock(good).unwrap();
+        let after = player.view().unwrap();
+        assert_eq!(after.tick, before.tick);
+        assert_eq!(
+            after.claims,
+            vec![game_parallel_economy_player::ClaimView { region: 1, good }]
+        );
+        assert!(player.claim_stock(good).is_err());
+    }
+    let path =
+        std::env::temp_dir().join(format!("legacy-personal-claim-{}.json", std::process::id()));
+    save(&world, &path).unwrap();
+    let mut restored = load(&path).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut restored);
+    assert_eq!(player.view().unwrap().claims.len(), 1);
+    player.withdraw_claim(1, good).unwrap();
+    assert!(player.view().unwrap().claims.is_empty());
+    assert!(player.withdraw_claim(1, good).is_err());
+    let state = restored.snapshot();
+    let claims = &state
+        .dynamics
+        .as_ref()
+        .unwrap()
+        .claims
+        .as_ref()
+        .unwrap()
+        .claims;
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].person, 2);
+}
