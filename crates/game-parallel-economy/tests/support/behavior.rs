@@ -2587,6 +2587,7 @@ fn hunger_can_change_one_persons_claim_choice_after_open_food_is_considered() {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {
@@ -3949,6 +3950,7 @@ fn hauling_respects_claims_and_does_not_deliver_spoiled_cargo() {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {
@@ -4583,6 +4585,120 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
 }
 
 #[test]
+fn newborn_claim_preferences_do_not_inherit_assertions_or_feelings() {
+    use game_parallel_economy_claims::{Claim, Claims, Preference, SiteClaim};
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.work_sites = Some(WorkSites {
+        next_id: 8,
+        sites: vec![WorkSite {
+            id: 7,
+            region: 1,
+            kind: "workshop".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.dynamics = Some(Dynamics {
+        social: None,
+        personality: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            inherit_births: true,
+            claims: vec![Claim {
+                person: 1,
+                region: 1,
+                good: 2,
+            }],
+            preferences: vec![Preference {
+                person: 1,
+                disregard_others: true,
+                assert_outputs: true,
+                assert_built_sites: true,
+                desperate_hunger: Some(20),
+            }],
+            site_claims: vec![SiteClaim { person: 1, site: 7 }],
+            ..Default::default()
+        }),
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .dynamics
+                    .as_mut()
+                    .unwrap()
+                    .claims
+                    .as_mut()
+                    .unwrap()
+                    .inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let claims = state.dynamics.as_ref().unwrap().claims.as_ref().unwrap();
+                assert!(claims.claims.iter().all(|claim| claim.person != 5));
+                assert!(claims.site_claims.iter().all(|claim| claim.person != 5));
+                assert!(
+                    state
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .all(|row| row.observer != 5 && row.target != 5)
+                );
+                let preference = claims
+                    .preferences
+                    .iter()
+                    .find(|preference| preference.person == 5);
+                assert_eq!(preference.is_some(), inherit);
+                if let Some(preference) = preference {
+                    assert!(
+                        preference.disregard_others
+                            && preference.assert_outputs
+                            && preference.assert_built_sites
+                    );
+                    assert_eq!(preference.desperate_hunger, Some(20));
+                    world.set_claim_choice(5, false).unwrap();
+                    assert!(
+                        !world
+                            .snapshot()
+                            .dynamics
+                            .unwrap()
+                            .claims
+                            .unwrap()
+                            .preferences
+                            .iter()
+                            .find(|p| p.person == 5)
+                            .unwrap()
+                            .disregard_others
+                    );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn successor_is_an_actual_later_birth_and_guardian_travels_before_mentorship() {
     use game_parallel_economy_campaign::ReleaseDecision;
     let initial = campaign_fixture();
@@ -5083,6 +5199,7 @@ fn controlled_transfers_obey_physical_custody_and_generate_observed_claim_use() 
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {
@@ -5611,6 +5728,7 @@ fn claim_workload(count: u64) -> State {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: (count / 2 + 1..=count)
@@ -9787,6 +9905,7 @@ fn gathering_claims_workload(count: u64) -> State {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             preferences: (1..=count)
@@ -15133,6 +15252,7 @@ fn autonomous_workers_obtain_tools_from_real_stock_and_respect_personal_claims()
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {
@@ -15571,6 +15691,7 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {
@@ -16474,6 +16595,7 @@ fn concentrated_claimed_work_site(count: u64) -> State {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![SiteClaim { person: 1, site: 1 }],
             ..Default::default()
         }),
@@ -18987,6 +19109,7 @@ fn concentrated_built_site_claims(count: u64) -> State {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             preferences: (2..=count)
                 .map(|person| Preference {
                     person,
@@ -19436,6 +19559,7 @@ fn construction_respects_personal_claims_and_expiring_materials() {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {
@@ -19554,6 +19678,7 @@ fn controlled_construction_uses_carried_kits_without_taking_claimed_stock() {
         disease: None,
         treatment: vec![],
         claims: Some(Claims {
+            inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
             claims: vec![Claim {

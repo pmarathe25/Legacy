@@ -2018,6 +2018,11 @@ impl Economy {
         }
         purpose::enroll(purpose.as_mut(), family.as_ref(), tick)?;
         game_parallel_economy_agriculture::enroll(agriculture.as_mut(), family.as_ref(), tick);
+        game_parallel_economy_claims::enroll(
+            dynamics.as_mut().and_then(|owner| owner.claims.as_mut()),
+            family.as_ref(),
+            tick,
+        );
         gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         let deaths: Vec<_> = person

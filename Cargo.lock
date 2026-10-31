@@ -3323,6 +3323,7 @@ version = "0.2.0"
 dependencies = [
  "game-parallel-autowork",
  "game-parallel-economy-person",
+ "game-parallel-families",
  "game-parallel-lot-runtime",
  "game-parallel-lots",
  "game-parallel-opinions",

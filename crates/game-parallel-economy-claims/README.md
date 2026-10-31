@@ -5,3 +5,5 @@ People may make competing assertions over regional stock. Each person chooses wh
 People can also assert conflicting claims about physical work sites. Site use and demolition consult each actor's own choice; assertions do not evict existing work. Up to four physically present claimants can observe each actual use or destruction. An assertion may remain after a site is destroyed and can be withdrawn; site identities are not reused. Observers may interpret events through optional signed personal affinity preferences; no reaction is imposed.
 
 Each person's separate `assert_built_sites` preference can lead them to claim a site only after their own construction physically succeeds. Building does not automatically imply a claim; people may change this preference.
+
+When `inherit_births` and family birth enrollment are enabled, newborns may receive a parent's preferences for making or disregarding assertions. They inherit no stock or site assertions, relationships, or obligations, and may change their own choices.

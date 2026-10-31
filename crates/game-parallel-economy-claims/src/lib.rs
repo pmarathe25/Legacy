@@ -453,6 +453,9 @@ pub struct SiteUse {
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claims {
+    /// Newborns may inherit preferences, never assertions or relationships.
+    #[serde(default)]
+    pub inherit_births: bool,
     #[serde(default)]
     pub claims: Vec<Claim>,
     #[serde(default)]
@@ -467,6 +470,7 @@ pub struct Claims {
 impl Clone for Claims {
     fn clone(&self) -> Self {
         Self {
+            inherit_births: self.inherit_births,
             claims: self.claims.par_iter().cloned().collect(),
             preferences: self.preferences.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
@@ -475,6 +479,56 @@ impl Clone for Claims {
         }
     }
 }
+
+/// Enroll actual newborns without copying any person's claims or feelings.
+pub fn enroll(
+    owner: Option<&mut Claims>,
+    family: Option<&game_parallel_families::Families>,
+    tick: u64,
+) {
+    let Some((owner, family)) = owner
+        .zip(family)
+        .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
+    else {
+        return;
+    };
+    let newborns: Vec<_> = family
+        .members
+        .par_iter()
+        .filter(|member| member.born == Some(tick))
+        .collect();
+    if newborns.is_empty() {
+        return;
+    }
+    let mut preferences: Vec<_> = owner.preferences.par_iter().collect();
+    preferences.par_sort_unstable_by_key(|preference| preference.person);
+    let inherited: Vec<_> = newborns
+        .into_par_iter()
+        .filter_map(|member| {
+            if preferences
+                .binary_search_by_key(&member.id, |p| p.person)
+                .is_ok()
+            {
+                return None;
+            }
+            let parent = member.parents.iter().find_map(|id| {
+                preferences
+                    .binary_search_by_key(id, |p| p.person)
+                    .ok()
+                    .map(|i| preferences[i])
+            })?;
+            Some(Preference {
+                person: member.id,
+                disregard_others: parent.disregard_others,
+                assert_outputs: parent.assert_outputs,
+                assert_built_sites: parent.assert_built_sites,
+                desperate_hunger: parent.desperate_hunger,
+            })
+        })
+        .collect();
+    owner.preferences.par_extend(inherited);
+}
+
 impl Claims {
     pub fn validate(&self, people: &HashSet<u64>, view: &View, tick: u64) -> Result<(), String> {
         let mut keys: Vec<_> = self

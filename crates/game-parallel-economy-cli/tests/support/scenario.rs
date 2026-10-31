@@ -314,6 +314,11 @@ fn generated_campaign_replays_at_scale_across_workers() {
                             .iter()
                             .any(|policy| policy.person == member.id)
                 }));
+                let claims = state.dynamics.as_ref().unwrap().claims.as_ref().unwrap();
+                assert!(state.family.as_ref().unwrap().members.iter().any(|member| {
+                    member.born.is_some()
+                        && claims.preferences.iter().any(|p| p.person == member.id)
+                }));
                 state
             })
     };

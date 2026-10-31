@@ -151,6 +151,7 @@ person = 1
 person = 2
 
 [dynamics.claims]
+inherit_births = true
 
 [[dynamics.claims.preferences]]
 person = 1
