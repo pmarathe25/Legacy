@@ -20,6 +20,8 @@ Optional `[population.help.acquaintance_asking]` settings let people ask someone
 
 Optional `[population.work_support]` settings seed individual aspirations, inclinations to ask for help, and personal evaluations of requested work. A signed `affinity_weight` specifies how each person's own affinity affects that evaluation. The scenario must enable work requests, and aspirations use the profile's named recipe. Requests, refusals, and actual work emerge during simulation; these settings create no employment, institution, or binding agreement.
 
+The same profile accepts a signed `trust_weight` for each person's evaluation of the requester. Experienced promise outcomes can change trust and thereby affect later requests, but each person may weight trust positively, negatively, or not at all.
+
 The optional `learning_percent` and `learning_max` settings give selected individuals a bounded inclination to develop new aspirations from successful work they personally observe. They do not grant advance knowledge of a recipe or create an aspiration until the person witnesses work.
 
 Construction blueprints may specify `salvage` up to the kit `quantity`. Destroyed sites with surviving material appear as local debris; `salvage-site SITE GOOD QUANTITY` attempts to recover it into the ruler's inventory. Optional `[[construction.salvaging]]` policies configure individuals' own recovery choices.

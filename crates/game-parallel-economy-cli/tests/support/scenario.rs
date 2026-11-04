@@ -187,6 +187,12 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                     .as_ref()
                     .unwrap();
                 assert_eq!(work.preferences.len(), 129);
+                assert!(
+                    work.preferences
+                        .iter()
+                        .filter(|row| row.person >= 1000)
+                        .all(|row| row.trust_weight == 1)
+                );
                 assert!(work.askers.iter().any(|row| row.person >= 1000));
                 assert!(
                     initial

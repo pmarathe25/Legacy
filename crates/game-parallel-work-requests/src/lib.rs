@@ -56,16 +56,20 @@ pub struct Preference {
     /// This person's signed motivation per unit of their own directed affinity.
     #[serde(default)]
     pub affinity_weight: i64,
+    /// Each individual decides how much their own trust affects willingness.
+    #[serde(default)]
+    pub trust_weight: i64,
     #[serde(default)]
     pub disregard_claims: bool,
 }
 impl Preference {
     /// No agreement or feeling forces compliance; this is the person's present evaluation.
-    pub fn motivated(&self, fear: u64, obligation: u64, affinity: i32) -> bool {
+    pub fn motivated(&self, fear: u64, obligation: u64, affinity: i32, trust: i32) -> bool {
         let value = i128::from(self.help_value)
             + i128::from(fear)
             + i128::from(obligation)
-            + i128::from(affinity) * i128::from(self.affinity_weight);
+            + i128::from(affinity) * i128::from(self.affinity_weight)
+            + i128::from(trust) * i128::from(self.trust_weight);
         value >= i128::from(self.effort)
     }
 }
@@ -350,6 +354,7 @@ impl Requests {
         let index = opinions
             .filter(|opinions| !opinions.records.is_empty())
             .map(Opinions::index);
+        let initial_trust = opinions.map_or(0, |opinions| opinions.rules.initial);
         let mut eligible: Vec<_> = self
             .pending
             .par_iter()
@@ -369,19 +374,29 @@ impl Requests {
         }
         let decide = |row: &Request| {
             let preference = preference(row.worker).expect("eligible preference");
-            let (fear, obligation, affinity) = index.as_ref().map_or((0, 0, 0), |index| {
-                (
-                    index.fear(row.worker, row.requester),
-                    index.obligation(row.worker, row.requester),
-                    index.affinity(row.worker, row.requester),
-                )
-            });
+            let (fear, obligation) = index
+                .as_ref()
+                .map_or((0, 0), |index| index.feelings(row.worker, row.requester));
+            let affinity = if preference.affinity_weight == 0 {
+                0
+            } else {
+                index
+                    .as_ref()
+                    .map_or(0, |index| index.affinity(row.worker, row.requester))
+            };
+            let trust = if preference.trust_weight == 0 {
+                0
+            } else {
+                index.as_ref().map_or(initial_trust, |index| {
+                    index.trust(row.worker, row.requester)
+                })
+            };
             Decision {
                 request: row.id,
                 worker: row.worker,
                 region: row.region,
                 recipe: row.recipe,
-                help: preference.motivated(fear, obligation, affinity),
+                help: preference.motivated(fear, obligation, affinity, trust),
                 disregard_claims: preference.disregard_claims,
             }
         };
@@ -423,16 +438,17 @@ mod preference_tests {
             effort: 5,
             help_value: 0,
             affinity_weight: 3,
+            trust_weight: 0,
             disregard_claims: false,
         };
-        assert!(preference.motivated(0, 0, 2));
-        assert!(!preference.motivated(0, 0, -2));
+        assert!(preference.motivated(0, 0, 2, 0));
+        assert!(!preference.motivated(0, 0, -2, 0));
         preference.affinity_weight = -3;
-        assert!(preference.motivated(0, 0, -2));
-        assert!(!preference.motivated(0, 0, 2));
-        assert!(preference.motivated(u64::MAX, u64::MAX, i32::MIN));
+        assert!(preference.motivated(0, 0, -2, 0));
+        assert!(!preference.motivated(0, 0, 2, 0));
+        assert!(preference.motivated(u64::MAX, u64::MAX, i32::MIN, 0));
         preference.affinity_weight = 0;
-        assert!(!preference.motivated(0, 0, i32::MAX));
+        assert!(!preference.motivated(0, 0, i32::MAX, 0));
     }
 }
 #[cfg(test)]

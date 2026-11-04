@@ -353,14 +353,24 @@ pub fn pressured_workers(auto: &Autowork, opinions: Option<&Opinions>) -> Vec<u6
                 .binary_search_by_key(&link.worker, |row| row.person)
                 .ok()
                 .map(|i| prefs[i])?;
-            let (fear, obligation, affinity) = index.as_ref().map_or((0, 0, 0), |index| {
-                (
-                    index.fear(link.worker, link.requester),
-                    index.obligation(link.worker, link.requester),
-                    index.affinity(link.worker, link.requester),
-                )
-            });
-            pref.motivated(fear, obligation, affinity)
+            let (fear, obligation) = index
+                .as_ref()
+                .map_or((0, 0), |index| index.feelings(link.worker, link.requester));
+            let affinity = if pref.affinity_weight == 0 {
+                0
+            } else {
+                index
+                    .as_ref()
+                    .map_or(0, |index| index.affinity(link.worker, link.requester))
+            };
+            let trust = if pref.trust_weight == 0 {
+                0
+            } else {
+                index
+                    .as_ref()
+                    .map_or(0, |index| index.trust(link.worker, link.requester))
+            };
+            pref.motivated(fear, obligation, affinity, trust)
                 .then_some(link.worker)
         })
         .collect();

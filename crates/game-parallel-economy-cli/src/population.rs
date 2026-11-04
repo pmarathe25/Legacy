@@ -89,6 +89,8 @@ struct WorkSupport {
     #[serde(default)]
     affinity_weight: i64,
     #[serde(default)]
+    trust_weight: i64,
+    #[serde(default)]
     disregard_percent: u8,
 }
 
@@ -144,6 +146,7 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
                     help_value: rule.min_help_value
                         + random(1) % (rule.max_help_value - rule.min_help_value + 1),
                     affinity_weight: rule.affinity_weight,
+                    trust_weight: rule.trust_weight,
                     disregard_claims: random(2) % 100 < u64::from(rule.disregard_percent),
                 };
                 let asker = (random(3) % 100 < u64::from(rule.ask_percent)).then_some(
@@ -802,6 +805,7 @@ mod tests {
             min_help_value: 0,
             max_help_value: 10,
             affinity_weight: 0,
+            trust_weight: 0,
             disregard_percent: 0,
         });
         assert!(work_support(1, &[people]).is_err());

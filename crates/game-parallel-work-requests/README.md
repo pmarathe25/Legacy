@@ -4,6 +4,8 @@ Individuals can address requests for physical work to others. Recipients decide 
 
 Each person's optional signed `affinity_weight` controls how their own affinity toward a requester affects their decision to start requested work. The composed economy also reevaluates it when deciding whether to continue. Positive, negative, and zero weights are valid; fear, felt obligation, personal helping value, and effort remain separate parts of the person's evaluation.
 
+An independent signed `trust_weight` lets a person consider their own trust in the requester, including trust gained or lost through experienced promises. It also affects whether they continue work. Zero leaves trust irrelevant; no trust value or promise itself compels cooperation.
+
 With `inherit_births` and family birth enrollment enabled, newborns may acquire a parent's general willingness to request or perform work. They inherit no pending requests, job links, or personal memories; an inherited asking inclination still requires an actual goal.
 
 The controlled person can use `respond-work REQUEST_ID PERSON start|refuse` to start a requested job or refuse it. Starting still checks location, available resources, age, and other ordinary work restrictions; a failed start leaves the request available.

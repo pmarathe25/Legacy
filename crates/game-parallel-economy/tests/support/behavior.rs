@@ -6062,6 +6062,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
                 effort: 5,
                 help_value: 2,
                 affinity_weight: -3,
+                trust_weight: 0,
                 disregard_claims: true,
             }],
             askers: vec![Asker {
@@ -12480,6 +12481,7 @@ fn fear_can_start_requested_work_and_the_worker_can_leave_when_fear_fades() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -12637,6 +12639,7 @@ fn affinity_can_motivate_requested_work_and_a_changed_view_can_end_it() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 3,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -12682,6 +12685,132 @@ fn affinity_can_motivate_requested_work_and_a_changed_view_can_end_it() {
     };
     assert_eq!(run(1, 3, 2), run(4, 3, 2));
     assert_eq!(run(1, -3, -2), run(4, -3, -2));
+}
+
+#[test]
+fn experienced_reliability_can_change_a_persons_choice_to_help() {
+    use game_parallel_autowork::requests::{Preference, Requests};
+    let mut initial = fixture();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[0].hunger = 0;
+    initial.people[1].willing_to_work = false;
+    initial.physical.recipes[0].ticks = 3;
+    initial.opinions.as_mut().unwrap().records.clear();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 1,
+            inherit_births: false,
+            memory_limit: 2,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 1,
+                help_value: 0,
+                affinity_weight: 0,
+                trust_weight: 1,
+                disregard_claims: false,
+            }],
+            askers: vec![],
+            pending: vec![],
+            events: vec![],
+        }),
+    });
+    let agreements = initial.agreements.as_mut().unwrap();
+    agreements.next_id = 1;
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.policies = vec![AgreementPolicy {
+        person: 1,
+        honor: false,
+        accept: false,
+        minimum_trust: None,
+        minimum_honor_trust: None,
+        fear_honor_threshold: None,
+        obligation_honor_threshold: None,
+        accept_pressure_threshold: None,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.ask_work(1, 2, 1, 5).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let id = world
+                    .propose_promises(&[PromiseProposal {
+                        debtor: 1,
+                        creditor: 2,
+                        good: 1,
+                        quantity: 1,
+                        due: 10,
+                    }])
+                    .unwrap()[0];
+                world
+                    .decide_promises(&[PromiseDecision {
+                        contract: id,
+                        actor: 2,
+                        accept: true,
+                    }])
+                    .unwrap();
+                world.set_promise_choice(1, true).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .index()
+                        .trust(2, 1),
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                for sim in [&mut world, &mut restored] {
+                    sim.ask_work(1, 2, 1, 5).unwrap();
+                    assert_eq!(sim.advance().unwrap().started, vec![1]);
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let mut changed = world.snapshot();
+                changed
+                    .opinions
+                    .as_mut()
+                    .unwrap()
+                    .records
+                    .iter_mut()
+                    .find(|r| r.observer == 2 && r.target == 1)
+                    .unwrap()
+                    .trust = 0;
+                let mut changed = Economy::compile(changed).unwrap();
+                assert_eq!(changed.advance().unwrap().abandoned, vec![1]);
+                changed.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut contrary = initial;
+    contrary.opinions.as_mut().unwrap().rules.initial = -2;
+    contrary
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .trust_weight = -1;
+    let mut contrary = Economy::compile(contrary).unwrap();
+    contrary.ask_work(1, 2, 1, 5).unwrap();
+    assert_eq!(contrary.advance().unwrap().started, vec![1]);
 }
 
 #[test]
@@ -12883,6 +13012,7 @@ fn requested_work_is_learned_only_by_a_present_observer() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -13011,6 +13141,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![Asker {
@@ -16375,6 +16506,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     effort: 1,
                     help_value: u64::from(help),
                     affinity_weight: 0,
+                    trust_weight: 0,
                     disregard_claims: false,
                 }],
                 askers: vec![],
@@ -16509,6 +16641,7 @@ fn concentrated_work_refusals(count: u64) -> State {
                     effort: 1,
                     help_value: 0,
                     affinity_weight: 0,
+                    trust_weight: 0,
                     disregard_claims: false,
                 })
                 .collect(),
@@ -16563,6 +16696,68 @@ fn concentrated_work_refusals(count: u64) -> State {
 }
 
 #[test]
+fn concentrated_trust_based_refusals_are_deterministic() {
+    let initial = concentrated_trust_refusals(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let opinions = state.opinions.as_ref().unwrap();
+                assert_eq!(
+                    opinions
+                        .records
+                        .iter()
+                        .filter(|row| row.affinity == 2)
+                        .count(),
+                    2048
+                );
+                assert_eq!(
+                    opinions
+                        .records
+                        .iter()
+                        .filter(|row| row.trust == -1)
+                        .count(),
+                    2048
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn concentrated_trust_refusals(count: u64) -> State {
+    let mut state = concentrated_work_refusals(count);
+    for preference in &mut state
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences
+    {
+        preference.trust_weight = 1;
+    }
+    let half = count / 2;
+    state.opinions.as_mut().unwrap().records = (1..=half)
+        .map(|requester| Opinion {
+            observer: requester + half,
+            target: requester,
+            trust: -1,
+            fear: 0,
+            obligation: 0,
+            affinity: 0,
+        })
+        .collect();
+    state
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn concentrated_work_refusals_benchmark() {
     let workers = std::env::var("LEGACY_WORKERS")
@@ -16573,7 +16768,12 @@ fn concentrated_work_refusals_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = concentrated_work_refusals(count);
+    let trust = std::env::var_os("LEGACY_TRUST").is_some();
+    let initial = if trust {
+        concentrated_trust_refusals(count)
+    } else {
+        concentrated_work_refusals(count)
+    };
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -16586,11 +16786,20 @@ fn concentrated_work_refusals_benchmark() {
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 let records = world.snapshot().opinions.unwrap().records;
-                assert_eq!(records.len(), count as usize / 2);
-                assert!(
+                assert_eq!(
                     records
                         .iter()
-                        .all(|row| row.affinity == 2 && row.obligation == 0)
+                        .filter(|row| row.affinity == 2 && row.obligation == 0)
+                        .count(),
+                    count as usize / 2
+                );
+                assert_eq!(
+                    records.len(),
+                    if trust {
+                        count as usize
+                    } else {
+                        count as usize / 2
+                    }
                 );
                 if round > 0 {
                     samples.push(elapsed);
@@ -16626,6 +16835,7 @@ fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
                 effort: 1,
                 help_value: 1,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -16912,6 +17122,7 @@ fn witnessed_work_can_inspire_a_personal_offer_without_creating_a_duty() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -17984,6 +18195,7 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -18162,6 +18374,7 @@ fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
                 effort: 5,
                 help_value: 0,
                 affinity_weight: 0,
+                trust_weight: 0,
                 disregard_claims: false,
             }],
             askers: vec![],
