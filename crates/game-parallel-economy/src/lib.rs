@@ -1875,6 +1875,11 @@ impl Economy {
                         unwilling: &goal_building_refusals,
                         max_hunger: self.rules.max_work_hunger,
                         tick,
+                        plan_inputs: self.goals.as_ref().is_some_and(|goals| goals.plan_inputs),
+                        review: self
+                            .goals
+                            .as_ref()
+                            .map_or(0, |goals| tick.saturating_sub(1) / goals.retry_interval),
                     }
                     .prepare(action_base)
                 })

@@ -30,6 +30,7 @@ Physical work sites can limit concurrent jobs. Slots remain occupied by paused j
 Named stores within a region have separate physical custody and capacities. A person can pick up goods and later deposit them in another store or regional stock, or stop while still carrying them. Each action takes a boundary; this model does not yet represent walking distances within a region.
 
 People with an enabled personal goal-fetching preference can obtain missing inputs for their own active work goals from locally observed stores, physically carrying and depositing the goods before work can begin. They may stop and retain what they carry.
+When input planning is enabled, they can also seek supplies for intermediate recipes in a bounded dependency search.
 
 A claimant present when their site's debris is recovered can interpret that experience through their own signed affinity setting, independently of their feelings about using or destroying a site.
 

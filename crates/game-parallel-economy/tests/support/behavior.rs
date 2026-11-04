@@ -558,6 +558,131 @@ fn a_person_fetches_observed_local_inputs_for_their_own_work_goal() {
 }
 
 #[test]
+fn goal_fetching_finds_inputs_for_a_real_production_chain() {
+    use game_parallel_goals::Goal;
+    let mut initial = local_store_fixture();
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.goal_fetchers = vec![GoalFetchPreference {
+        person: 2,
+        enabled: true,
+        max_quantity: 1,
+    }];
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: true,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+        events: vec![],
+    });
+    initial.physical.recipes.push(Recipe {
+        id: 2,
+        name: "prepare material".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+    });
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            expires_at: Some(20),
+        }],
+    )
+    .unwrap();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().local_transport.as_ref().unwrap().events[0].good,
+                    3
+                );
+                world.advance().unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                for _ in 0..5 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                    1
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut cyclic = initial.clone();
+    let source = cyclic
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(source.place, source.capacity, vec![]).unwrap();
+    let mut cyclic = Economy::compile(cyclic).unwrap();
+    cyclic.advance().unwrap();
+    assert!(cyclic.snapshot().local_transport.unwrap().events.is_empty());
+    let mut direct_only = initial;
+    direct_only.goals.as_mut().unwrap().plan_inputs = false;
+    let mut direct_only = Economy::compile(direct_only).unwrap();
+    direct_only.advance().unwrap();
+    assert!(
+        direct_only
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
 fn local_store_actions_respect_location_capacity_and_expiry() {
     let mut initial = local_store_fixture();
     initial.people[0].controlled = true;
@@ -748,6 +873,83 @@ fn concentrated_goal_fetching(count: u64) -> State {
     state
 }
 
+fn concentrated_chain_fetching(count: u64) -> State {
+    let mut state = concentrated_goal_fetching(count);
+    state.goals.as_mut().unwrap().plan_inputs = true;
+    state.physical.recipes.push(Recipe {
+        id: 2,
+        name: "prepare material".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+    });
+    let source = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: count / 8,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn concentrated_chain_fetching_conserves_goods_across_workers() {
+    let count = 4096;
+    let initial = concentrated_chain_fetching(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .local_transport
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .filter(|event| event.moved && event.good == 3)
+                        .count(),
+                    count as usize / 8
+                );
+                let carried: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|row| matches!(row.place, Place::Person(_)))
+                    .flat_map(|row| &row.lots)
+                    .filter(|lot| lot.good == 3)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(carried, count / 8);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 fn concentrated_goal_fetching_conserves_goods_across_workers() {
     let count = 4096;
@@ -800,7 +1002,11 @@ fn concentrated_goal_fetch_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = concentrated_goal_fetching(count);
+    let initial = if std::env::var_os("LEGACY_CHAIN").is_some() {
+        concentrated_chain_fetching(count)
+    } else {
+        concentrated_goal_fetching(count)
+    };
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
