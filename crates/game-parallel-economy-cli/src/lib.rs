@@ -97,6 +97,8 @@ struct LocalTransportConfig {
     stores: Vec<LocalStoreConfig>,
     #[serde(default)]
     policies: Vec<LocalTransportPolicyConfig>,
+    #[serde(default)]
+    goal_fetchers: Vec<game_parallel_economy::GoalFetchPreference>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1049,6 +1051,7 @@ pub fn scenario_with_options(
             Ok::<_, String>(game_parallel_economy::LocalTransport {
                 stores,
                 policies,
+                goal_fetchers: config.goal_fetchers,
                 events: vec![],
             })
         })

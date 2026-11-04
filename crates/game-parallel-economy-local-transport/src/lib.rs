@@ -1,4 +1,5 @@
 //! Distinct local stores and personal choices to carry goods between them.
+pub mod goal;
 use game_parallel_economy_claims::{Index as Claims, Use};
 use game_parallel_economy_person::Person;
 use game_parallel_lot_runtime::Events;
@@ -65,6 +66,8 @@ pub struct LocalTransport {
     #[serde(default)]
     pub policies: Vec<Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub goal_fetchers: Vec<goal::Preference>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<Event>,
 }
 impl Clone for LocalTransport {
@@ -72,6 +75,7 @@ impl Clone for LocalTransport {
         Self {
             stores: self.stores.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
+            goal_fetchers: self.goal_fetchers.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
         }
     }
@@ -80,6 +84,8 @@ impl LocalTransport {
     pub fn normalize(&mut self) {
         self.stores.par_sort_unstable_by_key(|store| store.id);
         self.policies
+            .par_sort_unstable_by_key(|policy| policy.person);
+        self.goal_fetchers
             .par_sort_unstable_by_key(|policy| policy.person);
     }
     pub fn validate(
@@ -109,6 +115,8 @@ impl LocalTransport {
             || self.stores.par_iter().any(|s| s.id == 0 || s.name.is_empty() || !regions.contains(&s.region) || view.container(Place::Inventory(s.id)).is_none())
             || view.containers.par_iter().any(|c| matches!(c.place, Place::Inventory(id) if self.stores.binary_search_by_key(&id, |s| s.id).is_err()))
             || self.policies.par_windows(2).any(|w| w[0].person >= w[1].person)
+            || self.goal_fetchers.par_windows(2).any(|w| w[0].person >= w[1].person)
+            || self.goal_fetchers.par_iter().any(|p| !people.contains(&p.person) || p.max_quantity == 0)
             || self.policies.par_iter().any(|p| !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0
                 || p.source == p.destination || !endpoint(p.source, p.region, p.good) || !endpoint(p.destination, p.region, p.good)
                 || p.pressured_by.is_some() != p.pressure_threshold.is_some() || p.pressure_threshold == Some(0)
@@ -289,49 +297,52 @@ impl Context<'_> {
                 quantity: manual.quantity,
             });
         }
-        rows.par_sort_unstable_by_key(|row| row.person);
-        base.checked_add(rows.len() as u64)
-            .ok_or("local carrying action overflow")?;
-        let actions = rows
-            .par_iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let id = base + i as u64;
-                Transaction {
+        finish(rows, base, self.claims)
+    }
+}
+fn finish(mut rows: Vec<Choice>, base: u64, claims: Option<&Claims<'_>>) -> Result<Plan, String> {
+    rows.par_sort_unstable_by_key(|row| row.person);
+    base.checked_add(rows.len() as u64)
+        .ok_or("local carrying action overflow")?;
+    let actions = rows
+        .par_iter()
+        .enumerate()
+        .map(|(i, row)| {
+            let id = base + i as u64;
+            Transaction {
+                id,
+                movements: vec![Movement {
                     id,
-                    movements: vec![Movement {
-                        id,
-                        from: row.from,
-                        to: Some(row.to),
-                        good: row.good,
-                        quantity: row.quantity,
-                    }],
-                    creations: vec![],
-                }
-            })
-            .collect();
-        let uses = rows
-            .par_iter()
-            .enumerate()
-            .filter_map(|(i, row)| match row.from {
-                Place::Stock { region, .. } => self.claims.map(|_| Use {
-                    action: base + i as u64,
-                    person: row.person,
-                    region,
+                    from: row.from,
+                    to: Some(row.to),
                     good: row.good,
                     quantity: row.quantity,
-                    job: false,
-                }),
-                _ => None,
-            })
-            .collect();
-        Ok(Plan {
-            actors: rows.par_iter().map(|row| row.person).collect(),
-            actions,
-            uses,
-            rows,
+                }],
+                creations: vec![],
+            }
         })
-    }
+        .collect();
+    let uses = rows
+        .par_iter()
+        .enumerate()
+        .filter_map(|(i, row)| match row.from {
+            Place::Stock { region, .. } => claims.map(|_| Use {
+                action: base + i as u64,
+                person: row.person,
+                region,
+                good: row.good,
+                quantity: row.quantity,
+                job: false,
+            }),
+            _ => None,
+        })
+        .collect();
+    Ok(Plan {
+        actors: rows.par_iter().map(|row| row.person).collect(),
+        actions,
+        uses,
+        rows,
+    })
 }
 impl Plan {
     pub fn publish(self, tick: u64, events: &Events) -> Vec<Event> {

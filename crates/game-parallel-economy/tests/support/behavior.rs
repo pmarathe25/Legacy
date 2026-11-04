@@ -249,6 +249,7 @@ fn local_store_fixture() -> State {
         .containers
         .sort_unstable_by_key(|row| row.place);
     state.local_transport = Some(LocalTransport {
+        goal_fetchers: vec![],
         stores: vec![
             LocalStore {
                 id: 1,
@@ -433,6 +434,130 @@ fn local_delivery_makes_real_inputs_available_for_later_work() {
 }
 
 #[test]
+fn a_person_fetches_observed_local_inputs_for_their_own_work_goal() {
+    use game_parallel_goals::Goal;
+    let mut initial = local_store_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.local_transport.as_mut().unwrap().goal_fetchers = vec![GoalFetchPreference {
+        person: 2,
+        enabled: true,
+        max_quantity: 1,
+    }];
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+        events: vec![],
+    });
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let picked = world.snapshot();
+                assert!(picked.local_transport.as_ref().unwrap().events[0].moved);
+                assert_eq!(
+                    picked
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap()
+                        .lots[0]
+                        .expires_at,
+                    Some(10)
+                );
+                assert_eq!(picked.goals.as_ref().unwrap().people[0].next_review, 0);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&picked).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                assert!(restored.advance().unwrap().started.is_empty());
+                assert_eq!(world.advance().unwrap().started, vec![1]);
+                assert_eq!(restored.advance().unwrap().started, vec![1]);
+                assert_eq!(world.advance().unwrap().finished, vec![1]);
+                assert_eq!(restored.advance().unwrap().finished, vec![1]);
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                    1
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut disabled = Economy::compile(initial.clone()).unwrap();
+    disabled.set_goal_fetch_choice(2, false).unwrap();
+    disabled.advance().unwrap();
+    assert!(
+        disabled
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    let mut remote = initial;
+    remote.local_transport.as_mut().unwrap().stores[0].region = 2;
+    remote
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Stock { region: 2, good: 2 }, 10, vec![]).unwrap());
+    remote
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    let mut remote = Economy::compile(remote).unwrap();
+    remote.advance().unwrap();
+    assert!(remote.snapshot().local_transport.unwrap().events.is_empty());
+}
+
+#[test]
 fn local_store_actions_respect_location_capacity_and_expiry() {
     let mut initial = local_store_fixture();
     initial.people[0].controlled = true;
@@ -544,6 +669,7 @@ fn concentrated_local_carrying(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|row| row.place);
     state.local_transport = Some(LocalTransport {
+        goal_fetchers: vec![],
         stores: vec![
             LocalStore {
                 id: 1,
@@ -573,6 +699,140 @@ fn concentrated_local_carrying(count: u64) -> State {
         events: vec![],
     });
     state
+}
+
+fn concentrated_goal_fetching(count: u64) -> State {
+    use game_parallel_goals::Goal;
+    let mut state = concentrated_local_carrying(count);
+    let transport = state.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.goal_fetchers = (2..=count)
+        .map(|person| GoalFetchPreference {
+            person,
+            enabled: true,
+            max_quantity: 1,
+        })
+        .collect();
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    state.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: (2..=count)
+            .map(|person| Goal {
+                person,
+                recipe: 1,
+                priority: 1,
+                target: 1,
+                progress: 0,
+                next_review: 0,
+                enabled: true,
+            })
+            .collect(),
+        events: vec![],
+    });
+    for person in &mut state.people {
+        person.willing_to_work = true;
+    }
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    state
+}
+
+#[test]
+fn concentrated_goal_fetching_conserves_goods_across_workers() {
+    let count = 4096;
+    let initial = concentrated_goal_fetching(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .local_transport
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .filter(|event| event.moved)
+                        .count(),
+                    count as usize / 8
+                );
+                let carried: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|row| matches!(row.place, Place::Person(_)))
+                    .flat_map(|row| &row.lots)
+                    .filter(|lot| lot.good == 2)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(carried, count / 8);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_goal_fetch_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_goal_fetching(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .local_transport
+                        .unwrap()
+                        .events
+                        .iter()
+                        .filter(|event| event.moved)
+                        .count(),
+                    count as usize / 8
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} goal_fetch_seconds={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

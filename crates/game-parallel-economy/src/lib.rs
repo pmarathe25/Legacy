@@ -17,6 +17,7 @@ pub use game_parallel_economy_family::Families;
 pub use game_parallel_economy_fatigue::Fatigue;
 pub use game_parallel_economy_goals::{Dream, Dreams, Goals, Learning};
 pub use game_parallel_economy_knowledge::Knowledge;
+pub use game_parallel_economy_local_transport::goal::Preference as GoalFetchPreference;
 pub use game_parallel_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
     Policy as LocalTransportPolicy, Store as LocalStore,
@@ -345,6 +346,33 @@ impl Economy {
             .find(|p| p.person == person)
             .ok_or("person has no local carrying preference")?
             .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.local_transport = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Choose whether to fetch locally observed supplies for this person's own goals.
+    pub fn set_goal_fetch_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .local_transport
+            .clone()
+            .ok_or("local transport is disabled")?;
+        next.goal_fetchers
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no goal-fetching preference")?
+            .enabled = enabled;
         let epoch = self
             .epoch
             .checked_add(1)
@@ -1699,12 +1727,34 @@ impl Economy {
             .construction
             .as_ref()
             .is_some_and(|c| c.goal_builders.par_iter().any(|p| p.enabled));
-        if !self.work_tools.is_empty() || goal_building {
+        let goal_fetching = self
+            .local_transport
+            .as_ref()
+            .is_some_and(|owner| owner.goal_fetchers.par_iter().any(|p| p.enabled));
+        let mut goal_fetch_needs = Vec::new();
+        if !self.work_tools.is_empty() || goal_building || goal_fetching {
             goal_work = self
                 .goals
                 .as_ref()
                 .zip(self.autowork.as_ref())
                 .map(|(goals, auto)| goals.policies(auto, tick.saturating_sub(1)));
+            if goal_fetching && let (Some(planned), Some(auto)) = (&goal_work, &self.autowork) {
+                let explicit: HashSet<_> = auto
+                    .policies
+                    .par_iter()
+                    .map(|policy| policy.person)
+                    .collect();
+                goal_fetch_needs = planned
+                    .policies
+                    .par_iter()
+                    .filter(|policy| policy.enabled && !explicit.contains(&policy.person))
+                    .map(|policy| game_parallel_economy_local_transport::goal::Need {
+                        person: policy.person,
+                        recipe: policy.recipe,
+                    })
+                    .collect();
+                goal_fetch_needs.par_sort_unstable_by_key(|need| need.person);
+            }
             if self.goals.as_ref().is_some_and(|g| g.plan_inputs)
                 && let (Some(planned), Some(base)) = (&mut goal_work, &self.autowork)
             {
@@ -1740,7 +1790,7 @@ impl Economy {
             Vec::new()
         };
         goal_needs.par_sort_unstable_by_key(|need| need.person);
-        let mut goal_building_refusals = if goal_building {
+        let mut goal_building_refusals = if goal_building || goal_fetching {
             self.dynamics
                 .as_ref()
                 .and_then(|d| d.personality.as_ref())
@@ -1797,6 +1847,7 @@ impl Economy {
         }
         if !self.work_tools.is_empty()
             || self.construction.is_some()
+            || goal_fetching
             || matches!(
                 player_transfer,
                 Some(game_parallel_economy_interaction::PhysicalChoice::Build { .. })
@@ -1809,6 +1860,33 @@ impl Economy {
                         .map_or(0, |plan| plan.actions.len() as u64),
                 )
                 .ok_or("action count overflow")?;
+        }
+        let goal_fetch_plan = if goal_fetching {
+            self.local_transport
+                .as_ref()
+                .map(|owner| {
+                    game_parallel_economy_local_transport::goal::Context {
+                        owner,
+                        needs: &goal_fetch_needs,
+                        recipes: self.physical.recipes(),
+                        people: &self.people,
+                        view: &view,
+                        busy: &busy,
+                        unwilling: &goal_building_refusals,
+                        max_hunger: self.rules.max_work_hunger,
+                        tick,
+                    }
+                    .prepare(action_base)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+        if let Some(plan) = &goal_fetch_plan {
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
         let tool_pickup = if !self.work_tools.is_empty() {
             {
@@ -2008,6 +2086,9 @@ impl Economy {
             actions.extend_from_slice(&plan.actions);
         }
         if let Some(plan) = &local_plan {
+            actions.extend_from_slice(&plan.actions);
+        }
+        if let Some(plan) = &goal_fetch_plan {
             actions.extend_from_slice(&plan.actions);
         }
         let compact =
@@ -2650,6 +2731,12 @@ impl Economy {
         if let Some(owner) = &mut next_local_transport {
             owner.events =
                 local_plan.map_or_else(Vec::new, |plan| plan.publish(tick, physical.events()));
+            if let Some(plan) = goal_fetch_plan {
+                owner
+                    .events
+                    .par_extend(plan.publish(tick, physical.events()));
+                owner.events.par_sort_unstable_by_key(|event| event.person);
+            }
         }
         Ok(Draft {
             epoch: self.epoch,

@@ -129,3 +129,8 @@ destination = { kind = "store", id = 2 }
 good = "timber"
 quantity = 1
 willing = false
+
+[[local_transport.goal_fetchers]]
+person = 2
+enabled = false
+max_quantity = 1

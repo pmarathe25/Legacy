@@ -3536,6 +3536,7 @@ dependencies = [
  "game-parallel-lot-runtime",
  "game-parallel-lots",
  "game-parallel-opinions",
+ "game-parallel-production-model",
  "rayon",
  "serde",
 ]
