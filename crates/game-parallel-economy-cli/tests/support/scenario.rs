@@ -2198,6 +2198,21 @@ fn campaign_loads_personal_offers_for_observed_helpers() {
             .name,
         "bread"
     );
+    let sensitivity = state
+        .opinions
+        .as_ref()
+        .unwrap()
+        .sensitivities
+        .iter()
+        .find(|row| row.person == 2)
+        .unwrap();
+    assert_eq!(
+        (
+            sensitivity.affinity_work_success,
+            sensitivity.affinity_work_refusal
+        ),
+        (Some(2), Some(-1))
+    );
 }
 
 #[test]

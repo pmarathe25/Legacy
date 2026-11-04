@@ -261,6 +261,8 @@ minimum_report_trust = -10
 [[opinions.sensitivities]]
 person = 2
 gratitude_gain = 0
+affinity_work_success = 2
+affinity_work_refusal = -1
 
 [combat]
 damage = 10

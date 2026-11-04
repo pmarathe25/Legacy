@@ -374,6 +374,60 @@ fn visible(people: &[PersonSnapshot], requester: u64, worker: u64, region: u64) 
     matches!((a, b), (Some((_, Some(ar), ah, _)), Some((_, Some(br), bh, _))) if ar == region && br == ar && ah > 0 && bh > 0)
 }
 impl Plan {
+    /// Avoid scanning personal preferences on boundaries with no relevant outcomes.
+    pub fn may_have_work_experiences(&self, physical: &Events) -> bool {
+        !physical.finished.is_empty()
+            || self
+                .request
+                .as_ref()
+                .is_some_and(|request| !request.decisions.is_empty())
+    }
+    /// Actual outcomes observed by the requester, independent of memory capacity.
+    pub fn work_experiences(
+        &self,
+        auto: &Autowork,
+        physical: &Events,
+        people: &[PersonSnapshot],
+    ) -> Vec<(u64, u64, bool)> {
+        let Some(owner) = &auto.requests else {
+            return Vec::new();
+        };
+        let mut observations: Vec<_> = owner
+            .work_links
+            .par_iter()
+            .filter(|link| {
+                physical.finished.binary_search(&link.job).is_ok()
+                    && visible(people, link.requester, link.worker, link.region)
+            })
+            .map(|link| (link.requester, link.worker, true))
+            .collect();
+        if let Some(request) = self
+            .request
+            .as_ref()
+            .filter(|request| request.decisions.par_iter().any(|decision| !decision.help))
+        {
+            let mut pending: Vec<_> = owner.pending.par_iter().collect();
+            pending.par_sort_unstable_by_key(|row| row.id);
+            observations.par_extend(
+                request
+                    .decisions
+                    .par_iter()
+                    .filter(|decision| !decision.help)
+                    .filter_map(|decision| {
+                        let row = pending
+                            .binary_search_by_key(&decision.request, |row| row.id)
+                            .ok()
+                            .map(|i| pending[i])?;
+                        visible(people, row.requester, row.worker, row.region).then_some((
+                            row.requester,
+                            row.worker,
+                            false,
+                        ))
+                    }),
+            );
+        }
+        observations
+    }
     /// Publish remembered outcomes only after the physical generation succeeded.
     pub fn publish(self, auto: &mut Autowork, physical: &Events, people: &[PersonSnapshot]) {
         if let Some(work) = &self.work {

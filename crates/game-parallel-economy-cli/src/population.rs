@@ -553,6 +553,8 @@ struct Sensitivity {
     affinity_site_use: Option<i32>,
     affinity_site_destruction: Option<i32>,
     affinity_site_salvage: Option<i32>,
+    affinity_work_success: Option<i32>,
+    affinity_work_refusal: Option<i32>,
     obligation_development: Option<game_parallel_opinions::ObligationDevelopment>,
 }
 pub fn sensitivities(profiles: &[Profile]) -> Vec<game_parallel_opinions::Sensitivity> {
@@ -576,6 +578,8 @@ pub fn sensitivities(profiles: &[Profile]) -> Vec<game_parallel_opinions::Sensit
                     affinity_site_use: rule.affinity_site_use,
                     affinity_site_destruction: rule.affinity_site_destruction,
                     affinity_site_salvage: rule.affinity_site_salvage,
+                    affinity_work_success: rule.affinity_work_success,
+                    affinity_work_refusal: rule.affinity_work_refusal,
                     relationship_cases: Vec::new(),
                     obligation_development: rule.obligation_development.clone(),
                 }

@@ -3116,6 +3116,8 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -14198,6 +14200,8 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -14364,6 +14368,8 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -14534,6 +14540,8 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -14548,6 +14556,8 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         site_use: None,
         site_destruction: None,
         site_salvage: None,
+        work_success: None,
+        work_refusal: None,
         obligation_gain: None,
         obligation_relief: None,
         promise_obligation_gain: None,
@@ -14601,6 +14611,8 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -14686,6 +14698,8 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: Some(ObligationDevelopment {
             until_age: 3,
@@ -14860,6 +14874,8 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
+            affinity_work_success: None,
+            affinity_work_refusal: None,
             relationship_cases: vec![],
             obligation_development: Some(ObligationDevelopment {
                 until_age: 4,
@@ -15091,6 +15107,8 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
     };
@@ -15239,6 +15257,8 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
     }];
@@ -15447,6 +15467,8 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
+            affinity_work_success: None,
+            affinity_work_refusal: None,
             relationship_cases: vec![],
             obligation_development: None,
         })
@@ -16280,6 +16302,306 @@ fn companions_can_make_accept_and_fulfill_personal_promises_while_traveling() {
             .contracts
             .is_empty()
     );
+}
+
+#[test]
+fn people_interpret_witnessed_work_and_refusal_individually() {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    use game_parallel_opinions::AffinityRules;
+    let initial = |help: bool, override_case: bool| {
+        let mut state = fixture();
+        state.agreements = None;
+        for person in &mut state.people {
+            person.seek_meals = false;
+        }
+        let opinions = state.opinions.as_mut().unwrap();
+        opinions.records.clear();
+        opinions.rules.affinity = Some(AffinityRules {
+            limit: 10,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        opinions.sensitivities = vec![OpinionSensitivity {
+            person: 1,
+            fear_per_damage: None,
+            gratitude_gain: None,
+            promise_obligation_gain: None,
+            obligation_relief: None,
+            theft_loss: None,
+            confrontation: None,
+            affinity_help: None,
+            affinity_harm_per_damage: None,
+            affinity_encounter: None,
+            affinity_pressured_encounter: None,
+            affinity_site_use: None,
+            affinity_site_destruction: None,
+            affinity_site_salvage: None,
+            affinity_work_success: Some(-3),
+            affinity_work_refusal: Some(5),
+            relationship_cases: if override_case {
+                vec![RelationshipCase {
+                    target: 2,
+                    help: None,
+                    harm_per_damage: None,
+                    encounter: None,
+                    pressured_encounter: None,
+                    site_use: None,
+                    site_destruction: None,
+                    site_salvage: None,
+                    work_success: Some(4),
+                    work_refusal: Some(-2),
+                    obligation_gain: None,
+                    promise_obligation_gain: None,
+                    obligation_relief: None,
+                }]
+            } else {
+                vec![]
+            },
+            obligation_development: None,
+        }];
+        state.autowork = Some(Autowork {
+            next_id: 1,
+            policies: vec![],
+            requests: Some(Requests {
+                next_id: 2,
+                inherit_births: false,
+                memory_limit: 0,
+                work_links: vec![],
+                memories: vec![],
+                preferences: vec![Preference {
+                    person: 2,
+                    effort: 1,
+                    help_value: u64::from(help),
+                    affinity_weight: 0,
+                    disregard_claims: false,
+                }],
+                askers: vec![],
+                pending: vec![Request {
+                    id: 1,
+                    requester: 1,
+                    worker: 2,
+                    region: 1,
+                    recipe: 1,
+                    created_at: 0,
+                    expires: 3,
+                }],
+                events: vec![],
+            }),
+        });
+        state
+    };
+    for (help, override_case, expected) in [
+        (true, false, -3),
+        (true, true, 4),
+        (false, false, 5),
+        (false, true, -2),
+    ] {
+        let state = initial(help, override_case);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(state.clone()).unwrap();
+                    world.advance().unwrap();
+                    if help {
+                        assert_eq!(
+                            world
+                                .snapshot()
+                                .opinions
+                                .as_ref()
+                                .unwrap()
+                                .index()
+                                .affinity(1, 2),
+                            0
+                        );
+                        let mut restored = Economy::compile(
+                            serde_json::from_str(
+                                &serde_json::to_string(&world.snapshot()).unwrap(),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                        world.advance().unwrap();
+                        restored.advance().unwrap();
+                        assert_eq!(world.snapshot(), restored.snapshot());
+                    }
+                    let state = world.snapshot();
+                    assert_eq!(
+                        state.opinions.as_ref().unwrap().index().affinity(1, 2),
+                        expected
+                    );
+                    assert_eq!(state.opinions.as_ref().unwrap().index().obligation(1, 2), 0);
+                    assert!(
+                        state
+                            .autowork
+                            .as_ref()
+                            .unwrap()
+                            .requests
+                            .as_ref()
+                            .unwrap()
+                            .memories
+                            .is_empty()
+                    );
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+    let mut world = Economy::compile(initial(true, false)).unwrap();
+    world.advance().unwrap();
+    let mut departed = world.snapshot();
+    departed.people[0].region = Some(2);
+    let mut departed = Economy::compile(departed).unwrap();
+    departed.advance().unwrap();
+    assert_eq!(
+        departed.snapshot().opinions.unwrap().index().affinity(1, 2),
+        0
+    );
+}
+
+#[test]
+fn concentrated_work_refusals_use_individual_reactions_across_workers() {
+    let initial = concentrated_work_refusals(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let records = &state.opinions.as_ref().unwrap().records;
+                assert_eq!(records.len(), 2048);
+                assert!(
+                    records
+                        .iter()
+                        .all(|row| row.affinity == 2 && row.obligation == 0)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn concentrated_work_refusals(count: u64) -> State {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    use game_parallel_opinions::AffinityRules;
+    let mut state = field_workload(count);
+    state.agriculture = None;
+    let half = count / 2;
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: half + 1,
+            inherit_births: false,
+            memory_limit: 0,
+            work_links: vec![],
+            memories: vec![],
+            preferences: (half + 1..=count)
+                .map(|person| Preference {
+                    person,
+                    effort: 1,
+                    help_value: 0,
+                    affinity_weight: 0,
+                    disregard_claims: false,
+                })
+                .collect(),
+            askers: vec![],
+            pending: (1..=half)
+                .map(|requester| Request {
+                    id: requester,
+                    requester,
+                    worker: requester + half,
+                    region: 1,
+                    recipe: 1,
+                    created_at: 0,
+                    expires: 5,
+                })
+                .collect(),
+            events: vec![],
+        }),
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = (1..=half)
+        .map(|person| OpinionSensitivity {
+            person,
+            fear_per_damage: None,
+            gratitude_gain: None,
+            promise_obligation_gain: None,
+            obligation_relief: None,
+            theft_loss: None,
+            confrontation: None,
+            affinity_help: None,
+            affinity_harm_per_damage: None,
+            affinity_encounter: None,
+            affinity_pressured_encounter: None,
+            affinity_site_use: None,
+            affinity_site_destruction: None,
+            affinity_site_salvage: None,
+            affinity_work_success: None,
+            affinity_work_refusal: Some(2),
+            relationship_cases: vec![],
+            obligation_development: None,
+        })
+        .collect();
+    state.opinions = Some(opinions);
+    state
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_work_refusals_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_work_refusals(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                let records = world.snapshot().opinions.unwrap().records;
+                assert_eq!(records.len(), count as usize / 2);
+                assert!(
+                    records
+                        .iter()
+                        .all(|row| row.affinity == 2 && row.obligation == 0)
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} work_reaction_seconds={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]
@@ -19471,6 +19793,8 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_site_use: Some(rate),
         affinity_site_destruction: None,
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
     };
@@ -19484,6 +19808,8 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         site_use: Some(6),
         site_destruction: None,
         site_salvage: None,
+        work_success: None,
+        work_refusal: None,
         obligation_gain: None,
         promise_obligation_gain: None,
         obligation_relief: None,
@@ -19775,6 +20101,8 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_site_use: None,
         affinity_site_destruction: Some(5),
         affinity_site_salvage: None,
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
     }];
@@ -21009,6 +21337,8 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: Some(rate),
+        affinity_work_success: None,
+        affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
     };
@@ -21022,6 +21352,8 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         site_use: None,
         site_destruction: None,
         site_salvage: Some(7),
+        work_success: None,
+        work_refusal: None,
         obligation_gain: None,
         promise_obligation_gain: None,
         obligation_relief: None,
@@ -21842,6 +22174,8 @@ fn concentrated_site_salvage_benchmark() {
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: Some(1),
+                affinity_work_success: None,
+                affinity_work_refusal: None,
                 relationship_cases: vec![],
                 obligation_development: None,
             })

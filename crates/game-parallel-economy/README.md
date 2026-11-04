@@ -16,6 +16,7 @@ An optional personal acquaintance-request preference lets a hungry individual as
 
 People with an individual learning inclination can develop a bounded work aspiration after personally witnessing a requested job succeed. Other people's work memories and disabled aspirations are not overwritten; a new aspiration still needs ordinary resources and voluntary action.
 An individual can also decide to offer a revocable promise to a helper whose requested work they personally witnessed. The helper is selected from that person's actual memories, and neither the offer nor acceptance moves goods or compels later delivery.
+Individuals may interpret a witnessed work completion or refusal with independent signed affinity changes, including different reactions toward particular people. Unwitnessed outcomes do not create these impressions.
 Actual newborns may acquire a parent's general learning inclination when configured, but do not inherit their specific aspirations or memories.
 
 With `giving.inherit_births` and family birth enrollment enabled, a newborn may acquire a parent's general helping and acquaintance-request inclinations. Experiences, remembered helpers, previous targets, and target-specific requests are not copied.

@@ -42,6 +42,11 @@ pub struct Sensitivity {
     /// Personal interpretation of another person's witnessed recovery of claimed debris.
     #[serde(default)]
     pub affinity_site_salvage: Option<i32>,
+    /// Personal reactions to witnessed requested work and to a refusal.
+    #[serde(default)]
+    pub affinity_work_success: Option<i32>,
+    #[serde(default)]
+    pub affinity_work_refusal: Option<i32>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -82,6 +87,10 @@ pub struct RelationshipCase {
     pub site_destruction: Option<i32>,
     #[serde(default)]
     pub site_salvage: Option<i32>,
+    #[serde(default)]
+    pub work_success: Option<i32>,
+    #[serde(default)]
+    pub work_refusal: Option<i32>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]

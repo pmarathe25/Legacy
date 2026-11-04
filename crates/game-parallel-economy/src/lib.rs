@@ -2695,6 +2695,15 @@ impl Economy {
         agreement::decay(next_opinions.as_mut());
         let mut autowork = self.autowork.clone();
         if let (Some(auto), Some(plan)) = (&mut autowork, work) {
+            if let Some(opinions) = next_opinions.as_mut().filter(|o| {
+                plan.may_have_work_experiences(physical.events()) && o.tracks_work_affinity()
+            }) {
+                opinions.learn_work_affinity(&plan.work_experiences(
+                    auto,
+                    physical.events(),
+                    &people,
+                ));
+            }
             plan.publish(auto, physical.events(), &people);
         }
         if let Some((requests, family)) = autowork

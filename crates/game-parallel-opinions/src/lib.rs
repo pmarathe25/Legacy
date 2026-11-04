@@ -88,6 +88,28 @@ impl Opinions {
     pub fn tracks_salvage_affinity(&self) -> bool {
         harm::tracks_affinity(self, harm::AffinityKind::SiteSalvage)
     }
+    pub fn tracks_work_affinity(&self) -> bool {
+        harm::tracks_affinity(self, harm::AffinityKind::WorkSuccess)
+            || harm::tracks_affinity(self, harm::AffinityKind::WorkRefusal)
+    }
+    /// Interpret only personally witnessed outcomes, without creating obligations.
+    pub fn learn_work_affinity(&mut self, events: &[(u64, u64, bool)]) {
+        if events.is_empty() || !self.tracks_work_affinity() {
+            return;
+        }
+        let success: Vec<_> = events
+            .par_iter()
+            .filter(|row| row.2)
+            .map(|row| (row.0, row.1, 1))
+            .collect();
+        let refusals: Vec<_> = events
+            .par_iter()
+            .filter(|row| !row.2)
+            .map(|row| (row.0, row.1, 1))
+            .collect();
+        harm::affinity(self, &success, harm::AffinityKind::WorkSuccess);
+        harm::affinity(self, &refusals, harm::AffinityKind::WorkRefusal);
+    }
     /// Each observer decides how to interpret witnessed recovery of their claimed debris.
     pub fn learn_salvage_affinity(&mut self, events: &[(u64, u64)]) {
         if !events.is_empty() && self.tracks_salvage_affinity() {
@@ -183,6 +205,8 @@ impl Opinions {
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
+                affinity_work_success: None,
+                affinity_work_refusal: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),
             })
