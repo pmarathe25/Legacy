@@ -2177,6 +2177,30 @@ fn ruler_observes_only_local_physical_work_sites() {
 }
 
 #[test]
+fn campaign_loads_personal_offers_for_observed_helpers() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let state = world.snapshot();
+    let preference = &state.agreements.as_ref().unwrap().work_offering[0];
+    assert_eq!(preference.person, 2);
+    assert!(!preference.willing);
+    assert_eq!(
+        state
+            .physical
+            .goods
+            .iter()
+            .find(|good| good.id == preference.good)
+            .unwrap()
+            .name,
+        "bread"
+    );
+}
+
+#[test]
 fn salvage_scenario_runs_through_real_player_and_individual_actions() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

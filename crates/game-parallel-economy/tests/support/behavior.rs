@@ -120,6 +120,7 @@ fn fixture() -> State {
         market: None,
         agreements: Some(Agreements {
             offering: vec![],
+            work_offering: vec![],
             next_id: 2,
             policies: vec![AgreementPolicy {
                 person: 4,
@@ -9601,6 +9602,7 @@ fn people_make_promises_but_can_change_their_minds_before_physical_delivery() {
     let mut state = fixture();
     state.agreements = Some(Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: 1,
         policies: vec![],
         bulk_debtors: vec![],
@@ -9679,6 +9681,7 @@ fn controlled_promise_is_a_choice_and_only_physical_delivery_fulfills_it() {
     initial.autowork = None;
     initial.agreements = Some(Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: 1,
         policies: vec![],
         bulk_debtors: vec![],
@@ -10568,6 +10571,7 @@ fn recipient_can_automatically_acknowledge_a_promise_without_compelling_its_make
     let mut state = fixture();
     state.agreements = Some(Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: 1,
         policies: vec![AgreementPolicy {
             person: 2,
@@ -15406,6 +15410,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
         bulk_debtors: vec![],
         contracts: vec![],
         events: vec![],
+        work_offering: vec![],
         offering: (2..=count)
             .map(|person| PromiseOfferPolicy {
                 person,
@@ -16275,6 +16280,283 @@ fn companions_can_make_accept_and_fulfill_personal_promises_while_traveling() {
             .contracts
             .is_empty()
     );
+}
+
+#[test]
+fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    let mut initial = fixture();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[0].hunger = 0;
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            inherit_births: false,
+            next_id: 2,
+            memory_limit: 2,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 1,
+                help_value: 1,
+                affinity_weight: 0,
+                disregard_claims: false,
+            }],
+            askers: vec![],
+            pending: vec![Request {
+                id: 1,
+                requester: 1,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                created_at: 0,
+                expires: 3,
+            }],
+            events: vec![],
+        }),
+    });
+    let agreements = initial.agreements.as_mut().unwrap();
+    agreements.next_id = 1;
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.offering.clear();
+    agreements.policies = vec![AgreementPolicy {
+        person: 1,
+        honor: false,
+        accept: false,
+        minimum_trust: None,
+        minimum_honor_trust: None,
+        fear_honor_threshold: None,
+        obligation_honor_threshold: None,
+        accept_pressure_threshold: None,
+    }];
+    agreements.work_offering = vec![WorkPromiseOfferPolicy {
+        person: 1,
+        good: 1,
+        quantity: 1,
+        due_after: 8,
+        retry_ticks: 1,
+        willing: true,
+        minimum_trust: None,
+        pressure_threshold: None,
+        next_review: 0,
+        last_work_offer_at: None,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started, vec![1]);
+                assert!(
+                    world
+                        .snapshot()
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .is_empty()
+                );
+                assert_eq!(world.advance().unwrap().finished, vec![1]);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let offered = world.snapshot();
+                assert_eq!(offered, restored.snapshot());
+                let contract = &offered.agreements.as_ref().unwrap().contracts[0];
+                assert_eq!(
+                    (contract.debtor, contract.creditor, contract.status),
+                    (1, 2, Status::Proposed)
+                );
+                assert_eq!(
+                    offered.opinions.as_ref().unwrap().index().obligation(1, 2),
+                    0
+                );
+                for sim in [&mut world, &mut restored] {
+                    sim.decide_promises(&[PromiseDecision {
+                        contract: 1,
+                        actor: 2,
+                        accept: true,
+                    }])
+                    .unwrap();
+                    sim.set_work_promise_offer_choice(1, false).unwrap();
+                    sim.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state.agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Active
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut pressured = initial.clone();
+    let preference = &mut pressured.agreements.as_mut().unwrap().work_offering[0];
+    preference.willing = false;
+    preference.pressure_threshold = Some(5);
+    pressured.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 1,
+        target: 2,
+        trust: 0,
+        fear: 5,
+        obligation: 0,
+        affinity: 0,
+    });
+    let mut pressured = Economy::compile(pressured).unwrap();
+    for _ in 0..3 {
+        pressured.advance().unwrap();
+    }
+    assert_eq!(
+        pressured.snapshot().agreements.unwrap().contracts[0].creditor,
+        2
+    );
+    let mut unwilling = Economy::compile(initial).unwrap();
+    unwilling.set_work_promise_offer_choice(1, false).unwrap();
+    for _ in 0..3 {
+        unwilling.advance().unwrap();
+    }
+    assert!(
+        unwilling
+            .snapshot()
+            .agreements
+            .unwrap()
+            .contracts
+            .is_empty()
+    );
+}
+
+#[test]
+fn concentrated_selected_helper_offers_are_deterministic() {
+    let initial = concentrated_selected_helper_offers(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let contracts = &state.agreements.as_ref().unwrap().contracts;
+                assert_eq!(contracts.len(), 4095);
+                assert!(
+                    contracts
+                        .iter()
+                        .all(|c| c.creditor == 1 && c.status == Status::Proposed)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn concentrated_selected_helper_offers(count: u64) -> State {
+    use game_parallel_autowork::requests::{Memory, Requests};
+    let mut state = concentrated_personal_promise_workload(count);
+    let owner = state.agreements.as_mut().unwrap();
+    owner.offering.clear();
+    owner.work_offering = (2..=count)
+        .map(|person| WorkPromiseOfferPolicy {
+            person,
+            good: 1,
+            quantity: 1,
+            due_after: 5,
+            retry_ticks: 3,
+            willing: true,
+            minimum_trust: None,
+            pressure_threshold: None,
+            next_review: 0,
+            last_work_offer_at: None,
+        })
+        .collect();
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 1,
+            inherit_births: false,
+            memory_limit: 1,
+            work_links: vec![],
+            memories: (2..=count)
+                .map(|observer| Memory {
+                    observer,
+                    worker: 1,
+                    recipe: 1,
+                    successes: 1,
+                    failures: 0,
+                    last_tick: 0,
+                    last_success_at: Some(0),
+                })
+                .collect(),
+            preferences: vec![],
+            askers: vec![],
+            pending: vec![],
+            events: vec![],
+        }),
+    });
+    state
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_selected_helper_offers_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_selected_helper_offers(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(
+                    world.snapshot().agreements.unwrap().contracts.len(),
+                    count as usize - 1
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} remembered_offer_seconds={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

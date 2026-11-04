@@ -410,6 +410,34 @@ macro_rules! promise_methods {
             self.epoch = epoch;
             Ok(())
         }
+        /// Change this person's inclination to offer a promise after observed help.
+        pub fn set_work_promise_offer_choice(
+            &mut self,
+            person: u64,
+            willing: bool,
+        ) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be alive".into());
+            }
+            let mut next = self.agreements.clone().ok_or("promises are disabled")?;
+            next.work_offering
+                .iter_mut()
+                .find(|p| p.person == person)
+                .ok_or("person has no work offer preference")?
+                .willing = willing;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            self.agreements = Some(next);
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Change this person's willingness to act on their felt obligation.
         pub fn set_promise_obligation_choice(
             &mut self,

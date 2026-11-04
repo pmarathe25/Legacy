@@ -30,6 +30,8 @@ The same scenario includes two named local stores. `view` shows their contents; 
 
 Optional `[[local_transport.goal_fetchers]]` entries enable individuals to fetch locally observed supplies for their own current work goals. The administrative command `fetch-goal PERSON on|off` changes that individual preference; it does not create a goal or guarantee the person acts.
 
+Optional `[[work_promise_offering]]` entries give individuals an inclination to offer a future delivery to someone whose requested work they personally witnessed. `work-offer PERSON on|off` changes that inclination in the administrative runner. The person chooses an observed local helper; the helper may accept or decline, and the maker may later choose whether to deliver real goods.
+
 Scenarios can also use `[[aspiration_learning]]` to specify an individual's inclination directly; authored entries override generated ones. With `inherit_aspiration_learning = true` and family birth enrollment enabled, actual newborns can acquire a parent's general inclination, without inheriting their aspirations or experiences.
 
 When family rules are enabled, each generated population profile also supplies `[population.family]`: inclusive `min_age` and `max_age`, inclusive `min_allele` and `max_allele` in 0–1000, `reproduction_percent`, and optional `reconsider_partnership_percent`. Seeded founders have individual genomes and choices but no preassigned partner. Explicit family members override generated founder records; the next birth identity is advanced beyond the generated people. Later partnerships, conceptions, and births use the ordinary family simulation.

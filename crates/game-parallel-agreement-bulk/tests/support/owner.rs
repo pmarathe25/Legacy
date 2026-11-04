@@ -20,6 +20,7 @@ fn amount(good: u32, quantity: u64) -> Amount {
 fn fixture(count: u64, funds: u64) -> (Agreements, GoodsCargo, Vec<PersonSnapshot>) {
     let state = Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: count + 1,
         policies: vec![Policy {
             person: 1,

@@ -322,6 +322,7 @@ fn agreement_benchmark(
         .collect();
     world.agreements = Some(Agreements {
         offering: vec![],
+        work_offering: vec![],
         bulk_debtors: Vec::new(),
         next_id: half as u64 + 1,
         policies: (1..=half as u64)

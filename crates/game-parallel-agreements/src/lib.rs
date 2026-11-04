@@ -12,6 +12,9 @@ pub struct Agreements {
     pub policies: Vec<Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub offering: Vec<OfferPolicy>,
+    /// Personal inclinations to make an offer after observing someone help.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub work_offering: Vec<WorkOfferPolicy>,
     /// People who can consider multiple deliveries from their own custody in one tick.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bulk_debtors: Vec<u64>,
@@ -26,6 +29,7 @@ impl Clone for Agreements {
             next_id: self.next_id,
             policies: self.policies.par_iter().cloned().collect(),
             offering: self.offering.par_iter().cloned().collect(),
+            work_offering: self.work_offering.par_iter().cloned().collect(),
             bulk_debtors: self.bulk_debtors.par_iter().copied().collect(),
             contracts: self.contracts.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
@@ -55,6 +59,25 @@ pub struct OfferPolicy {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub after_work_recipe: Option<u32>,
     /// Last observed completion already considered by this person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_work_offer_at: Option<u64>,
+}
+/// A person may offer goods to a worker they personally saw complete requested work.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkOfferPolicy {
+    pub person: u64,
+    pub good: u32,
+    pub quantity: u64,
+    pub due_after: u64,
+    pub retry_ticks: u64,
+    pub willing: bool,
+    #[serde(default)]
+    pub minimum_trust: Option<i32>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pub next_review: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_work_offer_at: Option<u64>,
 }
@@ -202,6 +225,7 @@ impl Agreements {
         self.next_id = 1;
         self.policies.clear();
         self.offering.clear();
+        self.work_offering.clear();
         self.bulk_debtors.clear();
         self.contracts.clear();
         self.events.clear();
@@ -221,7 +245,23 @@ impl Agreements {
         policies.par_sort_unstable();
         let mut offers: Vec<_> = self.offering.par_iter().map(|offer| offer.person).collect();
         offers.par_sort_unstable();
+        let mut work_offers: Vec<_> = self
+            .work_offering
+            .par_iter()
+            .map(|offer| offer.person)
+            .collect();
+        work_offers.par_sort_unstable();
         if offers.par_windows(2).any(|pair| pair[0] == pair[1])
+            || work_offers.par_windows(2).any(|pair| pair[0] == pair[1])
+            || self.work_offering.par_iter().any(|p| {
+                !people.contains(&p.person)
+                    || !goods.contains(&p.good)
+                    || p.quantity == 0
+                    || p.due_after == 0
+                    || p.retry_ticks == 0
+                    || p.pressure_threshold == Some(0)
+                    || p.last_work_offer_at.is_some_and(|t| t > now)
+            })
             || self.offering.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || !people.contains(&p.recipient)

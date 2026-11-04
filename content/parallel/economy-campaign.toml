@@ -229,6 +229,14 @@ due_after = 8
 retry_ticks = 6
 willing = false
 
+[[work_promise_offering]]
+person = 2
+good = "bread"
+quantity = 1
+due_after = 8
+retry_ticks = 6
+willing = false
+
 [work_requests]
 next_id = 1
 inherit_births = true

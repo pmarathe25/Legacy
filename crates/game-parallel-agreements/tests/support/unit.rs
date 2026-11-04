@@ -2,6 +2,7 @@ use super::*;
 fn state() -> Agreements {
     Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: 1,
         policies: Vec::new(),
         bulk_debtors: Vec::new(),

@@ -1,5 +1,6 @@
 //! Person-driven economic activity over authoritative dated physical goods.
 pub use game_parallel_agreements::OfferPolicy as PromiseOfferPolicy;
+pub use game_parallel_agreements::WorkOfferPolicy as WorkPromiseOfferPolicy;
 pub use game_parallel_economy_building::demolition::{
     Event as DemolitionEvent, Policy as DemolitionPolicy,
 };
@@ -1188,7 +1189,9 @@ impl Economy {
             .checked_add(game_parallel_economy_exchange::actions(trade.as_ref()).len() as u64)
             .ok_or("action count overflow")?;
         let needs_locations = self.agreements.as_ref().is_some_and(|agreements| {
-            !agreements.contracts.is_empty() || !agreements.offering.is_empty()
+            !agreements.contracts.is_empty()
+                || !agreements.offering.is_empty()
+                || !agreements.work_offering.is_empty()
         }) || self.giving.is_some()
             || self.medical.is_some()
             || self.hauling.as_ref().is_some_and(|h| !h.asking.is_empty())

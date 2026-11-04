@@ -295,6 +295,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
     let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
     let mut agreements = Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: 2,
         policies: vec![PromisePolicy {
             person: 2,
@@ -425,6 +426,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
     };
     let agreements = Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: count + 1,
         policies: (2..=count + 1)
             .map(|person| PromisePolicy {
@@ -538,6 +540,7 @@ fn concentrated_promise_delivery_benchmark() {
     };
     let agreements = Agreements {
         offering: vec![],
+        work_offering: vec![],
         next_id: count + 1,
         policies: (2..=count + 1)
             .map(|person| PromisePolicy {

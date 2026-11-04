@@ -39,6 +39,8 @@ struct Scenario {
     #[serde(default)]
     promise_offering: Vec<PromiseOfferConfig>,
     #[serde(default)]
+    work_promise_offering: Vec<WorkPromiseOfferConfig>,
+    #[serde(default)]
     work_requests: Option<game_parallel_autowork::requests::Requests>,
     #[serde(default)]
     work_tools: Vec<WorkToolConfig>,
@@ -193,6 +195,20 @@ struct PromiseOfferConfig {
     pressure_threshold: Option<u64>,
     #[serde(default)]
     after_work_recipe: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkPromiseOfferConfig {
+    person: u64,
+    good: String,
+    quantity: u64,
+    due_after: u64,
+    retry_ticks: u64,
+    willing: bool,
+    #[serde(default)]
+    minimum_trust: Option<i32>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -783,6 +799,32 @@ pub fn scenario_with_options(
             })
             .collect::<Result<Vec<_>, String>>()?;
         owner.offering.extend(offering);
+    }
+    if !scenario.work_promise_offering.is_empty() {
+        let owner = agreements
+            .as_mut()
+            .ok_or("work promise offering requires agreements")?;
+        let offering = scenario
+            .work_promise_offering
+            .into_iter()
+            .map(|p| {
+                Ok(game_parallel_economy::WorkPromiseOfferPolicy {
+                    person: p.person,
+                    good: *goods
+                        .get(p.good.as_str())
+                        .ok_or_else(|| format!("unknown promise good {}", p.good))?,
+                    quantity: p.quantity,
+                    due_after: p.due_after,
+                    retry_ticks: p.retry_ticks,
+                    willing: p.willing,
+                    minimum_trust: p.minimum_trust,
+                    pressure_threshold: p.pressure_threshold,
+                    next_review: 0,
+                    last_work_offer_at: None,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        owner.work_offering.extend(offering);
     }
     let dynamics = game_parallel_economy_dynamics::configure_remedies!(scenario, goods);
     for (inventory, region) in production.inventories.iter_mut().zip(&scenario.regions) {
