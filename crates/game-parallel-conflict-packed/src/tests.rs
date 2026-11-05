@@ -116,6 +116,49 @@ fn concentrated(count: usize) -> (Conflict, Vec<PersonSnapshot>) {
 }
 
 #[test]
+fn duplicate_encounters_and_fighters_are_rejected_in_any_order() {
+    let fight = |id, a, b| Encounter {
+        id,
+        region: 1,
+        fighters: vec![
+            Fighter {
+                person: a,
+                side: 1,
+                order: Order::Attack { target: b },
+            },
+            Fighter {
+                person: b,
+                side: 2,
+                order: Order::Defend,
+            },
+        ],
+    };
+    let mut conflict = Conflict {
+        damage: 1,
+        next_id: 5,
+        events: vec![],
+        encounters: vec![fight(3, 1, 2), fight(1, 3, 4), fight(3, 5, 6)],
+    };
+    for workers in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                assert!(matches!(
+                    Plan::compile(&conflict),
+                    Err("duplicate encounter")
+                ));
+            });
+    }
+    conflict.encounters[2] = fight(2, 5, 1);
+    assert!(matches!(
+        Plan::compile(&conflict),
+        Err("fighter has multiple encounter slots")
+    ));
+}
+
+#[test]
 fn hot_targets_cross_word_chunk_boundaries_without_losing_saturated_receipts() {
     for count in [1, 63, 64, 65, 2047, 2048, 2049, 20_001] {
         let (conflict, people) = concentrated(count);

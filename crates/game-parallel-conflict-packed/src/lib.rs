@@ -2,7 +2,7 @@
 use game_parallel_conflict::{Conflict, Order};
 use game_parallel_production_model::{PersonSnapshot, person_index};
 use rayon::prelude::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use game_parallel_conflict_receipts::{
@@ -28,17 +28,27 @@ impl Plan {
         if conflict.damage == 0 {
             return Err("invalid conflict damage");
         }
-        let mut encounter_ids = HashSet::new();
-        let mut actors = HashSet::new();
-        for fight in &conflict.encounters {
-            if !encounter_ids.insert(fight.id) {
-                return Err("duplicate encounter");
-            }
-            for fighter in &fight.fighters {
-                if !actors.insert(fighter.person) {
-                    return Err("fighter has multiple encounter slots");
-                }
-            }
+        let mut encounter_ids: Vec<_> = conflict
+            .encounters
+            .par_iter()
+            .map(|fight| fight.id)
+            .collect();
+        if encounter_ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            encounter_ids.par_sort_unstable();
+        }
+        if encounter_ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("duplicate encounter");
+        }
+        let mut actors: Vec<_> = conflict
+            .encounters
+            .par_iter()
+            .flat_map_iter(|fight| fight.fighters.iter().map(|fighter| fighter.person))
+            .collect();
+        if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            actors.par_sort_unstable();
+        }
+        if actors.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("fighter has multiple encounter slots");
         }
         let mut edges: Vec<_> = conflict
             .encounters
