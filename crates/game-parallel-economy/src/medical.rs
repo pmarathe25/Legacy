@@ -1,5 +1,5 @@
 //! Personal medical assistance consumes the caregiver's physical supplies.
-use game_parallel_disease::{Disease, EventKind};
+use game_parallel_disease::Disease;
 use game_parallel_economy_person::{Person, travel::Colocation};
 use game_parallel_lot_runtime::Events;
 use game_parallel_lots::{Movement, Place, Transaction, View};
@@ -435,15 +435,16 @@ impl Plan {
         patients.par_sort_unstable();
         game_parallel_economy_dynamics::treatment::apply_people(disease, &patients, events.tick);
     }
-    pub fn treated(&self, actor: u64, patient: u64, disease: Option<&Disease>) -> bool {
-        self.records
-            .iter()
-            .any(|(_, c)| c.actor == actor && c.patient == patient && c.effective)
-            && disease.is_some_and(|d| {
-                d.events
-                    .iter()
-                    .any(|e| e.person == patient && e.kind == EventKind::Treated)
-            })
+    pub fn attempted(&self, actor: u64, patient: u64, events: &Events) -> bool {
+        self.records.iter().any(|(id, choice)| {
+            choice.actor == actor
+                && choice.patient == patient
+                && events
+                    .physical_actions
+                    .binary_search_by_key(id, |event| event.id)
+                    .ok()
+                    .is_some_and(|index| events.physical_actions[index].accepted)
+        })
     }
     /// The patient interprets an actual treatment attempt, regardless of its outcome.
     pub fn help(&self, events: &Events) -> Vec<(u64, u64)> {

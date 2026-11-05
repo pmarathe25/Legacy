@@ -12,6 +12,8 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 An authored medical preference can set `patient_health_at_most` to act on observable poor health without knowing a diagnosis. The caregiver may use an ineffective medicine and still consume it; a cure only follows a successful treatment with a matching remedy. If this setting is absent, the older automatic policy selects only a matching remedy, so it still has privileged diagnostic knowledge.
 
+Self-treatment can similarly use `health_at_most` to act on observed health instead of a confirmed diagnosis. Controlled people may attempt their chosen medicine even without an infection. Treatment commands report whether the medicine was consumed, rather than disclosing a hidden diagnosis or whether it was effective. Automatic self-treatment without the health setting retains the older confirmed-remedy behavior.
+
 An optional `medical.acquaintances` preference lets someone choose among local people they have actually met. Their signed urgency and affinity weights rank eligible patients; fear or felt obligation toward a patient may motivate an unwilling caregiver. The selected action competes for both people's time, consumes real medicine on success, and can be ineffective. A person may change their willingness without creating a formal role or binding commitment.
 
 Diseases can separately define transmission through actual combat strikes. Out-of-range attacks and strains without that route do not cause combat exposure.

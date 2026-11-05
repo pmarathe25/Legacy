@@ -2249,6 +2249,7 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
         "[[medical.acquaintances]]\nperson = 1\nmedicine = \"medicine\"\nquantity = 1\npatient_health_at_most = 75\nwilling = false\npressure_threshold = 3\nurgency_weight = 2\naffinity_weight = -1\n\n[[medical.policies]]\npatient_health_at_most = 70",
         1,
     );
+    let configured = configured.replacen("[[remedies]]", "[[remedies]]\nhealth_at_most = 65", 1);
     let path = std::env::temp_dir().join(format!(
         "legacy-personal-practices-{}.toml",
         std::process::id()
@@ -2256,6 +2257,10 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     std::fs::write(&path, configured).unwrap();
     let mut world = scenario(&path, &root.join("content")).unwrap();
     std::fs::remove_file(path).unwrap();
+    assert_eq!(
+        world.snapshot().dynamics.unwrap().treatment[0].health_at_most,
+        Some(65)
+    );
     assert_eq!(
         world.snapshot().medical.unwrap().policies[0].patient_health_at_most,
         Some(70)

@@ -400,7 +400,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             "eaten={}",
             player.eat(good.parse().map_err(|_| "invalid good")?)?
         ),
-        ["treat"] => println!("treated={}", player.treat()?),
+        ["treat"] => println!("medicine_consumed={}", player.treat()?),
         ["rest"] => player.rest()?,
         ["farm", field] => println!(
             "cultivated={}",
@@ -435,7 +435,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             )?
         ),
         ["treat-other", patient, medicine, quantity] => println!(
-            "treated={}",
+            "medicine_consumed={}",
             player.treat_other(
                 patient.parse().map_err(|_| "invalid patient")?,
                 medicine.parse().map_err(|_| "invalid medicine")?,

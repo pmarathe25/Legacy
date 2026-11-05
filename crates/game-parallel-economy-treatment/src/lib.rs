@@ -1,4 +1,4 @@
-//! A person's own choice to consume real medicine for an existing infection.
+//! A person's own choice to consume real medicine, which may be ineffective.
 use game_parallel_disease::{Disease, Event, EventKind};
 use game_parallel_economy_person::Person;
 use game_parallel_lot_runtime::Events;
@@ -14,6 +14,9 @@ pub struct Policy {
     pub medicine: u32,
     pub quantity: u64,
     pub willing: bool,
+    /// Act on observed health, without privileged diagnosis, when configured.
+    #[serde(default)]
+    pub health_at_most: Option<u32>,
 }
 /// Names are resolved through the authored goods catalog when creating a world.
 #[derive(Deserialize)]
@@ -25,6 +28,8 @@ pub struct Remedy {
     pub people: Vec<u64>,
     #[serde(default)]
     pub willing: bool,
+    #[serde(default)]
+    pub health_at_most: Option<u32>,
 }
 pub fn configure(
     disease: Option<&mut Disease>,
@@ -67,6 +72,7 @@ pub fn configure(
             medicine,
             quantity: remedy.quantity,
             willing: remedy.willing,
+            health_at_most: remedy.health_at_most,
         }));
     }
     disease.treatments.extend(additions);
@@ -110,6 +116,7 @@ pub fn validate(
 pub struct Plan {
     pub actions: Vec<Transaction>,
     pub actors: Vec<u64>,
+    effective: Vec<bool>,
 }
 pub fn prepare(
     disease: Option<&Disease>,
@@ -127,6 +134,7 @@ pub fn prepare(
         return Ok(Plan {
             actions: vec![],
             actors: vec![],
+            effective: vec![],
         });
     };
     if let Some(id) = manual {
@@ -135,33 +143,11 @@ pub fn prepare(
             .ok()
             .map(|i| &people[i])
             .ok_or("unknown person")?;
-        let policy = policies
+        policies
             .iter()
             .find(|p| p.person == id)
             .ok_or("person has no treatment preference")?;
-        let case = disease
-            .cases
-            .iter()
-            .find(|c| c.person == id)
-            .ok_or("person has no infection")?;
-        let strain = disease
-            .strains
-            .iter()
-            .find(|s| s.id == case.strain)
-            .ok_or("unknown infection")?;
-        let age = view
-            .boundary
-            .checked_sub(1)
-            .and_then(|now| now.checked_sub(case.infected_at))
-            .ok_or("invalid infection time")?;
-        if !person.controlled
-            || person.health == 0
-            || age >= strain.incubation + strain.infectious_ticks + strain.immunity_ticks
-            || !disease
-                .treatments
-                .iter()
-                .any(|t| t.strain == case.strain && t.medicine == policy.medicine)
-        {
+        if !person.controlled || person.health == 0 {
             return Err("person cannot use this treatment".into());
         }
     }
@@ -174,28 +160,40 @@ pub fn prepare(
                 .binary_search_by_key(&policy.person, |p| p.id)
                 .ok()
                 .map(|i| &people[i])?;
-            let case = cases
+            let effective = cases
                 .binary_search_by_key(&policy.person, |c| c.person)
                 .ok()
-                .map(|i| cases[i])?;
-            let strain = disease
-                .strains
-                .iter()
-                .find(|strain| strain.id == case.strain)?;
-            let age = view
-                .boundary
-                .checked_sub(1)?
-                .checked_sub(case.infected_at)?;
+                .map(|i| cases[i])
+                .is_some_and(|case| {
+                    let Some(strain) = disease
+                        .strains
+                        .iter()
+                        .find(|strain| strain.id == case.strain)
+                    else {
+                        return false;
+                    };
+                    let Some(age) = view
+                        .boundary
+                        .checked_sub(1)
+                        .and_then(|now| now.checked_sub(case.infected_at))
+                    else {
+                        return false;
+                    };
+                    age < strain.incubation + strain.infectious_ticks + strain.immunity_ticks
+                        && disease
+                            .treatments
+                            .iter()
+                            .any(|t| t.strain == case.strain && t.medicine == policy.medicine)
+                });
             let explicit = manual == Some(person.id);
             if (!policy.willing && !explicit)
                 || (person.controlled && !explicit)
                 || person.health == 0
                 || (!explicit && busy.binary_search(&person.id).is_ok())
-                || age >= strain.incubation + strain.infectious_ticks + strain.immunity_ticks
-                || !disease
-                    .treatments
-                    .iter()
-                    .any(|t| t.strain == case.strain && t.medicine == policy.medicine)
+                || (!explicit
+                    && policy
+                        .health_at_most
+                        .map_or(!effective, |threshold| person.health > threshold))
                 || (!explicit
                     && view
                         .container(Place::Person(person.id))
@@ -203,7 +201,7 @@ pub fn prepare(
             {
                 return None;
             }
-            Some(policy)
+            Some((policy, effective))
         })
         .collect();
     base.checked_add(chosen.len() as u64)
@@ -211,7 +209,7 @@ pub fn prepare(
     let actions = chosen
         .par_iter()
         .enumerate()
-        .map(|(i, p)| {
+        .map(|(i, &(p, _))| {
             let id = base + i as u64;
             Transaction {
                 id,
@@ -228,14 +226,8 @@ pub fn prepare(
         .collect();
     Ok(Plan {
         actions,
-        actors: chosen.par_iter().map(|p| p.person).collect(),
-    })
-}
-pub fn treated(disease: Option<&Disease>, person: u64) -> bool {
-    disease.is_some_and(|d| {
-        d.events
-            .iter()
-            .any(|event| event.person == person && event.kind == EventKind::Treated)
+        actors: chosen.par_iter().map(|(p, _)| p.person).collect(),
+        effective: chosen.par_iter().map(|(_, effective)| *effective).collect(),
     })
 }
 #[macro_export]
@@ -266,7 +258,11 @@ pub fn apply(disease: Option<&mut Disease>, plan: &Plan, events: &Events) {
         .actions
         .par_iter()
         .zip(plan.actors.par_iter())
-        .filter_map(|(action, &person)| {
+        .zip(plan.effective.par_iter())
+        .filter_map(|((action, &person), &effective)| {
+            if !effective {
+                return None;
+            }
             events
                 .physical_actions
                 .binary_search_by_key(&action.id, |row| row.id)
@@ -321,6 +317,50 @@ pub fn apply_people(disease: Option<&mut Disease>, treated: &[u64], tick: u64) {
 mod tests {
     use super::*;
     #[test]
+    fn ineffective_course_cannot_clear_an_infection_acquired_at_the_same_boundary() {
+        let mut disease = Disease {
+            strains: vec![],
+            treatments: vec![],
+            cases: vec![game_parallel_disease::Case {
+                person: 1,
+                strain: 1,
+                infected_at: 1,
+                source: Some(2),
+            }],
+            events: vec![],
+        };
+        let plan = Plan {
+            actions: vec![Transaction {
+                id: 1,
+                movements: vec![],
+                creations: vec![],
+            }],
+            actors: vec![1],
+            effective: vec![false],
+        };
+        let events = Events {
+            tick: 1,
+            started: vec![],
+            start_denied: vec![],
+            abandoned: vec![],
+            finished: vec![],
+            delivered: vec![],
+            output_lost: vec![],
+            interrupted: vec![],
+            returned: vec![],
+            empty_returns: vec![],
+            spoiled: vec![],
+            physical_actions: vec![game_parallel_lots::TransactionOutcome {
+                id: 1,
+                accepted: true,
+            }],
+            physical_movements: vec![],
+        };
+        apply(Some(&mut disease), &plan, &events);
+        assert_eq!(disease.cases.len(), 1);
+        assert!(disease.events.is_empty());
+    }
+    #[test]
     fn invalid_remedy_batch_does_not_partially_mutate_state() {
         let mut disease = Disease {
             strains: vec![game_parallel_disease::Strain {
@@ -346,6 +386,7 @@ mod tests {
                 quantity: 1,
                 people: vec![1],
                 willing: true,
+                health_at_most: None,
             },
             Remedy {
                 strain: 9,
@@ -353,6 +394,7 @@ mod tests {
                 quantity: 1,
                 people: vec![2],
                 willing: true,
+                health_at_most: None,
             },
         ];
         assert!(configure(Some(&mut disease), &mut policies, &remedies, |_| Some(1)).is_err());

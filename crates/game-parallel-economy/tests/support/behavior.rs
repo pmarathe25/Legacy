@@ -2818,6 +2818,7 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
             medicine: 2,
             quantity: 2,
             willing: false,
+            health_at_most: None,
         }],
         claims: None,
     });
@@ -2878,6 +2879,121 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
 }
 
 #[test]
+fn self_treatment_can_be_wrong_without_revealing_hidden_infection() {
+    use game_parallel_disease::Treatment;
+    use game_parallel_economy_dynamics::TreatmentPolicy;
+    let mut initial = fixture();
+    initial.autowork = None;
+    initial.agreements = None;
+    initial.people[0].seek_meals = false;
+    initial.people[0].health = 70;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        10,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut dynamics = infection_from(1);
+    let disease = dynamics.disease.as_mut().unwrap();
+    let mut other = disease.strains[0].clone();
+    other.id = 2;
+    other.name = "other illness".into();
+    disease.strains.push(other);
+    disease.cases[0].strain = 2;
+    disease.treatments.push(Treatment {
+        strain: 1,
+        medicine: 2,
+    });
+    dynamics.treatment.push(TreatmentPolicy {
+        person: 1,
+        medicine: 2,
+        quantity: 1,
+        willing: true,
+        health_at_most: Some(80),
+    });
+    initial.dynamics = Some(dynamics);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                assert_eq!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .disease
+                        .as_ref()
+                        .unwrap()
+                        .cases[0]
+                        .strain,
+                    2
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    initial.people[0].controlled = true;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .cases
+        .clear();
+    let mut player = Economy::compile(initial).unwrap();
+    assert!(player.treat(1).unwrap());
+    let state = player.snapshot();
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        0
+    );
+    assert!(state.dynamics.unwrap().disease.unwrap().cases.is_empty());
+}
+
+#[test]
 fn controlled_treatment_consumes_only_unexpired_medicine() {
     use game_parallel_disease::Treatment;
     use game_parallel_economy_dynamics::TreatmentPolicy;
@@ -2918,6 +3034,7 @@ fn controlled_treatment_consumes_only_unexpired_medicine() {
         medicine: 2,
         quantity: 2,
         willing: false,
+        health_at_most: None,
     });
     initial.dynamics = Some(dynamics);
     let run = |workers| {
@@ -3132,7 +3249,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
     }]
     .into();
     let mut world = Economy::compile(wrong).unwrap();
-    assert!(!world.treat_other(1, 2, 3, 1).unwrap());
+    assert!(world.treat_other(1, 2, 3, 1).unwrap());
     let state = world.snapshot();
     assert_eq!(
         state

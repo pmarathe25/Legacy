@@ -308,20 +308,30 @@ macro_rules! fulfill_method {
 #[macro_export]
 macro_rules! treat_method {
     () => {
-        /// Use this person's chosen medicine through actual physical custody.
+        /// Attempt to consume this person's medicine; the result reports consumption.
         pub fn treat(&mut self, person: u64) -> Result<bool, String> {
             game_parallel_economy_campaign::preflight!(self);
+            let medicine = self
+                .dynamics
+                .as_ref()
+                .and_then(|d| d.treatment.iter().find(|p| p.person == person))
+                .map(|p| (p.medicine, p.quantity));
             let draft = self.prepare_interaction(
                 None,
                 None,
                 None,
                 Some($crate::PhysicalChoice::Treat { person }),
             )?;
-            self.commit(draft)?;
-            Ok(game_parallel_economy_dynamics::treatment::treated(
-                self.dynamics.as_ref().and_then(|d| d.disease.as_ref()),
-                person,
-            ))
+            let events = self.commit(draft)?;
+            Ok(medicine.is_some_and(|(good, quantity)| {
+                events.physical_movements.iter().any(|receipt| {
+                    receipt.request.from == game_parallel_lots::Place::Person(person)
+                        && receipt.request.to.is_none()
+                        && receipt.request.good == good
+                        && receipt.request.quantity == quantity
+                        && receipt.movement.accepted
+                })
+            }))
         }
     };
 }

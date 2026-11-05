@@ -825,7 +825,7 @@ impl Economy {
         self.commit(draft)?;
         Ok(delivered)
     }
-    /// Use carried medicine to try to treat a local person.
+    /// Attempt treatment; the result reports whether medicine was consumed.
     pub fn treat_other(
         &mut self,
         person: u64,
@@ -2381,11 +2381,7 @@ impl Economy {
             physical.events(),
         );
         let treated_other = manual_medical.map(|(actor, patient, _, _)| {
-            medical_plan.treated(
-                actor,
-                patient,
-                dynamics.as_ref().and_then(|d| d.disease.as_ref()),
-            )
+            medical_plan.attempted(actor, patient, physical.events())
         });
         #[cfg(feature = "profile")]
         {
