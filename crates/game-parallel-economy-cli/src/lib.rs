@@ -51,6 +51,8 @@ struct Scenario {
     #[serde(default)]
     construction: Option<ConstructionConfig>,
     #[serde(default)]
+    confinement: Option<game_parallel_economy::Confinement>,
+    #[serde(default)]
     opinions: Option<game_parallel_opinions::Opinions>,
     #[serde(default)]
     aspirations: Vec<Aspiration>,
@@ -1309,6 +1311,7 @@ pub fn scenario_with_options(
         work_tools,
         work_sites,
         construction,
+        confinement: scenario.confinement,
         goals: has_dreams.then_some(Goals {
             retry_interval: 3,
             plan_inputs: true,

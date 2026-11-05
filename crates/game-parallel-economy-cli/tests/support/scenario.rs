@@ -2114,6 +2114,45 @@ fn player_can_take_from_an_incapacitated_guardian_who_later_recovers() {
 }
 
 #[test]
+fn player_can_confine_and_release_a_guardian_using_the_authored_cell() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut state = scenario(
+        &root.join("content/parallel/economy-confinement.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let guardian = state
+        .people
+        .iter_mut()
+        .find(|person| person.id == 99)
+        .unwrap();
+    guardian.region = Some(1);
+    guardian.health = 0;
+    let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+    assert!(Player::new(&mut world).confine_person(99, 1).unwrap());
+    let guardian = Player::new(&mut world)
+        .guardians()
+        .unwrap()
+        .into_iter()
+        .find(|g| g.person == 99)
+        .unwrap();
+    assert_eq!((guardian.health, guardian.confined), (2, Some(true)));
+    assert!(Player::new(&mut world).release_held_person(99).unwrap());
+    assert_eq!(
+        Player::new(&mut world)
+            .guardians()
+            .unwrap()
+            .into_iter()
+            .find(|g| g.person == 99)
+            .unwrap()
+            .confined,
+        Some(false)
+    );
+}
+
+#[test]
 fn ruler_view_excludes_remote_people_stock_and_other_minds() {
     use game_parallel_economy_knowledge::Record;
     use game_parallel_economy_player::Player;

@@ -498,6 +498,7 @@ pub fn finish(
     travel: &mut Option<Travel>,
     people: &mut Vec<Person>,
     encounters: &[game_parallel_social::Encounter],
+    held: &[u64],
     tick: u64,
 ) -> Option<Missions> {
     let Some(prepared) = prepared else {
@@ -520,7 +521,11 @@ pub fn finish(
             people
                 .binary_search_by_key(&d.person, |p| p.id)
                 .ok()
-                .is_some_and(|i| people[i].health > 0 && people[i].region == Some(d.source))
+                .is_some_and(|i| {
+                    people[i].health > 0
+                        && people[i].region == Some(d.source)
+                        && held.binary_search(&d.person).is_err()
+                })
         })
         .collect();
     let mut groups: Vec<_> = draft
@@ -576,7 +581,7 @@ pub fn finish(
 }
 #[macro_export]
 macro_rules! finish_world {
-    ($world:expr, $draft:expr, $person:expr, $travel:expr, $dynamics:expr, $tick:expr) => {{
+    ($world:expr, $draft:expr, $person:expr, $travel:expr, $dynamics:expr, $held:expr, $tick:expr) => {{
         let encounters = $dynamics
             .as_ref()
             .and_then(|d| d.social.as_ref())
@@ -587,6 +592,7 @@ macro_rules! finish_world {
             &mut $travel,
             &mut $person.people,
             encounters,
+            &$held,
             $tick,
         )
     }};

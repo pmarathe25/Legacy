@@ -100,7 +100,9 @@ For separate phase attribution, enable the `profile` feature and set `LEGACY_PRO
 
 For a ruler and guardians in the same dated-goods world, run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-campaign.toml`. `ruler` shows the current incarnation, guardians and any pending invocation warning. `invoke`, `dismiss-invocation`, `accept-warning`, and `guardian-release` operate those personal abilities and choices. A pending warning leaves the simulation time unchanged until it is accepted or invocation is dismissed.
 
-`[[campaign.embodied_guardians.guardians]]` identifies actual immortal people and their individual `mentorship_required` judgments. They use ordinary travel, possessions, combat, and social encounters. The campaign includes guardians who may disagree about when to accept a release request; their assessments reset for each new incarnation. Their shared-world planner does not yet implement physical confinement.
+`[[campaign.embodied_guardians.guardians]]` identifies actual immortal people and their individual `mentorship_required` judgments. They use ordinary travel, possessions, combat, and social encounters. The campaign includes guardians who may disagree about when to accept a release request; their assessments reset for each new incarnation.
+
+`cargo run -p game-parallel-economy-cli -- --player content/parallel/economy-confinement.toml` includes an existing physical cell. `confine PERSON SITE` places a local incapacitated immortal behind its intact barrier; `release-held PERSON` opens it, and `escape` spends a boundary on the ruler's own attempt. Captives' independent escape preferences can damage a shared barrier, freeing everyone when it breaks. A captured guardian recovers while held. Capture of conscious people and autonomous capture are not yet implemented.
 
 An authored person can have `immortal = { recovery_per_tick = 1 }` with zero hunger. This makes their ordinary body recover from incapacitation without hunger, nutritional depletion, or mortal family death. Their goods, combat, and travel use the same physical systems as other people.
 

@@ -31,6 +31,8 @@ pub struct State {
     #[serde(default)]
     pub construction: Option<game_parallel_economy_building::Construction>,
     #[serde(default)]
+    pub confinement: Option<game_parallel_economy_confinement::Confinement>,
+    #[serde(default)]
     pub goals: Option<Goals>,
     #[serde(default)]
     pub dreams: Option<game_parallel_economy_goals::Dreams>,

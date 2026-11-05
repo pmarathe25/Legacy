@@ -1,0 +1,7 @@
+# Physical confinement
+
+This owner models doors attached to real local sites, people held behind them, and each captive's own inclination and effort to escape. The economic host stages these actions with the rest of the world, blocks departures through intact barriers, and frees occupants when a barrier breaks or its site is destroyed. A player can confine an incapacitated immortal, open a cell, or attempt to escape. People can recover while held, and autonomous captives can independently attempt escape. The records do not imply authority, consent, employment, or an institution.
+
+Scenarios supply existing physical sites, their barrier resistance, occupants, and individual escape preferences. `default_effort` sets the fallback strength of an explicitly chosen escape and defaults to one; autonomous attempts require an individual preference. Capture of conscious people, autonomous capture, active guards, and construction of new barriers are not yet implemented. Sites used as cells cannot simultaneously serve a production recipe. The current model treats the cell as a barrier to outside actions; carried food and personal treatment remain available.
+
+`cargo test --release -p game-parallel-economy-confinement concentrated_escape_benchmark -- --ignored --nocapture` measures simultaneous attempts against one shared barrier; set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to choose the workload and worker count.

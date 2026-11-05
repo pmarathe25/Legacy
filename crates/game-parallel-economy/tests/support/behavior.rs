@@ -187,6 +187,7 @@ fn fixture() -> State {
         work_tools: vec![],
         work_sites: None,
         construction: None,
+        confinement: None,
         goals: None,
         dreams: None,
         nutrition: Some(Nutrition {
@@ -9033,6 +9034,228 @@ fn embodied_guardian_pursues_the_actual_successor_and_resets_mentorship() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
+    let mut initial = embodied_guardian_fixture();
+    initial.pending_food.clear();
+    initial
+        .people
+        .iter_mut()
+        .find(|p| p.id == 5)
+        .unwrap()
+        .health = 0;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 2,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 5,
+        }],
+        holds: vec![ConfinementHold { person: 5, site: 1 }],
+        escape: vec![EscapePreference {
+            person: 5,
+            willing: true,
+            effort: 2,
+        }],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(
+                    world
+                        .depart(&[Departure {
+                            person: 5,
+                            destination: 1
+                        }])
+                        .is_err()
+                );
+                let stale = world.prepare().unwrap();
+                world.advance().unwrap();
+                assert!(world.commit(stale).is_err());
+                let state = world.snapshot();
+                assert_eq!(state.people.iter().find(|p| p.id == 5).unwrap().health, 1);
+                assert_eq!(state.confinement.as_ref().unwrap().cells[0].resistance, 5);
+                assert!(state.confinement.as_ref().unwrap().held(5));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for expected in [3, 1, 0] {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(
+                        state.confinement.as_ref().unwrap().cells[0].resistance,
+                        expected
+                    );
+                    assert_eq!(
+                        state.people.iter().find(|p| p.id == 5).unwrap().region,
+                        Some(2)
+                    );
+                    assert_eq!(state, restored.snapshot());
+                }
+                assert!(!world.snapshot().confinement.unwrap().held(5));
+                world.advance().unwrap();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .people
+                        .iter()
+                        .find(|p| p.id == 5)
+                        .unwrap()
+                        .region,
+                    None
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
+    let mut initial = embodied_guardian_fixture();
+    initial.pending_food.clear();
+    let guardian = initial.people.iter_mut().find(|p| p.id == 5).unwrap();
+    guardian.region = Some(1);
+    guardian.health = 0;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 5,
+        }],
+        holds: vec![],
+        escape: vec![EscapePreference {
+            person: 5,
+            willing: false,
+            effort: 2,
+        }],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                assert!(world.confine_person(3, 5, 2).is_err());
+                assert_eq!(world.snapshot(), before);
+                assert!(world.confine_person(3, 5, 1).unwrap());
+                let state = world.snapshot();
+                assert_eq!(state.people.iter().find(|p| p.id == 5).unwrap().health, 1);
+                assert!(state.confinement.as_ref().unwrap().held(5));
+                let mut demolished = Economy::compile(state.clone()).unwrap();
+                assert!(demolished.destroy_site(3, 1).unwrap());
+                let after_demolition = demolished.snapshot();
+                assert!(!after_demolition.confinement.as_ref().unwrap().held(5));
+                assert!(
+                    after_demolition
+                        .confinement
+                        .as_ref()
+                        .unwrap()
+                        .cells
+                        .is_empty()
+                );
+                Economy::compile(after_demolition).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    world
+                        .depart(&[Departure {
+                            person: 5,
+                            destination: 2
+                        }])
+                        .is_err()
+                );
+                assert!(world.release_held_person(3, 5).unwrap());
+                assert!(restored.release_held_person(3, 5).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert!(!world.snapshot().confinement.unwrap().held(5));
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn controlled_person_can_choose_repeated_physical_escape_attempts() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 2,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 3,
+        }],
+        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        escape: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(
+        world
+            .depart(&[Departure {
+                person: 3,
+                destination: 2
+            }])
+            .is_err()
+    );
+    assert!(!world.escape_confinement(3).unwrap());
+    assert_eq!(world.snapshot().confinement.unwrap().cells[0].resistance, 1);
+    assert!(world.escape_confinement(3).unwrap());
+    assert!(!world.snapshot().confinement.unwrap().held(3));
+    assert!(
+        world
+            .depart(&[Departure {
+                person: 3,
+                destination: 2
+            }])
+            .is_ok()
+    );
 }
 
 #[test]

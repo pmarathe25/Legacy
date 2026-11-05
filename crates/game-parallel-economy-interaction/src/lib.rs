@@ -370,6 +370,13 @@ macro_rules! combat_methods {
     () => {
         /// Start an attack; the other person responds according to their own reaction.
         pub fn attack(&mut self, actor: u64, target: u64) -> Result<u64, String> {
+            if self
+                .confinement
+                .as_ref()
+                .is_some_and(|owner| owner.held(actor) || owner.held(target))
+            {
+                return Err("a physical barrier separates the participants".into());
+            }
             if self.campaign.as_ref().is_some_and(|c| {
                 c.lineage.current == Some(actor)
                     && c.lineage.controlled_person(self.tick()) != Some(actor)

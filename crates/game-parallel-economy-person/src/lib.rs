@@ -156,6 +156,13 @@ macro_rules! work_choice_method {
 macro_rules! departure_method {
     () => {
         pub fn depart(&mut self, departures: &[Departure]) -> Result<(), String> {
+            if departures.iter().any(|request| {
+                self.confinement
+                    .as_ref()
+                    .is_some_and(|owner| owner.held(request.person))
+            }) {
+                return Err("person is held behind a physical barrier".into());
+            }
             let working = $crate::travel::working(self.physical.work());
             let (travel, people) = self.travel.as_ref().ok_or("travel is disabled")?.depart(
                 &self.people,

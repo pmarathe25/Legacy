@@ -92,6 +92,18 @@ pub enum PhysicalChoice {
     Rest {
         person: u64,
     },
+    Escape {
+        person: u64,
+    },
+    Confine {
+        person: u64,
+        target: u64,
+        site: u64,
+    },
+    ReleaseHeld {
+        person: u64,
+        target: u64,
+    },
 }
 impl PhysicalChoice {
     pub fn person(self) -> u64 {
@@ -112,7 +124,9 @@ impl PhysicalChoice {
             | Self::AskFood { person, .. }
             | Self::AskHaul { person, .. }
             | Self::TreatOther { person, .. }
-            | Self::Rest { person } => person,
+            | Self::Rest { person }
+            | Self::Escape { person } => person,
+            Self::Confine { person, .. } | Self::ReleaseHeld { person, .. } => person,
         }
     }
 }

@@ -3234,6 +3234,7 @@ dependencies = [
  "game-parallel-economy-claims",
  "game-parallel-economy-claims-output",
  "game-parallel-economy-combat",
+ "game-parallel-economy-confinement",
  "game-parallel-economy-dynamics",
  "game-parallel-economy-exchange",
  "game-parallel-economy-expeditions",
@@ -3405,6 +3406,16 @@ dependencies = [
  "game-parallel-production-model",
  "game-parallel-tactical-choices",
  "game-parallel-tactics",
+ "rayon",
+ "serde",
+]
+
+[[package]]
+name = "game-parallel-economy-confinement"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-work-sites",
  "rayon",
  "serde",
 ]
@@ -3600,6 +3611,7 @@ dependencies = [
  "game-parallel-economy-building",
  "game-parallel-economy-campaign",
  "game-parallel-economy-combat",
+ "game-parallel-economy-confinement",
  "game-parallel-economy-dynamics",
  "game-parallel-economy-expeditions",
  "game-parallel-economy-fatigue",

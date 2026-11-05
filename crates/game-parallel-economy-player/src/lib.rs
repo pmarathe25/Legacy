@@ -99,6 +99,7 @@ pub struct View {
     pub tick: u64,
     pub person: Option<Person>,
     pub journey: Option<game_parallel_economy::Journey>,
+    pub held: bool,
     pub nearby: Vec<u64>,
     pub bodies: Vec<BodyView>,
     /// Observable local animals, without their genetics or hidden pregnancy.
@@ -205,7 +206,11 @@ impl<'a> Player<'a> {
                 state
                     .people
                     .par_iter()
-                    .filter(|p| p.health == 0 && p.region == Some(region))
+                    .filter(|p| {
+                        p.health == 0
+                            && p.region == Some(region)
+                            && state.confinement.is_none_or(|owner| !owner.held(p.id))
+                    })
                     .map(|p| BodyView {
                         person: p.id,
                         possessions: state
@@ -563,6 +568,7 @@ impl<'a> Player<'a> {
             .unwrap_or_default();
         Ok(View {
             tick: self.world.tick(),
+            held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
             person,
             journey,
             nearby,
@@ -792,7 +798,7 @@ impl<'a> Player<'a> {
                         mentorship: guardian.mentorship,
                         mentorship_required: guardian.mentorship_required,
                         released: guardian.released,
-                        confined: None,
+                        confined: state.confinement.map(|owner| owner.held(person.id)),
                     })
                 })
                 .collect();
@@ -846,6 +852,24 @@ impl<'a> Player<'a> {
     pub fn release_guardian(&mut self, guardian: u64) -> Result<ReleaseDecision, String> {
         self.current()?;
         self.world.request_guardian_release(guardian)
+    }
+    pub fn escape_confinement(&mut self) -> Result<bool, String> {
+        self.world.escape_confinement(self.current()?)
+    }
+    pub fn confine_person(&mut self, target: u64, site: u64) -> Result<bool, String> {
+        let view = self.view()?;
+        if !view.bodies.iter().any(|body| body.person == target)
+            || !view.work_sites.iter().any(|row| row.site.id == site)
+        {
+            return Err("target or cell is not present".into());
+        }
+        self.world.confine_person(self.current()?, target, site)
+    }
+    pub fn release_held_person(&mut self, target: u64) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&target) {
+            return Err("person is not present".into());
+        }
+        self.world.release_held_person(self.current()?, target)
     }
     pub fn meet(&mut self, target: u64) -> Result<bool, String> {
         if !self.view()?.nearby.contains(&target) {

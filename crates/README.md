@@ -263,6 +263,8 @@ The [lot-based economic host](game-parallel-economy/README.md) combines dated ph
 
 [Local transport](game-parallel-economy-local-transport/README.md) owns named stores and individuals' carrying preferences; actual dated goods remain in the physical custody owner.
 
+[Physical confinement](game-parallel-economy-confinement/README.md) associates barriers with actual sites and resolves personal escape attempts without creating institutional authority.
+
 [Personal expeditions](game-parallel-missions/README.md) use real routes, custody and observations; their [fused adapter](game-parallel-fused-missions/README.md) reserves and rechecks departures, the [meeting objective owner](game-parallel-mission-objectives/README.md) records real consenting encounters, and the [mission CLI](game-parallel-block-cli-missions/README.md) exposes expedition and objective commands.
 [Personal journey data](game-parallel-missions-model/README.md) records willingness separately from participation under pressure.
 

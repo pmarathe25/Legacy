@@ -12,6 +12,9 @@ pub use game_parallel_economy_building::{
 };
 pub use game_parallel_economy_campaign::{Campaign, ReleaseDecision};
 pub use game_parallel_economy_combat::Combat;
+pub use game_parallel_economy_confinement::{
+    Cell as ConfinementCell, Confinement, EscapePreference, Hold as ConfinementHold,
+};
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
 use game_parallel_economy_family as family;
@@ -118,6 +121,7 @@ pub struct Economy {
     work_tools: Vec<WorkTool>,
     work_sites: Option<WorkSites>,
     construction: Option<Construction>,
+    confinement: Option<Confinement>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -158,6 +162,7 @@ pub struct Draft {
     autowork: Option<Autowork>,
     work_sites: Option<WorkSites>,
     construction: Option<Construction>,
+    confinement: Option<Confinement>,
     goals: Option<Goals>,
     dreams: Option<Dreams>,
     nutrition: Option<Nutrition>,
@@ -1030,6 +1035,7 @@ impl Economy {
     game_parallel_economy_interaction::combat_methods!();
     game_parallel_economy_goals::request_method!();
     game_parallel_economy_person::departure_method!();
+    game_parallel_economy_confinement::escape_method!();
     game_parallel_economy_dynamics::social_choice_method!();
     game_parallel_economy_claims::claim_methods!();
     game_parallel_economy_expeditions::mission_methods!();
@@ -1231,6 +1237,17 @@ impl Economy {
                 .collect();
             sites.validate(physical.work(), &recipes, &regions)?;
         }
+        if let Some(confinement) = &mut state.confinement {
+            confinement.normalize();
+            confinement.validate(
+                &state.people,
+                state
+                    .work_sites
+                    .as_ref()
+                    .ok_or("confinement requires physical sites")?,
+                physical.tick(),
+            )?;
+        }
         if let Some(claims) = state.dynamics.as_ref().and_then(|d| d.claims.as_ref())
             && (claims.site_claims.par_iter().any(|claim| {
                 state
@@ -1293,6 +1310,7 @@ impl Economy {
             work_tools: state.work_tools,
             work_sites: state.work_sites,
             construction: state.construction,
+            confinement: state.confinement,
             goals: state.goals,
             dreams: state.dreams,
             nutrition: state.nutrition,
@@ -1337,6 +1355,7 @@ impl Economy {
             work_tools: self.work_tools.clone(),
             work_sites: self.work_sites.clone(),
             construction: self.construction.clone(),
+            confinement: self.confinement.clone(),
             goals: self.goals.clone(),
             dreams: self.dreams.clone(),
             nutrition: self.nutrition.clone(),
@@ -1383,6 +1402,41 @@ impl Economy {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
+        if let Some(owner) = &self.confinement {
+            let restricted = request.is_some_and(|row| owner.held(row.actor))
+                || player_work.is_some_and(|row| owner.held(row.actor()))
+                || player_transfer.is_some_and(|row| {
+                    owner.held(row.person())
+                        && !matches!(
+                            row,
+                            game_parallel_economy_interaction::PhysicalChoice::Rest { .. }
+                                | game_parallel_economy_interaction::PhysicalChoice::Treat { .. }
+                                | game_parallel_economy_interaction::PhysicalChoice::Escape { .. }
+                        )
+                })
+                || player_transfer.is_some_and(|row| match row {
+                    game_parallel_economy_interaction::PhysicalChoice::Recover {
+                        deceased, ..
+                    } => owner.held(deceased),
+                    game_parallel_economy_interaction::PhysicalChoice::Give {
+                        recipient, ..
+                    } => owner.held(recipient),
+                    game_parallel_economy_interaction::PhysicalChoice::TreatOther {
+                        patient,
+                        ..
+                    } => owner.held(patient),
+                    game_parallel_economy_interaction::PhysicalChoice::AskFood {
+                        target, ..
+                    } => owner.held(target),
+                    game_parallel_economy_interaction::PhysicalChoice::AskHaul {
+                        carrier, ..
+                    } => owner.held(carrier),
+                    _ => false,
+                });
+            if restricted {
+                return Err("person is held behind a physical barrier".into());
+            }
+        }
         let (player_work, manual_response) = match player_work {
             Some(game_parallel_economy_interaction::WorkAction::Respond {
                 actor,
@@ -1491,6 +1545,9 @@ impl Economy {
             if let Some(combat) = &self.combat {
                 unavailable.extend_from_slice(combat.actors());
             }
+            if let Some(confinement) = &self.confinement {
+                unavailable.extend(confinement.holds.iter().map(|hold| hold.person));
+            }
             if let Some(row) = request {
                 unavailable.extend([row.actor, row.target]);
             }
@@ -1544,6 +1601,95 @@ impl Economy {
             player_transfer,
             initial_fighters
         );
+        let held: Vec<_> = self
+            .confinement
+            .as_ref()
+            .map_or(&[][..], |owner| owner.holds.as_slice())
+            .par_iter()
+            .map(|hold| hold.person)
+            .collect();
+        let manual_escape = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::Escape { person }) => {
+                Some(person)
+            }
+            _ => None,
+        };
+        if manual_escape.is_some() && self.confinement.is_none() {
+            return Err("confinement is disabled".into());
+        }
+        let mut next_confinement = self
+            .confinement
+            .as_ref()
+            .map(|owner| owner.escape_attempts(&self.people, &busy, tick, manual_escape))
+            .transpose()?
+            .map(|(next, _)| next);
+        match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::Confine {
+                person,
+                target,
+                site,
+            }) => {
+                if self.physical.work().iter().any(|job| {
+                    job.job.worker == person
+                        && job.phase == game_parallel_lot_runtime::Phase::Working
+                }) {
+                    return Err("a working person cannot confine someone".into());
+                }
+                next_confinement
+                    .as_mut()
+                    .ok_or("confinement is disabled")?
+                    .capture(
+                        person,
+                        target,
+                        site,
+                        &self.people,
+                        self.work_sites
+                            .as_ref()
+                            .ok_or("confinement requires physical sites")?,
+                        tick,
+                    )?;
+            }
+            Some(game_parallel_economy_interaction::PhysicalChoice::ReleaseHeld {
+                person,
+                target,
+            }) => {
+                if self.physical.work().iter().any(|job| {
+                    job.job.worker == person
+                        && job.phase == game_parallel_lot_runtime::Phase::Working
+                }) {
+                    return Err("a working person cannot release someone".into());
+                }
+                let owner = next_confinement.as_mut().ok_or("confinement is disabled")?;
+                if owner.held(target) {
+                    owner.release(
+                        person,
+                        target,
+                        &self.people,
+                        self.work_sites
+                            .as_ref()
+                            .ok_or("confinement requires physical sites")?,
+                        tick,
+                    )?;
+                } else {
+                    self.confinement
+                        .clone()
+                        .ok_or("confinement is disabled")?
+                        .release(
+                            person,
+                            target,
+                            &self.people,
+                            self.work_sites
+                                .as_ref()
+                                .ok_or("confinement requires physical sites")?,
+                            tick,
+                        )?;
+                }
+            }
+            _ => {}
+        }
+        if !held.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, held.iter().copied());
+        }
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -2246,7 +2392,7 @@ impl Economy {
             work_offers,
             practice_offers,
         );
-        let (mut rates, abandon) = family::work_rates!(
+        let (mut rates, mut abandon) = family::work_rates!(
             self,
             meal_candidates,
             player_work,
@@ -2254,6 +2400,14 @@ impl Economy {
             resting,
             work_offers
         );
+        if !held.is_empty() {
+            game_parallel_economy_combat::interrupt(
+                &held,
+                self.physical.work(),
+                &mut rates,
+                &mut abandon,
+            );
+        }
         let mut goal_work = None;
         let goal_building = self
             .construction
@@ -3133,11 +3287,14 @@ impl Economy {
             .map(|travel| travel.advance(&mut person.people));
         let mut food_search = self.food_search.clone();
         let alive_and_local = |d: &Departure| {
-            person
-                .people
-                .binary_search_by_key(&d.person, |p| p.id)
-                .ok()
-                .is_some_and(|i| person.people[i].health > 0 && person.people[i].region.is_some())
+            held.binary_search(&d.person).is_err()
+                && person
+                    .people
+                    .binary_search_by_key(&d.person, |p| p.id)
+                    .ok()
+                    .is_some_and(|i| {
+                        person.people[i].health > 0 && person.people[i].region.is_some()
+                    })
         };
         let search_departures: Vec<_> = search_plan
             .as_ref()
@@ -3151,15 +3308,7 @@ impl Economy {
             .map_or(&[][..], |plan| &plan.departures)
             .par_iter()
             .copied()
-            .filter(|d| {
-                person
-                    .people
-                    .binary_search_by_key(&d.person, |p| p.id)
-                    .ok()
-                    .is_some_and(|i| {
-                        person.people[i].health > 0 && person.people[i].region.is_some()
-                    })
-            })
+            .filter(alive_and_local)
             .collect();
         departures.par_extend(search_departures.par_iter().copied());
         departures.par_extend(
@@ -3285,6 +3434,9 @@ impl Economy {
                     .filter(|material| destroyed.binary_search(&material.site).is_ok())
                     .for_each(|material| material.debris = true);
             }
+        }
+        if let (Some(confinement), Some(sites)) = (&mut next_confinement, &work_sites) {
+            confinement.retain_sites(sites);
         }
         if let Some(owner) = &mut construction {
             owner.salvage_events =
@@ -3428,7 +3580,7 @@ impl Economy {
             combat.add_confrontations(selected, &person.people)?;
         }
         let missions = game_parallel_economy_expeditions::finish_world!(
-            self, expedition, person, travel, dynamics, tick
+            self, expedition, person, travel, dynamics, held, tick
         );
         #[cfg(feature = "profile")]
         {
@@ -3679,6 +3831,7 @@ impl Economy {
             autowork,
             work_sites,
             construction,
+            confinement: next_confinement,
             goals,
             dreams,
             nutrition: person.nutrition,
@@ -3737,6 +3890,7 @@ impl Economy {
         self.autowork = draft.autowork;
         self.work_sites = draft.work_sites;
         self.construction = draft.construction;
+        self.confinement = draft.confinement;
         self.goals = draft.goals;
         self.dreams = draft.dreams;
         self.nutrition = draft.nutrition;
