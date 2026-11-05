@@ -12453,6 +12453,98 @@ fn changing_a_personal_work_choice_invalidates_a_prepared_generation() {
 }
 
 #[test]
+fn privately_changing_promise_intent_does_not_communicate_a_withdrawal_at_a_distance() {
+    let mut initial = expedition_fixture();
+    initial.dynamics = None;
+    initial.missions = None;
+    initial.opinions = None;
+    initial.nutrition = None;
+    let mut agreements = fixture().agreements.unwrap();
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.policies.clear();
+    agreements.next_id = 1;
+    initial.agreements = Some(agreements);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let id = world
+                    .propose_promises(&[PromiseProposal {
+                        debtor: 1,
+                        creditor: 2,
+                        good: 1,
+                        quantity: 1,
+                        due: 20,
+                    }])
+                    .unwrap()[0];
+                world
+                    .depart(&[Departure {
+                        person: 2,
+                        destination: 2,
+                    }])
+                    .unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                assert_eq!(world.snapshot().people[1].region, Some(2));
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .decide_promises(&[PromiseDecision {
+                            contract: id,
+                            actor: 1,
+                            accept: false
+                        }])
+                        .is_err()
+                );
+                assert_eq!(world.snapshot(), before);
+                world.set_promise_choice(1, false).unwrap();
+                assert_eq!(
+                    world.snapshot().agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Proposed
+                );
+                let saved = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world
+                    .depart(&[Departure {
+                        person: 2,
+                        destination: 1,
+                    }])
+                    .unwrap();
+                restored
+                    .depart(&[Departure {
+                        person: 2,
+                        destination: 1,
+                    }])
+                    .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(world.snapshot().people[1].region, Some(1));
+                world
+                    .decide_promises(&[PromiseDecision {
+                        contract: id,
+                        actor: 1,
+                        accept: false,
+                    }])
+                    .unwrap();
+                assert_eq!(
+                    world.snapshot().agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Withdrawn
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn people_make_promises_but_can_change_their_minds_before_physical_delivery() {
     let mut state = fixture();
     state.agreements = Some(Agreements {

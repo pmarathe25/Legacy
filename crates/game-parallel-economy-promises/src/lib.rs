@@ -238,14 +238,7 @@ pub fn decide(
             .binary_search_by_key(&decision.contract, |row| row.id)
             .ok()
             .map(|i| contracts[i]);
-        !actor_alive
-            || contract.is_none_or(|c| {
-                if decision.actor == c.debtor && !decision.accept {
-                    false
-                } else {
-                    !local(people, locations, c.debtor, c.creditor)
-                }
-            })
+        !actor_alive || contract.is_none_or(|c| !local(people, locations, c.debtor, c.creditor))
     }) {
         return Err("promise decision requires a living participant and local discussion".into());
     }
