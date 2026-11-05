@@ -18,6 +18,9 @@ pub struct Node {
     pub available: u64,
     pub capacity: u64,
     pub regrowth: u64,
+    /// Scale renewal by the current season's food-growth factor.
+    #[serde(default)]
+    pub seasonal: bool,
     pub yield_per_action: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -288,7 +291,12 @@ impl Plan {
                     .any(|decision| decision.id == row.1 && decision.accepted)
             })
     }
-    pub fn publish(mut self, owner: &Gathering, events: &Events) -> Result<Gathering, String> {
+    pub fn publish(
+        mut self,
+        owner: &Gathering,
+        events: &Events,
+        season: Option<&crate::Season>,
+    ) -> Result<Gathering, String> {
         let mut decisions: Vec<_> = events.physical_actions.par_iter().collect();
         if decisions.par_windows(2).any(|w| w[0].id > w[1].id) {
             decisions.par_sort_unstable_by_key(|d| d.id);
@@ -317,7 +325,15 @@ impl Plan {
                     .available
                     .checked_sub(gathered)
                     .ok_or("gathering exceeds resource")?
-                    .saturating_add(node.regrowth)
+                    .saturating_add(if node.seasonal {
+                        renewal(
+                            node.regrowth,
+                            season.map_or(1000, |s| s.food_growth_per_thousand),
+                            events.tick,
+                        )
+                    } else {
+                        node.regrowth
+                    })
                     .min(node.capacity);
                 Ok(next)
             })
@@ -329,4 +345,14 @@ impl Plan {
             policies: owner.policies.par_iter().cloned().collect(),
         })
     }
+}
+
+/// Distribute fractional renewal deterministically without losing low rates to rounding.
+fn renewal(rate: u64, factor: u32, tick: u64) -> u64 {
+    let scaled = u128::from(rate) * u128::from(factor);
+    let whole = scaled / 1000;
+    let remainder = scaled % 1000;
+    let fraction = (u128::from(tick) * remainder / 1000)
+        - (u128::from(tick.saturating_sub(1)) * remainder / 1000);
+    (whole + fraction).min(u128::from(u64::MAX)) as u64
 }

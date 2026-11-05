@@ -2929,6 +2929,7 @@ impl Economy {
                 p.publish(
                     self.gathering.as_ref().expect("gathering owner"),
                     physical.events(),
+                    self.environment.as_ref().and_then(|env| env.season(tick)),
                 )
             })
             .transpose()?;

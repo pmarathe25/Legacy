@@ -344,6 +344,8 @@ struct ResourceConfig {
     available: u64,
     capacity: u64,
     regrowth: u64,
+    #[serde(default)]
+    seasonal: bool,
     yield_per_action: u64,
 }
 #[derive(Deserialize)]
@@ -1084,6 +1086,7 @@ pub fn scenario_with_options(
                         available: node.available,
                         capacity: node.capacity,
                         regrowth: node.regrowth,
+                        seasonal: node.seasonal,
                         yield_per_action: node.yield_per_action,
                     })
                 })

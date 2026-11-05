@@ -441,6 +441,7 @@ good = "grain"
 available = 12
 capacity = 20
 regrowth = 1
+seasonal = true
 yield_per_action = 2
 
 [hunting]

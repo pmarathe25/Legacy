@@ -714,6 +714,167 @@ fn flexible_caregivers_choose_only_local_living_animals() {
     assert_eq!(run(1), run(4));
 }
 
+#[test]
+fn seasonal_patch_renewal_preserves_fractional_rates_and_save_continuity() {
+    let mut state = fixture();
+    state.agreements = None;
+    state.autowork = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+    }
+    state.gathering = Some(Gathering {
+        max_hunger: 20,
+        inherit_births: false,
+        policies: vec![],
+        nodes: vec![
+            ResourceNode {
+                id: 1,
+                region: 1,
+                good: 1,
+                available: 0,
+                capacity: 10,
+                regrowth: 1,
+                seasonal: true,
+                yield_per_action: 1,
+            },
+            ResourceNode {
+                id: 2,
+                region: 1,
+                good: 1,
+                available: 0,
+                capacity: 10,
+                regrowth: 1,
+                seasonal: false,
+                yield_per_action: 1,
+            },
+            ResourceNode {
+                id: 3,
+                region: 1,
+                good: 1,
+                available: 0,
+                capacity: 10,
+                regrowth: u64::MAX,
+                seasonal: true,
+                yield_per_action: 1,
+            },
+        ],
+    });
+    state.environment = Some(Environment {
+        regions: vec![],
+        seasons: vec![
+            Season {
+                name: "slow".into(),
+                duration: 4,
+                food_growth_per_thousand: 500,
+                exposure_per_thousand: 1000,
+                planting_allowed: true,
+                tending_allowed: true,
+                harvest_allowed: true,
+            },
+            Season {
+                name: "fast".into(),
+                duration: 2,
+                food_growth_per_thousand: 2000,
+                exposure_per_thousand: 1000,
+                planting_allowed: true,
+                tending_allowed: true,
+                harvest_allowed: true,
+            },
+        ],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .gathering
+                        .as_ref()
+                        .unwrap()
+                        .nodes
+                        .iter()
+                        .map(|n| n.available)
+                        .collect::<Vec<_>>(),
+                    vec![0, 1, 10]
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .gathering
+                        .as_ref()
+                        .unwrap()
+                        .nodes
+                        .iter()
+                        .map(|n| n.available)
+                        .collect::<Vec<_>>(),
+                    vec![4, 5, 10]
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn animals_graze_only_the_actual_seasonal_renewal() {
+    let mut state = hunting_fixture();
+    state.hunting = None;
+    state.fauna.as_mut().unwrap().animals.truncate(1);
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.gathering = Some(Gathering {
+        max_hunger: 20,
+        inherit_births: false,
+        policies: vec![],
+        nodes: vec![ResourceNode {
+            id: 1,
+            region: 1,
+            good: 1,
+            available: 0,
+            capacity: 10,
+            regrowth: 1,
+            seasonal: true,
+            yield_per_action: 1,
+        }],
+    });
+    state.environment = Some(Environment {
+        regions: vec![],
+        seasons: vec![Season {
+            name: "slow".into(),
+            duration: 10,
+            food_growth_per_thousand: 500,
+            exposure_per_thousand: 1000,
+            planting_allowed: true,
+            tending_allowed: true,
+            harvest_allowed: true,
+        }],
+    });
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
+        2
+    );
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.fauna.unwrap().animals[0].hunger, 2);
+    assert_eq!(state.gathering.unwrap().nodes[0].available, 0);
+}
+
 fn hunting_fixture() -> State {
     use game_parallel_genetics::{Genome, Sex};
     let mut state = fixture();
@@ -837,6 +998,7 @@ fn contested_hunting_conserves_yield_and_prevents_births() {
             available: 10,
             capacity: 10,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 1,
         }],
         policies: vec![],
@@ -15940,6 +16102,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
             available: 3,
             capacity: 3,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 2,
         }],
         policies: vec![GatherPolicy {
@@ -16059,6 +16222,7 @@ fn gathering_depletes_real_sites_only_when_storage_accepts_the_output() {
             available: 4,
             capacity: 4,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 1,
         }],
         policies: (2..=4)
@@ -16166,6 +16330,7 @@ fn gathered_outputs_become_personal_claims_only_after_real_delivery() {
             available: 2,
             capacity: 2,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 1,
         }],
         policies: vec![],
@@ -16243,6 +16408,7 @@ fn fear_can_motivate_gathering_and_renewable_sites_regrow() {
             available: 3,
             capacity: 3,
             regrowth: 1,
+            seasonal: false,
             yield_per_action: 2,
         }],
         policies: vec![GatherPolicy {
@@ -16305,6 +16471,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
             available: 1,
             capacity: 1,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 1,
         }],
         policies: vec![GatherPolicy {
@@ -16365,6 +16532,7 @@ fn gathering_workload(count: u64) -> State {
             available: count / 2,
             capacity: count,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 1,
         }],
         policies: (1..=count)
@@ -24112,6 +24280,7 @@ fn tool_pickup_and_gathering_share_one_physical_boundary() {
             available: 1,
             capacity: 1,
             regrowth: 0,
+            seasonal: false,
             yield_per_action: 1,
         }],
         policies: vec![GatherPolicy {
