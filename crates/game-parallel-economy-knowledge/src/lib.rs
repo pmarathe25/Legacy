@@ -129,6 +129,12 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
             records: vec![],
         }));
 }
+/// Reclaim independent personal record allocations as part of the committed boundary.
+pub fn reclaim(owner: Option<Knowledge>) {
+    if let Some(owner) = owner {
+        owner.minds.into_par_iter().for_each(drop);
+    }
+}
 /// Compare only each living person's direct local observation with their own earlier report.
 pub fn discrepancies(before: &Knowledge, after: &Knowledge, people: &[Person]) -> Vec<(u64, u64)> {
     let dense = people.first().zip(people.last()).and_then(|(first, last)| {

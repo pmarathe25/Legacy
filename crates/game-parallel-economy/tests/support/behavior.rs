@@ -6522,7 +6522,7 @@ fn discrepancy_workload(count: u64) -> State {
 
 #[test]
 fn concentrated_personal_report_reactions_are_deterministic_and_happen_once() {
-    let mut initial = discrepancy_workload(4096);
+    let mut initial = discrepancy_workload(20_000);
     for sensitivity in &mut initial.opinions.as_mut().unwrap().sensitivities {
         sensitivity.trust_report_discrepancy = Some(1);
     }
@@ -6537,7 +6537,7 @@ fn concentrated_personal_report_reactions_are_deterministic_and_happen_once() {
                 world.advance().unwrap();
                 let result = world.snapshot();
                 let opinions = result.opinions.as_ref().unwrap();
-                assert_eq!(opinions.records.len(), 4096);
+                assert_eq!(opinions.records.len(), 20_000);
                 assert!(opinions.records.iter().all(|r| r.affinity == 1));
                 assert!(opinions.records.iter().all(|r| r.trust == 1));
                 result

@@ -3018,24 +3018,23 @@ impl Economy {
         self.hauling = draft.hauling;
         self.local_transport = draft.local_transport;
         self.epoch = epoch;
-        let large_practices = old_giving
-            .as_ref()
-            .and_then(|giving| giving.practices.as_ref())
-            .is_some_and(|practices| practices.minds.len() >= 16_384);
-        if parallel_reclaim && large_practices {
+        if parallel_reclaim {
             rayon::join(
-                || drop((old_family, old_knowledge)),
                 || {
                     rayon::join(
-                        || drop((old_dynamics, old_opinions)),
-                        || giving_practices::reclaim(old_giving),
-                    )
+                        || drop(old_family),
+                        || game_parallel_economy_knowledge::reclaim(old_knowledge),
+                    );
                 },
-            );
-        } else if parallel_reclaim {
-            rayon::join(
-                || drop((old_family, old_knowledge)),
-                || drop((old_dynamics, old_opinions, old_giving)),
+                || {
+                    rayon::join(
+                        || {
+                            drop(old_dynamics);
+                            game_parallel_economy_dynamics::reclaim_opinions(old_opinions);
+                        },
+                        || giving_practices::reclaim(old_giving),
+                    );
+                },
             );
         } else {
             drop((
