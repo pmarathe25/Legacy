@@ -17,3 +17,4 @@ The controlled person sees work requests addressed to them and can accept or dec
 The controlled person can configure their own signed trust reactions to witnessed fulfilled and unfulfilled promises, or use the scenario defaults.
 
 Local wildlife appears in the person's view by identity, species, and observable health. Remote animals, genomes, diets, and pregnancies are not exposed. `feed-animal ANIMAL GOOD QUANTITY` attempts to offer the person's carried food to a local animal and reports whether the food was used, without revealing whether it was nutritious.
+`hunt-animal ANIMAL` attempts to hunt a local animal; success requires real space for the species' fresh yield and advances the shared world.

@@ -221,6 +221,16 @@ impl Context<'_> {
 }
 
 impl Plan {
+    pub fn targets(&self) -> Vec<u64> {
+        let mut targets: Vec<_> = self
+            .records
+            .par_iter()
+            .map(|(_, food)| food.animal)
+            .collect();
+        targets.par_sort_unstable();
+        targets.dedup();
+        targets
+    }
     pub fn accepted(&self, events: &Events) -> Vec<Feeding> {
         #[cfg(feature = "profile")]
         let _profile = game_diagnostics::span("economy.animal_care.receipts");

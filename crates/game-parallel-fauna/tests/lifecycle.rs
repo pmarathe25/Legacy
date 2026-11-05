@@ -32,6 +32,7 @@ fn species() -> Species {
         mutation_per_million: 0,
         mutation_step: 0,
         climate: None,
+        hunting: None,
     }
 }
 fn animal(id: u64, sex: Sex, allele: u16) -> Animal {

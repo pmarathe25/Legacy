@@ -11,19 +11,70 @@ pub struct Catalog {
 #[derive(Default)]
 pub struct Growth<'a> {
     pub harvest: &'a [Transaction],
+    /// Domain-validated animal yield; every accepted creation is tied to a staged animal death.
+    pub animal_yield: &'a [AnimalYield],
     pub compact_consumption: &'a [u64],
+}
+/// A domain-validated yield tied to one prey and one hunter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimalYield {
+    pub action: u64,
+    pub animal: u64,
+    pub hunter: u64,
+    pub good: u32,
+    pub quantity: u64,
 }
 pub fn combine_growth(
     external: &[Transaction],
     growth: &[Transaction],
+    animal_yield: &[Transaction],
 ) -> Option<Vec<Transaction>> {
-    (!growth.is_empty()).then(|| {
+    (!growth.is_empty() || !animal_yield.is_empty()).then(|| {
         external
             .par_iter()
             .chain(growth.par_iter())
+            .chain(animal_yield.par_iter())
             .cloned()
             .collect()
     })
+}
+/// Generate canonical dated output only for unique prey and hunters selected by the animal owner.
+pub fn prepare_animal_yield(
+    catalog: &Catalog,
+    yields: &[AnimalYield],
+    tick: u64,
+) -> Result<Vec<Transaction>, String> {
+    let mut animals: Vec<_> = yields.par_iter().map(|y| y.animal).collect();
+    let mut hunters: Vec<_> = yields.par_iter().map(|y| y.hunter).collect();
+    let mut actions: Vec<_> = yields.par_iter().map(|y| y.action).collect();
+    animals.par_sort_unstable();
+    hunters.par_sort_unstable();
+    actions.par_sort_unstable();
+    if animals.first() == Some(&0)
+        || hunters.first() == Some(&0)
+        || actions.first() == Some(&0)
+        || animals.par_windows(2).any(|p| p[0] == p[1])
+        || hunters.par_windows(2).any(|p| p[0] == p[1])
+        || actions.par_windows(2).any(|p| p[0] == p[1])
+    {
+        return Err("invalid animal yield identity".into());
+    }
+    yields
+        .par_iter()
+        .map(|y| {
+            Ok(Transaction {
+                id: y.action,
+                movements: vec![],
+                creations: vec![catalog.creation(
+                    y.action,
+                    Place::Person(y.hunter),
+                    y.good,
+                    y.quantity,
+                    tick,
+                )?],
+            })
+        })
+        .collect()
 }
 /// The environment may produce only freshly dated output into regional stock.
 pub fn validate_growth(

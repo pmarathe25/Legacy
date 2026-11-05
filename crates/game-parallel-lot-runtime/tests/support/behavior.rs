@@ -75,6 +75,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                 &[],
                 Growth {
                     harvest: &[output(1, Some(5))],
+                    animal_yield: &[],
                     compact_consumption: &[]
                 },
                 1
@@ -90,6 +91,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
             &[],
             Growth {
                 harvest: &[output(1, None), output(2, None)],
+                animal_yield: &[],
                 compact_consumption: &[],
             },
             1,
@@ -111,6 +113,110 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
             .unwrap()
             .used,
         7
+    );
+}
+
+#[test]
+fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
+    use game_parallel_lot_content::AnimalYield;
+    let mut snapshot = runtime().snapshot();
+    snapshot
+        .custody
+        .containers
+        .push(Container::new(Place::Person(1), 2, vec![]).unwrap());
+    snapshot
+        .custody
+        .containers
+        .push(Container::new(Place::Person(2), 2, vec![]).unwrap());
+    let mut world = Runtime::compile(snapshot).unwrap();
+    let yield_ = AnimalYield {
+        action: 10,
+        animal: 3,
+        hunter: 1,
+        good: 1,
+        quantity: 2,
+    };
+    let invalid = AnimalYield {
+        action: 11,
+        hunter: 2,
+        ..yield_
+    };
+    let before = world.snapshot();
+    assert!(
+        world
+            .prepare_with_growth(
+                &[],
+                &[],
+                &[],
+                &[],
+                Growth {
+                    harvest: &[],
+                    animal_yield: &[yield_, invalid],
+                    compact_consumption: &[]
+                },
+                7
+            )
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    let draft = world
+        .prepare_with_growth(
+            &[],
+            &[],
+            &[],
+            &[],
+            Growth {
+                harvest: &[],
+                animal_yield: &[yield_],
+                compact_consumption: &[],
+            },
+            7,
+        )
+        .unwrap();
+    assert!(
+        draft
+            .events()
+            .physical_actions
+            .iter()
+            .any(|event| event.id == 10 && event.accepted)
+    );
+    world.commit_advance(draft).unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        2
+    );
+    let next = AnimalYield {
+        action: 12,
+        animal: 4,
+        ..yield_
+    };
+    let draft = world
+        .prepare_with_growth(
+            &[],
+            &[],
+            &[],
+            &[],
+            Growth {
+                harvest: &[],
+                animal_yield: &[next],
+                compact_consumption: &[],
+            },
+            7,
+        )
+        .unwrap();
+    assert!(
+        draft
+            .events()
+            .physical_actions
+            .iter()
+            .any(|event| event.id == 12 && !event.accepted)
     );
 }
 #[test]

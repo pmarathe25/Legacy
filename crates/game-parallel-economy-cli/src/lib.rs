@@ -89,6 +89,8 @@ struct Scenario {
     #[serde(default)]
     animal_care: Option<game_parallel_economy::AnimalCareConfig>,
     #[serde(default)]
+    hunting: Option<game_parallel_economy::Hunting>,
+    #[serde(default)]
     food_search: Option<game_parallel_economy::FoodSearch>,
     #[serde(default)]
     giving: Option<GivingConfig>,
@@ -1317,6 +1319,7 @@ pub fn scenario_with_options(
         gathering,
         fauna,
         animal_care,
+        hunting: scenario.hunting,
         food_search: scenario.food_search,
         giving,
         medical,

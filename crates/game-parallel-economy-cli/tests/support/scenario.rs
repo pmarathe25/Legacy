@@ -96,6 +96,10 @@ fn wildlife_climate_settings_are_loaded_from_content() {
         inherited_tolerance = 4
         hardiness_locus = 1
         damage_per_excess = 2
+        [species.hunting]
+        good = "grain"
+        quantity = 2
+        success_per_thousand = 1000
     "#;
     let config: game_parallel_fauna::content::Config = toml::from_str(text).unwrap();
     let fauna = config.build(|name| (name == "grain").then_some(1)).unwrap();
@@ -107,6 +111,42 @@ fn wildlife_climate_settings_are_loaded_from_content() {
             .inherited_tolerance,
         4
     );
+    assert_eq!(fauna.species[0].hunting.as_ref().unwrap().good, 1);
+}
+
+#[test]
+fn player_hunts_a_local_animal_into_actual_possessions() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut state = scenario(
+        &root.join("content/parallel/economy-wildlife.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let grain = state.fauna.as_ref().unwrap().species[0].food_good;
+    state.fauna.as_mut().unwrap().species[0].hunting = Some(game_parallel_fauna::HuntYield {
+        good: grain,
+        quantity: 1,
+        success_per_thousand: 1000,
+    });
+    let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+    assert!(Player::new(&mut world).hunt_animal(1).unwrap());
+    let view = Player::new(&mut world).view().unwrap();
+    assert!(
+        view.possessions
+            .iter()
+            .any(|lot| lot.good == grain && lot.quantity == 1)
+    );
+    assert_eq!(
+        view.animals
+            .iter()
+            .find(|animal| animal.id == 1)
+            .unwrap()
+            .health,
+        0
+    );
+    assert!(Player::new(&mut world).hunt_animal(1).is_err());
 }
 
 #[test]

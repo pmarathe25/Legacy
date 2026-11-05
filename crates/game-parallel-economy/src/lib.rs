@@ -63,6 +63,7 @@ mod giving_discovery;
 mod giving_inheritance;
 mod giving_practices;
 mod hauling;
+mod hunting;
 mod medical;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
 pub use giving::{
@@ -73,6 +74,7 @@ pub use giving_discovery::Policy as AcquaintanceAsking;
 pub use hauling::{
     Asking as HaulingAsking, Hauling, Policy as HaulingPolicy, Request as HaulingRequest,
 };
+pub use hunting::{Hunting, Policy as HuntingPolicy};
 pub use medical::{
     AcquaintancePolicy as MedicalAcquaintancePolicy, Medical, Policy as MedicalPolicy,
 };
@@ -130,6 +132,7 @@ pub struct Economy {
     gathering: Option<Gathering>,
     fauna: Option<Fauna>,
     animal_care: Option<AnimalCare>,
+    hunting: Option<Hunting>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
     medical: Option<Medical>,
@@ -173,6 +176,7 @@ pub struct Draft {
     given: Option<bool>,
     treated_other: Option<bool>,
     fed_animal: Option<bool>,
+    hunted: Option<bool>,
 }
 impl Draft {
     pub fn events(&self) -> &Events {
@@ -934,6 +938,19 @@ impl Economy {
         self.commit(draft)?;
         Ok(fed)
     }
+    /// Attempt to hunt a nearby animal; success requires admitted physical yield.
+    pub fn hunt_animal(&mut self, person: u64, animal: u64) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_parallel_economy_interaction::PhysicalChoice::HuntAnimal { person, animal }),
+        )?;
+        let hunted = draft.hunted.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(hunted)
+    }
     /// Attempt treatment; the result reports whether medicine was consumed.
     pub fn treat_other(
         &mut self,
@@ -1046,6 +1063,9 @@ impl Economy {
         }
         if let Some(care) = &state.animal_care {
             care.validate(&ids, &goods, state.fauna.as_ref())?;
+        }
+        if let Some(hunting) = &state.hunting {
+            hunting.validate(&ids, state.fauna.as_ref())?;
         }
         if let Some(search) = &state.food_search {
             search.validate(&ids, state.knowledge.as_ref(), state.travel.as_ref())?;
@@ -1240,6 +1260,7 @@ impl Economy {
             gathering: state.gathering,
             fauna: state.fauna,
             animal_care: state.animal_care,
+            hunting: state.hunting,
             food_search: state.food_search,
             giving: state.giving,
             medical: state.medical,
@@ -1282,6 +1303,7 @@ impl Economy {
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             animal_care: self.animal_care.clone(),
+            hunting: self.hunting.clone(),
             food_search: self.food_search.clone(),
             giving: self.giving.clone(),
             medical: self.medical.clone(),
@@ -1782,6 +1804,52 @@ impl Economy {
             .ok_or("action count overflow")?;
         if !animal_care_plan.actors.is_empty() {
             game_parallel_economy_work::reserve(&mut busy, animal_care_plan.actors.iter().copied());
+        }
+        let manual_hunt = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::HuntAnimal {
+                person,
+                animal,
+            }) => Some((person, animal)),
+            _ => None,
+        };
+        if let Some((person, _)) = manual_hunt
+            && (self.family.as_ref().is_some_and(|f| {
+                f.members
+                    .iter()
+                    .any(|m| m.id == person && m.age < f.rules.min_work_age)
+            }) || self.physical.work().iter().any(|w| {
+                w.job.worker == person && w.phase == game_parallel_lot_runtime::Phase::Working
+            }))
+        {
+            return Err("hunting requires an available person".into());
+        }
+        let mut feed_targets = animal_care_plan.targets();
+        if let Some(game_parallel_economy_interaction::PhysicalChoice::FeedAnimal {
+            animal, ..
+        }) = player_transfer
+        {
+            feed_targets.push(animal);
+            feed_targets.par_sort_unstable();
+            feed_targets.dedup();
+        }
+        let hunting_plan = hunting::Context {
+            owner: self.hunting.as_ref(),
+            fauna: self.fauna.as_ref(),
+            people: &self.people,
+            opinions: self.opinions.as_ref(),
+            busy: &busy,
+            feed_targets: &feed_targets,
+            max_hunger: self.rules.max_work_hunger,
+            seed: self.seed,
+            tick,
+            manual: manual_hunt,
+        }
+        .prepare(action_base)?;
+        action_base = action_base
+            .checked_add(hunting_plan.yields.len() as u64)
+            .ok_or("action count overflow")?;
+        if !hunting_plan.actors.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, hunting_plan.actors.iter().copied());
         }
         let mut next_hauling = self.hauling.clone();
         if let Some(hauling) = &mut next_hauling {
@@ -2737,6 +2805,7 @@ impl Economy {
             (
                 game_parallel_lot_runtime::Growth {
                     harvest,
+                    animal_yield: &hunting_plan.yields,
                     compact_consumption: &compact,
                 },
                 staged_custody,
@@ -2775,6 +2844,8 @@ impl Economy {
                 .iter()
                 .any(|event| event.id == *id && event.accepted)
         });
+        let hunted_animals = hunting_plan.accepted(physical.events());
+        let hunted = manual_hunt.map(|(person, _)| hunting_plan.caught(person, &hunted_animals));
         let mut gathering = gathering_plan
             .map(|p| {
                 p.publish(
@@ -2818,7 +2889,14 @@ impl Economy {
                 })
                 .collect();
             let draft = fauna
-                .advance_with_feeding_and_exposure(&patches, &feedings, &exposure, self.seed, tick)
+                .advance_with_hunts(
+                    &patches,
+                    &feedings,
+                    &exposure,
+                    &hunted_animals,
+                    self.seed,
+                    tick,
+                )
                 .map_err(str::to_owned)?;
             if let Some(gathering) = &mut gathering {
                 gathering
@@ -3520,6 +3598,7 @@ impl Economy {
             given,
             treated_other,
             fed_animal,
+            hunted,
         })
     }
     pub fn commit(&mut self, draft: Draft) -> Result<Events, String> {

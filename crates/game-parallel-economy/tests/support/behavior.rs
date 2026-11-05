@@ -218,6 +218,7 @@ fn fixture() -> State {
         gathering: None,
         fauna: None,
         animal_care: None,
+        hunting: None,
         food_search: None,
         giving: None,
         medical: None,
@@ -258,6 +259,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             mutation_per_million: 0,
             mutation_step: 0,
             climate: None,
+            hunting: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -434,6 +436,389 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
         run(no_stock, 4).fauna.as_ref().unwrap().animals[0].hunger,
         4
     );
+}
+
+fn hunting_fixture() -> State {
+    use game_parallel_genetics::{Genome, Sex};
+    let mut state = fixture();
+    state.agreements = None;
+    state.autowork = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+    }
+    let female = Genome {
+        sex: Sex::Female,
+        alleles: [[100; 2]; 4],
+    };
+    let male = Genome {
+        sex: Sex::Male,
+        alleles: [[900; 2]; 4],
+    };
+    state.fauna = Some(Fauna {
+        last_tick: 0,
+        next_id: 3,
+        species: vec![AnimalSpecies {
+            id: 1,
+            name: "grazer".into(),
+            food_good: 1,
+            intake: 2,
+            hunger_per_tick: 1,
+            relief_per_unit: 1,
+            starvation_threshold: 10,
+            starvation_damage: 1,
+            max_health: 10,
+            adult_age: 1,
+            fertile_until: 10,
+            lifespan: 30,
+            gestation: 2,
+            conception_one_in: u64::MAX,
+            breeding_max_hunger: 5,
+            newborn_health: 10,
+            mutation_per_million: 0,
+            mutation_step: 0,
+            climate: None,
+            hunting: Some(game_parallel_fauna::HuntYield {
+                good: 2,
+                quantity: 2,
+                success_per_thousand: 1000,
+            }),
+        }],
+        animals: vec![
+            Animal {
+                id: 1,
+                species: 1,
+                region: 1,
+                age: 1,
+                health: 10,
+                hunger: 1,
+                genome: female,
+                pregnancy: Some(game_parallel_fauna::Pregnancy {
+                    father: 2,
+                    father_genome: male.clone(),
+                    due: 1,
+                }),
+                parents: None,
+                social_response: None,
+                opinions: vec![],
+            },
+            Animal {
+                id: 2,
+                species: 1,
+                region: 1,
+                age: 1,
+                health: 10,
+                hunger: 1,
+                genome: male,
+                pregnancy: None,
+                parents: None,
+                social_response: None,
+                opinions: vec![],
+            },
+        ],
+    });
+    state.hunting = Some(Hunting {
+        policies: vec![
+            HuntingPolicy {
+                person: 1,
+                animal: 1,
+                willing: true,
+                pressured_by: None,
+                pressure_threshold: None,
+            },
+            HuntingPolicy {
+                person: 4,
+                animal: 1,
+                willing: false,
+                pressured_by: Some(1),
+                pressure_threshold: Some(3),
+            },
+        ],
+    });
+    state
+}
+
+#[test]
+fn contested_hunting_conserves_yield_and_prevents_births() {
+    let mut initial = hunting_fixture();
+    initial.gathering = Some(Gathering {
+        max_hunger: 20,
+        inherit_births: false,
+        nodes: vec![ResourceNode {
+            id: 1,
+            region: 1,
+            good: 1,
+            available: 10,
+            capacity: 10,
+            regrowth: 0,
+            yield_per_action: 1,
+        }],
+        policies: vec![],
+    });
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if reverse {
+                    state.hunting.as_mut().unwrap().policies.reverse();
+                }
+                let mut world = Economy::compile(state).unwrap();
+                let stale = world.prepare().unwrap();
+                world.advance().unwrap();
+                let after = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), after);
+                let fauna = after.fauna.as_ref().unwrap();
+                assert_eq!(fauna.animals[0].health, 0);
+                assert_eq!(fauna.animals.len(), 2);
+                assert_eq!(after.gathering.as_ref().unwrap().nodes[0].available, 8);
+                let yield_count: u64 = after
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|c| matches!(c.place, Place::Person(_)))
+                    .flat_map(|c| c.lots.iter())
+                    .filter(|lot| lot.good == 2)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(yield_count, 2);
+                let saved = serde_json::to_string(&after).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let next = world.snapshot();
+                let next_yield: u64 = next
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|c| matches!(c.place, Place::Person(_)))
+                    .flat_map(|c| c.lots.iter())
+                    .filter(|lot| lot.good == 2)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(next_yield, 2);
+                after
+            })
+    };
+    let a = run(1, false);
+    let b = run(4, true);
+    assert_eq!(a.fauna, b.fauna);
+    assert_eq!(a.physical, b.physical);
+}
+
+#[test]
+fn hunting_needs_capacity_and_yields_to_animal_feeding() {
+    let mut full = hunting_fixture();
+    full.hunting.as_mut().unwrap().policies.truncate(1);
+    full.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    let holder = full
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 10,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(full).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().fauna.unwrap().animals[0].health > 0);
+    let mut feeding = hunting_fixture();
+    feeding.animal_care = Some(AnimalCare {
+        policies: vec![AnimalCarePolicy {
+            person: 1,
+            animal: 1,
+            good: 1,
+            quantity: 1,
+            willing: true,
+            health_at_most: 10,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let mut world = Economy::compile(feeding).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.fauna.as_ref().unwrap().animals[0].health > 0);
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        0
+    );
+    assert!(
+        !state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .filter(|c| matches!(c.place, Place::Person(_)))
+            .flat_map(|c| c.lots.iter())
+            .any(|lot| lot.good == 2)
+    );
+}
+
+#[test]
+fn independent_hunters_can_hunt_distinct_animals_together() {
+    let mut state = hunting_fixture();
+    let policy = &mut state.hunting.as_mut().unwrap().policies[1];
+    policy.animal = 2;
+    policy.willing = true;
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(
+        state
+            .fauna
+            .unwrap()
+            .animals
+            .iter()
+            .all(|animal| animal.health == 0)
+    );
+    for person in [1, 4] {
+        assert!(
+            state
+                .physical
+                .custody
+                .containers
+                .iter()
+                .find(|c| c.place == Place::Person(person))
+                .unwrap()
+                .lots
+                .iter()
+                .any(|lot| lot.good == 2 && lot.quantity == 2)
+        );
+    }
+}
+
+#[test]
+fn controlled_hunting_is_a_choice_and_unwilling_hunters_need_pressure() {
+    let mut initial = hunting_fixture();
+    initial.hunting.as_mut().unwrap().policies.remove(0);
+    initial.opinions.as_mut().unwrap().records.clear();
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().fauna.unwrap().animals[0].health > 0);
+    initial.people[0].controlled = true;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.hunt_animal(1, 1).unwrap());
+    assert_eq!(world.snapshot().fauna.unwrap().animals[0].health, 0);
+    assert!(world.hunt_animal(1, 1).is_err());
+}
+
+#[test]
+fn an_attempt_does_not_require_private_knowledge_of_the_animals_yield() {
+    let mut state = hunting_fixture();
+    state.fauna.as_mut().unwrap().species[0].hunting = None;
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.hunting.as_mut().unwrap().policies.truncate(1);
+    state.people[0].willing_to_work = true;
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![WorkPolicy {
+            person: 1,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        }],
+        requests: None,
+    });
+    let mut attempting = Economy::compile(state.clone()).unwrap();
+    attempting.advance().unwrap();
+    assert!(attempting.snapshot().physical.work.is_empty());
+    state.hunting = None;
+    let mut not_attempting = Economy::compile(state.clone()).unwrap();
+    not_attempting.advance().unwrap();
+    assert!(!not_attempting.snapshot().physical.work.is_empty());
+    state.people[0].controlled = true;
+    let mut controlled = Economy::compile(state).unwrap();
+    assert!(!controlled.hunt_animal(1, 1).unwrap());
+    assert_eq!(controlled.tick(), 1);
+}
+
+#[test]
+#[ignore]
+fn concentrated_hunting_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let mut state = concentrated(count);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    state.fauna = hunting_fixture().fauna;
+    state.hunting = Some(Hunting {
+        policies: (1..=count)
+            .map(|person| HuntingPolicy {
+                person,
+                animal: 1,
+                willing: true,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                assert_eq!(state.fauna.unwrap().animals[0].health, 0);
+                let yield_count: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|c| matches!(c.place, Place::Person(_)))
+                    .flat_map(|c| c.lots.iter())
+                    .filter(|lot| lot.good == 2)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(yield_count, 2);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} concentrated_hunting_seconds={:.6}",
+                samples[1]
+            );
+        });
 }
 
 fn local_store_fixture() -> State {
@@ -14727,6 +15112,7 @@ fn concentrated_animal_care_benchmark() {
             mutation_per_million: 0,
             mutation_step: 0,
             climate: None,
+            hunting: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -14920,6 +15306,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
             mutation_per_million: 0,
             mutation_step: 0,
             climate: None,
+            hunting: None,
         }],
         animals: (1..=2)
             .map(|id| Animal {

@@ -1,5 +1,5 @@
 //! Data-file conversion for species with named food goods.
-use crate::{Animal, Climate, Fauna, Species};
+use crate::{Animal, Climate, Fauna, HuntYield, Species};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -36,6 +36,16 @@ struct SpeciesConfig {
     mutation_step: u16,
     #[serde(default)]
     climate: Option<Climate>,
+    #[serde(default)]
+    hunting: Option<HuntYieldConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct HuntYieldConfig {
+    good: String,
+    quantity: u64,
+    success_per_thousand: u32,
 }
 impl Config {
     pub fn build(self, lookup: impl Fn(&str) -> Option<u32>) -> Result<Fauna, String> {
@@ -64,6 +74,17 @@ impl Config {
                     mutation_per_million: s.mutation_per_million,
                     mutation_step: s.mutation_step,
                     climate: s.climate,
+                    hunting: s
+                        .hunting
+                        .map(|yield_| -> Result<_, String> {
+                            Ok(HuntYield {
+                                good: lookup(&yield_.good)
+                                    .ok_or_else(|| format!("unknown hunt yield {}", yield_.good))?,
+                                quantity: yield_.quantity,
+                                success_per_thousand: yield_.success_per_thousand,
+                            })
+                        })
+                        .transpose()?,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

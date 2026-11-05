@@ -202,7 +202,13 @@ impl Runtime {
         game_parallel_lot_work::validate_actions(&self.catalog, external)?;
         let next_tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
         game_parallel_lot_content::validate_growth(&self.catalog, growth.harvest, next_tick)?;
-        let combined = game_parallel_lot_content::combine_growth(external, growth.harvest);
+        let animal_yield = game_parallel_lot_content::prepare_animal_yield(
+            &self.catalog,
+            growth.animal_yield,
+            next_tick,
+        )?;
+        let combined =
+            game_parallel_lot_content::combine_growth(external, growth.harvest, &animal_yield);
         let external = combined.as_deref().unwrap_or(external);
         game_parallel_lot_work::validate_starts(&self.work, starts)?;
         let start_plan = game_parallel_lot_work::start(starts, &self.recipes)?;

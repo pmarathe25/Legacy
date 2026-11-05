@@ -252,6 +252,7 @@ pub fn physical_growth<'a>(
 ) -> game_parallel_lot_runtime::Growth<'a> {
     game_parallel_lot_runtime::Growth {
         harvest: plan.map_or(&[], |plan| plan.harvest.as_slice()),
+        animal_yield: &[],
         compact_consumption: compact,
     }
 }

@@ -32,6 +32,17 @@ pub struct Species {
     /// Optional response to regional seasonal exposure; absent means no modeled stress.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub climate: Option<Climate>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hunting: Option<HuntYield>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HuntYield {
+    pub good: u32,
+    pub quantity: u64,
+    /// Chance in a thousand that an otherwise viable pursuit succeeds.
+    pub success_per_thousand: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -204,6 +215,11 @@ impl Fauna {
                     || s.climate
                         .as_ref()
                         .is_some_and(|climate| climate.hardiness_locus >= 4)
+                    || s.hunting.as_ref().is_some_and(|yield_| {
+                        !goods.contains(&yield_.good)
+                            || yield_.quantity == 0
+                            || yield_.success_per_thousand > 1000
+                    })
             })
             || ids.first() == Some(&0)
             || ids.last().is_some_and(|id| *id >= self.next_id)
@@ -272,7 +288,13 @@ impl Fauna {
     /// across worker counts; failed staging does not mutate the animals or the patches.
     pub fn advance(&self, patches: &[Patch], seed: u64, tick: u64) -> Result<Draft, &'static str> {
         let regions = self.animals.par_iter().map(|a| a.region).collect();
-        let goods = self.species.par_iter().map(|s| s.food_good).collect();
+        let goods = self
+            .species
+            .par_iter()
+            .flat_map_iter(|s| {
+                std::iter::once(s.food_good).chain(s.hunting.iter().map(|yield_| yield_.good))
+            })
+            .collect();
         self.validate(&regions, &goods, self.last_tick)?;
         self.advance_validated(patches, seed, tick)
     }
@@ -307,8 +329,46 @@ impl Fauna {
         seed: u64,
         tick: u64,
     ) -> Result<Draft, &'static str> {
+        self.advance_with_hunts(patches, feeding, exposure, &[], seed, tick)
+    }
+
+    /// Accepted unique hunt receipts remove prey before grazing, breeding, or birth.
+    pub fn advance_with_hunts(
+        &self,
+        patches: &[Patch],
+        feeding: &[Feeding],
+        exposure: &[Exposure],
+        hunted: &[u64],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Draft, &'static str> {
         if self.last_tick.checked_add(1) != Some(tick) {
             return Err("fauna phase must advance one tick");
+        }
+        let mut hunted = hunted.to_vec();
+        hunted.par_sort_unstable();
+        if hunted.first() == Some(&0)
+            || hunted.par_windows(2).any(|pair| pair[0] == pair[1])
+            || feeding
+                .par_iter()
+                .any(|food| hunted.binary_search(&food.animal).is_ok())
+        {
+            return Err("invalid or simultaneously fed hunted animal");
+        }
+        if !hunted.is_empty() {
+            let mut living: Vec<_> = self
+                .animals
+                .par_iter()
+                .filter(|animal| animal.health > 0)
+                .map(|animal| animal.id)
+                .collect();
+            living.par_sort_unstable();
+            if hunted
+                .par_iter()
+                .any(|id| living.binary_search(id).is_err())
+            {
+                return Err("unknown living hunted animal");
+            }
         }
         let mut exposure = exposure.to_vec();
         exposure.par_sort_unstable_by_key(|row| row.region);
@@ -391,7 +451,7 @@ impl Fauna {
             .animals
             .par_iter()
             .filter_map(|a| {
-                if a.health == 0 {
+                if a.health == 0 || hunted.binary_search(&a.id).is_ok() {
                     return None;
                 }
                 let s = lookup(a.species)?;
@@ -469,6 +529,11 @@ impl Fauna {
             .map(|a| -> Result<_, &'static str> {
                 let mut next = a.clone();
                 if a.health == 0 {
+                    return Ok(next);
+                }
+                if hunted.binary_search(&a.id).is_ok() {
+                    next.health = 0;
+                    next.pregnancy = None;
                     return Ok(next);
                 }
                 if let Some(response) = &a.social_response {

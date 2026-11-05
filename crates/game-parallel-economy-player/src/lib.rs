@@ -1054,6 +1054,12 @@ impl<'a> Player<'a> {
         self.world
             .feed_animal(self.current()?, animal, good, quantity)
     }
+    pub fn hunt_animal(&mut self, animal: u64) -> Result<bool, String> {
+        if !self.view()?.animals.iter().any(|a| a.id == animal) {
+            return Err("animal is not locally visible".into());
+        }
+        self.world.hunt_animal(self.current()?, animal)
+    }
     pub fn rest(&mut self) -> Result<(), String> {
         self.world.rest(self.current()?)
     }
