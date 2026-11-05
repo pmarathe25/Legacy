@@ -465,7 +465,9 @@ impl Opinions {
         if policies.is_empty() && self.rules.minimum_report_trust.is_none() {
             return None;
         }
-        policies.par_sort_unstable_by_key(|p| p.0);
+        if policies.par_windows(2).any(|p| p[0].0 > p[1].0) {
+            policies.par_sort_unstable_by_key(|p| p.0);
+        }
         let dense_base = policies
             .first()
             .zip(policies.last())

@@ -1,5 +1,6 @@
 use game_parallel_knowledge::{Knowledge, Mind, Misreport, Observation, Record};
 use game_parallel_knowledge_columns::{ObservationView, Runtime};
+use game_parallel_opinions::{Opinions, ReportReception, Rules, Sensitivity};
 use game_parallel_social::Encounter;
 use std::{collections::HashSet, time::Instant};
 struct View(Vec<Observation>);
@@ -14,6 +15,34 @@ fn main() {
     let count: usize = args[1].parse().unwrap();
     let ticks: u64 = args[2].parse().unwrap();
     let deceive = args.get(3).is_some_and(|arg| arg == "deceive");
+    let judgment = args.get(4).is_some_and(|arg| arg == "judgment");
+    let opinions = judgment.then(|| Opinions {
+        rules: Rules {
+            minimum: -10,
+            maximum: 10,
+            initial: 1,
+            fulfilled_gain: 0,
+            default_loss: 0,
+            theft_loss: 0,
+            encounter_gain: 0,
+            fear_per_damage: 0,
+            fear_decay_per_tick: 0,
+            gratitude_gain: 0,
+            obligation_relief: 0,
+            minimum_report_trust: None,
+            affinity: None,
+            newborn_obligation_development: None,
+        },
+        sensitivities: (1..=count as u64)
+            .map(|person| Sensitivity {
+                person,
+                report_reception: Some(ReportReception::TrustAtLeast(0)),
+                ..Default::default()
+            })
+            .collect(),
+        records: vec![],
+        events: vec![],
+    });
     let initial = Knowledge {
         max_records: 4,
         minds: (1..=count as u64)
@@ -63,8 +92,11 @@ fn main() {
                     pressured: None,
                 })
                 .collect();
+            let filter = opinions.as_ref().and_then(Opinions::report_filter);
             expected = expected
-                .prepare_validated(&view.0, &regions, &encounters, now)
+                .prepare_validated_with(&view.0, &regions, &encounters, now, |receiver, sender| {
+                    filter.as_ref().is_none_or(|f| f.accepts(receiver, sender))
+                })
                 .unwrap();
         }
         let reference = start.elapsed();
@@ -81,7 +113,11 @@ fn main() {
                     pressured: None,
                 })
                 .collect();
-            let draft = runtime.prepare_validated(&view, &encounters, now).unwrap();
+            let draft =
+                runtime
+                    .begin(now)
+                    .unwrap()
+                    .prepare_trusted(&view, &encounters, opinions.as_ref());
             runtime.commit(draft).unwrap();
         }
         let columns = start.elapsed();

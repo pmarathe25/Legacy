@@ -1,5 +1,35 @@
 use super::*;
 #[test]
+fn report_judgments_handle_dense_sparse_and_reordered_people() {
+    let mut state = Opinions {
+        rules: rules(),
+        sensitivities: vec![],
+        records: vec![],
+        events: vec![],
+    };
+    state.rules.minimum_report_trust = Some(1);
+    let policy = |person, reception| Sensitivity {
+        person,
+        report_reception: Some(reception),
+        ..Default::default()
+    };
+    for people in [[3, 1, 2], [30, 10, 20]] {
+        state.sensitivities = vec![
+            policy(people[0], ReportReception::Never),
+            policy(people[1], ReportReception::Always),
+            policy(people[2], ReportReception::TrustAtLeast(0)),
+        ];
+        let filter = state.report_filter().unwrap();
+        assert!(!filter.accepts(people[0], 99));
+        assert!(filter.accepts(people[1], 99));
+        assert!(filter.accepts(people[2], 99));
+        assert!(!filter.accepts(100, 99));
+    }
+    state.sensitivities.clear();
+    state.rules.minimum_report_trust = None;
+    assert!(state.report_filter().is_none());
+}
+#[test]
 fn witnessed_takings_are_combined_per_pair_without_losing_other_feelings() {
     let mut state = Opinions {
         rules: rules(),
