@@ -77,12 +77,34 @@ pub fn advance(
     {
         return Vec::new();
     }
-    let mut starts = starts.to_vec();
-    starts.par_sort_unstable_by_key(|row| (row.worker, row.request, row.job));
-    let mut finished = finished.to_vec();
-    finished.par_sort_unstable();
-    let mut failed = failed.to_vec();
-    failed.par_sort_unstable();
+    let mut sorted_starts;
+    let starts = if starts.par_windows(2).any(|pair| {
+        (pair[0].worker, pair[0].request, pair[0].job)
+            > (pair[1].worker, pair[1].request, pair[1].job)
+    }) {
+        sorted_starts = starts.par_iter().copied().collect::<Vec<_>>();
+        sorted_starts.par_sort_unstable_by_key(|row| (row.worker, row.request, row.job));
+        sorted_starts.as_slice()
+    } else {
+        starts
+    };
+    let mut sorted_finished;
+    let finished = if finished.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        sorted_finished = finished.par_iter().copied().collect::<Vec<_>>();
+        sorted_finished.par_sort_unstable();
+        sorted_finished.as_slice()
+    } else {
+        finished
+    };
+    let mut sorted_failed;
+    let failed = if failed.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        sorted_failed = failed.par_iter().copied().collect::<Vec<_>>();
+        sorted_failed.par_sort_unstable();
+        sorted_failed.as_slice()
+    } else {
+        failed
+    };
+
     let mut gifts: Vec<_> = gifts
         .par_iter()
         .filter(|row| !row.gift.given)
@@ -101,7 +123,14 @@ pub fn advance(
         .par_chunk_by(|a, b| (a.person, a.action) == (b.person, b.action))
         .map(|rows| rows[0])
         .collect();
-    let mut old: Vec<_> = if starts.is_empty() {
+    let aligned = !starts.is_empty()
+        && prior.minds.len() == next.minds.len()
+        && prior
+            .minds
+            .par_iter()
+            .zip(next.minds.par_iter())
+            .all(|(a, b)| a.person == b.person);
+    let mut old: Vec<_> = if starts.is_empty() || aligned {
         Vec::new()
     } else {
         prior.minds.par_iter().collect()
@@ -114,7 +143,8 @@ pub fn advance(
     }
     next.minds
         .par_iter_mut()
-        .flat_map_iter(|person| {
+        .enumerate()
+        .flat_map_iter(|(index, person)| {
             let Some(existing) = person.work.as_ref() else {
                 return Vec::new();
             };
@@ -122,12 +152,14 @@ pub fn advance(
                 .binary_search_by_key(&person.person, |row| row.worker)
                 .ok()
                 .map(|i| starts[i]);
-            let old_work = old
-                .binary_search_by_key(&person.person, |row| row.person)
-                .ok()
-                .and_then(|i| old[i].work.as_ref());
             let proposed = start.and_then(|start| {
-                let old_work = old_work?;
+                let old_work = if aligned {
+                    prior.minds[index].work.as_ref()
+                } else {
+                    old.binary_search_by_key(&person.person, |row| row.person)
+                        .ok()
+                        .and_then(|i| old[i].work.as_ref())
+                }?;
                 old_work.outcome_policy?;
                 if existing.experiences.iter().any(|experience| {
                     experience.request == start.request || experience.job == start.job

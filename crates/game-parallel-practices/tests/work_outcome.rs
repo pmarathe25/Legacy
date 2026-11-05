@@ -269,3 +269,22 @@ fn interrupted_work_does_not_create_a_completed_work_expectation() {
     assert!(next.minds[1].work.as_ref().unwrap().experiences.is_empty());
     assert!(advance(&next, &[], &[], &[], 10).1.is_empty());
 }
+
+#[test]
+fn worker_start_observation_handles_reordered_staged_people() {
+    use game_parallel_practices::work::outcome::{Start, advance as observe};
+    let prior = fixture();
+    let start = Start {
+        requester: 1,
+        worker: 2,
+        recipe: 7,
+        request: 10,
+        job: 20,
+    };
+    let (expected, _) = advance(&prior, &[start], &[], &[], 2);
+    let mut reordered = prior.clone();
+    reordered.minds.reverse();
+    assert!(observe(&prior, &mut reordered, &[start], &[], &[], &[], 2).is_empty());
+    reordered.minds.sort_unstable_by_key(|person| person.person);
+    assert_eq!(reordered, expected);
+}

@@ -1,4 +1,5 @@
 use game_parallel_practices::{Decision, Mind, Practices};
+use rayon::prelude::*;
 
 fn mind(person: u64) -> Mind {
     Mind {
@@ -117,9 +118,11 @@ fn run(
     let mut next = previous.clone();
     let finished: Vec<_> = starts.iter().map(|start| start.job).collect();
     assert!(advance(&previous, &mut next, &[], &finished, &[], &[], 3).is_empty());
+    previous.minds.into_par_iter().for_each(drop);
     let previous = next;
     let mut next = previous.clone();
     let reactions = advance(&previous, &mut next, &[], &[], &[], &[], 4);
+    previous.minds.into_par_iter().for_each(drop);
     (next, reactions)
 }
 
@@ -135,6 +138,12 @@ fn many_independent_worker_expectations_are_worker_invariant() {
     };
     let (result, reactions) = execute(1);
     assert_eq!((result.clone(), reactions.clone()), execute(4));
+    let mut reversed = starts.clone();
+    reversed.reverse();
+    assert_eq!(
+        (result.clone(), reactions.clone()),
+        run(&initial, &reversed)
+    );
     assert_eq!(reactions.len(), 2048);
     assert!(
         result
