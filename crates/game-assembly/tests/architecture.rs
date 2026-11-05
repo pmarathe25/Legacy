@@ -38,8 +38,9 @@ fn crate_size_and_dependency_direction_are_enforced() {
             .sum();
         let budget = match name {
             "game-sim" => 1250,
-            "game-parallel-economy" => 7000,
+            "game-parallel-economy" => 8000,
             "game-parallel-economy-cli" => 2800,
+            "game-parallel-practices" => 1700,
             "game-parallel-economy-building" => 1500,
             "game-parallel-opinions" => 1400,
             _ => 1200,

@@ -12,7 +12,7 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
     match words.as_slice() {
         [] => {}
         ["help"] => println!(
-            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON ignore|trust|doubt|min THRESHOLD | practice-unanswered PERSON MODE | practice-value PERSON off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent PERSON off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport PERSON off|DELTA [TARGET] | food-report-reception PERSON default|all|none|MIN | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
+            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | work-practice-choice PERSON FIELD on|off | work-practice-reserve PERSON AMOUNT | work-practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON ignore|trust|doubt|min THRESHOLD | practice-unanswered PERSON MODE | practice-value PERSON off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent PERSON off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport PERSON off|DELTA [TARGET] | food-report-reception PERSON default|all|none|MIN | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["status"] => {
@@ -208,6 +208,29 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
                 _ => return Err("expected invent, approve, willing, ask, or require-report".into()),
             }
         }
+        ["work-practice-choice", person, field, choice] => world.set_work_practice_choice(
+            person.parse().map_err(|_| "invalid person")?,
+            field,
+            match *choice {
+                "on" => true,
+                "off" => false,
+                _ => return Err("expected on or off".into()),
+            },
+        )?,
+        ["work-practice-reserve", person, reserve] => world.set_work_practice_reserve(
+            person.parse().map_err(|_| "invalid person")?,
+            reserve.parse().map_err(|_| "invalid reserve")?,
+        )?,
+        ["work-practice-decide", person, author, sequence, choice] => world.decide_work_practice(
+            person.parse().map_err(|_| "invalid person")?,
+            author.parse().map_err(|_| "invalid author")?,
+            sequence.parse().map_err(|_| "invalid proposal sequence")?,
+            match *choice {
+                "accept" => true,
+                "decline" => false,
+                _ => return Err("expected accept or decline".into()),
+            },
+        )?,
         ["practice-decide", person, author, sequence, choice] => world.decide_practice(
             person.parse().map_err(|_| "invalid person")?,
             author.parse().map_err(|_| "invalid author")?,

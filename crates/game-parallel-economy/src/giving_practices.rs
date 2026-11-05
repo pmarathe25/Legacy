@@ -17,6 +17,8 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub goals: Option<&'a game_parallel_goals::Goals>,
     pub requests: Option<&'a game_parallel_autowork::requests::Requests>,
+    pub work_asks: &'a [game_parallel_autowork::requests::Request],
+    pub practice_requests: &'a [game_parallel_economy_work::PracticeRequest],
     pub encounters: &'a [Encounter],
     pub gifts: &'a Plan,
     pub events: &'a Events,
@@ -192,6 +194,57 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
             },
         )
         .map_err(str::to_owned)?;
+        let mut intentions = context.practice_requests.to_vec();
+        intentions.par_sort_unstable_by_key(|entry| (entry.requester, entry.worker, entry.recipe));
+        let mut asks: Vec<_> = context.work_asks.par_iter().collect();
+        asks.par_sort_unstable_by_key(|request| request.requester);
+        next.minds.par_iter_mut().for_each(|person| {
+            let Some(work) = person.work.as_ref() else {
+                return;
+            };
+            let Some(proposal) = work.authored.as_ref() else {
+                return;
+            };
+            let Ok(i) = asks.binary_search_by_key(&person.person, |request| request.requester)
+            else {
+                return;
+            };
+            let request = asks[i];
+            let key = (request.requester, request.worker, request.recipe);
+            if work.engagement.is_some()
+                || intentions
+                    .binary_search_by_key(&key, |entry| {
+                        (entry.requester, entry.worker, entry.recipe)
+                    })
+                    .is_err()
+                || (proposal.worker, proposal.recipe) != (request.worker, request.recipe)
+            {
+                return;
+            }
+            let engagement = game_parallel_practices::work::Engagement {
+                proposal: proposal.clone(),
+                request: request.id,
+            };
+            std::sync::Arc::make_mut(person.work.as_mut().expect("work mind")).engagement =
+                Some(engagement);
+        });
+        let mut completed = context.gifts.completed_work_gifts(context.events);
+        completed.par_sort_unstable();
+        if !completed.is_empty() {
+            next.minds.par_iter_mut().for_each(|person| {
+                let Some(work) = person.work.as_ref() else {
+                    return;
+                };
+                if work.engagement.as_ref().is_some_and(|entry| {
+                    completed
+                        .binary_search(&(person.person, entry.request))
+                        .is_ok()
+                }) {
+                    std::sync::Arc::make_mut(person.work.as_mut().expect("work mind")).engagement =
+                        None;
+                }
+            });
+        }
     }
     Ok(next)
 }
@@ -274,6 +327,76 @@ macro_rules! methods {
         pub fn set_practice_asking(&mut self, person: u64, enabled: bool) -> Result<(), String> {
             self.edit_practice(person, |mind| {
                 mind.ask_willing = enabled;
+                Ok(())
+            })
+        }
+        /// Change this person's own present choices; no proposal compels them.
+        pub fn set_work_practice_choice(
+            &mut self,
+            person: u64,
+            choice: &str,
+            enabled: bool,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                let work = mind
+                    .work
+                    .as_mut()
+                    .ok_or("person has no work practice mind")?;
+                let work = std::sync::Arc::make_mut(work);
+                match choice {
+                    "invent" => work.invent = enabled,
+                    "approve" => work.approve = enabled,
+                    "willing" => work.willing = enabled,
+                    "ask" => work.ask_willing = enabled,
+                    _ => return Err("unknown work practice choice".into()),
+                }
+                Ok(())
+            })
+        }
+        pub fn set_work_practice_reserve(
+            &mut self,
+            person: u64,
+            reserve: u64,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                let work = mind
+                    .work
+                    .as_mut()
+                    .ok_or("person has no work practice mind")?;
+                std::sync::Arc::make_mut(work).reserve = reserve;
+                Ok(())
+            })
+        }
+        /// Independently accept or reject a proposal this person actually received.
+        pub fn decide_work_practice(
+            &mut self,
+            person: u64,
+            author: u64,
+            sequence: u64,
+            approve: bool,
+        ) -> Result<(), String> {
+            let now = self.tick();
+            self.edit_practice(person, |mind| {
+                let work = mind
+                    .work
+                    .as_mut()
+                    .ok_or("person has no work practice mind")?;
+                let work = std::sync::Arc::make_mut(work);
+                let item = work
+                    .inbox
+                    .iter_mut()
+                    .find(|item| {
+                        item.proposal.author == author
+                            && item.proposal.sequence == sequence
+                            && item.proposal.expires >= now
+                    })
+                    .ok_or("no current received work proposal")?;
+                item.approved = approve;
+                item.decision = if approve {
+                    game_parallel_practices::Decision::Adopted
+                } else {
+                    game_parallel_practices::Decision::Declined
+                };
                 Ok(())
             })
         }

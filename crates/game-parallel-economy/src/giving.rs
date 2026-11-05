@@ -164,6 +164,7 @@ impl Giving {
                 mind.work.as_ref().is_some_and(|work| {
                     work.authored
                         .iter()
+                        .chain(work.engagement.iter().map(|entry| &entry.proposal))
                         .chain(work.inbox.iter().map(|row| &row.proposal))
                         .any(|proposal| !recipes.iter().any(|recipe| recipe.id == proposal.recipe))
                 })
@@ -508,11 +509,13 @@ pub struct Plan {
     pub actors: Vec<u64>,
     pub actions: Vec<Transaction>,
     records: Vec<(u64, u64, u64, u32)>,
+    work_gifts: Vec<(u64, u64, u64)>,
 }
 pub struct Context<'a> {
     pub owner: Option<&'a Giving>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
+    pub work_requests: Option<&'a game_parallel_autowork::requests::Requests>,
     pub goods: &'a [Good],
     pub view: &'a View,
     pub busy: &'a [u64],
@@ -744,6 +747,80 @@ impl Context<'_> {
                     .map(|group| group[0]),
             );
         }
+        // A witnessed completion may inspire a separate, freely chosen real gift.
+        let work_choices: Vec<_> = if practice_minds.par_iter().any(|person| {
+            person
+                .work
+                .as_ref()
+                .is_some_and(|work| work.engagement.is_some())
+        }) {
+            let mut occupied: Vec<_> = chosen.par_iter().map(|row| row.0).collect();
+            occupied.par_sort_unstable();
+            let mut memories: Vec<_> = self
+                .work_requests
+                .map_or(&[][..], |owner| owner.memories.as_slice())
+                .par_iter()
+                .collect();
+            memories
+                .par_sort_unstable_by_key(|memory| (memory.observer, memory.worker, memory.recipe));
+            practice_minds
+                .par_iter()
+                .filter_map(|person| {
+                    let work = person.work.as_ref()?;
+                    let entry = work.engagement.as_ref()?;
+                    let proposal = &entry.proposal;
+                    let sender = find(person.person)?;
+                    let recipient = find(proposal.worker)?;
+                    let from = self.view.container(Place::Person(sender.id))?;
+                    let to = self.view.container(Place::Person(recipient.id))?;
+                    let memory = memories
+                        .binary_search_by_key(
+                            &(sender.id, recipient.id, proposal.recipe),
+                            |memory| (memory.observer, memory.worker, memory.recipe),
+                        )
+                        .ok()
+                        .map(|i| memories[i])?;
+                    let pressured = work.pressure_threshold.is_some_and(|threshold| {
+                        opinions.as_ref().is_some_and(|index| {
+                            let (fear, obligation) = index.feelings(sender.id, recipient.id);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                    (memory
+                        .last_success
+                        .is_some_and(|receipt| receipt.request == entry.request)
+                        && !sender.controlled
+                        && sender.health > 0
+                        && recipient.health > 0
+                        && (work.willing || pressured)
+                        && occupied.binary_search(&sender.id).is_err()
+                        && self.busy.binary_search(&sender.id).is_err()
+                        && self
+                            .locations
+                            .region((sender.id, sender.region), (recipient.id, recipient.region))
+                            .is_some()
+                        && proposal
+                            .quantity
+                            .checked_add(work.reserve)
+                            .is_some_and(|needed| from.quantity(proposal.good) >= needed)
+                        && to.capacity.saturating_sub(to.used) >= proposal.quantity)
+                        .then_some((
+                            sender.id,
+                            recipient.id,
+                            proposal.good,
+                            proposal.quantity,
+                            entry.request,
+                        ))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        chosen.par_extend(
+            work_choices
+                .par_iter()
+                .map(|row| (row.0, row.1, row.2, row.3)),
+        );
         // A remembered helper can become the target of an unsolicited personal offer.
         // Existing requested help takes priority, so each person still chooses one action.
         let mut already_chosen: Vec<_> = chosen.par_iter().map(|row| row.0).collect();
@@ -835,14 +912,37 @@ impl Context<'_> {
             .enumerate()
             .map(|(i, row)| (base + i as u64, row.0, row.1, row.2))
             .collect();
+        let work_gifts = work_choices
+            .par_iter()
+            .filter_map(|row| {
+                chosen
+                    .binary_search(&(row.0, row.1, row.2, row.3))
+                    .ok()
+                    .map(|index| (base + index as u64, row.0, row.4))
+            })
+            .collect();
         Ok(Plan {
             actors,
             actions,
             records,
+            work_gifts,
         })
     }
 }
 impl Plan {
+    pub(crate) fn completed_work_gifts(&self, events: &Events) -> Vec<(u64, u64)> {
+        let accepted: HashSet<_> = events
+            .physical_actions
+            .par_iter()
+            .filter(|event| event.accepted)
+            .map(|event| event.id)
+            .collect();
+        self.work_gifts
+            .par_iter()
+            .filter(|row| accepted.contains(&row.0))
+            .map(|row| (row.1, row.2))
+            .collect()
+    }
     pub(crate) fn practice_gifts(&self, events: &Events) -> Vec<(u64, u64, u32, u64)> {
         let accepted: HashSet<_> = events
             .physical_actions

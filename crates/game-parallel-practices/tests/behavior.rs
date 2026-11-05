@@ -161,6 +161,7 @@ fn work_practice_is_delivered_through_contact_and_considered_independently() {
         next_review: 0,
         sequence: 0,
         authored: None,
+        engagement: None,
         inbox: vec![],
     };
     let mut author = mind(1);

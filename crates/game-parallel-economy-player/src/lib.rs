@@ -789,6 +789,23 @@ impl<'a> Player<'a> {
         self.world
             .decide_practice(self.current()?, author, sequence, approve)
     }
+    pub fn decide_work_practice(
+        &mut self,
+        author: u64,
+        sequence: u64,
+        approve: bool,
+    ) -> Result<(), String> {
+        self.world
+            .decide_work_practice(self.current()?, author, sequence, approve)
+    }
+    pub fn set_work_practice_choice(&mut self, choice: &str, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_work_practice_choice(self.current()?, choice, enabled)
+    }
+    pub fn set_work_practice_reserve(&mut self, reserve: u64) -> Result<(), String> {
+        self.world
+            .set_work_practice_reserve(self.current()?, reserve)
+    }
     pub fn report_practice(
         &mut self,
         listener: u64,

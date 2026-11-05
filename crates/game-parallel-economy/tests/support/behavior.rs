@@ -8603,6 +8603,23 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
     use game_parallel_practices::work::Mind as WorkMind;
     use game_parallel_social::{Participant, Rules as SocialRules, Social};
     let mut initial = fixture();
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|holder| holder.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 2,
+            expires_at: Some(20),
+        }],
+    )
+    .unwrap();
     initial.agreements = None;
     initial.nutrition = None;
     for person in &mut initial.people {
@@ -8622,6 +8639,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         next_review: 0,
         sequence: 0,
         authored: None,
+        engagement: None,
         inbox: vec![],
     };
     let mut author = practice_mind(1, false);
@@ -8831,6 +8849,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                     .unwrap()
                     .minds;
                 std::sync::Arc::make_mut(minds[0].work.as_mut().unwrap()).ask_willing = true;
+                std::sync::Arc::make_mut(minds[0].work.as_mut().unwrap()).willing = true;
                 let preference = &mut offered
                     .autowork
                     .as_mut()
@@ -8859,13 +8878,50 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                     &mut std::sync::Arc::make_mut(recipient.work.as_mut().unwrap()).inbox[0];
                 received.decision = PracticeDecision::Declined;
                 received.approved = false;
+                let mut refuses_gift = offered.clone();
+                let mind = &mut refuses_gift
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds[0];
+                std::sync::Arc::make_mut(mind.work.as_mut().unwrap()).willing = false;
+                let mut no_stock = offered.clone();
+                let holder = no_stock
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|holder| holder.place == Place::Person(1))
+                    .unwrap();
+                *holder = Container::new(Place::Person(1), 10, vec![]).unwrap();
+                let mut keeps_reserve = offered.clone();
+                let mind = &mut keeps_reserve
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds[0];
+                std::sync::Arc::make_mut(mind.work.as_mut().unwrap()).reserve = 1;
+                let mut observation_world = Economy::compile(offered.clone()).unwrap();
                 let mut willing_world = Economy::compile(offered).unwrap();
                 let mut unwilling_world = Economy::compile(rejected).unwrap();
+                let mut refuses_world = Economy::compile(refuses_gift).unwrap();
+                let mut broke_world = Economy::compile(no_stock).unwrap();
+                let mut reserve_world = Economy::compile(keeps_reserve).unwrap();
                 let mut willing_started = false;
                 let mut unwilling_started = false;
-                for _ in 0..4 {
+                let mut broke_started = false;
+                for _ in 0..5 {
                     willing_started |= !willing_world.advance().unwrap().started.is_empty();
                     unwilling_started |= !unwilling_world.advance().unwrap().started.is_empty();
+                    refuses_world.advance().unwrap();
+                    broke_started |= !broke_world.advance().unwrap().started.is_empty();
+                    reserve_world.advance().unwrap();
                 }
                 assert!(
                     willing_started,
@@ -8874,6 +8930,137 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                 assert!(
                     !unwilling_started,
                     "an unaccepted offer does not motivate work"
+                );
+                assert!(
+                    broke_started,
+                    "a claim can motivate work even when its maker has no goods"
+                );
+                let held = |world: &Economy| {
+                    world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|holder| holder.place == Place::Person(2))
+                        .unwrap()
+                        .used
+                };
+                assert_eq!(
+                    held(&willing_world),
+                    1,
+                    "a willing person can give real goods after witnessing the work"
+                );
+                assert_eq!(
+                    held(&refuses_world),
+                    0,
+                    "the maker can choose not to follow through"
+                );
+                assert_eq!(held(&broke_world), 0, "a false claim cannot create goods");
+                assert_eq!(
+                    held(&reserve_world),
+                    0,
+                    "a personal reserve can prevent the gift"
+                );
+                let mut witnessed = None;
+                for _ in 0..5 {
+                    observation_world.advance().unwrap();
+                    let snapshot = observation_world.snapshot();
+                    let entry = snapshot
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds[0]
+                        .work
+                        .as_ref()
+                        .unwrap()
+                        .engagement
+                        .as_ref();
+                    let memory = &snapshot
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .memories[0];
+                    if entry.is_some_and(|entry| {
+                        memory
+                            .last_success
+                            .is_some_and(|receipt| receipt.request == entry.request)
+                    }) {
+                        witnessed = Some(snapshot);
+                        break;
+                    }
+                }
+                let witnessed =
+                    witnessed.expect("the requester personally observes the requested job");
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&witnessed).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let mut different_job = witnessed.clone();
+                different_job
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .memories[0]
+                    .last_success
+                    .as_mut()
+                    .unwrap()
+                    .request = 1;
+                let mut different_job = Economy::compile(different_job).unwrap();
+                observation_world
+                    .set_work_practice_choice(1, "willing", false)
+                    .unwrap();
+                restored
+                    .set_work_practice_choice(1, "willing", false)
+                    .unwrap();
+                observation_world.advance().unwrap();
+                restored.advance().unwrap();
+                different_job.advance().unwrap();
+                assert_eq!(
+                    observation_world.snapshot(),
+                    restored.snapshot(),
+                    "a pending personal decision survives save and load"
+                );
+                assert_eq!(
+                    held(&observation_world),
+                    0,
+                    "the maker can change their mind after work is completed"
+                );
+                observation_world
+                    .set_work_practice_choice(1, "willing", true)
+                    .unwrap();
+                observation_world.advance().unwrap();
+                assert_eq!(held(&observation_world), 1);
+                assert_eq!(
+                    held(&different_job),
+                    0,
+                    "another witnessed job cannot trigger this gift"
+                );
+                assert!(
+                    observation_world
+                        .snapshot()
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds[0]
+                        .work
+                        .as_ref()
+                        .unwrap()
+                        .engagement
+                        .is_none(),
+                    "an accepted gift is not repeated"
                 );
                 state
             })

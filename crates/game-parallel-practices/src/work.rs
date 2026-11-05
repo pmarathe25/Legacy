@@ -25,6 +25,9 @@ pub struct Mind {
     pub sequence: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authored: Option<Proposal>,
+    /// One personally remembered request made using these terms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engagement: Option<Engagement>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox: Vec<Received>,
 }
@@ -36,6 +39,13 @@ pub struct Received {
     pub delivered: u64,
     pub decision: Decision,
     pub approved: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Engagement {
+    pub proposal: Proposal,
+    pub request: u64,
 }
 
 pub fn valid(
@@ -64,6 +74,12 @@ pub fn valid(
             .authored
             .as_ref()
             .is_none_or(|p| valid_proposal(p) && p.author == person && p.sequence <= mind.sequence)
+        && mind.engagement.as_ref().is_none_or(|entry| {
+            entry.request > 0
+                && valid_proposal(&entry.proposal)
+                && entry.proposal.author == person
+                && entry.proposal.sequence <= mind.sequence
+        })
         && mind.inbox.iter().enumerate().all(|(i, r)| {
             valid_proposal(&r.proposal)
                 && r.proposal.worker == person
@@ -244,6 +260,9 @@ where
             .authored
             .as_ref()
             .is_some_and(|p| p.expires < context.tick)
+            || existing.engagement.as_ref().is_some_and(|entry| {
+                context.tick.saturating_sub(entry.proposal.expires) > existing.proposal_lifetime
+            })
             || existing
                 .inbox
                 .iter()
@@ -277,6 +296,11 @@ where
             .is_some_and(|p| p.expires < context.tick)
         {
             work.authored = None;
+        }
+        if work.engagement.as_ref().is_some_and(|entry| {
+            context.tick.saturating_sub(entry.proposal.expires) > work.proposal_lifetime
+        }) {
+            work.engagement = None;
         }
         work.inbox.retain(|r| r.proposal.expires >= context.tick);
         if let Some(proposal) = authored {

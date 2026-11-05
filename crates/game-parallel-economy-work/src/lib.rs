@@ -414,6 +414,10 @@ fn visible(people: &[PersonSnapshot], requester: u64, worker: u64, region: u64) 
     matches!((a, b), (Some((_, Some(ar), ah, _)), Some((_, Some(br), bh, _))) if ar == region && br == ar && ah > 0 && bh > 0)
 }
 impl Plan {
+    /// Requests actually admitted to a receiver's bounded inbox this boundary.
+    pub fn asks(&self) -> &[game_parallel_work_requests::Request] {
+        self.asks.as_ref().map_or(&[], |draft| &draft.requests)
+    }
     /// Avoid scanning personal preferences on boundaries with no relevant outcomes.
     pub fn may_have_work_experiences(&self, physical: &Events) -> bool {
         !physical.finished.is_empty()

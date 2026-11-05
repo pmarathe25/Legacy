@@ -919,6 +919,22 @@ impl Economy {
         }
         if let Some(giving) = &state.giving {
             giving.validate(&ids, physical.goods(), physical.recipes(), physical.tick())?;
+            let requests = state
+                .autowork
+                .as_ref()
+                .and_then(|auto| auto.requests.as_ref());
+            if giving.practices.as_ref().is_some_and(|practices| {
+                practices.minds.par_iter().any(|mind| {
+                    mind.work
+                        .as_ref()
+                        .and_then(|work| work.engagement.as_ref())
+                        .is_some_and(|entry| {
+                            requests.is_none_or(|requests| entry.request >= requests.next_id)
+                        })
+                })
+            }) {
+                return Err("work practice references an unknown request".into());
+            }
         }
         if let Some(hauling) = &state.hauling {
             hauling.validate(&ids, &goods, &view, state.travel.as_ref())?;
@@ -1416,6 +1432,10 @@ impl Economy {
             owner: self.giving.as_ref(),
             people: &self.people,
             opinions: self.opinions.as_ref(),
+            work_requests: self
+                .autowork
+                .as_ref()
+                .and_then(|auto| auto.requests.as_ref()),
             goods: self.physical.goods(),
             view: &view,
             busy: &busy,
@@ -2234,6 +2254,7 @@ impl Economy {
                     .binary_search_by_key(&mind.person, |p| p.id)
                     .ok()?;
                 (work.ask_willing
+                    && work.engagement.is_none()
                     && proposal.expires > tick
                     && self.people[index].health > 0
                     && !self.people[index].controlled)
@@ -2823,6 +2844,8 @@ impl Economy {
                         .autowork
                         .as_ref()
                         .and_then(|auto| auto.requests.as_ref()),
+                    work_asks: work.as_ref().map_or(&[][..], |plan| plan.asks()),
+                    practice_requests: &practice_requests,
                     encounters,
                     gifts: &giving_plan,
                     events: physical.events(),
