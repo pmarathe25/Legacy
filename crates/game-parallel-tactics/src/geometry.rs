@@ -7,7 +7,7 @@ impl Tactics {
             .enumerate()
             .map(|(i, map)| (map.region, i))
             .collect();
-        let entries: Vec<_> = self
+        let mut battles: Vec<_> = self
             .battles
             .par_iter()
             .enumerate()
@@ -26,25 +26,45 @@ impl Tactics {
                 ))
             })
             .collect::<Result<_, &'static str>>()?;
-        let count = entries.len();
-        let battles: std::collections::HashMap<_, _> = entries.into_par_iter().collect();
-        if battles.len() != count {
+        if battles.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            battles.par_sort_unstable_by_key(|row| row.0);
+        }
+        if battles.par_windows(2).any(|pair| pair[0].0 == pair[1].0) {
             return Err("duplicate tactical battle");
         }
-        let mut actors: Vec<_> = self
+        let mut actors: Vec<_> = if self
             .battles
             .par_iter()
-            .flat_map(|battle| {
-                let map = regions[&battle.region];
-                battle.people.par_iter().map(move |person| Geometry {
-                    id: person.person,
-                    encounter: battle.encounter,
-                    map,
-                    point: person.position,
-                    active: true,
+            .any(|battle| battle.people.len() >= 4096)
+        {
+            self.battles
+                .par_iter()
+                .flat_map(|battle| {
+                    let map = regions[&battle.region];
+                    battle.people.par_iter().map(move |person| Geometry {
+                        id: person.person,
+                        encounter: battle.encounter,
+                        map,
+                        point: person.position,
+                        active: true,
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            self.battles
+                .par_iter()
+                .flat_map_iter(|battle| {
+                    let map = regions[&battle.region];
+                    battle.people.iter().map(move |person| Geometry {
+                        id: person.person,
+                        encounter: battle.encounter,
+                        map,
+                        point: person.position,
+                        active: true,
+                    })
+                })
+                .collect()
+        };
         if actors.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             actors.par_sort_unstable_by_key(|actor| actor.id);
         }
@@ -59,6 +79,16 @@ impl Tactics {
     }
 }
 impl Index {
+    pub(super) fn battle_slot(&self, id: u64) -> Option<usize> {
+        let first = self.battles.first()?.0;
+        if self.battles.last()?.0.checked_sub(first) == Some((self.battles.len() - 1) as u64) {
+            usize::try_from(id.checked_sub(first)?)
+                .ok()
+                .filter(|&i| i < self.battles.len())
+        } else {
+            self.battles.binary_search_by_key(&id, |row| row.0).ok()
+        }
+    }
     pub(super) fn locate(&self, id: u64) -> Option<usize> {
         locate(&self.actors, id)
     }

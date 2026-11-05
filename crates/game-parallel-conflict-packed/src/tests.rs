@@ -3,6 +3,60 @@ use game_parallel_conflict::{Conflict, Encounter, Fighter, Order};
 use game_parallel_production_model::PersonSnapshot;
 use std::collections::BTreeMap;
 
+#[test]
+#[ignore = "performance measurement"]
+fn many_small_encounter_topology_benchmark() {
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .unwrap_or_else(|_| "1".into())
+        .parse()
+        .unwrap();
+    let count: u64 = std::env::var("LEGACY_FIGHTS")
+        .unwrap_or_else(|_| "50000".into())
+        .parse()
+        .unwrap();
+    let conflict = Conflict {
+        damage: 10,
+        next_id: count + 1,
+        events: vec![],
+        encounters: (1..=count)
+            .map(|id| Encounter {
+                id,
+                region: 1,
+                fighters: vec![
+                    Fighter {
+                        person: id * 2 - 1,
+                        side: 1,
+                        order: Order::Attack { target: id * 2 },
+                    },
+                    Fighter {
+                        person: id * 2,
+                        side: 2,
+                        order: Order::Defend,
+                    },
+                ],
+            })
+            .collect(),
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for _ in 0..5 {
+                let now = std::time::Instant::now();
+                let plan = std::hint::black_box(Plan::compile(&conflict).unwrap());
+                samples.push(now.elapsed().as_secs_f64());
+                drop(plan);
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} fights={count} topology_seconds={:.6}",
+                samples[2]
+            );
+        });
+}
+
 fn compare(conflict: &Conflict, people: &[PersonSnapshot]) {
     let expected = game_parallel_conflict::prepare(conflict, people, 7);
     let plan = Plan::compile(conflict).unwrap();
@@ -155,6 +209,18 @@ fn duplicate_encounters_and_fighters_are_rejected_in_any_order() {
     assert!(matches!(
         Plan::compile(&conflict),
         Err("fighter has multiple encounter slots")
+    ));
+    conflict.encounters[2] = fight(2, 5, 6);
+    conflict.encounters[0].fighters[0].order = Order::Attack { target: 99 };
+    assert!(matches!(
+        Plan::compile(&conflict),
+        Err("invalid strike target")
+    ));
+    let (mut large, _) = concentrated(32);
+    large.encounters[0].fighters[0].order = Order::Attack { target: 99 };
+    assert!(matches!(
+        Plan::compile(&large),
+        Err("invalid strike target")
     ));
 }
 

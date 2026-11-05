@@ -6,7 +6,7 @@ mod geometry;
 mod membership;
 mod movement;
 pub struct Index {
-    battles: std::collections::HashMap<u64, IndexedBattle>,
+    battles: Vec<(u64, IndexedBattle)>,
     actors: Vec<Geometry>,
     maps: Vec<Map>,
 }

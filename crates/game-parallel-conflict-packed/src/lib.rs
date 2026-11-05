@@ -50,40 +50,77 @@ impl Plan {
         if actors.par_windows(2).any(|pair| pair[0] == pair[1]) {
             return Err("fighter has multiple encounter slots");
         }
-        let mut edges: Vec<_> = conflict
+        let mut edges: Vec<_> = if conflict
             .encounters
             .par_iter()
-            .enumerate()
-            .map(|(encounter, fight)| {
-                let fighters: HashMap<_, _> =
-                    fight.fighters.par_iter().map(|f| (f.person, f)).collect();
-                fight
-                    .fighters
-                    .par_iter()
-                    .filter_map(|fighter| {
+            .all(|fight| fight.fighters.len() <= 32)
+        {
+            // Most confrontations have only two participants. Scan that small
+            // local slice instead of allocating a hash table and a vector for
+            // every encounter; parallelism is across independent fights.
+            conflict
+                .encounters
+                .par_iter()
+                .enumerate()
+                .flat_map_iter(|(encounter, fight)| {
+                    fight.fighters.iter().filter_map(move |fighter| {
                         let Order::Attack { target } = fighter.order else {
                             return None;
                         };
-                        let result = fighters
-                            .get(&target)
-                            .filter(|other| other.side != fighter.side)
-                            .ok_or("invalid strike target")
-                            .map(|other| {
-                                let damage = if matches!(other.order, Order::Defend) {
-                                    (conflict.damage / 2).max(1)
-                                } else {
-                                    conflict.damage
-                                };
-                                (target, fight.id, fighter.person, encounter, damage)
-                            });
-                        Some(result)
+                        Some(
+                            fight
+                                .fighters
+                                .iter()
+                                .find(|other| other.person == target && other.side != fighter.side)
+                                .ok_or("invalid strike target")
+                                .map(|other| {
+                                    let damage = if matches!(other.order, Order::Defend) {
+                                        (conflict.damage / 2).max(1)
+                                    } else {
+                                        conflict.damage
+                                    };
+                                    (target, fight.id, fighter.person, encounter, damage)
+                                }),
+                        )
                     })
-                    .collect::<Result<Vec<_>, _>>()
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .into_par_iter()
-            .flatten()
-            .collect();
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            conflict
+                .encounters
+                .par_iter()
+                .enumerate()
+                .map(|(encounter, fight)| {
+                    let fighters: HashMap<_, _> =
+                        fight.fighters.par_iter().map(|f| (f.person, f)).collect();
+                    fight
+                        .fighters
+                        .par_iter()
+                        .filter_map(|fighter| {
+                            let Order::Attack { target } = fighter.order else {
+                                return None;
+                            };
+                            let result = fighters
+                                .get(&target)
+                                .filter(|other| other.side != fighter.side)
+                                .ok_or("invalid strike target")
+                                .map(|other| {
+                                    let damage = if matches!(other.order, Order::Defend) {
+                                        (conflict.damage / 2).max(1)
+                                    } else {
+                                        conflict.damage
+                                    };
+                                    (target, fight.id, fighter.person, encounter, damage)
+                                });
+                            Some(result)
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .collect::<Result<Vec<_>, _>>()?
+                .into_par_iter()
+                .flatten()
+                .collect()
+        };
         edges.par_sort_unstable_by_key(|edge| (edge.0, edge.1, edge.2));
         let groups: Vec<_> = edges
             .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))

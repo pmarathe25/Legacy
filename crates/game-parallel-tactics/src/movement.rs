@@ -17,7 +17,7 @@ impl Index {
             .enumerate()
             .map(|(i, battle)| (battle.encounter, i))
             .collect();
-        self.battles.retain(|id, battle| {
+        self.battles.retain_mut(|(id, battle)| {
             let Some(&slot) = slots.get(id) else {
                 return false;
             };
@@ -52,10 +52,10 @@ impl Index {
             )) {
                 return Err("occupied tactical position");
             }
-            let indexed = self
-                .battles
-                .get_mut(&command.encounter)
+            let index = self
+                .battle_slot(command.encounter)
                 .ok_or("unknown tactical encounter")?;
+            let indexed = &mut self.battles[index].1;
             if indexed.slots.is_none() {
                 let battle = &state.battles[indexed.slot];
                 indexed.occupied = battle
@@ -75,7 +75,7 @@ impl Index {
         }
         let dense = moves.len() >= 4096 && moves.len() > self.actors.len() / 4;
         let validate = |command: &Move| {
-            let indexed = &self.battles[&command.encounter];
+            let indexed = &self.battles[self.battle_slot(command.encounter).unwrap()].1;
             let &slot = indexed
                 .slots
                 .as_ref()
@@ -165,11 +165,8 @@ impl Index {
         }
         // Remove every source before inserting destinations so swaps remain valid.
         for (command, &(_, _, from)) in moves.iter().zip(&edits) {
-            self.battles
-                .get_mut(&command.encounter)
-                .unwrap()
-                .occupied
-                .remove(&(from.x, from.y));
+            let index = self.battle_slot(command.encounter).unwrap();
+            self.battles[index].1.occupied.remove(&(from.x, from.y));
         }
         for (command, &(battle, slot, _)) in moves.iter().zip(&edits) {
             let person = &mut state.battles[battle].people[slot];
@@ -177,7 +174,8 @@ impl Index {
             person.last_move = Some(tick);
             let slot = self.locate(command.person).unwrap();
             self.actors[slot].point = command.destination;
-            let indexed = self.battles.get_mut(&command.encounter).unwrap();
+            let index = self.battle_slot(command.encounter).unwrap();
+            let indexed = &mut self.battles[index].1;
 
             indexed.occupied.insert(
                 (command.destination.x, command.destination.y),
