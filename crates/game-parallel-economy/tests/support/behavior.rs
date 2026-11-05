@@ -8052,6 +8052,7 @@ fn campaign_fixture() -> State {
                 released: false,
             }],
         }),
+        embodied_guardians: None,
     });
     state
 }
@@ -8859,6 +8860,179 @@ fn mortal_family_cohort_reserves_ids_for_other_physical_people() {
             .validate_committed_cohort(&physical, &[5], 0, 100)
             .is_err()
     );
+}
+
+fn embodied_guardian_fixture() -> State {
+    use game_parallel_economy_campaign::embodied;
+    let mut initial = campaign_fixture();
+    initial.family.as_mut().unwrap().next_id = 6;
+    initial.people.push(Person {
+        id: 5,
+        region: Some(2),
+        health: 100,
+        hunger: 0,
+        immortal: Some(Immortal {
+            recovery_per_tick: 1,
+        }),
+        willing_to_work: false,
+        seek_meals: false,
+        controlled: false,
+    });
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Person(5), 10, vec![]).unwrap());
+    let campaign = initial.campaign.as_mut().unwrap();
+    campaign.guardians = None;
+    campaign.embodied_guardians = Some(embodied::Guardians {
+        guardians: vec![embodied::Guardian {
+            person: 5,
+            mentorship_required: 2,
+            student: None,
+            mentorship: 0,
+            released: false,
+        }],
+    });
+    initial
+}
+
+#[test]
+fn embodied_guardian_uses_ordinary_travel_and_personal_mentorship() {
+    use game_parallel_economy_campaign::ReleaseDecision;
+    let mut initial = embodied_guardian_fixture();
+    initial.pending_food.clear();
+    let mut invalid = initial.clone();
+    invalid.people.last_mut().unwrap().immortal = None;
+    assert!(Economy::compile(invalid).is_err());
+    let mut invalid = initial.clone();
+    let guardians = &mut invalid
+        .campaign
+        .as_mut()
+        .unwrap()
+        .embodied_guardians
+        .as_mut()
+        .unwrap()
+        .guardians;
+    guardians.push(guardians[0].clone());
+    assert!(Economy::compile(invalid).is_err());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                world.advance().unwrap();
+                let departed = world.snapshot();
+                assert_eq!(
+                    departed.people.iter().find(|p| p.id == 5).unwrap().region,
+                    None
+                );
+                assert!(
+                    departed
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .journeys
+                        .iter()
+                        .any(|j| j.person == 5 && j.source == 2 && j.destination == 1)
+                );
+                assert_eq!(
+                    world.request_guardian_release(5).unwrap(),
+                    ReleaseDecision::NotPresent
+                );
+                assert!(world.commit(stale).is_err());
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .people
+                        .iter()
+                        .find(|p| p.id == 5)
+                        .unwrap()
+                        .region,
+                    Some(1)
+                );
+                assert_eq!(
+                    world.request_guardian_release(5).unwrap(),
+                    ReleaseDecision::NotReady
+                );
+                assert_eq!(
+                    restored.request_guardian_release(5).unwrap(),
+                    ReleaseDecision::NotReady
+                );
+                for _ in 0..2 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(
+                    world.request_guardian_release(5).unwrap(),
+                    ReleaseDecision::Accepted
+                );
+                assert_eq!(
+                    restored.request_guardian_release(5).unwrap(),
+                    ReleaseDecision::Accepted
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn embodied_guardian_pursues_the_actual_successor_and_resets_mentorship() {
+    let initial = embodied_guardian_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().campaign.as_ref().unwrap().lineage.current,
+                    None
+                );
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().campaign.as_ref().unwrap().lineage.current,
+                    Some(6)
+                );
+                let state = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                let guardian = &state
+                    .campaign
+                    .as_ref()
+                    .unwrap()
+                    .embodied_guardians
+                    .as_ref()
+                    .unwrap()
+                    .guardians[0];
+                assert_eq!(
+                    (guardian.student, guardian.mentorship, guardian.released),
+                    (Some(6), 1, false)
+                );
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

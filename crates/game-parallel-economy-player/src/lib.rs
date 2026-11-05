@@ -2,7 +2,7 @@
 use game_parallel_economy::{
     Departure, Economy, MissionStart, Person, PromiseDecision, PromiseProposal,
 };
-use game_parallel_economy_campaign::{Guardian, InvocationWarning, Life, ReleaseDecision};
+use game_parallel_economy_campaign::{InvocationWarning, Life, ReleaseDecision};
 use game_parallel_economy_combat::{Map, Order, Point};
 use game_parallel_economy_knowledge::Record;
 use game_parallel_lot_runtime::Phase;
@@ -59,6 +59,19 @@ pub struct Conditions {
 pub struct BodyView {
     pub person: u64,
     pub possessions: Vec<Lot>,
+}
+/// Explicit search spectating combines guardian judgment with their actual body.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GuardianView {
+    pub person: u64,
+    pub region: Option<u64>,
+    pub health: u32,
+    pub journey: Option<game_parallel_economy::Journey>,
+    pub student: Option<u64>,
+    pub mentorship: u64,
+    pub mentorship_required: u64,
+    pub released: bool,
+    pub confined: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AnimalView {
@@ -746,16 +759,73 @@ impl<'a> Player<'a> {
             .move_local_store(self.current()?, store, good, quantity, deposit)
     }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
-    pub fn guardians(&self) -> Result<Vec<Guardian>, String> {
+    pub fn guardians(&self) -> Result<Vec<GuardianView>, String> {
         let state = self.world.read();
-        Ok(state
-            .campaign
-            .ok_or("campaign is disabled")?
+        let campaign = state.campaign.ok_or("campaign is disabled")?;
+        if let Some(guardians) = &campaign.embodied_guardians {
+            return guardians
+                .guardians
+                .iter()
+                .map(|guardian| {
+                    let person = state
+                        .people
+                        .binary_search_by_key(&guardian.person, |p| p.id)
+                        .ok()
+                        .map(|i| &state.people[i])
+                        .ok_or("unknown guardian body")?;
+                    let journey = state
+                        .travel
+                        .and_then(|travel| {
+                            travel
+                                .journeys
+                                .binary_search_by_key(&guardian.person, |j| j.person)
+                                .ok()
+                                .map(|i| &travel.journeys[i])
+                        })
+                        .cloned();
+                    Ok(GuardianView {
+                        person: person.id,
+                        region: person.region,
+                        health: person.health,
+                        journey,
+                        student: guardian.student,
+                        mentorship: guardian.mentorship,
+                        mentorship_required: guardian.mentorship_required,
+                        released: guardian.released,
+                        confined: None,
+                    })
+                })
+                .collect();
+        }
+        let guardians = campaign
             .guardians
             .as_ref()
-            .ok_or("guardians are disabled")?
+            .ok_or("guardians are disabled")?;
+        Ok(guardians
             .guardians
-            .clone())
+            .iter()
+            .map(|guardian| GuardianView {
+                person: guardian.id,
+                region: guardian.journey.is_none().then_some(guardian.region),
+                health: guardian.health,
+                journey: guardian
+                    .journey
+                    .as_ref()
+                    .map(|journey| game_parallel_economy::Journey {
+                        person: guardian.id,
+                        source: guardian.region,
+                        destination: journey.destination,
+                        remaining: u64::from(journey.remaining),
+                    }),
+                student: guardian.student,
+                mentorship: guardian.mentorship,
+                mentorship_required: guardian
+                    .mentorship_required
+                    .unwrap_or(guardians.mentorship_ticks),
+                released: guardian.released,
+                confined: Some(guardian.confined),
+            })
+            .collect())
     }
     pub fn past_knowledge(&self, life: u64) -> Result<Vec<Record>, String> {
         self.current()?;

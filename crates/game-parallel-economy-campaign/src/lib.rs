@@ -1,4 +1,5 @@
 //! Ruler continuity and guardians over the same personal and physical world.
+pub mod embodied;
 use game_parallel_economy_person::{Person, travel::Travel};
 use game_parallel_families::Families;
 pub use game_parallel_guardians::{Guardian, Guardians, ReleaseDecision};
@@ -16,6 +17,8 @@ pub struct Campaign {
     pub lineage: Lineage,
     #[serde(default)]
     pub guardians: Option<Guardians>,
+    #[serde(default)]
+    pub embodied_guardians: Option<embodied::Guardians>,
 }
 fn routes(travel: Option<&Travel>) -> Result<Vec<Route>, String> {
     travel.map_or(Ok(Vec::new()), |travel| {
@@ -35,6 +38,7 @@ fn routes(travel: Option<&Travel>) -> Result<Vec<Route>, String> {
 pub fn validate(
     campaign: Option<&Campaign>,
     family: Option<&Families>,
+    people: &[Person],
     travel: Option<&Travel>,
     view: &View,
     tick: u64,
@@ -45,6 +49,12 @@ pub fn validate(
     campaign
         .lineage
         .validate(family.ok_or("campaign requires family")?, tick)?;
+    if campaign.guardians.is_some() && campaign.embodied_guardians.is_some() {
+        return Err("campaign cannot mix guardian body models".into());
+    }
+    if let Some(guardians) = &campaign.embodied_guardians {
+        guardians.validate(people, campaign.lineage.current)?;
+    }
     if let Some(guardians) = &campaign.guardians {
         let mut regions: Vec<_> = view
             .containers
@@ -80,6 +90,7 @@ macro_rules! validate_world {
         $crate::validate(
             $state.campaign.as_ref(),
             $state.family.as_ref(),
+            &$state.people,
             $state.travel.as_ref(),
             &$view,
             $physical.tick(),
@@ -109,6 +120,22 @@ pub struct Draft {
     next: Campaign,
     strain: Option<(u64, u32)>,
     lifespan: Option<(u64, u64)>,
+}
+impl Draft {
+    pub fn prepare_guardians(
+        &mut self,
+        people: &[Person],
+        travel: Option<&Travel>,
+        busy: &[u64],
+    ) -> (
+        Vec<game_parallel_economy_person::travel::Departure>,
+        Vec<u64>,
+    ) {
+        self.next.embodied_guardians.as_mut().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |guardians| guardians.prepare(self.next.lineage.current, people, travel, busy),
+        )
+    }
 }
 #[macro_export]
 macro_rules! prepare_world {
@@ -311,11 +338,15 @@ macro_rules! campaign_methods {
                         .and_then(|i| self.people[i].region),
                 )
             });
-            let result = campaign
-                .guardians
-                .as_mut()
-                .ok_or("guardians are disabled")?
-                .request_release(guardian, target)?;
+            let result = if let Some(guardians) = campaign.embodied_guardians.as_mut() {
+                guardians.request_release(guardian, campaign.lineage.current, &self.people)?
+            } else {
+                campaign
+                    .guardians
+                    .as_mut()
+                    .ok_or("guardians are disabled")?
+                    .request_release(guardian, target)?
+            };
             let epoch = self
                 .epoch
                 .checked_add(1)

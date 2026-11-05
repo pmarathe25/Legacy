@@ -120,6 +120,22 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                     );
                 }
             }
+            if let Some(guardians) = &campaign.embodied_guardians {
+                for guardian in &guardians.guardians {
+                    let body = state.people.iter().find(|p| p.id == guardian.person);
+                    let journey = state.travel.as_ref().and_then(|travel| {
+                        travel.journeys.iter().find(|j| j.person == guardian.person)
+                    });
+                    println!(
+                        "guardian={} body={body:?} student={:?} mentorship={} required={} released={} journey={journey:?}",
+                        guardian.person,
+                        guardian.student,
+                        guardian.mentorship,
+                        guardian.mentorship_required,
+                        guardian.released
+                    );
+                }
+            }
         }
         ["invoke", lives @ ..] if !lives.is_empty() => {
             let lives = lives

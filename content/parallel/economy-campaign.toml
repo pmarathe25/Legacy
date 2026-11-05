@@ -199,6 +199,14 @@ willing = true
 person = 2
 willing = true
 
+[[dynamics.social.participants]]
+person = 99
+willing = true
+
+[[dynamics.social.participants]]
+person = 100
+willing = true
+
 [[dynamics.disease.strains]]
 id = 1
 name = "fever"
@@ -323,7 +331,7 @@ recipe = "mill-grain"
 goods = { bread = 20 }
 
 [family]
-next_id = 3
+next_id = 101
 last_tick = 0
 
 [family.rules]
@@ -381,6 +389,24 @@ willing_to_work = true
 seek_meals = true
 goods = { bread = 20 }
 
+[[people]]
+id = 99
+region = 2
+health = 100
+hunger = 0
+immortal = { recovery_per_tick = 5 }
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 100
+region = 2
+health = 100
+hunger = 0
+immortal = { recovery_per_tick = 5 }
+willing_to_work = false
+seek_meals = false
+
 [[aspirations]]
 person = 2
 recipe = "fixture-tool"
@@ -423,18 +449,10 @@ strain_damage_per_tick = 1
 permanent_exposure_threshold = 1000
 lifespan_loss_per_tick = 1
 
-[campaign.guardians]
-recovery_per_tick = 5
-max_health = 100
-mentorship_ticks = 3
+[[campaign.embodied_guardians.guardians]]
+person = 99
+mentorship_required = 3
 
-[[campaign.guardians.guardians]]
-id = 99
-region = 2
-health = 100
-
-[[campaign.guardians.guardians]]
-id = 100
-region = 2
-health = 100
+[[campaign.embodied_guardians.guardians]]
+person = 100
 mentorship_required = 5

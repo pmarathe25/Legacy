@@ -672,7 +672,7 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                 )
                 .unwrap();
                 let initial = world.snapshot();
-                assert_eq!(initial.people.len(), 130);
+                assert_eq!(initial.people.len(), 132);
                 assert_eq!(initial.family.as_ref().unwrap().next_id, 1128);
                 let work = initial
                     .autowork
@@ -763,7 +763,7 @@ fn generated_population_joins_the_ruler_campaign_without_revealing_remote_people
                         .iter()
                         .any(|p| p.person >= 1000 && !p.disregard_others)
                 );
-                assert_eq!(social.participants.len(), 130);
+                assert_eq!(social.participants.len(), 132);
                 assert!(
                     social
                         .participants
@@ -1909,6 +1909,15 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                 }
                 let saved = world.snapshot();
                 assert_eq!(saved.family.as_ref().unwrap().totals.births, 1);
+                let newborn = saved
+                    .family
+                    .as_ref()
+                    .unwrap()
+                    .members
+                    .iter()
+                    .find(|member| member.born == Some(3))
+                    .unwrap()
+                    .id;
                 assert!(
                     saved
                         .food_search
@@ -1916,7 +1925,7 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                         .unwrap()
                         .people
                         .iter()
-                        .any(|p| p.person == 3 && p.enabled)
+                        .any(|p| p.person == newborn && p.enabled)
                 );
                 assert!(
                     saved
@@ -1925,7 +1934,7 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                         .unwrap()
                         .policies
                         .iter()
-                        .any(|p| p.person == 3 && p.pressured_by.is_none())
+                        .any(|p| p.person == newborn && p.pressured_by.is_none())
                 );
                 let newborn_purpose = saved
                     .purpose
@@ -1933,7 +1942,7 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                     .unwrap()
                     .people
                     .iter()
-                    .find(|p| p.person == 3)
+                    .find(|p| p.person == newborn)
                     .unwrap();
                 assert_eq!(newborn_purpose.deprivation, 0);
                 assert!(newborn_purpose.eligible_at > saved.physical.custody.tick);
@@ -1947,7 +1956,7 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                         .unwrap()
                         .people
                         .iter()
-                        .any(|p| p.person == 3)
+                        .any(|p| p.person == newborn)
                 );
                 assert!(
                     saved
@@ -1956,7 +1965,7 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                         .unwrap()
                         .minds
                         .iter()
-                        .any(|mind| mind.person == 3)
+                        .any(|mind| mind.person == newborn)
                 );
                 assert!(
                     saved
@@ -1964,13 +1973,65 @@ fn authored_campaign_starts_a_controlled_ruler_and_a_real_family() {
                         .custody
                         .containers
                         .iter()
-                        .any(|c| c.place == game_parallel_lots::Place::Person(3))
+                        .any(|c| c.place == game_parallel_lots::Place::Person(newborn))
                 );
                 game_parallel_economy::Economy::compile(saved.clone()).unwrap();
                 saved
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn campaign_guardians_share_people_travel_and_player_encounters() {
+    use game_parallel_economy::ReleaseDecision;
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let initial = Player::new(&mut world).guardians().unwrap();
+    assert_eq!(
+        initial.iter().map(|g| g.person).collect::<Vec<_>>(),
+        vec![99, 100]
+    );
+    assert!(initial.iter().all(|g| g.region == Some(2)));
+    for _ in 0..4 {
+        Player::new(&mut world).advance().unwrap();
+    }
+    let arrived = Player::new(&mut world).guardians().unwrap();
+    assert!(
+        arrived
+            .iter()
+            .all(|g| g.region == Some(1) && g.journey.is_none())
+    );
+    assert!(Player::new(&mut world).meet(99).unwrap());
+    for _ in 0..3 {
+        Player::new(&mut world).advance().unwrap();
+    }
+    assert_eq!(
+        Player::new(&mut world).release_guardian(99).unwrap(),
+        ReleaseDecision::Accepted
+    );
+    assert_eq!(
+        Player::new(&mut world).release_guardian(100).unwrap(),
+        ReleaseDecision::NotReady
+    );
+    let state = world.snapshot();
+    let guardians = Player::new(&mut world).guardians().unwrap();
+    for guardian in guardians {
+        let body = state
+            .people
+            .iter()
+            .find(|p| p.id == guardian.person)
+            .unwrap();
+        assert_eq!(
+            (guardian.region, guardian.health),
+            (body.region, body.health)
+        );
+    }
 }
 
 #[test]

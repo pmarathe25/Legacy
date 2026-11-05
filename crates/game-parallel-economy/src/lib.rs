@@ -10,7 +10,7 @@ pub use game_parallel_economy_building::{
     Blueprint as BuildingBlueprint, Construction, Event as ConstructionEvent, GoalBuilder,
     Policy as ConstructionPolicy,
 };
-pub use game_parallel_economy_campaign::Campaign;
+pub use game_parallel_economy_campaign::{Campaign, ReleaseDecision};
 pub use game_parallel_economy_combat::Combat;
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
@@ -1039,6 +1039,11 @@ impl Economy {
     game_parallel_economy_knowledge::knowledge_methods!();
     pub fn compile(mut state: State) -> Result<Self, String> {
         state.people.par_sort_unstable_by_key(|row| row.id);
+        if let Some(travel) = &mut state.travel {
+            travel
+                .journeys
+                .par_sort_unstable_by_key(|journey| journey.person);
+        }
         state
             .work_tools
             .par_sort_unstable_by_key(|row| (row.recipe, row.good));
@@ -1414,7 +1419,7 @@ impl Economy {
             }
             other => (other, None),
         };
-        let campaign_draft = game_parallel_economy_campaign::prepare_world!(self);
+        let mut campaign_draft = game_parallel_economy_campaign::prepare_world!(self);
         let view = self.physical.view(tick)?;
         let destroy_site =
             if let Some(game_parallel_economy_interaction::PhysicalChoice::DestroySite {
@@ -1546,6 +1551,13 @@ impl Economy {
         }
         let interaction =
             game_parallel_economy_interaction::prepare_world!(self, request, busy, tick);
+        let (guardian_departures, guardian_actors) = campaign_draft.as_mut().map_or_else(
+            || (Vec::new(), Vec::new()),
+            |draft| draft.prepare_guardians(&self.people, self.travel.as_ref(), &busy),
+        );
+        if !guardian_actors.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, guardian_actors);
+        }
         let mut action_base = u64::try_from(meals.actions().len())
             .map_err(|_| "action count overflow")?
             .checked_add(1)
@@ -3150,6 +3162,12 @@ impl Economy {
             })
             .collect();
         departures.par_extend(search_departures.par_iter().copied());
+        departures.par_extend(
+            guardian_departures
+                .par_iter()
+                .copied()
+                .filter(alive_and_local),
+        );
         if !departures.is_empty() {
             let current_travel = travel.as_mut().ok_or("departures require travel")?;
             let working = person::travel::working(self.physical.work());
