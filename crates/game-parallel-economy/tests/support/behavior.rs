@@ -2449,6 +2449,8 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
             willing: false,
             minimum_trust: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
             pressure_threshold: None,
         }],
         acquaintance_asking: vec![AcquaintanceAsking {
@@ -6472,6 +6474,8 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
             willing: false,
             minimum_trust: None,
             affinity_threshold: Some(2),
+            affinity_at_most: None,
+            affinity_weight: None,
             pressure_threshold: Some(3),
         }],
         learning: vec![SharingLearning {
@@ -9674,6 +9678,8 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
             minimum_trust: None,
             pressure_threshold: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
         }],
         asking: vec![FoodAsking {
             person: 3,
@@ -9802,6 +9808,8 @@ fn food_response_workload(count: u64) -> State {
         minimum_trust: None,
         pressure_threshold: None,
         affinity_threshold: None,
+        affinity_at_most: None,
+        affinity_weight: None,
     }];
     let holder = state
         .physical
@@ -15454,6 +15462,151 @@ fn requested_hauling_follows_connected_paths_with_physical_cargo_and_reload() {
 }
 
 #[test]
+fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
+    let mut initial = fixture();
+    initial.autowork = None;
+    initial.agreements = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[2].hunger = 5;
+    for container in &mut initial.physical.custody.containers {
+        if container.place == Place::Person(1) {
+            *container = Container::new(container.place, 10, vec![]).unwrap();
+        }
+        if container.place == Place::Person(2) {
+            *container = Container::new(
+                container.place,
+                10,
+                vec![Lot {
+                    good: 1,
+                    quantity: 1,
+                    expires_at: None,
+                }],
+            )
+            .unwrap();
+        }
+    }
+    initial.opinions.as_mut().unwrap().records = vec![
+        Opinion {
+            observer: 2,
+            target: 1,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: -3,
+        },
+        Opinion {
+            observer: 2,
+            target: 3,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: 3,
+        },
+    ];
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![],
+        learning: vec![],
+        asking: vec![],
+        acquaintance_asking: vec![],
+        responses: vec![FoodResponse {
+            person: 2,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 5,
+            willing: false,
+            minimum_trust: None,
+            affinity_threshold: None,
+            affinity_at_most: Some(-1),
+            affinity_weight: None,
+            pressure_threshold: None,
+        }],
+        requests: vec![
+            FoodRequest {
+                requester: 1,
+                target: 2,
+                expires_at: 5,
+            },
+            FoodRequest {
+                requester: 3,
+                target: 2,
+                expires_at: 5,
+            },
+        ],
+    });
+    let run = |workers, initial: &State| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    let disliked = run(1, &initial);
+    assert_eq!(disliked, run(4, &initial));
+    assert_eq!(
+        disliked
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    let response = &mut initial.giving.as_mut().unwrap().responses[0];
+    response.willing = true;
+    response.affinity_at_most = None;
+    response.affinity_weight = Some(1);
+    let liked = run(4, &initial);
+    assert_eq!(
+        liked
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(3))
+            .unwrap()
+            .used,
+        1
+    );
+    initial.giving.as_mut().unwrap().responses[0].affinity_weight = Some(-1);
+    let reversed = run(4, &initial);
+    assert_eq!(
+        reversed
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    let response = &mut initial.giving.as_mut().unwrap().responses[0];
+    response.willing = false;
+    response.affinity_threshold = Some(-4);
+    response.affinity_weight = Some(0);
+    assert!(Economy::compile(initial).is_ok());
+}
+
+#[test]
 fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
     let mut initial = fixture();
     initial.autowork = None;
@@ -15502,6 +15655,8 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
             minimum_trust: None,
             pressure_threshold: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
         }],
         learning: vec![SharingLearning {
             person: 2,
@@ -15588,6 +15743,8 @@ fn sharing_learning_workload(count: u64) -> State {
         minimum_trust: None,
         pressure_threshold: None,
         affinity_threshold: None,
+        affinity_at_most: None,
+        affinity_weight: None,
     });
     giving.learning.push(SharingLearning {
         person: 1,
@@ -15683,6 +15840,8 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
             minimum_trust: None,
             pressure_threshold: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
         }],
         learning: vec![SharingLearning {
             person: 2,
@@ -15818,6 +15977,8 @@ fn reciprocal_sharing_workload(count: u64) -> State {
             minimum_trust: None,
             pressure_threshold: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
         })
         .collect();
     giving.learning = (2..=count)
@@ -15950,6 +16111,8 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
             minimum_trust: None,
             pressure_threshold: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
         }],
         learning: vec![SharingLearning {
             person: 2,
@@ -16021,6 +16184,8 @@ fn learned_food_asking_workload(count: u64) -> State {
             minimum_trust: None,
             pressure_threshold: None,
             affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
         })
         .collect();
     giving.learning = (2..=count)

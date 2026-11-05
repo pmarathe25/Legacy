@@ -192,6 +192,10 @@ struct HelpProfile {
     #[serde(default)]
     affinity_threshold: Option<i32>,
     #[serde(default)]
+    affinity_at_most: Option<i32>,
+    #[serde(default)]
+    affinity_weight: Option<i32>,
+    #[serde(default)]
     pressure_threshold: Option<u64>,
     #[serde(default)]
     learning: Option<HelpLearning>,
@@ -272,6 +276,8 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                     willing: random(0) % 100 < u64::from(rule.willing_percent),
                     minimum_trust: rule.minimum_trust,
                     affinity_threshold: rule.affinity_threshold,
+                    affinity_at_most: rule.affinity_at_most,
+                    affinity_weight: rule.affinity_weight,
                     pressure_threshold: rule.pressure_threshold,
                 };
                 let learning = rule

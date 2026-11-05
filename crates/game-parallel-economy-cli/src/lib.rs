@@ -369,6 +369,10 @@ struct FoodResponseConfig {
     #[serde(default)]
     affinity_threshold: Option<i32>,
     #[serde(default)]
+    affinity_at_most: Option<i32>,
+    #[serde(default)]
+    affinity_weight: Option<i32>,
+    #[serde(default)]
     pressure_threshold: Option<u64>,
 }
 #[derive(Deserialize)]
@@ -944,6 +948,8 @@ pub fn scenario_with_options(
                         willing: p.willing,
                         minimum_trust: p.minimum_trust,
                         affinity_threshold: p.affinity_threshold,
+                        affinity_at_most: p.affinity_at_most,
+                        affinity_weight: p.affinity_weight,
                         pressure_threshold: p.pressure_threshold,
                     })
                 })

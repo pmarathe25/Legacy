@@ -85,9 +85,15 @@ pub struct Response {
     pub willing: bool,
     #[serde(default)]
     pub minimum_trust: Option<i32>,
-    /// Positive directed affinity can motivate help, separately from fear or obligation.
+    /// Directed affinity at or above this value can motivate help.
     #[serde(default)]
     pub affinity_threshold: Option<i32>,
+    /// Directed affinity at or below this value can independently motivate help.
+    #[serde(default)]
+    pub affinity_at_most: Option<i32>,
+    /// Signed weight for choosing between requesters; absent preserves weight 1.
+    #[serde(default)]
+    pub affinity_weight: Option<i32>,
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
 }
@@ -208,7 +214,6 @@ impl Giving {
                     || !food.contains(&p.good)
                     || p.quantity == 0
                     || p.pressure_threshold == Some(0)
-                    || p.affinity_threshold.is_some_and(|n| n <= 0)
             })
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
@@ -599,9 +604,12 @@ impl Context<'_> {
                 let affinity = opinions
                     .as_ref()
                     .map_or(0, |index| index.affinity(sender.id, recipient.id));
-                let likes = policy
+                let affinity_motivated = policy
                     .affinity_threshold
-                    .is_some_and(|threshold| affinity >= threshold);
+                    .is_some_and(|threshold| affinity >= threshold)
+                    || policy
+                        .affinity_at_most
+                        .is_some_and(|threshold| affinity <= threshold);
                 let pressured = policy.pressure_threshold.is_some_and(|threshold| {
                     opinions.as_ref().is_some_and(|index| {
                         let (fear, obligation) = index.feelings(sender.id, recipient.id);
@@ -619,7 +627,7 @@ impl Context<'_> {
                     && self.busy.binary_search(&sender.id).is_err()
                     && (pressured
                         || ((policy.willing
-                            || likes
+                            || affinity_motivated
                             || learners.binary_search(&sender.id).is_ok())
                             && policy.minimum_trust.is_none_or(|minimum| trust >= minimum)))
                     && food_goods.contains(&policy.good)
@@ -628,7 +636,9 @@ impl Context<'_> {
                     && to.capacity.saturating_sub(to.used) >= policy.quantity)
                     .then_some((
                         sender.id,
-                        std::cmp::Reverse(affinity),
+                        std::cmp::Reverse(
+                            i64::from(affinity) * i64::from(policy.affinity_weight.unwrap_or(1)),
+                        ),
                         game_parallel_genetics::random(
                             self.seed ^ sender.id,
                             recipient.id,

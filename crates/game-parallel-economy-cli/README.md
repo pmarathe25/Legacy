@@ -18,6 +18,8 @@ An optional `[population.claims]` table independently seeds preferences for asse
 
 An optional `[population.help]` table seeds individual responses to food requests, using a named carried good and independent willingness, trust, affinity, and pressure settings. Optional `[population.help.learning]` settings allow a seeded fraction to develop reciprocal inclinations from their own experiences. The scenario must enable giving. These profiles create neither requests nor obligations, and individually authored choices take precedence.
 
+Both `[[giving.responses]]` and `[population.help]` may set `affinity_threshold` to motivate responses above a signed value, `affinity_at_most` to motivate responses below one, and a signed `affinity_weight` to rank requesters. Omitted weight preserves the default preference for higher affinity; zero disregards affinity in ranking.
+
 Optional `[population.help.acquaintance_asking]` settings let people ask someone they have actually met when hungry. They can set a minimum familiarity or affinity and choose to prefer those they like; the recipient remains free to refuse. No remote locations or unobserved acquaintances are revealed.
 
 Optional `[population.work_support]` settings seed individual aspirations, inclinations to ask for help, and personal evaluations of requested work. A signed `affinity_weight` specifies how each person's own affinity affects that evaluation. The scenario must enable work requests, and aspirations use the profile's named recipe. Requests, refusals, and actual work emerge during simulation; these settings create no employment, institution, or binding agreement.

@@ -10,6 +10,8 @@ Individuals can gather finite or renewable local resources, subject to personal 
 
 People can ask for food, give supplies, or provide medical care through real local contact and consumed medicine. Requests expire and do not require a response; actual food delivery satisfies them. Individual willingness and feelings influence autonomous help; treatment can expose a caregiver to infection and does not compel later cooperation. All distinct successful physical contacts can transmit disease, including several contacts involving the same person at one boundary.
 
+A person's food-response preference can be motivated by affinity above or below a personally chosen threshold. A signed affinity weight also controls how that person ranks multiple requesters, so they can favor people they like, favor people they dislike, or disregard affinity. Fear or felt obligation can independently motivate a response.
+
 An authored medical preference can set `patient_health_at_most` to act on observable poor health without knowing a diagnosis. The caregiver may use an ineffective medicine and still consume it; a cure only follows a successful treatment with a matching remedy. If this setting is absent, the older automatic policy selects only a matching remedy, so it still has privileged diagnostic knowledge.
 
 Self-treatment can similarly use `health_at_most` to act on observed health instead of a confirmed diagnosis. Controlled people may attempt their chosen medicine even without an infection. Treatment commands report whether the medicine was consumed, rather than disclosing a hidden diagnosis or whether it was effective. Automatic self-treatment without the health setting retains the older confirmed-remedy behavior.
