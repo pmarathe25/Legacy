@@ -54,10 +54,100 @@ fn each_person_interprets_an_observed_discrepancy_in_their_own_way() {
             ..Default::default()
         }],
     };
-    state.learn_report_discrepancies(&[(1, 2), (1, 3), (4, 2)]);
+    state.learn_report_discrepancies(&[(1, 2), (1, 3), (4, 2)], 1);
     assert_eq!(state.index().affinity(1, 2), 3);
     assert_eq!(state.index().affinity(1, 3), -2);
     assert_eq!(state.index().affinity(4, 2), 0);
+}
+#[test]
+fn report_discrepancies_change_only_the_listeners_chosen_trust() {
+    let mut state = Opinions {
+        rules: rules(),
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![Sensitivity {
+            person: 1,
+            trust_report_discrepancy: Some(-2),
+            relationship_cases: vec![
+                RelationshipCase {
+                    target: 2,
+                    report_discrepancy_trust: Some(3),
+                    ..Default::default()
+                },
+                RelationshipCase {
+                    target: 4,
+                    report_discrepancy_trust: Some(0),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }],
+    };
+    assert!(state.tracks_report_discrepancy());
+    state.learn_report_discrepancies(&[(1, 2), (1, 3), (1, 4), (4, 2)], 7);
+    assert_eq!(state.index().trust(1, 2), 3);
+    assert_eq!(state.index().trust(1, 3), -2);
+    assert_eq!(state.index().trust(4, 2), 0);
+    assert_eq!(state.index().trust(1, 4), 0);
+    assert_eq!(state.index().affinity(1, 2), 0);
+    assert_eq!(state.index().obligation(1, 2), 0);
+    assert_eq!(state.events.len(), 2);
+    assert!(state.events.iter().all(|e| e.tick == 7));
+    state.learn_report_discrepancies(&[(1, 2), (1, 3), (1, 3)], 8);
+    assert_eq!(state.index().trust(1, 2), 5);
+    assert_eq!(state.index().trust(1, 3), -5);
+}
+
+#[test]
+fn report_trust_merge_handles_sparse_unordered_existing_relationships_across_chunks() {
+    let count = 2050u64;
+    let initial = Opinions {
+        rules: rules(),
+        events: vec![],
+        sensitivities: (1..=count)
+            .rev()
+            .map(|person| Sensitivity {
+                person,
+                trust_report_discrepancy: Some(if person % 2 == 0 { 3 } else { -2 }),
+                ..Default::default()
+            })
+            .collect(),
+        records: (1..=count)
+            .rev()
+            .filter(|person| person % 2 == 0)
+            .map(|observer| Opinion {
+                observer,
+                target: 9000,
+                trust: 1,
+                fear: 0,
+                obligation: 0,
+                affinity: 0,
+            })
+            .collect(),
+    };
+    let observations: Vec<_> = (1..=count).rev().map(|person| (person, 9000)).collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.learn_report_discrepancies(&observations, 1);
+                state
+            })
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    assert_eq!(result.events.len(), count as usize);
+    assert!(result.events.iter().all(|event| {
+        if event.observer % 2 == 0 {
+            (event.before, event.after) == (1, 4)
+        } else {
+            (event.before, event.after) == (0, -2)
+        }
+    }));
+    assert_eq!(result.records.len(), count as usize);
 }
 
 #[test]
@@ -89,8 +179,8 @@ fn unordered_sparse_discrepancies_match_ordered_inputs() {
     };
     let mut reordered = ordered.clone();
     reordered.sensitivities.reverse();
-    ordered.learn_report_discrepancies(&[(10, 20), (10, 20), (30, 20)]);
-    reordered.learn_report_discrepancies(&[(30, 20), (10, 20), (10, 20)]);
+    ordered.learn_report_discrepancies(&[(10, 20), (10, 20), (30, 20)], 1);
+    reordered.learn_report_discrepancies(&[(30, 20), (10, 20), (10, 20)], 1);
     assert_eq!(ordered.records, reordered.records);
     assert_eq!(ordered.index().affinity(10, 20), 4);
     assert_eq!(ordered.index().affinity(30, 20), -1);
@@ -135,6 +225,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 person: 1,
                 report_reception: None,
                 affinity_report_discrepancy: None,
+                trust_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -157,6 +248,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 person: 3,
                 report_reception: None,
                 affinity_report_discrepancy: None,
+                trust_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -192,6 +284,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             person: 1,
             report_reception: None,
             affinity_report_discrepancy: None,
+            trust_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             obligation_relief: Some(2),
@@ -263,6 +356,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 person: 2,
                 report_reception: None,
                 affinity_report_discrepancy: None,
+                trust_report_discrepancy: None,
                 fear_per_damage: Some(0),
                 gratitude_gain: Some(0),
                 obligation_relief: None,
@@ -285,6 +379,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 person: 3,
                 report_reception: None,
                 affinity_report_discrepancy: None,
+                trust_report_discrepancy: None,
                 fear_per_damage: Some(2),
                 gratitude_gain: Some(3),
                 obligation_relief: None,
@@ -622,6 +717,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         person,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         obligation_relief: None,
@@ -686,6 +782,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         person: 1,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -703,6 +800,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         relationship_cases: vec![RelationshipCase {
             target: 4,
             report_discrepancy: None,
+            report_discrepancy_trust: None,
             help: Some(-2),
             harm_per_damage: Some(-2),
             encounter: None,
@@ -747,6 +845,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         person: 1,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: Some(0),
@@ -764,6 +863,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         relationship_cases: vec![RelationshipCase {
             target: 4,
             report_discrepancy: None,
+            report_discrepancy_trust: None,
             help: None,
             harm_per_damage: None,
             encounter: None,

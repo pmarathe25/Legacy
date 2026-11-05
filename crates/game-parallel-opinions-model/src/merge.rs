@@ -7,6 +7,8 @@ pub enum Change {
     Help,
     Relief,
     Theft,
+    TrustGain,
+    TrustLoss,
     AffinityGain,
     AffinityLoss,
 }
@@ -83,8 +85,13 @@ pub fn merge(
                         row.affinity =
                             (i128::from(row.affinity) + signed).clamp(-limit, limit) as i32;
                     }
-                    Change::Theft => {
+                    Change::Theft | Change::TrustLoss => {
                         row.trust = (i128::from(row.trust) - i128::from(delta))
+                            .clamp(i128::from(rules.minimum), i128::from(rules.maximum))
+                            as i32
+                    }
+                    Change::TrustGain => {
+                        row.trust = (i128::from(row.trust) + i128::from(delta))
                             .clamp(i128::from(rules.minimum), i128::from(rules.maximum))
                             as i32
                     }

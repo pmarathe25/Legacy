@@ -2839,11 +2839,10 @@ impl Economy {
             .filter(|o| o.tracks_report_discrepancy())
             && let Some((before, after)) = self.knowledge.as_ref().zip(knowledge.as_ref())
         {
-            opinions.learn_report_discrepancies(&game_parallel_economy_knowledge::discrepancies(
-                before,
-                after,
-                &self.people,
-            ));
+            opinions.learn_report_discrepancies(
+                &game_parallel_economy_knowledge::discrepancies(before, after, &self.people),
+                tick,
+            );
         }
         game_parallel_economy_claims::publish_claims!(
             dynamics,

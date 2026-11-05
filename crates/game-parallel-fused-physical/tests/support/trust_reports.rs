@@ -116,6 +116,7 @@ fn directly_seen_report_discrepancies_have_personal_signed_affinity_and_do_not_r
             .push(game_parallel::OpinionSensitivity {
                 person: 2,
                 affinity_report_discrepancy: Some(rate),
+                trust_report_discrepancy: Some(rate),
                 ..Default::default()
             });
         let mut kernel = Kernel::compile(state).unwrap();
@@ -124,6 +125,10 @@ fn directly_seen_report_discrepancies_have_personal_signed_affinity_and_do_not_r
         assert_eq!(
             after.opinions.as_ref().unwrap().index().affinity(2, 1),
             rate
+        );
+        assert_eq!(
+            after.opinions.as_ref().unwrap().index().trust(2, 1),
+            -2 + rate
         );
         let saved = serde_json::to_string(&after).unwrap();
         let mut restored = Kernel::compile(World::from_json(&saved).unwrap()).unwrap();

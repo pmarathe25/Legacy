@@ -14,6 +14,9 @@ pub struct Sensitivity {
     /// Signed personal reaction when an earlier food report differs from direct observation.
     #[serde(default)]
     pub affinity_report_discrepancy: Option<i32>,
+    /// Signed trust reaction to an observation differing from a remembered report.
+    #[serde(default)]
+    pub trust_report_discrepancy: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fear_per_damage: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,6 +91,8 @@ pub struct RelationshipCase {
     pub target: u64,
     #[serde(default)]
     pub report_discrepancy: Option<i32>,
+    #[serde(default)]
+    pub report_discrepancy_trust: Option<i32>,
     #[serde(default)]
     pub help: Option<i32>,
     #[serde(default)]

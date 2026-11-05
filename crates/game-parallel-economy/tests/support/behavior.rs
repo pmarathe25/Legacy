@@ -3111,6 +3111,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -6521,7 +6522,10 @@ fn discrepancy_workload(count: u64) -> State {
 
 #[test]
 fn concentrated_personal_report_reactions_are_deterministic_and_happen_once() {
-    let initial = discrepancy_workload(4096);
+    let mut initial = discrepancy_workload(4096);
+    for sensitivity in &mut initial.opinions.as_mut().unwrap().sensitivities {
+        sensitivity.trust_report_discrepancy = Some(1);
+    }
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -6535,6 +6539,7 @@ fn concentrated_personal_report_reactions_are_deterministic_and_happen_once() {
                 let opinions = result.opinions.as_ref().unwrap();
                 assert_eq!(opinions.records.len(), 4096);
                 assert!(opinions.records.iter().all(|r| r.affinity == 1));
+                assert!(opinions.records.iter().all(|r| r.trust == 1));
                 result
             })
     };
@@ -6552,7 +6557,12 @@ fn concentrated_report_discrepancy_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = discrepancy_workload(count);
+    let mut initial = discrepancy_workload(count);
+    if std::env::var_os("LEGACY_REPORT_TRUST").is_some() {
+        for sensitivity in &mut initial.opinions.as_mut().unwrap().sensitivities {
+            sensitivity.trust_report_discrepancy = Some(1);
+        }
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -6572,6 +6582,13 @@ fn concentrated_report_discrepancy_benchmark() {
                 "workers={workers} people={count} ticks=1 elapsed={:.6}",
                 samples[1]
             );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!(
+                    "{name}: {:.3} ms/call",
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
         });
 }
 
@@ -14507,6 +14524,12 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
             help_change: 0,
             harm_change_per_damage: 0,
         });
+    initial
+        .opinions
+        .as_mut()
+        .unwrap()
+        .rules
+        .minimum_report_trust = Some(0);
     let run = |workers, rate| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -14522,6 +14545,7 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
                     .push(OpinionSensitivity {
                         person: 2,
                         affinity_report_discrepancy: Some(rate),
+                        trust_report_discrepancy: Some(rate),
                         ..Default::default()
                     });
                 let mut world = Economy::compile(state).unwrap();
@@ -14564,6 +14588,22 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
                         .map_or(0, |o| o.affinity),
                     rate
                 );
+                let own = world
+                    .opinions()
+                    .iter()
+                    .find(|o| o.observer == 2 && o.target == 1);
+                assert_eq!(own.map_or(0, |o| o.trust), rate);
+                let snapshot = world.snapshot();
+                assert_eq!(
+                    snapshot
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .report_filter()
+                        .unwrap()
+                        .accepts(2, 1),
+                    rate >= 0
+                );
                 world.advance().unwrap();
                 assert_eq!(
                     world
@@ -14579,6 +14619,69 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
     for rate in [-2, 0, 3] {
         assert_eq!(run(1, rate), run(4, rate));
     }
+}
+
+#[test]
+fn stale_draft_does_not_publish_a_report_discrepancy_reaction() {
+    use game_parallel_economy_knowledge::{Knowledge, Mind, Record};
+    let mut state = expedition_fixture();
+    state.knowledge = Some(Knowledge {
+        max_records: 4,
+        minds: vec![Mind {
+            person: 2,
+            misreport: None,
+            records: vec![Record {
+                region: 1,
+                food: 99,
+                observed_at: 0,
+                witness: 1,
+                learned_from: Some(1),
+            }],
+        }],
+    });
+    state
+        .opinions
+        .as_mut()
+        .unwrap()
+        .sensitivities
+        .push(OpinionSensitivity {
+            person: 2,
+            trust_report_discrepancy: Some(-2),
+            ..Default::default()
+        });
+    let mut world = Economy::compile(state).unwrap();
+    let stale = world.prepare().unwrap();
+    world.set_social_choice(2, true).unwrap();
+    assert!(world.commit(stale).is_err());
+    assert_eq!(world.known_food(2).unwrap()[0].food, 99);
+    assert!(
+        world
+            .opinions()
+            .iter()
+            .all(|o| (o.observer, o.target) != (2, 1))
+    );
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .opinions()
+            .iter()
+            .find(|o| (o.observer, o.target) == (2, 1))
+            .unwrap()
+            .trust,
+        -2
+    );
+    let saved = serde_json::to_string(&world.snapshot()).unwrap();
+    let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    restored.advance().unwrap();
+    assert_eq!(
+        restored
+            .opinions()
+            .iter()
+            .find(|o| (o.observer, o.target) == (2, 1))
+            .unwrap()
+            .trust,
+        -2
+    );
 }
 
 #[test]
@@ -15556,6 +15659,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15726,6 +15830,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15901,6 +16006,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15923,6 +16029,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
     sensitivity.relationship_cases.push(RelationshipCase {
         target: 999,
         report_discrepancy: None,
+        report_discrepancy_trust: None,
         help: None,
         harm_per_damage: Some(-1),
         encounter: None,
@@ -15975,6 +16082,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -16064,6 +16172,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         person,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(2),
         obligation_relief: None,
@@ -16242,6 +16351,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             person,
             report_reception: None,
             affinity_report_discrepancy: None,
+            trust_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: Some(2),
             obligation_relief: None,
@@ -16476,6 +16586,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         person,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(gain),
@@ -16628,6 +16739,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(3),
@@ -16840,6 +16952,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             person,
             report_reception: None,
             affinity_report_discrepancy: None,
+            trust_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: Some(1),
@@ -17713,6 +17826,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             person: 1,
             report_reception: None,
             affinity_report_discrepancy: None,
+            trust_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -17732,6 +17846,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                 vec![RelationshipCase {
                     target: 2,
                     report_discrepancy: None,
+                    report_discrepancy_trust: None,
                     help: None,
                     harm_per_damage: None,
                     encounter: None,
@@ -18209,6 +18324,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             person,
             report_reception: None,
             affinity_report_discrepancy: None,
+            trust_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -21744,6 +21860,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         person,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -21766,6 +21883,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
     first.relationship_cases.push(RelationshipCase {
         target: 3,
         report_discrepancy: None,
+        report_discrepancy_trust: None,
         help: None,
         harm_per_damage: None,
         encounter: None,
@@ -22056,6 +22174,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         person: 1,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(0),
@@ -23302,6 +23421,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         person,
         report_reception: None,
         affinity_report_discrepancy: None,
+        trust_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -23324,6 +23444,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
     first.relationship_cases.push(RelationshipCase {
         target: 2,
         report_discrepancy: None,
+        report_discrepancy_trust: None,
         help: None,
         harm_per_damage: None,
         encounter: None,
@@ -24143,6 +24264,7 @@ fn concentrated_site_salvage_benchmark() {
                 person,
                 report_reception: None,
                 affinity_report_discrepancy: None,
+                trust_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,

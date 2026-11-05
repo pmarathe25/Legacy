@@ -2356,13 +2356,24 @@ fn authored_food_misreport_is_personal_and_player_can_change_it() {
         "[[knowledge.minds]]\nperson = 1\nmisreport = { target = 2, food_delta = -7 }",
     );
     let configured = format!(
-        "{configured}\n[[opinions.sensitivities]]\nperson = 1\nreport_reception = \"never\"\n"
+        "{configured}\n[[opinions.sensitivities]]\nperson = 1\nreport_reception = \"never\"\ntrust_report_discrepancy = -2\n[[opinions.sensitivities.relationship_cases]]\ntarget = 2\nreport_discrepancy_trust = 3\n"
     );
     let path =
         std::env::temp_dir().join(format!("legacy-food-misreport-{}.toml", std::process::id()));
     std::fs::write(&path, configured).unwrap();
     let mut world = scenario(&path, &root.join("content")).unwrap();
     std::fs::remove_file(path).unwrap();
+    let snapshot = world.snapshot();
+    let own = snapshot
+        .opinions
+        .as_ref()
+        .unwrap()
+        .sensitivities
+        .iter()
+        .find(|s| s.person == 1)
+        .unwrap();
+    assert_eq!(own.trust_report_discrepancy, Some(-2));
+    assert_eq!(own.relationship_cases[0].report_discrepancy_trust, Some(3));
     let mut player = game_parallel_economy_player::Player::new(&mut world);
     assert_eq!(
         player.food_misreport().unwrap(),

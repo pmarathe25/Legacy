@@ -506,10 +506,11 @@ macro_rules! ensure_reference_supported {
                         row.confrontation.is_some()
                             || row.report_reception.is_some()
                             || row.affinity_report_discrepancy.is_some()
-                            || row
-                                .relationship_cases
-                                .iter()
-                                .any(|case| case.report_discrepancy.is_some())
+                            || row.trust_report_discrepancy.is_some()
+                            || row.relationship_cases.iter().any(|case| {
+                                case.report_discrepancy.is_some()
+                                    || case.report_discrepancy_trust.is_some()
+                            })
                     })
             })
             || $world

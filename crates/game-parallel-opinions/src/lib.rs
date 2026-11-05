@@ -4,6 +4,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod harm;
+mod report_trust;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opinions {
@@ -138,9 +139,10 @@ impl Opinions {
     }
     pub fn tracks_report_discrepancy(&self) -> bool {
         harm::tracks_affinity(self, harm::AffinityKind::ReportDiscrepancy)
+            || report_trust::enabled(self)
     }
     /// Reactions to observed differences, not a judgment that a report was dishonest.
-    pub fn learn_report_discrepancies(&mut self, observations: &[(u64, u64)]) {
+    pub fn learn_report_discrepancies(&mut self, observations: &[(u64, u64)], tick: u64) {
         if observations.is_empty() || !self.tracks_report_discrepancy() {
             return;
         }
@@ -149,6 +151,7 @@ impl Opinions {
             .map(|&(observer, speaker)| (observer, speaker, 1))
             .collect();
         harm::affinity(self, &events, harm::AffinityKind::ReportDiscrepancy);
+        report_trust::apply(self, observations, tick);
     }
     /// Interpret only personally witnessed outcomes, without creating obligations.
     pub fn learn_work_affinity(&mut self, events: &[(u64, u64, bool)]) {
@@ -252,6 +255,7 @@ impl Opinions {
                 person,
                 report_reception: None,
                 affinity_report_discrepancy: None,
+                trust_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,

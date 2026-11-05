@@ -41,6 +41,7 @@ fn crate_size_and_dependency_direction_are_enforced() {
             "game-parallel-economy" => 6700,
             "game-parallel-economy-cli" => 2600,
             "game-parallel-economy-building" => 1500,
+            "game-parallel-opinions" => 1400,
             _ => 1200,
         };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");
