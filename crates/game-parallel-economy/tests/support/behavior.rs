@@ -965,6 +965,7 @@ fn hunting_fixture() -> State {
                 hunger_at_least: None,
                 reserve_good: None,
                 reserve_below: None,
+                request_response: None,
                 pressured_by: None,
                 pressure_threshold: None,
             },
@@ -977,12 +978,182 @@ fn hunting_fixture() -> State {
                 hunger_at_least: None,
                 reserve_good: None,
                 reserve_below: None,
+                request_response: None,
                 pressured_by: Some(1),
                 pressure_threshold: Some(3),
             },
         ],
     });
     state
+}
+
+fn requested_hunting_fixture() -> State {
+    let mut state = hunting_fixture();
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.fauna.as_mut().unwrap().species[0]
+        .hunting
+        .as_mut()
+        .unwrap()
+        .good = 1;
+    state.people[1].hunger = 8;
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(Place::Person(1), 10, vec![]).unwrap();
+    state.hunting.as_mut().unwrap().policies.truncate(1);
+    let policy = &mut state.hunting.as_mut().unwrap().policies[0];
+    policy.willing = false;
+    policy.hunger_at_least = Some(99);
+    policy.request_response = Some(HuntingRequestResponse {
+        willing: true,
+        minimum_trust: None,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        pressure_threshold: None,
+    });
+    state.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![],
+        learning: vec![],
+        asking: vec![],
+        acquaintance_asking: vec![],
+        requests: vec![FoodRequest {
+            requester: 2,
+            target: 1,
+            expires_at: 10,
+        }],
+        responses: vec![FoodResponse {
+            person: 1,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 0,
+            willing: true,
+            minimum_trust: None,
+            affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
+            pressure_threshold: None,
+        }],
+    });
+    state
+}
+
+#[test]
+fn a_person_may_hunt_after_a_request_and_later_change_their_mind_about_giving() {
+    let initial = requested_hunting_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let after_hunt = world.snapshot();
+                assert_eq!(after_hunt.fauna.as_ref().unwrap().animals[0].health, 0);
+                assert_eq!(
+                    after_hunt
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    2
+                );
+                assert_eq!(
+                    after_hunt
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&after_hunt).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.set_giving_choice(1, false).unwrap();
+                restored.set_giving_choice(1, false).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                world.set_giving_choice(1, true).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut unseen = initial.clone();
+    unseen.giving.as_mut().unwrap().requests[0].target = 4;
+    let mut world = Economy::compile(unseen).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().fauna.unwrap().animals[0].health > 0);
+    let mut expired = initial;
+    expired.giving.as_mut().unwrap().requests[0].expires_at = 0;
+    let mut world = Economy::compile(expired).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().fauna.unwrap().animals[0].health > 0);
+}
+
+#[test]
+fn a_received_request_can_motivate_hunting_through_fear_without_consent() {
+    let mut state = requested_hunting_fixture();
+    let response = state.hunting.as_mut().unwrap().policies[0]
+        .request_response
+        .as_mut()
+        .unwrap();
+    response.willing = false;
+    response.minimum_trust = Some(9);
+    response.pressure_threshold = Some(3);
+    state.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 1,
+        target: 2,
+        trust: -5,
+        fear: 4,
+        obligation: 0,
+        affinity: 0,
+    }];
+    let mut afraid = Economy::compile(state.clone()).unwrap();
+    afraid.advance().unwrap();
+    assert_eq!(afraid.snapshot().fauna.unwrap().animals[0].health, 0);
+    state.opinions.as_mut().unwrap().records.clear();
+    let mut unafraid = Economy::compile(state).unwrap();
+    unafraid.advance().unwrap();
+    assert!(unafraid.snapshot().fauna.unwrap().animals[0].health > 0);
 }
 
 #[test]
@@ -1412,6 +1583,7 @@ fn concentrated_hunting_benchmark() {
                 hunger_at_least: None,
                 reserve_good: None,
                 reserve_below: None,
+                request_response: None,
                 pressured_by: None,
                 pressure_threshold: None,
             })
@@ -1448,6 +1620,102 @@ fn concentrated_hunting_benchmark() {
             samples.sort_by(f64::total_cmp);
             println!(
             "workers={workers} people={count} flexible={flexible} concentrated_hunting_seconds={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+#[ignore]
+fn concentrated_requested_hunting_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    assert!(count >= 128 && count.is_multiple_of(2));
+    let mut state = concentrated(count);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    state.fauna = hunting_fixture().fauna;
+    state.hunting = Some(Hunting {
+        inherit_births: false,
+        policies: (1..=count / 2)
+            .map(|person| HuntingPolicy {
+                person,
+                animal: Some(1),
+                willing: false,
+                affinity_at_least: None,
+                affinity_at_most: None,
+                hunger_at_least: None,
+                reserve_good: None,
+                reserve_below: None,
+                request_response: Some(HuntingRequestResponse {
+                    willing: true,
+                    minimum_trust: None,
+                    affinity_at_least: None,
+                    affinity_at_most: None,
+                    pressure_threshold: None,
+                }),
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+    });
+    state.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![],
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        acquaintance_asking: vec![],
+        requests: (1..=count / 2)
+            .map(|person| FoodRequest {
+                requester: count / 2 + person,
+                target: person,
+                expires_at: 10,
+            })
+            .collect(),
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                assert_eq!(state.fauna.unwrap().animals[0].health, 0);
+                let quantity: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|c| matches!(c.place, Place::Person(_)))
+                    .flat_map(|c| c.lots.iter())
+                    .filter(|lot| lot.good == 2)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(quantity, 2);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} requested_hunting_seconds={:.6}",
                 samples[1]
             );
         });
@@ -7787,6 +8055,13 @@ fn newborn_hunting_inclinations_do_not_inherit_targets_or_pressure() {
             hunger_at_least: Some(5),
             reserve_good: Some(2),
             reserve_below: Some(3),
+            request_response: Some(HuntingRequestResponse {
+                willing: true,
+                minimum_trust: Some(-2),
+                affinity_at_least: None,
+                affinity_at_most: None,
+                pressure_threshold: Some(4),
+            }),
             pressured_by: Some(2),
             pressure_threshold: Some(3),
         }],
@@ -7836,6 +8111,10 @@ fn newborn_hunting_inclinations_do_not_inherit_targets_or_pressure() {
                         ),
                         (Some(5), Some(2), Some(3))
                     );
+                    let response = policy.request_response.unwrap();
+                    assert!(response.willing);
+                    assert_eq!(response.minimum_trust, Some(-2));
+                    assert_eq!(response.pressure_threshold, None);
                     assert!(
                         state
                             .opinions

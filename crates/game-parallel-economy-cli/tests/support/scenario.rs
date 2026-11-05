@@ -125,12 +125,17 @@ fn hunting_preferences_resolve_named_reserves() {
         hunger_at_least = 5
         reserve_good = "meat"
         reserve_below = 3
+        request_response = { willing = false, minimum_trust = -2, pressure_threshold = 3 }
     "#,
     )
     .unwrap();
     let hunting = config.build(|name| (name == "meat").then_some(7)).unwrap();
     assert_eq!(hunting.policies[0].reserve_good, Some(7));
     assert_eq!(hunting.policies[0].reserve_below, Some(3));
+    assert_eq!(
+        hunting.policies[0].request_response.unwrap().minimum_trust,
+        Some(-2)
+    );
 }
 
 #[test]

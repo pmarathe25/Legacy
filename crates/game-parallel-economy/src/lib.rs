@@ -78,7 +78,10 @@ pub use giving_discovery::Policy as AcquaintanceAsking;
 pub use hauling::{
     Asking as HaulingAsking, Hauling, Policy as HaulingPolicy, Request as HaulingRequest,
 };
-pub use hunting::{Config as HuntingConfig, Hunting, Policy as HuntingPolicy};
+pub use hunting::{
+    Config as HuntingConfig, Hunting, Policy as HuntingPolicy,
+    RequestResponse as HuntingRequestResponse,
+};
 pub use medical::{
     AcquaintancePolicy as MedicalAcquaintancePolicy, Medical, Policy as MedicalPolicy,
 };
@@ -1884,6 +1887,10 @@ impl Economy {
             opinions: self.opinions.as_ref(),
             animal_feelings: self.animal_feelings.as_ref(),
             view: &view,
+            requests: self
+                .giving
+                .as_ref()
+                .map_or(&[], |giving| giving.requests.as_slice()),
             busy: &busy,
             feed_targets: &feed_targets,
             max_hunger: self.rules.max_work_hunger,

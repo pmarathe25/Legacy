@@ -27,8 +27,25 @@ pub struct Policy {
     pub reserve_good: Option<u32>,
     #[serde(default)]
     pub reserve_below: Option<u64>,
+    /// A separate personal inclination to respond to received food requests.
+    #[serde(default)]
+    pub request_response: Option<RequestResponse>,
     #[serde(default)]
     pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestResponse {
+    pub willing: bool,
+    #[serde(default)]
+    pub minimum_trust: Option<i32>,
+    #[serde(default)]
+    pub affinity_at_least: Option<i32>,
+    #[serde(default)]
+    pub affinity_at_most: Option<i32>,
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
 }
@@ -67,6 +84,8 @@ pub struct PolicyConfig {
     #[serde(default)]
     reserve_below: Option<u64>,
     #[serde(default)]
+    request_response: Option<RequestResponse>,
+    #[serde(default)]
     pressured_by: Option<u64>,
     #[serde(default)]
     pressure_threshold: Option<u64>,
@@ -92,6 +111,7 @@ impl Config {
                         })
                         .transpose()?,
                     reserve_below: p.reserve_below,
+                    request_response: p.request_response,
                     pressured_by: p.pressured_by,
                     pressure_threshold: p.pressure_threshold,
                 })
@@ -148,6 +168,10 @@ pub fn enroll(owner: Option<&Hunting>, family: Option<&crate::Families>, tick: u
                 hunger_at_least: parent.hunger_at_least,
                 reserve_good: parent.reserve_good,
                 reserve_below: parent.reserve_below,
+                request_response: parent.request_response.map(|mut response| {
+                    response.pressure_threshold = None;
+                    response
+                }),
                 pressured_by: None,
                 pressure_threshold: None,
             })
@@ -178,6 +202,12 @@ impl Hunting {
                         .is_some_and(|(a, b)| a > b)
                     || p.reserve_good.is_some() != p.reserve_below.is_some()
                     || p.reserve_good.is_some_and(|good| !goods.contains(&good))
+                    || p.request_response.is_some_and(|r| {
+                        r.pressure_threshold == Some(0)
+                            || r.affinity_at_least
+                                .zip(r.affinity_at_most)
+                                .is_some_and(|(a, b)| a > b)
+                    })
                     || p.pressure_threshold == Some(0)
                     || p.pressured_by.is_some() != p.pressure_threshold.is_some()
                     || p.pressured_by
@@ -202,6 +232,7 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub animal_feelings: Option<&'a crate::AnimalFeelings>,
     pub view: &'a View,
+    pub requests: &'a [crate::FoodRequest],
     pub busy: &'a [u64],
     pub feed_targets: &'a [u64],
     pub max_hunger: u32,
@@ -263,6 +294,20 @@ impl Context<'_> {
                 .map(|i| &self.people[i])
         };
         let opinions = self.opinions.map(Opinions::index);
+        let mut requests: Vec<_> = if policies.par_iter().any(|p| p.request_response.is_some()) {
+            self.requests
+                .par_iter()
+                .filter(|request| request.expires_at >= self.tick)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if requests
+            .par_windows(2)
+            .any(|p| (p[0].target, p[0].requester) > (p[1].target, p[1].requester))
+        {
+            requests.par_sort_unstable_by_key(|r| (r.target, r.requester));
+        }
         let mut candidates: Vec<_> = policies
             .par_iter()
             .filter_map(|policy| {
@@ -297,6 +342,53 @@ impl Context<'_> {
                             fear.saturating_add(obligation) >= threshold
                         })
                     });
+                let (asked, request_pressure) =
+                    policy.request_response.map_or((false, false), |response| {
+                        let start = requests.partition_point(|request| request.target < actor.id);
+                        let end = requests.partition_point(|request| request.target <= actor.id);
+                        requests[start..end]
+                            .par_iter()
+                            .map(|request| {
+                                let trust = opinions
+                                    .as_ref()
+                                    .map_or(0, |index| index.trust(actor.id, request.requester));
+                                let affinity = opinions
+                                    .as_ref()
+                                    .map_or(0, |index| index.affinity(actor.id, request.requester));
+                                let forced = response.pressure_threshold.is_some_and(|threshold| {
+                                    opinions.as_ref().is_some_and(|index| {
+                                        let (fear, obligation) =
+                                            index.feelings(actor.id, request.requester);
+                                        fear.saturating_add(obligation) >= threshold
+                                    })
+                                });
+                                let willing = response.willing
+                                    && response.minimum_trust.is_none_or(|min| trust >= min)
+                                    && response.affinity_at_least.is_none_or(|min| affinity >= min)
+                                    && response.affinity_at_most.is_none_or(|max| affinity <= max);
+                                (willing, forced)
+                            })
+                            .reduce(|| (false, false), |a, b| (a.0 || b.0, a.1 || b.1))
+                    });
+                let prefers_target = || {
+                    policy.affinity_at_least.is_none_or(|min| affinity() >= min)
+                        && policy.affinity_at_most.is_none_or(|max| affinity() <= max)
+                };
+                let self_interested = || {
+                    policy.willing
+                        && policy.hunger_at_least.is_none_or(|min| actor.hunger >= min)
+                        && policy.reserve_good.zip(policy.reserve_below).is_none_or(
+                            |(good, threshold)| {
+                                self.view
+                                    .container(Place::Person(actor.id))
+                                    .map_or(0, |c| c.quantity(good))
+                                    < threshold
+                            },
+                        )
+                };
+                let motivated = pressured
+                    || request_pressure
+                    || (prefers_target() && (asked || self_interested()));
                 (!actor.controlled
                     && actor.health > 0
                     && actor.hunger <= self.max_hunger
@@ -304,25 +396,13 @@ impl Context<'_> {
                     && actor.region == Some(target.region)
                     && self.busy.binary_search(&actor.id).is_err()
                     && self.feed_targets.binary_search(&target.id).is_err()
-                    && (pressured
-                        || (policy.willing
-                            && policy.affinity_at_least.is_none_or(|min| affinity() >= min)
-                            && policy.affinity_at_most.is_none_or(|max| affinity() <= max)
-                            && policy.hunger_at_least.is_none_or(|min| actor.hunger >= min)
-                            && policy.reserve_good.zip(policy.reserve_below).is_none_or(
-                                |(good, threshold)| {
-                                    self.view
-                                        .container(Place::Person(actor.id))
-                                        .map_or(0, |c| c.quantity(good))
-                                        < threshold
-                                },
-                            ))))
-                .then_some((
-                    target.id,
-                    game_parallel_genetics::random(self.seed ^ target.id, actor.id, self.tick),
-                    actor.id,
-                    yield_,
-                ))
+                    && motivated)
+                    .then_some((
+                        target.id,
+                        game_parallel_genetics::random(self.seed ^ target.id, actor.id, self.tick),
+                        actor.id,
+                        yield_,
+                    ))
             })
             .collect();
         if let Some((actor_id, animal_id)) = self.manual {
