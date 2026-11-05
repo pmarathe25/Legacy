@@ -8804,6 +8804,63 @@ fn guardians_in_the_campaign_can_make_different_readiness_decisions() {
 }
 
 #[test]
+fn mortal_family_cohort_reserves_ids_for_other_physical_people() {
+    use game_parallel_families::LifeInput;
+    let state = campaign_fixture();
+    let mut family = state.family.unwrap();
+    family.next_id = 6;
+    let mut physical: Vec<_> = state
+        .people
+        .iter()
+        .map(|person| LifeInput {
+            id: person.id,
+            region: person.region,
+            health: person.health,
+            hunger: person.hunger,
+        })
+        .collect();
+    physical.push(LifeInput {
+        id: 5,
+        region: Some(1),
+        health: 0,
+        hunger: 0,
+    });
+    assert!(
+        family
+            .validate_committed_cohort(&physical, &[5], 0, 100)
+            .is_ok()
+    );
+    assert!(
+        family
+            .validate_committed_cohort(&physical, &[5, 5], 0, 100)
+            .is_err()
+    );
+    assert!(
+        family
+            .validate_committed_cohort(&physical, &[6], 0, 100)
+            .is_err()
+    );
+    assert!(
+        family
+            .validate_committed_cohort(&physical, &[4, 5], 0, 100)
+            .is_err()
+    );
+    family.next_id = 5;
+    assert!(
+        family
+            .validate_committed_cohort(&physical, &[5], 0, 100)
+            .is_err()
+    );
+    family.next_id = 6;
+    physical.push(physical[4]);
+    assert!(
+        family
+            .validate_committed_cohort(&physical, &[5], 0, 100)
+            .is_err()
+    );
+}
+
+#[test]
 fn invocation_warnings_pause_the_world_and_accepted_loss_releases_control() {
     use game_parallel_economy_campaign::{Invocation, InvocationRules, InvocationWarningKind};
     let mut initial = campaign_fixture();
