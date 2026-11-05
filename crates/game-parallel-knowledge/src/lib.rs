@@ -15,8 +15,19 @@ pub struct Knowledge {
 #[serde(deny_unknown_fields)]
 pub struct Mind {
     pub person: u64,
+    /// A private choice about what to tell a particular listener, or everyone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub misreport: Option<Misreport>,
     #[serde(default)]
     pub records: Vec<Record>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Misreport {
+    #[serde(default)]
+    pub target: Option<u64>,
+    /// Signed change to the quantity in the speaker's remembered report.
+    pub food_delta: i64,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -26,6 +37,18 @@ pub struct Record {
     pub observed_at: u64,
     pub witness: u64,
     pub learned_from: Option<u64>,
+}
+impl Record {
+    /// Produce a statement for a listener without changing the speaker's memory.
+    pub fn stated_to(&self, sender: u64, listener: u64, misreport: Option<Misreport>) -> Self {
+        let mut statement = self.clone();
+        if let Some(policy) = misreport.filter(|p| p.target.is_none_or(|id| id == listener)) {
+            statement.food = (i128::from(statement.food) + i128::from(policy.food_delta))
+                .clamp(0, i128::from(u32::MAX)) as u32;
+        }
+        statement.learned_from = Some(sender);
+        statement
+    }
 }
 #[derive(Clone, Copy)]
 pub struct Observation {
@@ -49,6 +72,10 @@ impl Knowledge {
             if !people.contains(&mind.person)
                 || !minds.insert(mind.person)
                 || mind.records.len() > self.max_records
+                || mind
+                    .misreport
+                    .and_then(|p| p.target)
+                    .is_some_and(|id| id == mind.person || !people.contains(&id))
             {
                 return Err("invalid personal mind");
             }
@@ -143,6 +170,12 @@ impl Knowledge {
                         .binary_search_by_key(&m.person, |o| o.person)
                         .is_err()
                         || m.records.len() > self.max_records
+                        || m.misreport.and_then(|p| p.target).is_some_and(|id| {
+                            id == m.person
+                                || observations
+                                    .binary_search_by_key(&id, |o| o.person)
+                                    .is_err()
+                        })
                 }))
         {
             return Err("invalid personal mind");
@@ -296,8 +329,7 @@ impl Knowledge {
                         })
                         .max_by_key(|r| (r.observed_at, r.region, r.witness));
                     if let Some(report) = report {
-                        let mut received = report.clone();
-                        received.learned_from = Some(partner);
+                        let received = report.stated_to(partner, mind.person, minds[j].misreport);
                         remember(
                             &mut mind.records,
                             received,

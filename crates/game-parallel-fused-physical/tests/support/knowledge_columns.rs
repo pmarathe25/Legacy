@@ -19,6 +19,7 @@ fn borrowed_past_life_memories_survive_publication_and_reload() {
         max_records: 4,
         minds: vec![Mind {
             person: 1,
+            misreport: None,
             records: vec![KnowledgeRecord {
                 region: 2,
                 food: 77,

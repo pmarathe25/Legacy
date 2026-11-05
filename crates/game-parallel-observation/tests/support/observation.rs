@@ -43,6 +43,7 @@ fn view_contains_local_information_and_only_personal_stale_reports() {
         minds: vec![
             Mind {
                 person: 1,
+                misreport: None,
                 records: vec![KnowledgeRecord {
                     region: 2,
                     food: 17,
@@ -53,6 +54,7 @@ fn view_contains_local_information_and_only_personal_stale_reports() {
             },
             Mind {
                 person: 2,
+                misreport: None,
                 records: vec![KnowledgeRecord {
                     region: 2,
                     food: 99,

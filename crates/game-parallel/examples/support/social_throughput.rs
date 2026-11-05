@@ -51,6 +51,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
             minds: (0..people)
                 .map(|id| Mind {
                     person: id as u64,
+                    misreport: None,
                     records: if regions > 1 {
                         vec![KnowledgeRecord {
                             region: ((id + 1) % regions) as u64,

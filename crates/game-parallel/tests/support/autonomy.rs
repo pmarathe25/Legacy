@@ -151,6 +151,7 @@ fn large_knowledge_driven_departures_are_worker_independent() {
     base.knowledge.as_mut().unwrap().minds = (1..=5000)
         .map(|person| Mind {
             person,
+            misreport: None,
             records: vec![
                 KnowledgeRecord {
                     region: 1,

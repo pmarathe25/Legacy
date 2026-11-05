@@ -56,6 +56,7 @@ fn persistent_reviews_match_reference_dispositions_routes_outcomes_and_reload() 
                             .iter()
                             .map(|a| Mind {
                                 person: a.person,
+                                misreport: None,
                                 records: [1, 2, 3]
                                     .into_iter()
                                     .map(|region| Record {

@@ -46,6 +46,7 @@ impl Context<'_> {
                 .minds
                 .par_extend(births.par_iter().map(|&person| Mind {
                     person,
+                    misreport: None,
                     records: Vec::new(),
                 }));
         }

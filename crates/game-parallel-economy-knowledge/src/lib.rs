@@ -2,7 +2,7 @@
 use game_parallel_economy_person::Person;
 use game_parallel_families::Families;
 use game_parallel_knowledge::Observation;
-pub use game_parallel_knowledge::{Knowledge, Mind, Record};
+pub use game_parallel_knowledge::{Knowledge, Mind, Misreport, Record};
 use game_parallel_lots::{Place, View};
 use game_parallel_opinions::Opinions;
 use game_parallel_production_model::Good;
@@ -127,6 +127,7 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
         .minds
         .par_extend(births.par_iter().map(|&person| Mind {
             person,
+            misreport: None,
             records: vec![],
         }));
 }
@@ -152,6 +153,44 @@ macro_rules! prepare_world {
 #[macro_export]
 macro_rules! knowledge_methods {
     () => {
+        /// Change only this person's future statements; their own memories stay intact.
+        pub fn set_food_misreport(
+            &mut self,
+            person: u64,
+            choice: Option<$crate::Misreport>,
+        ) -> Result<(), String> {
+            if !self.people.iter().any(|p| p.id == person && p.health > 0) {
+                return Err("unknown or deceased person".into());
+            }
+            if choice.and_then(|c| c.target).is_some_and(|target| {
+                target == person || !self.people.iter().any(|p| p.id == target)
+            }) {
+                return Err("invalid report target".into());
+            }
+            let owner = self.knowledge.as_mut().ok_or("knowledge is disabled")?;
+            let mind = owner
+                .minds
+                .iter_mut()
+                .find(|m| m.person == person)
+                .ok_or("person has no mind")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mind.misreport = choice;
+            self.epoch = epoch;
+            Ok(())
+        }
+        pub fn food_misreport(&self, person: u64) -> Result<Option<$crate::Misreport>, String> {
+            self.knowledge
+                .as_ref()
+                .ok_or("knowledge is disabled")?
+                .minds
+                .iter()
+                .find(|m| m.person == person)
+                .map(|m| m.misreport)
+                .ok_or("person has no mind".into())
+        }
         pub fn known_food(&self, person: u64) -> Result<Vec<$crate::Record>, String> {
             self.knowledge
                 .as_ref()

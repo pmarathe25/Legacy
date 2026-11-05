@@ -1,5 +1,5 @@
 //! Persistent bounded personal records with committed/scratch identity blocks.
-use game_parallel_knowledge::{Knowledge, Mind, Observation, Record};
+use game_parallel_knowledge::{Knowledge, Mind, Misreport, Observation, Record};
 use game_parallel_social::Encounter;
 use rayon::prelude::*;
 use smallvec::SmallVec;
@@ -15,6 +15,7 @@ pub trait ObservationView: Sync {
 pub struct Read<'a> {
     ids: &'a [u64],
     current: &'a [Vec<Records>],
+    misreports: &'a [Option<Misreport>],
 }
 impl<'a> Read<'a> {
     pub fn records(self, person: u64) -> Option<&'a [Record]> {
@@ -33,6 +34,7 @@ pub struct Runtime {
     order: Vec<u64>,
     current: Vec<Vec<Records>>,
     next: Vec<Vec<Records>>,
+    misreports: Vec<Option<Misreport>>,
     max_records: usize,
     tick: u64,
     epoch: u64,
@@ -70,6 +72,7 @@ impl Runtime {
             return Err("duplicate mind");
         }
         let ids = minds.iter().map(|m| m.person).collect();
+        let misreports = minds.iter().map(|m| m.misreport).collect();
         let (current, next) = minds
             .par_chunks(BLOCK)
             .map(|chunk| {
@@ -85,6 +88,7 @@ impl Runtime {
             ids,
             current,
             next,
+            misreports,
             order: owner.minds.iter().map(|m| m.person).collect(),
             max_records: owner.max_records,
             tick,
@@ -103,6 +107,7 @@ impl Runtime {
                 .par_iter()
                 .map(|&person| Mind {
                     person,
+                    misreport: self.misreports[locate(&self.ids, person).unwrap()],
                     records: self.records(person).unwrap().to_vec(),
                 })
                 .collect(),
@@ -112,6 +117,7 @@ impl Runtime {
         Read {
             ids: &self.ids,
             current: &self.current,
+            misreports: &self.misreports,
         }
     }
     pub fn begin(&mut self, now: u64) -> Result<Preparation<'_>, &'static str> {
@@ -127,6 +133,7 @@ impl Runtime {
             read: Read {
                 ids: &self.ids,
                 current: &self.current,
+                misreports: &self.misreports,
             },
             next: &mut self.next,
             limit: self.max_records,
@@ -199,6 +206,7 @@ impl Runtime {
             })
             .collect();
         self.ids.par_extend(births.par_iter().copied());
+        self.misreports.extend((0..births.len()).map(|_| None));
         self.order.par_extend(births.par_iter().copied());
         for (current, next) in blocks {
             self.current.push(current);
@@ -333,8 +341,8 @@ impl<'a> Preparation<'a> {
                             })
                             .max_by_key(|r| (r.observed_at, r.region, r.witness));
                         if let Some(report) = report {
-                            let mut received = report.clone();
-                            received.learned_from = Some(partner);
+                            let received =
+                                report.stated_to(partner, person, self.read.misreports[slot]);
                             remember(records, received, limit, local, false);
                         }
                     }

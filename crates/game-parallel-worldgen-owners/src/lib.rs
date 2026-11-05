@@ -26,6 +26,7 @@ pub fn knowledge(owner: &mut Knowledge, people: &[u64], source: (u64, u32, u32, 
                     < u64::from(percent);
             Mind {
                 person,
+                misreport: None,
                 records: knows_report
                     .then_some(KnowledgeRecord {
                         region,

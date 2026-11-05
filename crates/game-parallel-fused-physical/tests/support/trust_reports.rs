@@ -141,6 +141,7 @@ fn report_filtering_is_worker_invariant_across_a_large_population_and_reload() {
     state.knowledge.as_mut().unwrap().minds = (1..=count)
         .map(|person| Mind {
             person,
+            misreport: None,
             records: if person % 2 == 1 {
                 vec![KnowledgeRecord {
                     region: 2,

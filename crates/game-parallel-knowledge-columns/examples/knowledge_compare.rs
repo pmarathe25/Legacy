@@ -1,4 +1,4 @@
-use game_parallel_knowledge::{Knowledge, Mind, Observation, Record};
+use game_parallel_knowledge::{Knowledge, Mind, Misreport, Observation, Record};
 use game_parallel_knowledge_columns::{ObservationView, Runtime};
 use game_parallel_social::Encounter;
 use std::{collections::HashSet, time::Instant};
@@ -13,11 +13,16 @@ fn main() {
     let workers: usize = args[0].parse().unwrap();
     let count: usize = args[1].parse().unwrap();
     let ticks: u64 = args[2].parse().unwrap();
+    let deceive = args.get(3).is_some_and(|arg| arg == "deceive");
     let initial = Knowledge {
         max_records: 4,
         minds: (1..=count as u64)
             .map(|person| Mind {
                 person,
+                misreport: deceive.then_some(Misreport {
+                    target: None,
+                    food_delta: 10,
+                }),
                 records: (2..=5)
                     .map(|region| Record {
                         region,

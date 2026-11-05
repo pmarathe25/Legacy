@@ -2273,6 +2273,33 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
 }
 
 #[test]
+fn authored_food_misreport_is_personal_and_player_can_change_it() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = source.replace("\r\n", "\n").replace(
+        "[[knowledge.minds]]\nperson = 1",
+        "[[knowledge.minds]]\nperson = 1\nmisreport = { target = 2, food_delta = -7 }",
+    );
+    let path =
+        std::env::temp_dir().join(format!("legacy-food-misreport-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut world);
+    assert_eq!(
+        player.food_misreport().unwrap(),
+        Some(game_parallel_economy::Misreport {
+            target: Some(2),
+            food_delta: -7
+        })
+    );
+    player.set_food_misreport(None).unwrap();
+    assert_eq!(player.food_misreport().unwrap(), None);
+    assert_eq!(world.food_misreport(2).unwrap(), None);
+}
+
+#[test]
 fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =

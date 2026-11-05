@@ -24,6 +24,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     base.knowledge.as_mut().unwrap().minds = (0..people)
         .map(|id| Mind {
             person: id as u64,
+            misreport: None,
             records: vec![
                 KnowledgeRecord {
                     region: 1,

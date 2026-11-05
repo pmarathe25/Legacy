@@ -1098,6 +1098,7 @@ fn accepted_control_loss_blocks_manual_commands_and_allows_autonomy() {
         max_records: 4,
         minds: vec![game_parallel::Mind {
             person,
+            misreport: None,
             records: vec![
                 game_parallel::KnowledgeRecord {
                     region: state.regions[source].id,

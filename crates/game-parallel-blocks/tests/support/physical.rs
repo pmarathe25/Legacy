@@ -1308,6 +1308,7 @@ fn accepted_control_loss_blocks_dismissal_and_survives_reload() {
         max_records: 4,
         minds: vec![game_parallel::Mind {
             person,
+            misreport: None,
             records: vec![
                 game_parallel::KnowledgeRecord {
                     region: state.regions[source].id,

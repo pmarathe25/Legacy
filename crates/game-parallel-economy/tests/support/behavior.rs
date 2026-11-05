@@ -6451,6 +6451,7 @@ fn knowledge_workload(count: u64) -> State {
         minds: (1..=count)
             .map(|person| Mind {
                 person,
+                misreport: None,
                 records: vec![],
             })
             .collect(),
@@ -9591,6 +9592,7 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         max_records: 4,
         minds: vec![Mind {
             person: 2,
+            misreport: None,
             records: vec![Record {
                 region: 2,
                 food: 10,
@@ -9750,6 +9752,7 @@ fn food_search_workload(count: u64) -> State {
         minds: (1..=count)
             .map(|person| Mind {
                 person,
+                misreport: None,
                 records: vec![Record {
                     region: 2,
                     food: 10,
@@ -14040,10 +14043,12 @@ fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
         minds: vec![
             Mind {
                 person: 1,
+                misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 2,
+                misreport: None,
                 records: vec![Record {
                     region: 2,
                     food: 7,
@@ -14122,6 +14127,225 @@ fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
 }
 
 #[test]
+fn false_food_reports_are_personal_statements_not_physical_stock() {
+    use game_parallel_economy_knowledge::{Knowledge, Mind, Misreport, Record};
+    let mut initial = expedition_fixture();
+    initial.people[0].controlled = true;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = true;
+    initial.opinions.as_mut().unwrap().records.clear();
+    let remembered = Record {
+        region: 2,
+        food: 2,
+        observed_at: 0,
+        witness: 2,
+        learned_from: None,
+    };
+    initial.knowledge = Some(Knowledge {
+        max_records: 4,
+        minds: vec![
+            Mind {
+                person: 1,
+                misreport: None,
+                records: vec![],
+            },
+            Mind {
+                person: 2,
+                misreport: None,
+                records: vec![remembered.clone()],
+            },
+        ],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .set_food_misreport(
+                            2,
+                            Some(Misreport {
+                                target: Some(999),
+                                food_delta: 50
+                            })
+                        )
+                        .is_err()
+                );
+                assert_eq!(world.snapshot(), before);
+                let pending = world.prepare().unwrap();
+                world
+                    .set_food_misreport(
+                        2,
+                        Some(Misreport {
+                            target: Some(1),
+                            food_delta: 50,
+                        }),
+                    )
+                    .unwrap();
+                assert!(world.commit(pending).is_err());
+                let physical_before = world.snapshot().physical.custody.clone();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut world = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(world.meet(1, 2).unwrap());
+                let statement = world
+                    .known_food(1)
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| r.region == 2)
+                    .unwrap();
+                assert_eq!(statement.food, 52);
+                assert_eq!(statement.learned_from, Some(2));
+                assert_eq!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .into_iter()
+                        .find(|r| r.region == 2),
+                    Some(remembered.clone())
+                );
+                assert_eq!(
+                    world.snapshot().physical.custody.containers,
+                    physical_before.containers
+                );
+                assert_eq!(world.food_misreport(2).unwrap().unwrap().target, Some(1));
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.minimum_report_trust = Some(0);
+    opinions.records.push(Opinion {
+        observer: 1,
+        target: 2,
+        trust: -1,
+        fear: 0,
+        obligation: 0,
+        affinity: 0,
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world
+        .set_food_misreport(
+            2,
+            Some(Misreport {
+                target: None,
+                food_delta: 50,
+            }),
+        )
+        .unwrap();
+    assert!(world.meet(1, 2).unwrap());
+    assert!(world.known_food(1).unwrap().iter().all(|r| r.region != 2));
+}
+
+#[test]
+fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
+    use game_parallel_economy_knowledge::{Knowledge, Mind, Misreport, Record};
+    let mut initial = expedition_fixture();
+    initial.people[0].controlled = true;
+    initial.people[1].hunger = 5;
+    initial.people[1].seek_meals = true;
+    initial.nutrition = None;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = true;
+    initial.knowledge = Some(Knowledge {
+        max_records: 4,
+        minds: vec![
+            Mind {
+                person: 1,
+                misreport: Some(Misreport {
+                    target: Some(2),
+                    food_delta: 10,
+                }),
+                records: vec![Record {
+                    region: 2,
+                    food: 0,
+                    observed_at: 0,
+                    witness: 1,
+                    learned_from: None,
+                }],
+            },
+            Mind {
+                person: 2,
+                misreport: None,
+                records: vec![],
+            },
+        ],
+    });
+    initial.food_search = Some(FoodSearch {
+        inherit_births: false,
+        min_hunger: 5,
+        min_report_food: 1,
+        max_report_age: 20,
+        retry_ticks: 3,
+        people: vec![FoodSearchPreference {
+            person: 2,
+            enabled: true,
+            next_review: 0,
+            target: None,
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.meet(1, 2).unwrap());
+                assert_eq!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .find(|r| r.region == 2)
+                        .unwrap()
+                        .food,
+                    10
+                );
+                world.advance().unwrap();
+                assert_eq!(world.snapshot().people[1].region, None);
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(world.snapshot().people[1].region, Some(2));
+                assert_eq!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .find(|r| r.region == 2)
+                        .unwrap()
+                        .food,
+                    0
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn invoked_memory_remains_in_the_past_mind_and_requires_control() {
     use game_parallel_economy_campaign::{Invocation, InvocationRules};
     use game_parallel_economy_knowledge::{Knowledge, Mind, Record};
@@ -14139,10 +14363,12 @@ fn invoked_memory_remains_in_the_past_mind_and_requires_control() {
         minds: vec![
             Mind {
                 person: 3,
+                misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 4,
+                misreport: None,
                 records: vec![record.clone()],
             },
         ],

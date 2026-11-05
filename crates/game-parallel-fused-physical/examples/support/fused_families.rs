@@ -75,6 +75,7 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
         world.knowledge.as_mut().unwrap().minds = (1..=count as u64)
             .map(|person| game_parallel::Mind {
                 person,
+                misreport: None,
                 records: Vec::new(),
             })
             .collect();

@@ -18,6 +18,7 @@ fn fixture(count: usize, limit: usize, sparse: bool) -> (Knowledge, View, HashSe
             };
             Mind {
                 person,
+                misreport: None,
                 records: (1..=limit.min(7))
                     .rev()
                     .map(|region| Record {
@@ -147,10 +148,12 @@ fn reports_use_prior_records_not_the_partners_same_tick_observation() {
         minds: vec![
             Mind {
                 person: 1,
+                misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 2,
+                misreport: None,
                 records: vec![],
             },
         ],
@@ -181,6 +184,96 @@ fn reports_use_prior_records_not_the_partners_same_tick_observation() {
     assert_eq!(runtime.records(1).unwrap().len(), 1);
     assert_eq!(runtime.records(1).unwrap()[0].region, 1);
     assert_eq!(runtime.records(2).unwrap()[0].region, 2);
+}
+
+#[test]
+fn targeted_false_reports_match_reference_and_never_rewrite_the_speakers_memory() {
+    use game_parallel_knowledge::Misreport;
+    let (mut initial, view, regions) = fixture(4, 4, false);
+    let speaker = initial.minds.iter_mut().find(|m| m.person == 2).unwrap();
+    speaker.misreport = Some(Misreport {
+        target: Some(1),
+        food_delta: 17,
+    });
+    let original = speaker.records.clone();
+    let contacts = vec![Encounter {
+        tick: 1,
+        region: 1,
+        a: 1,
+        b: 2,
+        pressured: None,
+    }];
+    for workers in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let expected = initial.prepare(&view.0, &regions, &contacts, 0).unwrap();
+                let mut runtime = Runtime::compile_validated(&initial, 0).unwrap();
+                let draft = runtime.prepare_validated(&view, &contacts, 0).unwrap();
+                runtime.commit(draft).unwrap();
+                assert_eq!(runtime.export(), expected);
+                let receiver = expected.minds.iter().find(|m| m.person == 1).unwrap();
+                let received = receiver
+                    .records
+                    .iter()
+                    .find(|r| r.learned_from == Some(2))
+                    .unwrap();
+                let source = original
+                    .iter()
+                    .find(|r| r.region == received.region)
+                    .unwrap();
+                assert_eq!(received.food, source.food + 17);
+                assert_eq!(received.observed_at, source.observed_at);
+                assert_eq!(received.witness, source.witness);
+                let unchanged = expected.minds.iter().find(|m| m.person == 2).unwrap();
+                assert_eq!(
+                    unchanged.records.iter().find(|r| r.region == source.region),
+                    Some(source)
+                );
+            });
+    }
+    let source = &original[0];
+    assert_eq!(
+        source
+            .stated_to(
+                2,
+                3,
+                Some(Misreport {
+                    target: Some(1),
+                    food_delta: 17
+                })
+            )
+            .food,
+        source.food
+    );
+    assert_eq!(
+        source
+            .stated_to(
+                2,
+                1,
+                Some(Misreport {
+                    target: None,
+                    food_delta: i64::MIN
+                })
+            )
+            .food,
+        0
+    );
+    assert_eq!(
+        source
+            .stated_to(
+                2,
+                1,
+                Some(Misreport {
+                    target: None,
+                    food_delta: i64::MAX
+                })
+            )
+            .food,
+        u32::MAX
+    );
 }
 
 #[test]

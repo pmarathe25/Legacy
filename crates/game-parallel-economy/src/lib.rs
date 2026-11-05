@@ -18,7 +18,7 @@ use game_parallel_economy_family as family;
 pub use game_parallel_economy_family::Families;
 pub use game_parallel_economy_fatigue::Fatigue;
 pub use game_parallel_economy_goals::{Dream, Dreams, Goal, Goals, Learning};
-pub use game_parallel_economy_knowledge::Knowledge;
+pub use game_parallel_economy_knowledge::{Knowledge, Misreport};
 pub use game_parallel_economy_local_transport::goal::Preference as GoalFetchPreference;
 pub use game_parallel_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
