@@ -390,7 +390,25 @@ struct GivingPolicyConfig {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct MedicalConfig {
+    #[serde(default)]
     policies: Vec<MedicalPolicyConfig>,
+    #[serde(default)]
+    acquaintances: Vec<MedicalAcquaintanceConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MedicalAcquaintanceConfig {
+    person: u64,
+    medicine: String,
+    quantity: u64,
+    patient_health_at_most: u32,
+    willing: bool,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+    #[serde(default)]
+    urgency_weight: i32,
+    #[serde(default)]
+    affinity_weight: i32,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1012,7 +1030,28 @@ pub fn scenario_with_options(
                     })
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            Ok(game_parallel_economy::Medical { policies })
+            let acquaintances = config
+                .acquaintances
+                .into_iter()
+                .map(|p| {
+                    Ok(game_parallel_economy::MedicalAcquaintancePolicy {
+                        person: p.person,
+                        medicine: *goods
+                            .get(p.medicine.as_str())
+                            .ok_or_else(|| format!("unknown medicine {}", p.medicine))?,
+                        quantity: p.quantity,
+                        patient_health_at_most: p.patient_health_at_most,
+                        willing: p.willing,
+                        pressure_threshold: p.pressure_threshold,
+                        urgency_weight: p.urgency_weight,
+                        affinity_weight: p.affinity_weight,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            Ok(game_parallel_economy::Medical {
+                policies,
+                acquaintances,
+            })
         })
         .transpose()?;
     let gathering = scenario

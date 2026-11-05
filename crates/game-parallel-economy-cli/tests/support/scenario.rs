@@ -2246,7 +2246,7 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     );
     let configured = configured.replacen(
         "[[medical.policies]]",
-        "[[medical.policies]]\npatient_health_at_most = 70",
+        "[[medical.acquaintances]]\nperson = 1\nmedicine = \"medicine\"\nquantity = 1\npatient_health_at_most = 75\nwilling = false\npressure_threshold = 3\nurgency_weight = 2\naffinity_weight = -1\n\n[[medical.policies]]\npatient_health_at_most = 70",
         1,
     );
     let path = std::env::temp_dir().join(format!(
@@ -2259,6 +2259,10 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     assert_eq!(
         world.snapshot().medical.unwrap().policies[0].patient_health_at_most,
         Some(70)
+    );
+    assert_eq!(
+        world.snapshot().medical.unwrap().acquaintances[0].affinity_weight,
+        -1
     );
     let mut player = game_parallel_economy_player::Player::new(&mut world);
     let own = player.view().unwrap().practices.unwrap();

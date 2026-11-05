@@ -3236,6 +3236,7 @@ fn fear_can_motivate_a_caregiver_and_their_preference_can_change() {
         });
     initial.dynamics = Some(dynamics);
     initial.medical = Some(Medical {
+        acquaintances: vec![],
         policies: vec![MedicalPolicy {
             person: 4,
             patient: 3,
@@ -3338,6 +3339,7 @@ fn medical_workload(count: u64) -> State {
         });
     state.dynamics = Some(dynamics);
     state.medical = Some(Medical {
+        acquaintances: vec![],
         policies: (2..=count)
             .map(|person| MedicalPolicy {
                 person,
@@ -3352,6 +3354,170 @@ fn medical_workload(count: u64) -> State {
             .collect(),
     });
     state
+}
+
+#[test]
+fn caregivers_choose_reachable_acquaintances_from_their_own_priorities_and_feelings() {
+    use game_parallel_social::{Participant, Relationship, Rules as SocialRules, Social};
+    let mut initial = medical_workload(4);
+    initial.people[0].health = 60;
+    initial.people[2].health = 70;
+    initial.people[3].health = 10; // Unknown to the caregiver.
+    let dynamics = initial.dynamics.as_mut().unwrap();
+    let disease = dynamics.disease.as_mut().unwrap();
+    disease.strains[0].transmission_per_million = 0;
+    let mut other_case = disease.cases[0].clone();
+    other_case.person = 3;
+    disease.cases.push(other_case);
+    dynamics.social = Some(Social {
+        rules: SocialRules {
+            interval: 1,
+            min_health: 1,
+            max_hunger: 100,
+            familiarity_gain: 1,
+            familiarity_max: 10,
+            relationship_retention: None,
+        },
+        participants: (1..=4)
+            .map(|person| Participant {
+                person,
+                willing: false,
+            })
+            .collect(),
+        pressures: vec![],
+        relationships: vec![
+            Relationship {
+                a: 1,
+                b: 2,
+                familiarity: 2,
+                encounters: 1,
+                last_met: 0,
+            },
+            Relationship {
+                a: 2,
+                b: 3,
+                familiarity: 2,
+                encounters: 1,
+                last_met: 0,
+            },
+        ],
+        events: vec![],
+        needs: None,
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records = vec![
+        Opinion {
+            observer: 2,
+            target: 1,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: -5,
+        },
+        Opinion {
+            observer: 2,
+            target: 3,
+            trust: 0,
+            fear: 3,
+            obligation: 0,
+            affinity: 8,
+        },
+    ];
+    initial.opinions = Some(opinions);
+    initial.medical = Some(Medical {
+        policies: vec![],
+        acquaintances: vec![MedicalAcquaintancePolicy {
+            person: 2,
+            medicine: 2,
+            quantity: 1,
+            patient_health_at_most: 80,
+            willing: true,
+            pressure_threshold: Some(3),
+            urgency_weight: 1,
+            affinity_weight: 3,
+        }],
+    });
+    let mut missing_social = initial.clone();
+    missing_social.dynamics.as_mut().unwrap().social = None;
+    assert!(Economy::compile(missing_social).is_err());
+    let run = |workers, state: &State| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    let preferred = run(1, &initial);
+    assert_eq!(preferred, run(4, &initial));
+    let remaining: Vec<_> = preferred
+        .dynamics
+        .as_ref()
+        .unwrap()
+        .disease
+        .as_ref()
+        .unwrap()
+        .cases
+        .iter()
+        .map(|c| c.person)
+        .collect();
+    assert_eq!(remaining, [1]);
+    initial.medical.as_mut().unwrap().acquaintances[0].affinity_weight = -3;
+    let reversed = run(4, &initial);
+    assert_eq!(
+        reversed
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .map(|c| c.person)
+            .collect::<Vec<_>>(),
+        [3]
+    );
+    initial.medical.as_mut().unwrap().acquaintances[0].willing = false;
+    let pressured = run(4, &initial);
+    assert_eq!(
+        pressured
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .map(|c| c.person)
+            .collect::<Vec<_>>(),
+        [1]
+    );
+    initial.opinions.as_mut().unwrap().records[1].fear = 0;
+    let quiet = run(4, &initial);
+    assert_eq!(quiet.dynamics.unwrap().disease.unwrap().cases.len(), 2);
+    let mut world = Economy::compile(initial).unwrap();
+    world.set_medical_choice(2, true).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -3671,6 +3837,172 @@ fn distributed_medical_workload(count: u64) -> State {
         })
         .collect();
     state
+}
+
+fn acquainted_medical_workload(count: u64) -> State {
+    use game_parallel_social::{Participant, Relationship, Rules as SocialRules, Social};
+    let mut state = distributed_medical_workload(count);
+    let medical = state.medical.as_mut().unwrap();
+    medical.policies.clear();
+    medical.acquaintances = (count / 2 + 1..=count)
+        .map(|person| MedicalAcquaintancePolicy {
+            person,
+            medicine: 2,
+            quantity: 1,
+            patient_health_at_most: 100,
+            willing: true,
+            pressure_threshold: None,
+            urgency_weight: 1,
+            affinity_weight: 0,
+        })
+        .collect();
+    state.dynamics.as_mut().unwrap().social = Some(Social {
+        rules: SocialRules {
+            interval: 1,
+            min_health: 1,
+            max_hunger: 100,
+            familiarity_gain: 1,
+            familiarity_max: 10,
+            relationship_retention: None,
+        },
+        participants: (1..=count)
+            .map(|person| Participant {
+                person,
+                willing: false,
+            })
+            .collect(),
+        pressures: vec![],
+        relationships: (1..=count / 2)
+            .map(|person| Relationship {
+                a: person,
+                b: person + count / 2,
+                familiarity: 1,
+                encounters: 1,
+                last_met: 0,
+            })
+            .collect(),
+        events: vec![],
+        needs: None,
+    });
+    state
+}
+
+#[test]
+fn independent_acquaintance_care_matches_across_workers() {
+    let initial = acquainted_medical_workload(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .disease
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty()
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn acquainted_caregivers_competing_for_one_patient_resolve_once_across_workers() {
+    use game_parallel_social::Relationship;
+    let count = 4096;
+    let mut initial = acquainted_medical_workload(count);
+    let dynamics = initial.dynamics.as_mut().unwrap();
+    dynamics
+        .disease
+        .as_mut()
+        .unwrap()
+        .cases
+        .retain(|case| case.person == 1);
+    dynamics.social.as_mut().unwrap().relationships = (count / 2 + 1..=count)
+        .map(|person| Relationship {
+            a: 1,
+            b: person,
+            familiarity: 1,
+            encounters: 1,
+            last_met: 0,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|event| event.accepted)
+                        .count(),
+                    1
+                );
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .disease
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty()
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn acquainted_medical_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = acquainted_medical_workload(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(started.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

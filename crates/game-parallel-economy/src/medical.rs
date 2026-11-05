@@ -26,15 +26,34 @@ pub struct Policy {
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
 }
+/// A person's choice to help someone they have met, using observable health.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AcquaintancePolicy {
+    pub person: u64,
+    pub medicine: u32,
+    pub quantity: u64,
+    pub patient_health_at_most: u32,
+    pub willing: bool,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pub urgency_weight: i32,
+    #[serde(default)]
+    pub affinity_weight: i32,
+}
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Medical {
     pub policies: Vec<Policy>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub acquaintances: Vec<AcquaintancePolicy>,
 }
 impl Clone for Medical {
     fn clone(&self) -> Self {
         Self {
             policies: self.policies.par_iter().cloned().collect(),
+            acquaintances: self.acquaintances.par_iter().cloned().collect(),
         }
     }
 }
@@ -44,10 +63,25 @@ impl Medical {
         people: &HashSet<u64>,
         goods: &HashSet<u32>,
         disease: Option<&Disease>,
+        social: bool,
     ) -> Result<(), String> {
-        let mut actors: Vec<_> = self.policies.par_iter().map(|p| p.person).collect();
+        let mut actors: Vec<_> = self
+            .policies
+            .par_iter()
+            .map(|p| p.person)
+            .chain(self.acquaintances.par_iter().map(|p| p.person))
+            .collect();
         actors.par_sort_unstable();
         if actors.par_windows(2).any(|p| p[0] == p[1])
+            || (!social && !self.acquaintances.is_empty())
+            || self.acquaintances.par_iter().any(|p| {
+                !people.contains(&p.person)
+                    || !goods.contains(&p.medicine)
+                    || p.quantity == 0
+                    || p.pressure_threshold == Some(0)
+                    || disease
+                        .is_none_or(|d| !d.treatments.iter().any(|t| t.medicine == p.medicine))
+            })
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || !people.contains(&p.patient)
@@ -83,6 +117,7 @@ pub struct Plan {
 pub struct Context<'a> {
     pub owner: Option<&'a Medical>,
     pub disease: Option<&'a Disease>,
+    pub social: Option<&'a game_parallel_social::Social>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
     pub goods: &'a [Good],
@@ -97,7 +132,11 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        if self.manual.is_none() && self.owner.is_none_or(|o| o.policies.is_empty()) {
+        if self.manual.is_none()
+            && self
+                .owner
+                .is_none_or(|o| o.policies.is_empty() && o.acquaintances.is_empty())
+        {
             return Ok(Plan {
                 actors: Vec::new(),
                 actions: Vec::new(),
@@ -174,6 +213,97 @@ impl Context<'_> {
                 })
             })
             .collect();
+        let mut preferences: Vec<_> = self
+            .owner
+            .map_or(&[][..], |owner| owner.acquaintances.as_slice())
+            .par_iter()
+            .collect();
+        if preferences
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            preferences.par_sort_unstable_by_key(|p| p.person);
+        }
+        let dense = preferences
+            .first()
+            .zip(preferences.last())
+            .and_then(|(first, last)| {
+                (last.person.checked_sub(first.person) == Some((preferences.len() - 1) as u64))
+                    .then_some(first.person)
+            });
+        if !preferences.is_empty() {
+            let mut candidates: Vec<_> = self
+                .social
+                .map_or(&[][..], |s| s.relationships.as_slice())
+                .par_iter()
+                .flat_map_iter(|relation| [(relation.a, relation.b), (relation.b, relation.a)])
+                .filter_map(|(actor_id, patient_id)| {
+                    let preference = if let Some(first) = dense {
+                        preferences
+                            .get(usize::try_from(actor_id.checked_sub(first)?).ok()?)
+                            .copied()?
+                    } else {
+                        let index = preferences
+                            .binary_search_by_key(&actor_id, |p| p.person)
+                            .ok()?;
+                        preferences[index]
+                    };
+                    let actor = find(actor_id)?;
+                    let patient = find(patient_id)?;
+                    self.locations
+                        .region((actor.id, actor.region), (patient.id, patient.region))?;
+                    let pressured = preference.pressure_threshold.is_some_and(|threshold| {
+                        opinions.as_ref().is_some_and(|index| {
+                            let (fear, obligation) = index.feelings(actor_id, patient_id);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                    if actor.controlled
+                        || actor.health == 0
+                        || patient.health == 0
+                        || self.busy.binary_search(&actor_id).is_ok()
+                        || !available(patient)
+                        || (!preference.willing && !pressured)
+                        || patient.health > preference.patient_health_at_most
+                        || self
+                            .view
+                            .container(Place::Person(actor_id))
+                            .is_none_or(|c| c.quantity(preference.medicine) < preference.quantity)
+                    {
+                        return None;
+                    }
+                    let affinity = opinions
+                        .as_ref()
+                        .map_or(0, |index| index.affinity(actor_id, patient_id));
+                    let score = i128::from(preference.patient_health_at_most - patient.health)
+                        * i128::from(preference.urgency_weight)
+                        + i128::from(affinity) * i128::from(preference.affinity_weight);
+                    Some((
+                        actor_id,
+                        std::cmp::Reverse(score),
+                        patient_id,
+                        Choice {
+                            actor: actor_id,
+                            patient: patient_id,
+                            medicine: preference.medicine,
+                            quantity: preference.quantity,
+                            effective: effective(patient_id, preference.medicine),
+                        },
+                    ))
+                })
+                .collect();
+            if candidates
+                .par_windows(2)
+                .any(|pair| (pair[0].0, pair[0].1, pair[0].2) > (pair[1].0, pair[1].1, pair[1].2))
+            {
+                candidates.par_sort_unstable_by_key(|row| (row.0, row.1, row.2));
+            }
+            choices.par_extend(
+                candidates
+                    .par_chunk_by(|a, b| a.0 == b.0)
+                    .map(|group| group[0].3),
+            );
+        }
         if let Some((actor, patient, medicine, quantity)) = self.manual {
             let a = find(actor).ok_or("unknown caregiver")?;
             let p = find(patient).ok_or("unknown patient")?;
@@ -203,7 +333,12 @@ impl Context<'_> {
                 effective: effective(patient, medicine),
             });
         }
-        choices.par_sort_unstable_by_key(|c| (c.actor, c.patient));
+        if choices
+            .par_windows(2)
+            .any(|pair| (pair[0].actor, pair[0].patient) > (pair[1].actor, pair[1].patient))
+        {
+            choices.par_sort_unstable_by_key(|c| (c.actor, c.patient));
+        }
         let votes: Vec<_> = (0..choices.len())
             .into_par_iter()
             .map(|_| AtomicU8::new(0))

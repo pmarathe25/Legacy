@@ -66,7 +66,9 @@ pub use giving_discovery::Policy as AcquaintanceAsking;
 pub use hauling::{
     Asking as HaulingAsking, Hauling, Policy as HaulingPolicy, Request as HaulingRequest,
 };
-pub use medical::{Medical, Policy as MedicalPolicy};
+pub use medical::{
+    AcquaintancePolicy as MedicalAcquaintancePolicy, Medical, Policy as MedicalPolicy,
+};
 mod purpose;
 mod recovery;
 pub use game_parallel_purpose::Purpose;
@@ -635,12 +637,13 @@ impl Economy {
             return Err("person must be alive".into());
         }
         let mut next = self.medical.clone().ok_or("medical care is disabled")?;
-        let policy = next
-            .policies
-            .iter_mut()
-            .find(|p| p.person == person)
-            .ok_or("person has no medical preference")?;
-        policy.willing = willing;
+        if let Some(policy) = next.policies.iter_mut().find(|p| p.person == person) {
+            policy.willing = willing;
+        } else if let Some(policy) = next.acquaintances.iter_mut().find(|p| p.person == person) {
+            policy.willing = willing;
+        } else {
+            return Err("person has no medical preference".into());
+        }
         let epoch = self
             .epoch
             .checked_add(1)
@@ -935,6 +938,7 @@ impl Economy {
                 &ids,
                 &goods,
                 state.dynamics.as_ref().and_then(|d| d.disease.as_ref()),
+                state.dynamics.as_ref().is_some_and(|d| d.social.is_some()),
             )?;
         }
         let combat = game_parallel_economy_combat::compile_world!(state, physical, view);
@@ -1471,6 +1475,7 @@ impl Economy {
         let medical_plan = medical::Context {
             owner: self.medical.as_ref(),
             disease: self.dynamics.as_ref().and_then(|d| d.disease.as_ref()),
+            social: self.dynamics.as_ref().and_then(|d| d.social.as_ref()),
             people: &self.people,
             opinions: self.opinions.as_ref(),
             goods: self.physical.goods(),
