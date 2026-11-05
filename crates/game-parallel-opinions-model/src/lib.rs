@@ -17,6 +17,11 @@ pub struct Sensitivity {
     /// Signed trust reaction to an observation differing from a remembered report.
     #[serde(default)]
     pub trust_report_discrepancy: Option<i32>,
+    /// Signed personal trust reactions to witnessed promise outcomes.
+    #[serde(default)]
+    pub trust_promise_fulfilled: Option<i32>,
+    #[serde(default)]
+    pub trust_promise_unfulfilled: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fear_per_damage: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -93,6 +98,11 @@ pub struct RelationshipCase {
     pub report_discrepancy: Option<i32>,
     #[serde(default)]
     pub report_discrepancy_trust: Option<i32>,
+    /// Reactions to this particular person's observed promise outcomes.
+    #[serde(default)]
+    pub promise_fulfilled_trust: Option<i32>,
+    #[serde(default)]
+    pub promise_unfulfilled_trust: Option<i32>,
     #[serde(default)]
     pub help: Option<i32>,
     #[serde(default)]

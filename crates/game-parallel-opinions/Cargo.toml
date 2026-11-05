@@ -9,3 +9,6 @@ game-parallel-opinions-model = { path = "../game-parallel-opinions-model" }
 rayon.workspace = true
 serde.workspace = true
 game-parallel-social = { path = "../game-parallel-social" }
+
+[dev-dependencies]
+serde_json.workspace = true

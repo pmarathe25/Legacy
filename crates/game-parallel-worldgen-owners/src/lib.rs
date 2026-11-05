@@ -97,6 +97,8 @@ pub fn claim_tolerance(
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,

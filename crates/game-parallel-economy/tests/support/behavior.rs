@@ -3425,6 +3425,8 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -12585,6 +12587,67 @@ fn privately_changing_promise_intent_does_not_communicate_a_withdrawal_at_a_dist
 }
 
 #[test]
+fn witnessed_promise_outcomes_use_the_receivers_personal_trust_reactions() {
+    let mut state = fixture();
+    state.people[0].controlled = true;
+    for person in &mut state.people {
+        person.seek_meals = false;
+    }
+    state.dynamics = None;
+    state.nutrition = None;
+    state.autowork = None;
+    state.agreements = Some(Agreements {
+        offering: vec![],
+        work_offering: vec![],
+        next_id: 1,
+        policies: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![],
+        events: vec![],
+    });
+    let run = |workers, deliver| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                world.set_promise_trust_reactions(2, Some((-2, 3))).unwrap();
+                let id = world
+                    .propose_promises(&[PromiseProposal {
+                        debtor: 1,
+                        creditor: 2,
+                        good: 1,
+                        quantity: 1,
+                        due: 1,
+                    }])
+                    .unwrap()[0];
+                world
+                    .decide_promises(&[PromiseDecision {
+                        contract: id,
+                        actor: 2,
+                        accept: true,
+                    }])
+                    .unwrap();
+                if deliver {
+                    assert!(world.fulfill_promise(1, id).unwrap());
+                } else {
+                    world.advance().unwrap();
+                    world.advance().unwrap();
+                }
+                let snapshot = world.snapshot();
+                assert_eq!(
+                    snapshot.opinions.as_ref().unwrap().index().trust(2, 1),
+                    if deliver { -2 } else { 3 }
+                );
+                snapshot
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn people_make_promises_but_can_change_their_minds_before_physical_delivery() {
     let mut state = fixture();
     state.agreements = Some(Agreements {
@@ -17987,6 +18050,8 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -18159,6 +18224,8 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -18336,6 +18403,8 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -18359,6 +18428,8 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         target: 999,
         report_discrepancy: None,
         report_discrepancy_trust: None,
+        promise_fulfilled_trust: None,
+        promise_unfulfilled_trust: None,
         help: None,
         harm_per_damage: Some(-1),
         encounter: None,
@@ -18412,6 +18483,8 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -18503,6 +18576,8 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(2),
         obligation_relief: None,
@@ -18682,6 +18757,8 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             report_reception: None,
             affinity_report_discrepancy: None,
             trust_report_discrepancy: None,
+            trust_promise_fulfilled: None,
+            trust_promise_unfulfilled: None,
             fear_per_damage: None,
             gratitude_gain: Some(2),
             obligation_relief: None,
@@ -18930,6 +19007,8 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(gain),
@@ -19083,6 +19162,8 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(3),
@@ -19297,6 +19378,8 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             report_reception: None,
             affinity_report_discrepancy: None,
             trust_report_discrepancy: None,
+            trust_promise_fulfilled: None,
+            trust_promise_unfulfilled: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: Some(1),
@@ -20172,6 +20255,8 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             report_reception: None,
             affinity_report_discrepancy: None,
             trust_report_discrepancy: None,
+            trust_promise_fulfilled: None,
+            trust_promise_unfulfilled: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -20192,6 +20277,8 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     target: 2,
                     report_discrepancy: None,
                     report_discrepancy_trust: None,
+                    promise_fulfilled_trust: None,
+                    promise_unfulfilled_trust: None,
                     help: None,
                     harm_per_damage: None,
                     encounter: None,
@@ -20671,6 +20758,8 @@ fn concentrated_work_refusals(count: u64) -> State {
             report_reception: None,
             affinity_report_discrepancy: None,
             trust_report_discrepancy: None,
+            trust_promise_fulfilled: None,
+            trust_promise_unfulfilled: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -24221,6 +24310,8 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -24244,6 +24335,8 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         target: 3,
         report_discrepancy: None,
         report_discrepancy_trust: None,
+        promise_fulfilled_trust: None,
+        promise_unfulfilled_trust: None,
         help: None,
         harm_per_damage: None,
         encounter: None,
@@ -24535,6 +24628,8 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(0),
@@ -25783,6 +25878,8 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -25806,6 +25903,8 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         target: 2,
         report_discrepancy: None,
         report_discrepancy_trust: None,
+        promise_fulfilled_trust: None,
+        promise_unfulfilled_trust: None,
         help: None,
         harm_per_damage: None,
         encounter: None,
@@ -26626,6 +26725,8 @@ fn concentrated_site_salvage_benchmark() {
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,

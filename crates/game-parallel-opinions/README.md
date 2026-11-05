@@ -2,7 +2,17 @@
 
 Each observer's trust in another person is separate. Authored rules define the initial and bounded trust values and how directly experienced fulfilled or defaulted promises update them. The creditor learns from the debtor's outcome; no omniscient global reputation is created.
 
-An agreement recipient may set `minimum_trust` in their automatic acceptance policy. An observed default lowers that person's trust in the debtor; a later fulfilled promise can rebuild it. The ruler's ordinary view exposes only their own opinions. `content/parallel/distrust.toml` starts with a proposal that the recipient's configured threshold causes them not to automatically accept. Manual decisions remain possible.
+An agreement recipient may set `minimum_trust` in their automatic acceptance policy. Authored defaults can make an observed unfulfilled promise lower trust and a fulfilled promise rebuild it. A person's signed `trust_promise_fulfilled` and `trust_promise_unfulfilled` override those defaults, and a target-specific relationship case can override either again. Positive, negative, and zero reactions are all possible; none proves intent or dishonesty. The ruler's ordinary view exposes only their own opinions. `content/parallel/distrust.toml` starts with a proposal that the recipient's configured threshold causes them not to automatically accept. Manual decisions remain possible.
+
+For example, a scenario can configure an individual and one relationship:
+
+```toml
+[[opinions.sensitivities]]
+person = 2
+trust_promise_fulfilled = -1
+trust_promise_unfulfilled = 0
+relationship_cases = [{ target = 1, promise_unfulfilled_trust = 2 }]
+```
 
 `encounter_gain` optionally increases each participant's directed trust after an encounter, except for a participant who responded under pressure. Agreement outcomes and encounters at the same boundary combine before trust is clamped. A report threshold reads the prior committed trust, so a newly earned change affects later encounters. See `content/parallel/social_trust.toml`.
 

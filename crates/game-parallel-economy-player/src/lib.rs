@@ -909,6 +909,16 @@ impl<'a> Player<'a> {
     ) -> Result<Option<game_parallel_economy::ReportReception>, String> {
         self.world.food_report_reception(self.current()?)
     }
+    pub fn set_promise_trust_reactions(
+        &mut self,
+        reactions: Option<(i32, i32)>,
+    ) -> Result<(), String> {
+        self.world
+            .set_promise_trust_reactions(self.current()?, reactions)
+    }
+    pub fn promise_trust_reactions(&self) -> Result<(Option<i32>, Option<i32>), String> {
+        self.world.promise_trust_reactions(self.current()?)
+    }
     pub fn set_practice_willingness(&mut self, enabled: bool) -> Result<(), String> {
         self.world
             .set_practice_willingness(self.current()?, enabled)

@@ -346,6 +346,8 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -369,6 +371,8 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -406,6 +410,8 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             report_reception: None,
             affinity_report_discrepancy: None,
             trust_report_discrepancy: None,
+            trust_promise_fulfilled: None,
+            trust_promise_unfulfilled: None,
             fear_per_damage: None,
             gratitude_gain: None,
             obligation_relief: Some(2),
@@ -479,6 +485,8 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: Some(0),
                 gratitude_gain: Some(0),
                 obligation_relief: None,
@@ -502,6 +510,8 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: Some(2),
                 gratitude_gain: Some(3),
                 obligation_relief: None,
@@ -645,6 +655,93 @@ fn experienced_outcomes_update_only_the_creditors_directed_trust() {
     assert_eq!(state.index().trust(1, 2), 4);
     state.validate(&HashSet::from([1, 2]), 2).unwrap();
 }
+#[test]
+fn promise_outcomes_use_each_observers_signed_interpretation() {
+    let initial = Opinions {
+        rules: rules(),
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![
+            Sensitivity {
+                person: 2,
+                trust_promise_fulfilled: Some(-2),
+                trust_promise_unfulfilled: Some(3),
+                relationship_cases: vec![RelationshipCase {
+                    target: 4,
+                    promise_fulfilled_trust: Some(4),
+                    promise_unfulfilled_trust: Some(-1),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            Sensitivity {
+                person: 3,
+                trust_promise_fulfilled: Some(0),
+                trust_promise_unfulfilled: Some(0),
+                ..Default::default()
+            },
+        ]
+        .into(),
+    };
+    let contracts = vec![
+        contract(1, 1, 2),
+        contract(2, 1, 3),
+        contract(3, 4, 2),
+        contract(4, 5, 6),
+    ];
+    let events = |kind| {
+        contracts
+            .iter()
+            .rev()
+            .map(|c| AgreementEvent {
+                tick: 1,
+                contract: c.id,
+                actor: c.debtor,
+                kind,
+                quantity: 1,
+            })
+            .collect::<Vec<_>>()
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.advance_validated(&contracts, &events(EventKind::Fulfilled), 1);
+                let index = state.index();
+                assert_eq!(
+                    (
+                        index.trust(2, 1),
+                        index.trust(3, 1),
+                        index.trust(2, 4),
+                        index.trust(6, 5)
+                    ),
+                    (-2, 0, 4, 3)
+                );
+                assert!(!state.records.iter().any(|row| row.observer == 3));
+                let mut restored: Opinions =
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+                state.advance_validated(&contracts, &events(EventKind::Defaulted), 2);
+                restored.advance_validated(&contracts, &events(EventKind::Defaulted), 2);
+                assert_eq!(state, restored);
+                let index = state.index();
+                assert_eq!(
+                    (
+                        index.trust(2, 1),
+                        index.trust(3, 1),
+                        index.trust(2, 4),
+                        index.trust(6, 5)
+                    ),
+                    (1, 0, 3, -1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 fn multiple_experiences_are_combined_and_clamped_deterministically() {
     let contracts: Vec<_> = (1..=8000).map(|id| contract(id, id, 9000)).collect();
@@ -841,6 +938,8 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: None,
         obligation_relief: None,
@@ -906,6 +1005,8 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -924,6 +1025,8 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
             target: 4,
             report_discrepancy: None,
             report_discrepancy_trust: None,
+            promise_fulfilled_trust: None,
+            promise_unfulfilled_trust: None,
             help: Some(-2),
             harm_per_damage: Some(-2),
             encounter: None,
@@ -971,6 +1074,8 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         report_reception: None,
         affinity_report_discrepancy: None,
         trust_report_discrepancy: None,
+        trust_promise_fulfilled: None,
+        trust_promise_unfulfilled: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: Some(0),
@@ -989,6 +1094,8 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
             target: 4,
             report_discrepancy: None,
             report_discrepancy_trust: None,
+            promise_fulfilled_trust: None,
+            promise_unfulfilled_trust: None,
             help: None,
             harm_per_damage: None,
             encounter: None,

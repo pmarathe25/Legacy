@@ -13,3 +13,5 @@ The ruler can assert a personal claim over local stock or a local work site, ins
 The ruler can independently choose whether to assert a claim automatically after personally constructing a site.
 
 The controlled person sees work requests addressed to them and can accept or decline each one. Acceptance attempts the requested physical work, subject to actual materials and site requirements; a failed start does not become a completed job. The requester can only learn outcomes they witness.
+
+The controlled person can configure their own signed trust reactions to witnessed fulfilled and unfulfilled promises, or use the scenario defaults.

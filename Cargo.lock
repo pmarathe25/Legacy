@@ -4662,6 +4662,7 @@ dependencies = [
  "game-parallel-social",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

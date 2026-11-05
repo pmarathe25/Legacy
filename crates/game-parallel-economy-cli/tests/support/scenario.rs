@@ -1705,6 +1705,36 @@ fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
 }
 
 #[test]
+fn player_can_choose_signed_promise_trust_reactions() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut player = Player::new(&mut world);
+    assert_eq!(player.promise_trust_reactions().unwrap(), (None, None));
+    player.set_promise_trust_reactions(Some((-2, 3))).unwrap();
+    assert_eq!(
+        player.promise_trust_reactions().unwrap(),
+        (Some(-2), Some(3))
+    );
+    let state = world.snapshot();
+    let mut restored = game_parallel_economy::Economy::compile(
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let mut player = Player::new(&mut restored);
+    assert_eq!(
+        player.promise_trust_reactions().unwrap(),
+        (Some(-2), Some(3))
+    );
+    player.set_promise_trust_reactions(None).unwrap();
+    assert_eq!(player.promise_trust_reactions().unwrap(), (None, None));
+}
+
+#[test]
 fn player_can_make_a_promise_and_later_choose_real_delivery() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

@@ -564,6 +564,42 @@ impl Economy {
         sensitivity.report_reception = reception;
         self.set_opinion_sensitivity(sensitivity)
     }
+    /// Choose this person's signed response to personally witnessed promise outcomes.
+    pub fn set_promise_trust_reactions(
+        &mut self,
+        person: u64,
+        reactions: Option<(i32, i32)>,
+    ) -> Result<(), String> {
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        let mut sensitivity = owner
+            .sensitivities
+            .iter()
+            .find(|s| s.person == person)
+            .cloned()
+            .unwrap_or_else(|| OpinionSensitivity {
+                person,
+                ..Default::default()
+            });
+        sensitivity.trust_promise_fulfilled = reactions.map(|row| row.0);
+        sensitivity.trust_promise_unfulfilled = reactions.map(|row| row.1);
+        self.set_opinion_sensitivity(sensitivity)
+    }
+    pub fn promise_trust_reactions(
+        &self,
+        person: u64,
+    ) -> Result<(Option<i32>, Option<i32>), String> {
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        if !self.people.iter().any(|p| p.id == person) {
+            return Err("unknown person".into());
+        }
+        Ok(owner
+            .sensitivities
+            .iter()
+            .find(|s| s.person == person)
+            .map_or((None, None), |s| {
+                (s.trust_promise_fulfilled, s.trust_promise_unfulfilled)
+            }))
+    }
     pub fn food_report_reception(&self, person: u64) -> Result<Option<ReportReception>, String> {
         let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
         if !self.people.iter().any(|p| p.id == person) {

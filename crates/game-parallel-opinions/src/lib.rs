@@ -271,6 +271,8 @@ impl Opinions {
                 report_reception: None,
                 affinity_report_discrepancy: None,
                 trust_report_discrepancy: None,
+                trust_promise_fulfilled: None,
+                trust_promise_unfulfilled: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,
@@ -640,16 +642,71 @@ impl Opinions {
                 &contracts[index]
             }
         };
+        // Index only configured personal interpretations; the usual authored
+        // defaults need no lookup for every contract.
+        let mut people: Vec<_> = if events.is_empty() {
+            Vec::new()
+        } else {
+            self.sensitivities
+                .par_iter()
+                .filter(|p| {
+                    p.trust_promise_fulfilled.is_some() || p.trust_promise_unfulfilled.is_some()
+                })
+                .collect()
+        };
+        if people.par_windows(2).any(|p| p[0].person > p[1].person) {
+            people.par_sort_unstable_by_key(|p| p.person);
+        }
+        let mut cases: Vec<_> = if events.is_empty() {
+            Vec::new()
+        } else {
+            self.sensitivities
+                .par_iter()
+                .flat_map_iter(|p| {
+                    p.relationship_cases
+                        .iter()
+                        .filter(|case| {
+                            case.promise_fulfilled_trust.is_some()
+                                || case.promise_unfulfilled_trust.is_some()
+                        })
+                        .map(move |case| (p.person, case))
+                })
+                .collect()
+        };
+        if cases
+            .par_windows(2)
+            .any(|p| (p[0].0, p[0].1.target) > (p[1].0, p[1].1.target))
+        {
+            cases.par_sort_unstable_by_key(|row| (row.0, row.1.target));
+        }
         let mut changes: Vec<_> = events
             .par_iter()
             .filter_map(|event| {
-                let delta = match event.kind {
-                    EventKind::Fulfilled => i128::from(self.rules.fulfilled_gain),
-                    EventKind::Defaulted => -i128::from(self.rules.default_loss),
-                    _ => return None,
-                };
+                if !matches!(event.kind, EventKind::Fulfilled | EventKind::Defaulted) {
+                    return None;
+                }
                 let contract = find(event.contract);
-                Some(((contract.creditor, contract.debtor), delta))
+                let pair = (contract.creditor, contract.debtor);
+                let personal = people
+                    .binary_search_by_key(&pair.0, |row| row.person)
+                    .ok()
+                    .map(|i| people[i]);
+                let case = cases
+                    .binary_search_by_key(&pair, |row| (row.0, row.1.target))
+                    .ok()
+                    .map(|i| cases[i].1);
+                let delta = match event.kind {
+                    EventKind::Fulfilled => case
+                        .and_then(|c| c.promise_fulfilled_trust)
+                        .or_else(|| personal.and_then(|p| p.trust_promise_fulfilled))
+                        .map_or(i128::from(self.rules.fulfilled_gain), i128::from),
+                    EventKind::Defaulted => case
+                        .and_then(|c| c.promise_unfulfilled_trust)
+                        .or_else(|| personal.and_then(|p| p.trust_promise_unfulfilled))
+                        .map_or(-i128::from(self.rules.default_loss), i128::from),
+                    _ => unreachable!(),
+                };
+                (delta != 0).then_some((pair, delta))
             })
             .collect();
         if self.rules.encounter_gain > 0 {
