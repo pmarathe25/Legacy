@@ -177,6 +177,7 @@ pub struct Draft {
     treated_other: Option<bool>,
     fed_animal: Option<bool>,
     hunted: Option<bool>,
+    hunting_births: Vec<HuntingPolicy>,
 }
 impl Draft {
     pub fn events(&self) -> &Events {
@@ -3131,6 +3132,7 @@ impl Economy {
         );
         giving_inheritance::enroll(next_giving.as_mut(), family.as_ref(), tick);
         gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
+        let hunting_births = hunting::enroll(self.hunting.as_ref(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         #[cfg(feature = "profile")]
         {
@@ -3625,6 +3627,7 @@ impl Economy {
             treated_other,
             fed_animal,
             hunted,
+            hunting_births,
         })
     }
     pub fn commit(&mut self, draft: Draft) -> Result<Events, String> {
@@ -3671,6 +3674,13 @@ impl Economy {
         self.purpose = draft.purpose;
         self.gathering = draft.gathering;
         self.fauna = draft.fauna;
+        if !draft.hunting_births.is_empty() {
+            self.hunting
+                .as_mut()
+                .expect("new hunting preferences have an owner")
+                .policies
+                .par_extend(draft.hunting_births);
+        }
         self.food_search = draft.food_search;
         let old_giving = std::mem::replace(&mut self.giving, draft.giving);
         self.hauling = draft.hauling;

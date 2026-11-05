@@ -517,6 +517,7 @@ fn hunting_fixture() -> State {
         ],
     });
     state.hunting = Some(Hunting {
+        inherit_births: false,
         policies: vec![
             HuntingPolicy {
                 person: 1,
@@ -936,6 +937,7 @@ fn concentrated_hunting_benchmark() {
     }
     state.fauna = hunting_fixture().fauna;
     state.hunting = Some(Hunting {
+        inherit_births: false,
         policies: (1..=count)
             .map(|person| HuntingPolicy {
                 person,
@@ -7286,6 +7288,94 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
                     assert_eq!(
                         world.snapshot().agriculture.unwrap().fields[0].phase,
                         CropPhase::Fallow
+                    );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn newborn_hunting_inclinations_do_not_inherit_targets_or_pressure() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.controlled = false;
+    }
+    initial.fauna = hunting_fixture().fauna;
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.hunting = Some(Hunting {
+        inherit_births: true,
+        policies: vec![HuntingPolicy {
+            person: 1,
+            animal: Some(1),
+            willing: false,
+            hunger_at_least: Some(5),
+            reserve_good: Some(2),
+            reserve_below: Some(3),
+            pressured_by: Some(2),
+            pressure_threshold: Some(3),
+        }],
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.hunting.as_mut().unwrap().inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let policy = state
+                    .hunting
+                    .as_ref()
+                    .unwrap()
+                    .policies
+                    .iter()
+                    .find(|p| p.person == 5);
+                assert_eq!(policy.is_some(), inherit);
+                if let Some(policy) = policy {
+                    assert!(!policy.willing);
+                    assert_eq!(
+                        (
+                            policy.animal,
+                            policy.pressured_by,
+                            policy.pressure_threshold
+                        ),
+                        (None, None, None)
+                    );
+                    assert_eq!(
+                        (
+                            policy.hunger_at_least,
+                            policy.reserve_good,
+                            policy.reserve_below
+                        ),
+                        (Some(5), Some(2), Some(3))
+                    );
+                    assert!(
+                        state
+                            .opinions
+                            .as_ref()
+                            .unwrap()
+                            .records
+                            .iter()
+                            .all(|record| record.observer != 5)
                     );
                 }
                 state

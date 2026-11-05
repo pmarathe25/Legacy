@@ -32,12 +32,16 @@ pub struct Policy {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hunting {
+    #[serde(default)]
+    pub inherit_births: bool,
     pub policies: Vec<Policy>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub inherit_births: bool,
     pub policies: Vec<PolicyConfig>,
 }
 
@@ -83,8 +87,60 @@ impl Config {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        Ok(Hunting { policies })
+        Ok(Hunting {
+            inherit_births: self.inherit_births,
+            policies,
+        })
     }
+}
+
+/// New people may inherit a parent's general inclination, never a target or pressure.
+pub fn enroll(owner: Option<&Hunting>, family: Option<&crate::Families>, tick: u64) -> Vec<Policy> {
+    let Some((owner, family)) = owner
+        .zip(family)
+        .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
+    else {
+        return Vec::new();
+    };
+    let newborns: Vec<_> = family
+        .members
+        .par_iter()
+        .filter(|member| member.born == Some(tick))
+        .collect();
+    if newborns.is_empty() {
+        return Vec::new();
+    }
+    let mut policies: Vec<_> = owner.policies.par_iter().collect();
+    if policies.par_windows(2).any(|p| p[0].person > p[1].person) {
+        policies.par_sort_unstable_by_key(|p| p.person);
+    }
+    newborns
+        .par_iter()
+        .filter_map(|member| {
+            if policies
+                .binary_search_by_key(&member.id, |p| p.person)
+                .is_ok()
+            {
+                return None;
+            }
+            let parent = member.parents.iter().find_map(|id| {
+                policies
+                    .binary_search_by_key(id, |p| p.person)
+                    .ok()
+                    .map(|i| policies[i])
+            })?;
+            Some(Policy {
+                person: member.id,
+                animal: None,
+                willing: parent.willing,
+                hunger_at_least: parent.hunger_at_least,
+                reserve_good: parent.reserve_good,
+                reserve_below: parent.reserve_below,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+        })
+        .collect()
 }
 
 impl Hunting {
