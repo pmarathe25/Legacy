@@ -613,6 +613,7 @@ fn concentrated_requested_work_reserves_shared_inputs_deterministically() {
                 help_value: 1,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             })
             .collect(),
@@ -687,6 +688,7 @@ fn an_inbox_with_multiple_requests_considers_the_oldest_first() {
         help_value: 1,
         affinity_weight: 0,
         trust_weight: 0,
+        offer_value: None,
         disregard_claims: false,
     });
     preferences.reverse();
@@ -952,6 +954,7 @@ fn a_person_can_choose_a_witnessed_helper_for_a_later_goal() {
             help_value: 1,
             affinity_weight: 0,
             trust_weight: 0,
+            offer_value: None,
             disregard_claims: false,
         });
     let mut engine = Kernel::compile(state).unwrap();
@@ -1029,6 +1032,7 @@ fn witnessed_refusal_changes_whom_the_person_asks_without_compelling_anyone() {
         help_value: 1,
         affinity_weight: 0,
         trust_weight: 0,
+        offer_value: None,
         disregard_claims: false,
     });
     let mut engine = Kernel::compile(state).unwrap();

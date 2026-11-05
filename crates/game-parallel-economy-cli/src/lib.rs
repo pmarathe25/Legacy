@@ -43,6 +43,8 @@ struct Scenario {
     #[serde(default)]
     work_requests: Option<game_parallel_autowork::requests::Requests>,
     #[serde(default)]
+    work_offer_values: Vec<WorkOfferValueConfig>,
+    #[serde(default)]
     work_tools: Vec<WorkToolConfig>,
     #[serde(default)]
     work_sites: Option<WorkSitesConfig>,
@@ -195,6 +197,14 @@ struct PromiseOfferConfig {
     pressure_threshold: Option<u64>,
     #[serde(default)]
     after_work_recipe: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WorkOfferValueConfig {
+    person: u64,
+    good: String,
+    value_per_unit: i64,
+    max_quantity: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -689,6 +699,30 @@ pub fn scenario_with_options(
         .iter()
         .map(|recipe| (recipe.name.as_str(), recipe.id))
         .collect();
+    if !scenario.work_offer_values.is_empty() {
+        let requests = scenario
+            .work_requests
+            .as_mut()
+            .ok_or("work offer values require work requests")?;
+        let mut seen = HashSet::new();
+        for value in scenario.work_offer_values {
+            if !seen.insert(value.person) {
+                return Err("duplicate work offer value".into());
+            }
+            let preference = requests
+                .preferences
+                .iter_mut()
+                .find(|p| p.person == value.person)
+                .ok_or("work offer value requires a personal work preference")?;
+            preference.offer_value = Some(game_parallel_economy::WorkOfferValue {
+                good: *goods
+                    .get(value.good.as_str())
+                    .ok_or_else(|| format!("unknown work offer good {}", value.good))?,
+                value_per_unit: value.value_per_unit,
+                max_quantity: value.max_quantity,
+            });
+        }
+    }
     let work_tools = scenario
         .work_tools
         .into_iter()

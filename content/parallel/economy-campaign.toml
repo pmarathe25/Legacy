@@ -243,6 +243,12 @@ inherit_births = true
 memory_limit = 4
 preferences = [{ person = 2, effort = 5, help_value = 2 }]
 
+[[work_offer_values]]
+person = 2
+good = "bread"
+value_per_unit = 5
+max_quantity = 1
+
 [opinions.rules]
 minimum = -100
 maximum = 100

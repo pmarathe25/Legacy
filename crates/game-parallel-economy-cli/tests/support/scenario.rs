@@ -2264,6 +2264,22 @@ fn campaign_loads_personal_offers_for_observed_helpers() {
         ),
         (Some(2), Some(-1))
     );
+    let worker = state
+        .autowork
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap()
+        .preferences
+        .iter()
+        .find(|p| p.person == 2)
+        .unwrap();
+    let value = worker.offer_value.as_ref().unwrap();
+    assert_eq!(
+        (value.good, value.value_per_unit, value.max_quantity),
+        (preference.good, 5, 1)
+    );
 }
 
 #[test]

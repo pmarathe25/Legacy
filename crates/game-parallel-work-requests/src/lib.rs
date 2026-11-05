@@ -1,6 +1,7 @@
 //! Addressed requests for physical work; no agreement or organization is required.
 mod experience;
 pub use experience::{Memory, WorkLink};
+use game_parallel_agreements::{Agreements, Status};
 use game_parallel_opinions::Opinions;
 use game_parallel_production::Production;
 use game_parallel_production_model::{PersonSnapshot, person_index};
@@ -59,18 +60,51 @@ pub struct Preference {
     /// Each individual decides how much their own trust affects willingness.
     #[serde(default)]
     pub trust_weight: i64,
+    /// This person's valuation of an outstanding offer, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offer_value: Option<OfferValue>,
     #[serde(default)]
     pub disregard_claims: bool,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfferValue {
+    pub good: u32,
+    pub value_per_unit: i64,
+    pub max_quantity: u64,
+}
+/// Snapshot of outstanding personal promises, indexed by recipient, maker, and good.
+pub struct OfferIndex {
+    rows: Vec<(u64, u64, u32, u64)>,
+}
+impl OfferIndex {
+    pub fn quantity(&self, worker: u64, requester: u64, good: u32) -> u64 {
+        self.rows
+            .binary_search_by_key(&(worker, requester, good), |row| (row.0, row.1, row.2))
+            .ok()
+            .map_or(0, |i| self.rows[i].3)
+    }
+}
 impl Preference {
     /// No agreement or feeling forces compliance; this is the person's present evaluation.
-    pub fn motivated(&self, fear: u64, obligation: u64, affinity: i32, trust: i32) -> bool {
+    pub fn motivated(
+        &self,
+        fear: u64,
+        obligation: u64,
+        affinity: i32,
+        trust: i32,
+        offered: u64,
+    ) -> bool {
         let value = i128::from(self.help_value)
             + i128::from(fear)
             + i128::from(obligation)
             + i128::from(affinity) * i128::from(self.affinity_weight)
             + i128::from(trust) * i128::from(self.trust_weight);
-        value >= i128::from(self.effort)
+        let offer = self.offer_value.as_ref().map_or(0, |value| {
+            i128::from(value.value_per_unit)
+                .saturating_mul(i128::from(offered.min(value.max_quantity)))
+        });
+        value.saturating_add(offer) >= i128::from(self.effort)
     }
 }
 /// Periodically ask a local person to help with an active personal goal.
@@ -129,6 +163,51 @@ pub struct Draft {
 }
 
 impl Requests {
+    /// Only addressed, still-pending promises can inform a recipient's own choice.
+    pub fn offer_index(&self, agreements: Option<&Agreements>, tick: u64) -> Option<OfferIndex> {
+        let agreements = agreements.filter(|owner| !owner.contracts.is_empty())?;
+        if !self.preferences.par_iter().any(|p| {
+            p.offer_value
+                .as_ref()
+                .is_some_and(|v| v.value_per_unit != 0)
+        }) {
+            return None;
+        }
+        let mut rows: Vec<_> = agreements
+            .contracts
+            .par_iter()
+            .filter_map(|contract| {
+                let live = match contract.status {
+                    Status::Proposed => contract.due > tick,
+                    Status::Active => contract.due >= tick,
+                    _ => false,
+                };
+                let quantity = contract.quantity.saturating_sub(contract.delivered);
+                (live && quantity > 0).then_some((
+                    contract.creditor,
+                    contract.debtor,
+                    contract.good,
+                    quantity,
+                ))
+            })
+            .collect();
+        rows.par_sort_unstable_by_key(|row| (row.0, row.1, row.2));
+        let rows = rows
+            .par_chunk_by(|a, b| (a.0, a.1, a.2) == (b.0, b.1, b.2))
+            .map(|group| {
+                (
+                    group[0].0,
+                    group[0].1,
+                    group[0].2,
+                    group
+                        .par_iter()
+                        .map(|row| row.3)
+                        .reduce(|| 0, u64::saturating_add),
+                )
+            })
+            .collect();
+        Some(OfferIndex { rows })
+    }
     /// Copy only personal inclinations for actual newborns; no pending requests or memories.
     pub fn enroll(&mut self, family: &game_parallel_families::Families, tick: u64) {
         if !self.inherit_births || !family.rules.enroll_births {
@@ -202,6 +281,7 @@ impl Requests {
         let mut ids: Vec<_> = self.pending.par_iter().map(|row| row.id).collect();
         ids.par_sort_unstable();
         let recipes: HashSet<_> = production.recipes.iter().map(|row| row.id).collect();
+        let goods: HashSet<_> = production.goods.iter().map(|row| row.id).collect();
         let regions: HashSet<_> = production
             .inventories
             .iter()
@@ -217,6 +297,11 @@ impl Requests {
             || preferences
                 .par_iter()
                 .any(|&person| person_index(people, person).is_none())
+            || self.preferences.par_iter().any(|p| {
+                p.offer_value
+                    .as_ref()
+                    .is_some_and(|value| value.max_quantity == 0 || !goods.contains(&value.good))
+            })
             || ids.par_windows(2).any(|w| w[0] == w[1])
             || self.pending.par_iter().any(|row| {
                 row.id == 0
@@ -322,6 +407,16 @@ impl Requests {
         busy: &[u64],
         tick: u64,
     ) -> Draft {
+        self.prepare_with_offers(people, opinions, busy, None, tick)
+    }
+    pub fn prepare_with_offers(
+        &self,
+        people: &[PersonSnapshot],
+        opinions: Option<&Opinions>,
+        busy: &[u64],
+        offers: Option<&OfferIndex>,
+        tick: u64,
+    ) -> Draft {
         let mut busy = busy.to_vec();
         busy.par_sort_unstable();
         let mut prefs: Vec<_> = self.preferences.par_iter().collect();
@@ -396,7 +491,20 @@ impl Requests {
                 worker: row.worker,
                 region: row.region,
                 recipe: row.recipe,
-                help: preference.motivated(fear, obligation, affinity, trust),
+                help: preference.motivated(
+                    fear,
+                    obligation,
+                    affinity,
+                    trust,
+                    preference
+                        .offer_value
+                        .as_ref()
+                        .and_then(|value| {
+                            offers
+                                .map(|index| index.quantity(row.worker, row.requester, value.good))
+                        })
+                        .unwrap_or(0),
+                ),
                 disregard_claims: preference.disregard_claims,
             }
         };
@@ -429,7 +537,8 @@ impl Requests {
 extern crate self as game_parallel_work_requests;
 #[cfg(test)]
 mod preference_tests {
-    use super::Preference;
+    use super::{OfferValue, Preference, Requests};
+    use game_parallel_agreements::{Agreements, Contract, Status};
 
     #[test]
     fn signed_personal_affinity_can_raise_or_lower_the_value_of_help() {
@@ -439,16 +548,86 @@ mod preference_tests {
             help_value: 0,
             affinity_weight: 3,
             trust_weight: 0,
+            offer_value: None,
             disregard_claims: false,
         };
-        assert!(preference.motivated(0, 0, 2, 0));
-        assert!(!preference.motivated(0, 0, -2, 0));
+        assert!(preference.motivated(0, 0, 2, 0, 0));
+        assert!(!preference.motivated(0, 0, -2, 0, 0));
         preference.affinity_weight = -3;
-        assert!(preference.motivated(0, 0, -2, 0));
-        assert!(!preference.motivated(0, 0, 2, 0));
-        assert!(preference.motivated(u64::MAX, u64::MAX, i32::MIN, 0));
+        assert!(preference.motivated(0, 0, -2, 0, 0));
+        assert!(!preference.motivated(0, 0, 2, 0, 0));
+        assert!(preference.motivated(u64::MAX, u64::MAX, i32::MIN, 0, 0));
         preference.affinity_weight = 0;
-        assert!(!preference.motivated(0, 0, i32::MAX, 0));
+        assert!(!preference.motivated(0, 0, i32::MAX, 0, 0));
+    }
+
+    #[test]
+    fn outstanding_offers_are_addressed_and_expire_without_imposing_value() {
+        let preference = Preference {
+            person: 2,
+            effort: 5,
+            help_value: 0,
+            affinity_weight: 0,
+            trust_weight: 0,
+            offer_value: Some(OfferValue {
+                good: 1,
+                value_per_unit: 3,
+                max_quantity: 2,
+            }),
+            disregard_claims: false,
+        };
+        let requests = Requests {
+            next_id: 1,
+            inherit_births: false,
+            memory_limit: 0,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![preference.clone()],
+            askers: vec![],
+            pending: vec![],
+            events: vec![],
+        };
+        let contract = |id, creditor, good, quantity, delivered, due, status| Contract {
+            id,
+            debtor: 1,
+            creditor,
+            good,
+            quantity,
+            delivered,
+            due,
+            status,
+        };
+        let agreements = Agreements {
+            next_id: 10,
+            policies: vec![],
+            offering: vec![],
+            work_offering: vec![],
+            bulk_debtors: vec![],
+            events: vec![],
+            contracts: vec![
+                contract(1, 2, 1, 3, 1, 6, Status::Proposed),
+                contract(2, 2, 1, 4, 3, 5, Status::Active),
+                contract(3, 2, 1, 99, 0, 5, Status::Proposed),
+                contract(4, 2, 1, 99, 0, 4, Status::Active),
+                contract(5, 2, 1, 99, 0, 6, Status::Withdrawn),
+                contract(6, 2, 1, 99, 0, 6, Status::Declined),
+                contract(7, 2, 1, 99, 0, 6, Status::Defaulted),
+                contract(8, 2, 1, 99, 99, 6, Status::Fulfilled),
+                contract(9, 3, 1, 7, 0, 6, Status::Proposed),
+                contract(10, 2, 2, 8, 0, 6, Status::Proposed),
+            ],
+        };
+        let index = requests.offer_index(Some(&agreements), 5).unwrap();
+        assert_eq!(index.quantity(2, 1, 1), 3);
+        assert_eq!(index.quantity(3, 1, 1), 7);
+        assert_eq!(index.quantity(2, 1, 2), 8);
+        assert_eq!(index.quantity(1, 2, 1), 0);
+        assert!(preference.motivated(0, 0, 0, 0, index.quantity(2, 1, 1)));
+        assert!(!preference.motivated(0, 0, 0, 0, 1));
+        let mut dislike = preference;
+        dislike.help_value = 5;
+        dislike.offer_value.as_mut().unwrap().value_per_unit = -1;
+        assert!(!dislike.motivated(0, 0, 0, 0, 1));
     }
 }
 #[cfg(test)]

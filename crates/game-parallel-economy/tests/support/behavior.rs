@@ -6063,6 +6063,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
                 help_value: 2,
                 affinity_weight: -3,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: true,
             }],
             askers: vec![Asker {
@@ -12482,6 +12483,7 @@ fn fear_can_start_requested_work_and_the_worker_can_leave_when_fear_fades() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -12640,6 +12642,7 @@ fn affinity_can_motivate_requested_work_and_a_changed_view_can_end_it() {
                 help_value: 0,
                 affinity_weight: 3,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -12688,6 +12691,144 @@ fn affinity_can_motivate_requested_work_and_a_changed_view_can_end_it() {
 }
 
 #[test]
+fn an_individual_can_value_a_revocable_offer_when_choosing_work() {
+    use game_parallel_autowork::requests::{Preference, Requests};
+    let mut initial = fixture();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[0].hunger = 0;
+    initial.people[1].willing_to_work = false;
+    initial.physical.recipes[0].ticks = 3;
+    initial.opinions.as_mut().unwrap().records.clear();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 1,
+            inherit_births: false,
+            memory_limit: 1,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 5,
+                help_value: 0,
+                affinity_weight: 0,
+                trust_weight: 0,
+                offer_value: Some(WorkOfferValue {
+                    good: 1,
+                    value_per_unit: 3,
+                    max_quantity: 2,
+                }),
+                disregard_claims: false,
+            }],
+            askers: vec![],
+            pending: vec![],
+            events: vec![],
+        }),
+    });
+    let agreements = initial.agreements.as_mut().unwrap();
+    agreements.next_id = 1;
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.policies.clear();
+    let proposal = |creditor, good, quantity| PromiseProposal {
+        debtor: 1,
+        creditor,
+        good,
+        quantity,
+        due: 10,
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.propose_promises(&[proposal(2, 1, 2)]).unwrap();
+                world.ask_work(1, 2, 1, 5).unwrap();
+                assert_eq!(world.advance().unwrap().started, vec![1]);
+                let state = world.snapshot();
+                assert_eq!(
+                    state.agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Proposed
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for sim in [&mut world, &mut restored] {
+                    sim.decide_promises(&[PromiseDecision {
+                        contract: 1,
+                        actor: 1,
+                        accept: false,
+                    }])
+                    .unwrap();
+                    assert_eq!(sim.advance().unwrap().abandoned, vec![1]);
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    for (creditor, good, quantity) in [(3, 1, 2), (2, 2, 2), (2, 1, 1)] {
+        let mut world = Economy::compile(initial.clone()).unwrap();
+        world
+            .propose_promises(&[proposal(creditor, good, quantity)])
+            .unwrap();
+        world.ask_work(1, 2, 1, 5).unwrap();
+        assert!(world.advance().unwrap().started.is_empty());
+    }
+    let mut negative = initial.clone();
+    let preference = &mut negative
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences[0];
+    preference.help_value = 6;
+    preference.offer_value.as_mut().unwrap().value_per_unit = -3;
+    let mut world = Economy::compile(negative).unwrap();
+    world.propose_promises(&[proposal(2, 1, 1)]).unwrap();
+    world.ask_work(1, 2, 1, 5).unwrap();
+    assert!(world.advance().unwrap().started.is_empty());
+    let mut world = Economy::compile(initial).unwrap();
+    let before = world.snapshot();
+    assert!(
+        world
+            .set_work_offer_value(
+                2,
+                Some(WorkOfferValue {
+                    good: 1,
+                    value_per_unit: 1,
+                    max_quantity: 0
+                })
+            )
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    world.set_work_offer_value(2, None).unwrap();
+    world.propose_promises(&[proposal(2, 1, 2)]).unwrap();
+    world.ask_work(1, 2, 1, 5).unwrap();
+    assert!(world.advance().unwrap().started.is_empty());
+}
+
+#[test]
 fn experienced_reliability_can_change_a_persons_choice_to_help() {
     use game_parallel_autowork::requests::{Preference, Requests};
     let mut initial = fixture();
@@ -12713,6 +12854,7 @@ fn experienced_reliability_can_change_a_persons_choice_to_help() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 1,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -13013,6 +13155,7 @@ fn requested_work_is_learned_only_by_a_present_observer() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -13142,6 +13285,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![Asker {
@@ -16507,6 +16651,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     help_value: u64::from(help),
                     affinity_weight: 0,
                     trust_weight: 0,
+                    offer_value: None,
                     disregard_claims: false,
                 }],
                 askers: vec![],
@@ -16620,6 +16765,161 @@ fn concentrated_work_refusals_use_individual_reactions_across_workers() {
     assert_eq!(run(1), run(4));
 }
 
+fn concentrated_offered_work(count: u64) -> State {
+    use game_parallel_agreements::{Agreements, Contract, Status};
+    use game_parallel_autowork::requests::{OfferValue, Preference, Request, Requests};
+
+    let mut state = field_workload(count);
+    state.agriculture = None;
+    state.opinions = None;
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: count,
+            inherit_births: false,
+            memory_limit: 0,
+            work_links: vec![],
+            memories: vec![],
+            preferences: (2..=count)
+                .map(|person| Preference {
+                    person,
+                    effort: 1,
+                    help_value: 0,
+                    affinity_weight: 0,
+                    trust_weight: 0,
+                    offer_value: Some(OfferValue {
+                        good: 1,
+                        value_per_unit: 1,
+                        max_quantity: 1,
+                    }),
+                    disregard_claims: false,
+                })
+                .collect(),
+            askers: vec![],
+            pending: (2..=count)
+                .map(|worker| Request {
+                    id: worker - 1,
+                    requester: 1,
+                    worker,
+                    region: 1,
+                    recipe: 1,
+                    created_at: 0,
+                    expires: 5,
+                })
+                .collect(),
+            events: vec![],
+        }),
+    });
+    state.agreements = Some(Agreements {
+        next_id: count,
+        policies: vec![],
+        offering: vec![],
+        work_offering: vec![],
+        bulk_debtors: vec![],
+        events: vec![],
+        contracts: (2..=count)
+            .map(|creditor| Contract {
+                id: creditor - 1,
+                debtor: 1,
+                creditor,
+                good: 1,
+                quantity: 1,
+                delivered: 0,
+                due: 5,
+                status: Status::Proposed,
+            })
+            .collect(),
+    });
+    state
+}
+
+#[test]
+fn concentrated_offered_work_conserves_inputs_and_matches_across_workers() {
+    let count = 4096;
+    let initial = concentrated_offered_work(count);
+    let run =
+        |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let requests = state.autowork.as_ref().unwrap().requests.as_ref().unwrap();
+                    assert_eq!(requests.work_links.len(), count as usize / 2);
+                    assert_eq!(
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+                            .unwrap()
+                            .used,
+                        0
+                    );
+                    assert!(
+                        state.agreements.as_ref().unwrap().contracts.iter().all(
+                            |contract| contract.status
+                                == game_parallel_agreements::Status::Proposed
+                                && contract.delivered == 0
+                        )
+                    );
+                    state
+                })
+        };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_offered_work_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_offered_work(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .autowork
+                        .unwrap()
+                        .requests
+                        .unwrap()
+                        .work_links
+                        .len(),
+                    count as usize / 2
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
 fn concentrated_work_refusals(count: u64) -> State {
     use game_parallel_autowork::requests::{Preference, Request, Requests};
     use game_parallel_opinions::AffinityRules;
@@ -16642,6 +16942,7 @@ fn concentrated_work_refusals(count: u64) -> State {
                     help_value: 0,
                     affinity_weight: 0,
                     trust_weight: 0,
+                    offer_value: None,
                     disregard_claims: false,
                 })
                 .collect(),
@@ -16836,6 +17137,7 @@ fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
                 help_value: 1,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -17123,6 +17425,7 @@ fn witnessed_work_can_inspire_a_personal_offer_without_creating_a_duty() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -18196,6 +18499,7 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],
@@ -18375,6 +18679,7 @@ fn fear_can_motivate_fetching_a_tool_for_requested_work_without_consent() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
+                offer_value: None,
                 disregard_claims: false,
             }],
             askers: vec![],

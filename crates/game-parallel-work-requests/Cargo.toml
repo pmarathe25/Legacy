@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-parallel-agreements = { path = "../game-parallel-agreements" }
 game-parallel-opinions = { path = "../game-parallel-opinions" }
 game-parallel-families = { path = "../game-parallel-families" }
 game-parallel-production = { path = "../game-parallel-production" }

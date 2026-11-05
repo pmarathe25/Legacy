@@ -1,6 +1,7 @@
 //! Person-driven economic activity over authoritative dated physical goods.
 pub use game_parallel_agreements::OfferPolicy as PromiseOfferPolicy;
 pub use game_parallel_agreements::WorkOfferPolicy as WorkPromiseOfferPolicy;
+pub use game_parallel_autowork::requests::OfferValue as WorkOfferValue;
 pub use game_parallel_economy_building::demolition::{
     Event as DemolitionEvent, Policy as DemolitionPolicy,
 };
@@ -1735,8 +1736,19 @@ impl Economy {
                 ));
             }
         }
-        let (mut rates, abandon) =
-            family::work_rates!(self, meal_candidates, player_work, fighters, resting);
+        let work_offers = self
+            .autowork
+            .as_ref()
+            .and_then(|auto| auto.requests.as_ref())
+            .and_then(|requests| requests.offer_index(self.agreements.as_ref(), tick));
+        let (mut rates, abandon) = family::work_rates!(
+            self,
+            meal_candidates,
+            player_work,
+            fighters,
+            resting,
+            work_offers
+        );
         let mut goal_work = None;
         let goal_building = self
             .construction
@@ -1925,7 +1937,15 @@ impl Economy {
                     .as_ref()
                     .and_then(|a| a.requests.as_ref())
                     .filter(|r| !r.pending.is_empty())
-                    .map(|r| r.prepare(&people, self.opinions.as_ref(), &busy, tick));
+                    .map(|r| {
+                        r.prepare_with_offers(
+                            &people,
+                            self.opinions.as_ref(),
+                            &busy,
+                            work_offers.as_ref(),
+                            tick,
+                        )
+                    });
                 let plan = game_parallel_economy_work::tools::AcquisitionContext {
                     requirements: &self.work_tools,
                     auto: self.autowork.as_ref(),
@@ -2126,7 +2146,8 @@ impl Economy {
             busy,
             tick,
             goal_work,
-            site_classes
+            site_classes,
+            work_offers
         );
         let starts =
             game_parallel_economy_claims::work_actions!(work, claims, self, claim_uses, busy);

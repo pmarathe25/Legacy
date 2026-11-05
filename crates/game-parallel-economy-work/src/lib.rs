@@ -10,7 +10,7 @@ use game_parallel_opinions::Opinions;
 use game_parallel_production::Production;
 use game_parallel_production_model::{PersonSnapshot, person_index};
 use game_parallel_work_asking as asking;
-use game_parallel_work_requests::{Draft as RequestDraft, Event, Outcome};
+use game_parallel_work_requests::{Draft as RequestDraft, Event, OfferIndex, Outcome};
 use rayon::prelude::*;
 
 pub struct Plan {
@@ -116,6 +116,7 @@ pub struct Context<'a> {
     pub tool_requirements: &'a [tools::Requirement],
     pub view: &'a game_parallel_lots::View,
     pub opinions: Option<&'a Opinions>,
+    pub offers: Option<&'a OfferIndex>,
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub goals: Option<&'a Goals>,
     pub preplanned_goals: Option<&'a Autowork>,
@@ -187,11 +188,15 @@ impl Context<'_> {
                 asks: None,
             });
         }
-        let request = self
-            .auto
-            .requests
-            .as_ref()
-            .map(|owner| owner.prepare(self.people, self.opinions, self.busy, self.tick));
+        let request = self.auto.requests.as_ref().map(|owner| {
+            owner.prepare_with_offers(
+                self.people,
+                self.opinions,
+                self.busy,
+                self.offers,
+                self.tick,
+            )
+        });
         let mut ask_busy = self.busy.to_vec();
         if let Some(draft) = &request {
             ask_busy.par_extend(draft.decisions.par_iter().map(|row| row.worker));
@@ -338,7 +343,11 @@ impl Context<'_> {
     }
 }
 /// Ongoing requested work can still be motivated by current feelings; nothing binds the worker.
-pub fn pressured_workers(auto: &Autowork, opinions: Option<&Opinions>) -> Vec<u64> {
+pub fn pressured_workers(
+    auto: &Autowork,
+    opinions: Option<&Opinions>,
+    offers: Option<&OfferIndex>,
+) -> Vec<u64> {
     let Some(owner) = auto.requests.as_ref() else {
         return Vec::new();
     };
@@ -370,7 +379,14 @@ pub fn pressured_workers(auto: &Autowork, opinions: Option<&Opinions>) -> Vec<u6
                     .as_ref()
                     .map_or(0, |index| index.trust(link.worker, link.requester))
             };
-            pref.motivated(fear, obligation, affinity, trust)
+            let offered = pref
+                .offer_value
+                .as_ref()
+                .and_then(|value| {
+                    offers.map(|index| index.quantity(link.worker, link.requester, value.good))
+                })
+                .unwrap_or(0);
+            pref.motivated(fear, obligation, affinity, trust, offered)
                 .then_some(link.worker)
         })
         .collect();

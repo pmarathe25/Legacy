@@ -147,6 +147,7 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
                         + random(1) % (rule.max_help_value - rule.min_help_value + 1),
                     affinity_weight: rule.affinity_weight,
                     trust_weight: rule.trust_weight,
+                    offer_value: None,
                     disregard_claims: random(2) % 100 < u64::from(rule.disregard_percent),
                 };
                 let asker = (random(3) % 100 < u64::from(rule.ask_percent)).then_some(

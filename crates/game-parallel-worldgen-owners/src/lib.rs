@@ -154,6 +154,7 @@ pub fn work_requests(
             effort: settings.work_effort,
             affinity_weight: 0,
             trust_weight: 0,
+            offer_value: None,
             disregard_claims: game_parallel_genetics::random(
                 settings.seed ^ 0x636c61696d,
                 person,

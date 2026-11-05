@@ -96,7 +96,16 @@ pub fn prepare(
         .requests
         .as_ref()
         .filter(|requests| !requests.pending.is_empty() || !requests.events.is_empty())
-        .map(|requests| requests.prepare(people, world.opinions.as_ref(), &busy, next));
+        .map(|requests| {
+            let offers = requests.offer_index(world.agreements.as_ref(), next);
+            requests.prepare_with_offers(
+                people,
+                world.opinions.as_ref(),
+                &busy,
+                offers.as_ref(),
+                next,
+            )
+        });
     if let Some(draft) = &request_draft {
         requests::include(base, &mut goal_policies, draft, &mut busy);
     }

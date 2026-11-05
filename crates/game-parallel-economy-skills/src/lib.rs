@@ -10,9 +10,13 @@ use rayon::prelude::*;
 use std::collections::HashSet;
 #[macro_export]
 macro_rules! continuing_work {
-    ($world:expr, $meals:expr) => {{
+    ($world:expr, $meals:expr, $offers:expr) => {{
         let pressured = $world.autowork.as_ref().map_or_else(Vec::new, |auto| {
-            game_parallel_economy_work::pressured_workers(auto, $world.opinions.as_ref())
+            game_parallel_economy_work::pressured_workers(
+                auto,
+                $world.opinions.as_ref(),
+                $offers.as_ref(),
+            )
         });
         let (mut rates, abandon) = game_parallel_economy_person::occupation::continuing(
             $world.physical.work(),

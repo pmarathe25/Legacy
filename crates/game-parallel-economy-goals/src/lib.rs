@@ -9,7 +9,7 @@ use game_parallel_production_model::{PersonSnapshot, Recipe, person_index};
 use rayon::prelude::*;
 #[macro_export]
 macro_rules! prepare_work {
-    ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $tick:expr, $preplanned:expr, $site_classes:expr) => {{
+    ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $tick:expr, $preplanned:expr, $site_classes:expr, $offers:expr) => {{
         let mut unwilling: Vec<_> = $world
             .people
             .par_iter()
@@ -41,6 +41,7 @@ macro_rules! prepare_work {
                     tool_requirements: &$world.work_tools,
                     view: &$view,
                     opinions: $world.opinions.as_ref(),
+                    offers: $offers.as_ref(),
                     claims: $claims.as_ref(),
                     goals: $world.goals.as_ref(),
                     preplanned_goals: $preplanned.as_ref(),
@@ -219,6 +220,41 @@ pub fn advance(
 #[macro_export]
 macro_rules! request_method {
     () => {
+        /// Change how this person values a future offer when considering work.
+        pub fn set_work_offer_value(
+            &mut self,
+            person: u64,
+            value: Option<game_parallel_autowork::requests::OfferValue>,
+        ) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+                || value.as_ref().is_some_and(|v| {
+                    v.max_quantity == 0
+                        || !self.physical.goods().iter().any(|good| good.id == v.good)
+                })
+            {
+                return Err("invalid personal work offer value".into());
+            }
+            let mut next = self.autowork.clone().ok_or("work requests are disabled")?;
+            next.requests
+                .as_mut()
+                .ok_or("work requests are disabled")?
+                .preferences
+                .iter_mut()
+                .find(|p| p.person == person)
+                .ok_or("person has no work preference")?
+                .offer_value = value;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            self.autowork = Some(next);
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Address a request to another individual; their later choice is independent.
         pub fn ask_work(
             &mut self,

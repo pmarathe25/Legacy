@@ -6,6 +6,8 @@ Each person's optional signed `affinity_weight` controls how their own affinity 
 
 An independent signed `trust_weight` lets a person consider their own trust in the requester, including trust gained or lost through experienced promises. It also affects whether they continue work. Zero leaves trust irrelevant; no trust value or promise itself compels cooperation.
 
+An optional personal `offer_value` values a specific good in still-outstanding promises addressed to the worker. The signed value per unit and quantity cap belong to that worker; offers to someone else, expired promises, and already delivered amounts do not contribute. The worker reconsiders continuing when the offer changes, and can stop even after receiving a delivery. The promise remains independently revocable and does not move goods until an actual transfer succeeds.
+
 With `inherit_births` and family birth enrollment enabled, newborns may acquire a parent's general willingness to request or perform work. They inherit no pending requests, job links, or personal memories; an inherited asking inclination still requires an actual goal.
 
 The controlled person can use `respond-work REQUEST_ID PERSON start|refuse` to start a requested job or refuse it. Starting still checks location, available resources, age, and other ordinary work restrictions; a failed start leaves the request available.

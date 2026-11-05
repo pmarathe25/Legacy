@@ -22,6 +22,8 @@ Optional `[population.work_support]` settings seed individual aspirations, incli
 
 The same profile accepts a signed `trust_weight` for each person's evaluation of the requester. Experienced promise outcomes can change trust and thereby affect later requests, but each person may weight trust positively, negatively, or not at all.
 
+An optional `[[work_offer_values]]` entry sets a person's signed value per unit of a named good and a maximum considered quantity. A pending personal promise of that good can influence the person's work decision, without binding either party. The administrative command `work-value PERSON GOOD VALUE MAX` changes the preference; `work-value PERSON off` removes it.
+
 The optional `learning_percent` and `learning_max` settings give selected individuals a bounded inclination to develop new aspirations from successful work they personally observe. They do not grant advance knowledge of a recipe or create an aspiration until the person witnesses work.
 
 Construction blueprints may specify `salvage` up to the kit `quantity`. Destroyed sites with surviving material appear as local debris; `salvage-site SITE GOOD QUANTITY` attempts to recover it into the ruler's inventory. Optional `[[construction.salvaging]]` policies configure individuals' own recovery choices.

@@ -50,6 +50,7 @@ pub fn run(
             help_value: 1,
             affinity_weight: 0,
             trust_weight: 0,
+            offer_value: None,
             disregard_claims: claims,
         })
         .collect();
