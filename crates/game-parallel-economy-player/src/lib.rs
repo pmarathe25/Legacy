@@ -820,6 +820,13 @@ impl<'a> Player<'a> {
         self.world
             .set_work_practice_reserve(self.current()?, reserve)
     }
+    pub fn set_work_practice_evaluation(
+        &mut self,
+        evaluation: Option<game_parallel_economy::WorkPracticeEvaluation>,
+    ) -> Result<(), String> {
+        self.world
+            .set_work_practice_evaluation(self.current()?, evaluation)
+    }
     pub fn report_practice(
         &mut self,
         listener: u64,

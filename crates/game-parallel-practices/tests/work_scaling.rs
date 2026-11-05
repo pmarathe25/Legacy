@@ -49,6 +49,7 @@ fn paired_work_practices(count: u64) -> Workload {
     let work = std::sync::Arc::new(WorkMind {
         invent: true,
         approve: true,
+        evaluation: None,
         willing: true,
         ask_willing: true,
         review_interval: 2,

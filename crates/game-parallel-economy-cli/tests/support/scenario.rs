@@ -1594,6 +1594,43 @@ fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
     )
     .unwrap();
     let mut player = Player::new(&mut world);
+    player
+        .set_work_practice_evaluation(Some(game_parallel_economy::WorkPracticeEvaluation {
+            base: 1,
+            affinity_weight: -2,
+            trust_weight: 3,
+            threshold: 4,
+        }))
+        .unwrap();
+    assert_eq!(
+        player
+            .view()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .work
+            .as_ref()
+            .unwrap()
+            .evaluation
+            .unwrap()
+            .affinity_weight,
+        -2
+    );
+    player.set_work_practice_choice("approve", false).unwrap();
+    assert!(
+        player
+            .view()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .work
+            .as_ref()
+            .unwrap()
+            .evaluation
+            .is_none()
+    );
     let view = player.view().unwrap();
     let bread = view.possessions[0].good;
     let offered = view.possessions[0].quantity + 100;

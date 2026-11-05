@@ -152,6 +152,7 @@ fn work_practice_is_delivered_through_contact_and_considered_independently() {
     let preference = || WorkMind {
         invent: true,
         approve: false,
+        evaluation: None,
         willing: false,
         ask_willing: true,
         review_interval: 2,
@@ -236,6 +237,110 @@ fn work_practice_is_delivered_through_contact_and_considered_independently() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn work_proposal_approval_uses_each_recipients_directed_relationship() {
+    use game_parallel_practices::work::{
+        Context, Evaluation, Mind as WorkMind, Proposal as WorkProposal, Received as WorkReceived,
+        advance_with_relationships,
+    };
+    let mut worker = mind(2);
+    worker.work = Some(std::sync::Arc::new(WorkMind {
+        invent: false,
+        approve: false,
+        evaluation: Some(Evaluation {
+            base: 0,
+            affinity_weight: 1,
+            trust_weight: 1,
+            threshold: 1,
+        }),
+        willing: false,
+        ask_willing: false,
+        review_interval: 1,
+        proposal_lifetime: 5,
+        reserve: 0,
+        pressure_threshold: Some(3),
+        next_review: 0,
+        sequence: 0,
+        authored: None,
+        engagement: None,
+        gifts: vec![],
+        inbox: vec![WorkReceived {
+            proposal: WorkProposal {
+                author: 1,
+                sequence: 1,
+                worker: 2,
+                recipe: 7,
+                good: 4,
+                quantity: 1,
+                reserve: 0,
+                created: 1,
+                expires: 5,
+            },
+            delivered: 1,
+            decision: Decision::Pending,
+            approved: false,
+        }],
+    }));
+    let initial = Practices {
+        minds: vec![mind(1), worker],
+    };
+    let run = |workers, affinity, trust, pressure, weight| {
+        let mut prior = initial.clone();
+        std::sync::Arc::make_mut(prior.minds[1].work.as_mut().unwrap())
+            .evaluation
+            .as_mut()
+            .unwrap()
+            .affinity_weight = weight;
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = prior.clone();
+                advance_with_relationships(
+                    &prior,
+                    &mut next,
+                    Context {
+                        goals: &[],
+                        witnesses: &[],
+                        contacts: &[],
+                        tick: 2,
+                        can_decide: |_| true,
+                        pressure: |_, _| pressure,
+                    },
+                    |observer, author| {
+                        if (observer, author) == (2, 1) {
+                            (affinity, trust)
+                        } else {
+                            (99, 99)
+                        }
+                    },
+                )
+                .unwrap();
+                next
+            })
+    };
+    let liked = run(1, 2, 0, 0, 1);
+    assert_eq!(liked, run(4, 2, 0, 0, 1));
+    assert!(liked.minds[1].work.as_ref().unwrap().inbox[0].approved);
+    let disliked = run(1, -2, 0, 0, 1);
+    assert_eq!(
+        disliked.minds[1].work.as_ref().unwrap().inbox[0].decision,
+        Decision::Declined
+    );
+    let enjoys_dislike = run(1, -2, 0, 0, -1);
+    assert!(enjoys_dislike.minds[1].work.as_ref().unwrap().inbox[0].approved);
+    let trusts = run(1, 0, 2, 0, 1);
+    assert!(trusts.minds[1].work.as_ref().unwrap().inbox[0].approved);
+    let pressured = run(1, -2, 0, 3, 1);
+    let item = &pressured.minds[1].work.as_ref().unwrap().inbox[0];
+    assert_eq!(item.decision, Decision::Adopted);
+    assert!(
+        !item.approved,
+        "pressure can change outward behavior without changing private approval"
+    );
 }
 
 #[test]

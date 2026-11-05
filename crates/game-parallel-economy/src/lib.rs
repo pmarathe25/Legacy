@@ -40,6 +40,7 @@ pub use game_parallel_opinions::{
     ObligationDevelopment, Opinion, RelationshipCase, ReportReception,
     Sensitivity as OpinionSensitivity,
 };
+pub use game_parallel_practices::work::Evaluation as WorkPracticeEvaluation;
 pub use game_parallel_practices::{
     Belief as PracticeBelief, Case as PracticeCase, Decision as PracticeDecision,
     Mind as PracticeMind, Practices as PersonalPractices, PrecedentReasoning as PracticePrecedent,

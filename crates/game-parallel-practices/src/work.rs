@@ -11,6 +11,9 @@ use std::collections::HashSet;
 pub struct Mind {
     pub invent: bool,
     pub approve: bool,
+    /// Optional personal interpretation of the author's relationship.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluation: Option<Evaluation>,
     pub willing: bool,
     pub ask_willing: bool,
     pub review_interval: u64,
@@ -33,6 +36,17 @@ pub struct Mind {
     pub gifts: Vec<Gift>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox: Vec<Received>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Evaluation {
+    pub base: i64,
+    #[serde(default)]
+    pub affinity_weight: i64,
+    #[serde(default)]
+    pub trust_weight: i64,
+    pub threshold: i64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +228,21 @@ where
     C: Fn(u64) -> bool + Sync,
     P: Fn(u64, u64) -> u64 + Sync,
 {
+    advance_with_relationships(prior, next, context, |_, _| (0, 0))
+}
+
+/// Relationship values belong to the evaluating person and are never objective truth.
+pub fn advance_with_relationships<C, P, R>(
+    prior: &crate::Practices,
+    next: &mut crate::Practices,
+    context: Context<'_, C, P>,
+    relationship: R,
+) -> Result<(), &'static str>
+where
+    C: Fn(u64) -> bool + Sync,
+    P: Fn(u64, u64) -> u64 + Sync,
+    R: Fn(u64, u64) -> (i32, i32) + Sync,
+{
     if !prior.minds.par_iter().any(|person| person.work.is_some()) {
         return Ok(());
     }
@@ -232,7 +261,7 @@ where
         return next
             .minds
             .par_iter_mut()
-            .try_for_each(|person| update_person(person, &[], None, &context));
+            .try_for_each(|person| update_person(person, &[], None, &context, &relationship));
     }
     let mut minds: Vec<_> = prior.minds.par_iter().collect();
     if minds
@@ -333,19 +362,27 @@ where
             .binary_search_by_key(&person.person, |p| p.author)
             .ok()
             .map(|i| by_author[i]);
-        update_person(person, &offers[start..end], authored, &context)
+        update_person(
+            person,
+            &offers[start..end],
+            authored,
+            &context,
+            &relationship,
+        )
     })
 }
 
-fn update_person<C, P>(
+fn update_person<C, P, R>(
     person: &mut PersonalMind,
     offers: &[Proposal],
     authored: Option<&Proposal>,
     context: &Context<'_, C, P>,
+    relationship: &R,
 ) -> Result<(), &'static str>
 where
     C: Fn(u64) -> bool + Sync,
     P: Fn(u64, u64) -> u64 + Sync,
+    R: Fn(u64, u64) -> (i32, i32) + Sync,
 {
     let Some(existing) = person.work.as_ref() else {
         return Ok(());
@@ -378,7 +415,13 @@ where
             {
                 continue;
             }
-            item.approved = work.approve;
+            item.approved = work.evaluation.map_or(work.approve, |evaluation| {
+                let (affinity, trust) = relationship(person.person, item.proposal.author);
+                i128::from(evaluation.base)
+                    + i128::from(affinity) * i128::from(evaluation.affinity_weight)
+                    + i128::from(trust) * i128::from(evaluation.trust_weight)
+                    >= i128::from(evaluation.threshold)
+            });
             let pressured = work.pressure_threshold.is_some_and(|threshold| {
                 (context.pressure)(person.person, item.proposal.author) >= threshold
             });

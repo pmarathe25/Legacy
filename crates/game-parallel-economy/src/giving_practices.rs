@@ -193,7 +193,7 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
         } else {
             Vec::new()
         };
-        game_parallel_practices::work::advance(
+        game_parallel_practices::work::advance_with_relationships(
             owner,
             &mut next,
             game_parallel_practices::work::Context {
@@ -216,6 +216,11 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                         fear.saturating_add(obligation)
                     })
                 },
+            },
+            |person, other| {
+                opinions.as_ref().map_or((0, 0), |index| {
+                    (index.affinity(person, other), index.trust(person, other))
+                })
             },
         )
         .map_err(str::to_owned)?;
@@ -399,11 +404,29 @@ macro_rules! methods {
                 let work = std::sync::Arc::make_mut(work);
                 match choice {
                     "invent" => work.invent = enabled,
-                    "approve" => work.approve = enabled,
+                    "approve" => {
+                        work.approve = enabled;
+                        work.evaluation = None;
+                    }
                     "willing" => work.willing = enabled,
                     "ask" => work.ask_willing = enabled,
                     _ => return Err("unknown work practice choice".into()),
                 }
+                Ok(())
+            })
+        }
+        /// Set or clear this person's signed relationship interpretation.
+        pub fn set_work_practice_evaluation(
+            &mut self,
+            person: u64,
+            evaluation: Option<game_parallel_practices::work::Evaluation>,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                let work = mind
+                    .work
+                    .as_mut()
+                    .ok_or("person has no work practice mind")?;
+                std::sync::Arc::make_mut(work).evaluation = evaluation;
                 Ok(())
             })
         }

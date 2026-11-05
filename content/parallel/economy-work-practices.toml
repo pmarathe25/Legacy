@@ -143,6 +143,12 @@ ask_willing = false
 review_interval = 12
 proposal_lifetime = 24
 
+[giving.practices.minds.work.evaluation]
+base = 1
+affinity_weight = 1
+trust_weight = 1
+threshold = 1
+
 [hauling]
 policies = [{ person = 2, source = 2, destination = 1, good = "bread", quantity = 2, willing = true, requires_request = true, request_pressure_threshold = 3 }]
 

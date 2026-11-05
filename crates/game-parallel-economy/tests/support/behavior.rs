@@ -8623,6 +8623,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
     let work = WorkMind {
         invent: false,
         approve: true,
+        evaluation: None,
         willing: false,
         ask_willing: false,
         review_interval: 1,
@@ -8856,6 +8857,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
     let make_work = |invent, approve| WorkMind {
         invent,
         approve,
+        evaluation: None,
         willing: false,
         ask_willing: false,
         review_interval: 2,
@@ -9065,6 +9067,42 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                 }
                 let delivered =
                     delivered.expect("proposal delivered after real work, gift, and contact");
+                let evaluate = |trust| {
+                    let mut state = delivered.clone();
+                    let worker = &mut state
+                        .giving
+                        .as_mut()
+                        .unwrap()
+                        .practices
+                        .as_mut()
+                        .unwrap()
+                        .minds[1];
+                    std::sync::Arc::make_mut(worker.work.as_mut().unwrap()).evaluation =
+                        Some(game_parallel_practices::work::Evaluation {
+                            base: 0,
+                            affinity_weight: 0,
+                            trust_weight: 1,
+                            threshold: 1,
+                        });
+                    state.opinions.as_mut().unwrap().records.push(Opinion {
+                        observer: 2,
+                        target: 1,
+                        trust,
+                        fear: 0,
+                        obligation: 0,
+                        affinity: 0,
+                    });
+                    let mut world = Economy::compile(state).unwrap();
+                    world.advance().unwrap();
+                    world.snapshot().giving.unwrap().practices.unwrap().minds[1]
+                        .work
+                        .as_ref()
+                        .unwrap()
+                        .inbox[0]
+                        .approved
+                };
+                assert!(evaluate(2));
+                assert!(!evaluate(-2));
                 let minds = &delivered
                     .giving
                     .as_ref()
