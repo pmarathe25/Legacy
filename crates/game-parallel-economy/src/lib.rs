@@ -1759,7 +1759,7 @@ impl Economy {
                 .map(|group| group[0])
                 .collect();
         }
-        let animal_care_plan = animal_care::Context {
+        let mut animal_care_plan = animal_care::Context {
             owner: self.animal_care.as_ref(),
             fauna: self.fauna.as_ref(),
             people: &self.people,
@@ -2552,7 +2552,6 @@ impl Economy {
         actions.extend_from_slice(&treatment.actions);
         actions.extend_from_slice(&giving_plan.actions);
         actions.extend_from_slice(&medical_plan.actions);
-        actions.extend_from_slice(&animal_care_plan.actions);
         if let Some(plan) = &hauling_plan {
             actions.extend_from_slice(&plan.actions);
         }
@@ -2562,8 +2561,11 @@ impl Economy {
         if let Some(plan) = &goal_fetch_plan {
             actions.extend_from_slice(&plan.actions);
         }
-        let compact =
+        let mut compact =
             game_parallel_economy_agriculture::append_planting(&mut farming, &mut actions);
+        // Animal care needs the acceptance receipt, not copies of consumed lot cohorts.
+        compact.par_extend(animal_care_plan.actions.par_iter().map(|action| action.id));
+        actions.append(&mut animal_care_plan.actions);
         let practice_requests: Vec<_> = self
             .giving
             .as_ref()
@@ -2775,6 +2777,8 @@ impl Economy {
         // Human gathering and renewal have already been staged. Wildlife now
         // competes for the remaining physical patches in the same draft.
         let fauna = if let Some(fauna) = &self.fauna {
+            #[cfg(feature = "profile")]
+            let _profile = game_diagnostics::span("economy.fauna.advance");
             let patches: Vec<_> = gathering
                 .as_ref()
                 .map_or(&[][..], |g| g.nodes.as_slice())

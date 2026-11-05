@@ -55,7 +55,9 @@ pub fn prepare(
         .map(|row| row.id)
         .chain(creations.par_iter().map(|row| row.id))
         .collect();
-    ids.par_sort_unstable();
+    if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        ids.par_sort_unstable();
+    }
     if ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
         return Err("duplicate lot movement id".into());
     }
@@ -159,8 +161,13 @@ pub fn prepare(
             })
         })
         .collect::<Result<_, String>>()?;
-    claims
-        .par_sort_unstable_by_key(|row| (row.source, row.movement.good, row.rank, row.movement.id));
+    let claim_key = |row: &Claim| (row.source, row.movement.good, row.rank, row.movement.id);
+    if claims
+        .par_windows(2)
+        .any(|pair| claim_key(&pair[0]) > claim_key(&pair[1]))
+    {
+        claims.par_sort_unstable_by_key(claim_key);
+    }
     claims
         .par_iter_mut()
         .enumerate()
@@ -244,7 +251,9 @@ pub fn prepare(
                     }
                 });
         });
-    let outgoing: Vec<_> = if let Some(batch) = &batch {
+    let outgoing: Vec<_> = if let Some(batch) = &batch
+        && (!creations.is_empty() || claims.par_iter().any(|claim| claim.destination.is_some()))
+    {
         let mut rows: Vec<_> = claims
             .par_iter()
             .filter(|row| source_ok[row.sorted].load(Ordering::Relaxed))

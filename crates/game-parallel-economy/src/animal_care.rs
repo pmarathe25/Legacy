@@ -122,6 +122,8 @@ pub struct Context<'a> {
 
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        #[cfg(feature = "profile")]
+        let _profile = game_diagnostics::span("economy.animal_care.plan");
         let policies = self
             .owner
             .map_or(&[][..], |owner| owner.policies.as_slice());
@@ -219,6 +221,8 @@ impl Context<'_> {
 
 impl Plan {
     pub fn accepted(&self, events: &Events) -> Vec<Feeding> {
+        #[cfg(feature = "profile")]
+        let _profile = game_diagnostics::span("economy.animal_care.receipts");
         if self.records.is_empty() {
             return Vec::new();
         }

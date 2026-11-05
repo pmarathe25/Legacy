@@ -14653,6 +14653,112 @@ fn field_workload(count: u64) -> State {
 }
 
 #[test]
+#[ignore]
+fn concentrated_animal_care_benchmark() {
+    use game_parallel_genetics::{Genome, Sex};
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let mut initial = concentrated(count);
+    initial.autowork = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    initial.fauna = Some(Fauna {
+        last_tick: 0,
+        next_id: 2,
+        species: vec![AnimalSpecies {
+            id: 1,
+            name: "grazer".into(),
+            food_good: 1,
+            intake: 2,
+            hunger_per_tick: 1,
+            relief_per_unit: 1,
+            starvation_threshold: u32::MAX,
+            starvation_damage: 1,
+            max_health: 10,
+            adult_age: 1,
+            fertile_until: 10,
+            lifespan: 30,
+            gestation: 2,
+            conception_one_in: 10,
+            breeding_max_hunger: 5,
+            newborn_health: 10,
+            mutation_per_million: 0,
+            mutation_step: 0,
+        }],
+        animals: vec![Animal {
+            id: 1,
+            species: 1,
+            region: 1,
+            age: 1,
+            health: 10,
+            hunger: u32::try_from(count).unwrap(),
+            genome: Genome {
+                sex: Sex::Male,
+                alleles: [[100; 2]; 4],
+            },
+            pregnancy: None,
+            parents: None,
+        }],
+    });
+    initial.animal_care = Some(AnimalCare {
+        policies: (1..=count)
+            .map(|person| AnimalCarePolicy {
+                person,
+                animal: 1,
+                good: 1,
+                quantity: 1,
+                willing: true,
+                health_at_most: 10,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                assert_eq!(
+                    state.fauna.unwrap().animals[0].hunger,
+                    u32::try_from(count - count / 2 + 1).unwrap()
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} concentrated_animal_care_seconds={:.6}",
+                samples[1]
+            );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!(
+                    "{name}: {:.3} ms/call",
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
+        });
+}
+
+#[test]
 fn controlled_cultivation_uses_real_seed_and_publishes_actual_harvest() {
     let mut initial = field_workload(4);
     initial.people[0].controlled = true;

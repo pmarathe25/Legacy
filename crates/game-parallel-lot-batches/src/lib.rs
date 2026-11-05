@@ -28,7 +28,9 @@ pub fn prepare(
         return Err("invalid or existing new custody".into());
     }
     let mut ids: Vec<_> = transactions.par_iter().map(|row| row.id).collect();
-    ids.par_sort_unstable();
+    if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        ids.par_sort_unstable();
+    }
     if ids.first() == Some(&0) || ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
         return Err("invalid or duplicate transaction id".into());
     }
