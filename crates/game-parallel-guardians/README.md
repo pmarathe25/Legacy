@@ -4,4 +4,6 @@ Persistent guardian bodies sense the current incarnation's local region, follow 
 
 The compiled CLI's `request-release GUARDIAN` lets the current incarnation ask a guardian to end mentorship. The guardian refuses if not present or if the authored mentorship threshold has not been met; acceptance is saved on that guardian and resets for the next incarnation. The decision does not confer political office, property, or legal adulthood.
 
+Each guardian may set `mentorship_required` to express their own readiness judgment; otherwise the scenario's `mentorship_ticks` is used. Guardians can therefore reach different decisions after the same period, and their experience with a previous incarnation does not count toward the next one.
+
 These bodies are a separate prototype owner and do not yet interact with ordinary equipment, imprisonment, injury, other player requests, or the shared character action system. Sensing creates no ordinary personal knowledge. Guardians cannot teleport or inherit an incarnation's property or office.

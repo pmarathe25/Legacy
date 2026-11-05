@@ -8047,6 +8047,7 @@ fn campaign_fixture() -> State {
                 journey: None,
                 student: None,
                 mentorship: 0,
+                mentorship_required: None,
                 released: false,
             }],
         }),
@@ -8756,6 +8757,50 @@ fn successor_is_an_actual_later_birth_and_guardian_travels_before_mentorship() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn guardians_in_the_campaign_can_make_different_readiness_decisions() {
+    use game_parallel_economy_campaign::ReleaseDecision;
+    let mut initial = campaign_fixture();
+    let guardians = initial
+        .campaign
+        .as_mut()
+        .unwrap()
+        .guardians
+        .as_mut()
+        .unwrap();
+    let mut cautious = guardians.guardians[0].clone();
+    cautious.id = 43;
+    cautious.mentorship_required = Some(3);
+    guardians.guardians.push(cautious);
+    let mut world = Economy::compile(initial).unwrap();
+    for _ in 0..4 {
+        world.advance().unwrap();
+    }
+    assert_eq!(
+        world.request_guardian_release(42).unwrap(),
+        ReleaseDecision::Accepted
+    );
+    assert_eq!(
+        world.request_guardian_release(43).unwrap(),
+        ReleaseDecision::NotReady
+    );
+    let mut restored = Economy::compile(
+        serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap()).unwrap(),
+    )
+    .unwrap();
+    world.advance().unwrap();
+    restored.advance().unwrap();
+    assert_eq!(
+        world.request_guardian_release(43).unwrap(),
+        ReleaseDecision::Accepted
+    );
+    assert_eq!(
+        restored.request_guardian_release(43).unwrap(),
+        ReleaseDecision::Accepted
+    );
+    assert_eq!(world.snapshot(), restored.snapshot());
 }
 
 #[test]

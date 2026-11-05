@@ -432,3 +432,9 @@ mentorship_ticks = 3
 id = 99
 region = 2
 health = 100
+
+[[campaign.guardians.guardians]]
+id = 100
+region = 2
+health = 100
+mentorship_required = 5

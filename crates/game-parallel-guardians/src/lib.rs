@@ -27,6 +27,9 @@ pub struct Guardian {
     pub student: Option<u64>,
     #[serde(default)]
     pub mentorship: u64,
+    /// This guardian's own required local experience; absent uses the scenario default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentorship_required: Option<u64>,
     #[serde(default)]
     pub released: bool,
 }
@@ -65,6 +68,7 @@ impl Guardians {
                     || !ids.insert(g.id)
                     || !regions.contains(&g.region)
                     || g.health > self.max_health
+                    || g.mentorship_required == Some(0)
                     || g.journey.as_ref().is_some_and(|j| {
                         g.confined
                             || j.remaining == 0
@@ -146,7 +150,11 @@ impl Guardians {
         }
     }
     pub fn ready(&self, guardian: &Guardian) -> bool {
-        guardian.student.is_some() && guardian.mentorship >= self.mentorship_ticks
+        guardian.student.is_some()
+            && guardian.mentorship
+                >= guardian
+                    .mentorship_required
+                    .unwrap_or(self.mentorship_ticks)
     }
     /// A request changes only the guardian's own judgment, not legal status or office.
     pub fn request_release(
@@ -168,7 +176,7 @@ impl Guardians {
         {
             return Ok(ReleaseDecision::NotPresent);
         }
-        if guardian.mentorship < threshold {
+        if guardian.mentorship < guardian.mentorship_required.unwrap_or(threshold) {
             return Ok(ReleaseDecision::NotReady);
         }
         guardian.released = true;

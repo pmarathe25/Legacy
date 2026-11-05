@@ -9,8 +9,62 @@ fn guardian(id: u64, region: u64, health: u32) -> Guardian {
         journey: None,
         student: None,
         mentorship: 0,
+        mentorship_required: None,
         released: false,
     }
+}
+
+#[test]
+fn guardians_can_disagree_about_readiness_after_the_same_mentorship() {
+    let mut strict = guardian(2, 1, 10);
+    strict.mentorship_required = Some(3);
+    let initial = Guardians {
+        recovery_per_tick: 1,
+        max_health: 10,
+        mentorship_ticks: 2,
+        guardians: vec![guardian(1, 1, 10), strict],
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial
+                    .advance(Some((7, Some(1))), &[])
+                    .advance(Some((7, Some(1))), &[]);
+                assert!(state.ready(&state.guardians[0]));
+                assert!(!state.ready(&state.guardians[1]));
+                assert_eq!(
+                    state.request_release(1, Some((7, Some(1)))).unwrap(),
+                    ReleaseDecision::Accepted
+                );
+                assert_eq!(
+                    state.request_release(2, Some((7, Some(1)))).unwrap(),
+                    ReleaseDecision::NotReady
+                );
+                let mut restored: Guardians =
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap();
+                restored = restored.advance(Some((7, Some(1))), &[]);
+                state = state.advance(Some((7, Some(1))), &[]);
+                assert_eq!(state, restored);
+                assert_eq!(
+                    state.request_release(2, Some((7, Some(1)))).unwrap(),
+                    ReleaseDecision::Accepted
+                );
+                let next = state.advance(Some((8, Some(1))), &[]);
+                assert!(
+                    next.guardians
+                        .iter()
+                        .all(|g| !g.released && g.mentorship == 1)
+                );
+                next
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut invalid = initial;
+    invalid.guardians[0].mentorship_required = Some(0);
+    assert!(invalid.validate(&[1], &[]).is_err());
 }
 #[test]
 fn guardians_choose_weighted_shortest_route_with_stable_ties_and_recover_before_departing() {
