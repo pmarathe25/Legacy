@@ -352,6 +352,37 @@ fn generated_campaign(count: u64) -> game_parallel_economy::Economy {
 }
 
 #[test]
+fn large_campaign_commits_and_reloads_identically_across_workers() {
+    let initial = generated_campaign(20_000).snapshot();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                world.advance().unwrap();
+                let committed = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), committed);
+                let mut restored = game_parallel_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                for _ in 0..2 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn generated_campaign_replays_at_scale_across_workers() {
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()

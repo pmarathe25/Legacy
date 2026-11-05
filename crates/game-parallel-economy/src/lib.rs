@@ -2882,10 +2882,12 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.commit_owners");
         }
+        // Large independent owner generations can be reclaimed together; join keeps cleanup inside commit.
+        let parallel_reclaim = self.people.len() >= 16_384 && rayon::current_num_threads() > 1;
         self.people = draft.people;
         self.market = draft.market;
         self.agreements = draft.agreements;
-        self.opinions = draft.opinions;
+        let old_opinions = std::mem::replace(&mut self.opinions, draft.opinions);
         self.autowork = draft.autowork;
         self.work_sites = draft.work_sites;
         self.construction = draft.construction;
@@ -2894,14 +2896,14 @@ impl Economy {
         self.nutrition = draft.nutrition;
         self.pending_food = draft.pending_food;
         self.travel = draft.travel;
-        self.family = draft.family;
+        let old_family = std::mem::replace(&mut self.family, draft.family);
         self.care = draft.care;
         self.agriculture = draft.agriculture;
-        self.dynamics = draft.dynamics;
+        let old_dynamics = std::mem::replace(&mut self.dynamics, draft.dynamics);
         self.missions = draft.missions;
         self.campaign = draft.campaign;
         self.skills = draft.skills;
-        self.knowledge = draft.knowledge;
+        let old_knowledge = std::mem::replace(&mut self.knowledge, draft.knowledge);
         game_parallel_economy_combat::publish_world!(self, draft.combat);
         self.fatigue = draft.fatigue.map(|fatigue| fatigue.state);
         self.purpose = draft.purpose;
@@ -2911,6 +2913,14 @@ impl Economy {
         self.hauling = draft.hauling;
         self.local_transport = draft.local_transport;
         self.epoch = epoch;
+        if parallel_reclaim {
+            rayon::join(
+                || drop((old_family, old_knowledge)),
+                || drop((old_dynamics, old_opinions)),
+            );
+        } else {
+            drop((old_family, old_knowledge, old_dynamics, old_opinions));
+        }
         #[cfg(feature = "profile")]
         drop(profile_phase);
         Ok(events)
