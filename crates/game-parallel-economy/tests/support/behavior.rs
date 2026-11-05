@@ -2808,6 +2808,156 @@ fn isolation_changes_personal_social_choices_without_compelling_contact() {
 }
 
 #[test]
+fn automatic_treatment_without_a_threshold_uses_visible_health_not_hidden_infection() {
+    use game_parallel_disease::Treatment;
+    use game_parallel_economy_dynamics::TreatmentPolicy;
+    let mut initial = fixture();
+    initial.autowork = None;
+    initial.agreements = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.willing_to_work = false;
+    }
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|holder| holder.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut dynamics = infection_from(1);
+    dynamics
+        .disease
+        .as_mut()
+        .unwrap()
+        .treatments
+        .push(Treatment {
+            strain: 1,
+            medicine: 2,
+        });
+    dynamics.treatment.push(TreatmentPolicy {
+        person: 1,
+        medicine: 2,
+        quantity: 1,
+        willing: true,
+        health_at_most: None,
+    });
+    initial.dynamics = Some(dynamics);
+    let run = |workers, sick: bool, health| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.people[0].health = health;
+                if !sick {
+                    state
+                        .dynamics
+                        .as_mut()
+                        .unwrap()
+                        .disease
+                        .as_mut()
+                        .unwrap()
+                        .cases
+                        .clear();
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let stock = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|holder| holder.place == Place::Person(1))
+                    .unwrap()
+                    .used;
+                (stock, state)
+            })
+    };
+    for sick in [false, true] {
+        assert_eq!(run(1, sick, 80), run(4, sick, 80));
+        assert_eq!(
+            run(1, sick, 80).0,
+            0,
+            "poor health can prompt an ineffective course"
+        );
+        assert_eq!(
+            run(1, sick, 100).0,
+            1,
+            "an unseen infection does not trigger treatment"
+        );
+    }
+
+    let mut caregiver = initial.clone();
+    caregiver.dynamics.as_mut().unwrap().treatment.clear();
+    caregiver
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .cases[0]
+        .person = 3;
+    caregiver.medical = Some(Medical {
+        acquaintances: vec![],
+        policies: vec![MedicalPolicy {
+            person: 1,
+            patient: 3,
+            medicine: 2,
+            quantity: 1,
+            willing: true,
+            patient_health_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let run = |sick: bool, health| {
+        let mut state = caregiver.clone();
+        state.people[2].health = health;
+        if !sick {
+            state
+                .dynamics
+                .as_mut()
+                .unwrap()
+                .disease
+                .as_mut()
+                .unwrap()
+                .cases
+                .clear();
+        }
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|holder| holder.place == Place::Person(1))
+            .unwrap()
+            .used
+    };
+    for sick in [false, true] {
+        assert_eq!(run(sick, 80), 0);
+        assert_eq!(run(sick, 100), 1);
+    }
+}
+
+#[test]
 fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
     use game_parallel_disease::{Case, Disease, EventKind, Strain, Treatment};
     use game_parallel_economy_dynamics::TreatmentPolicy;
@@ -3406,7 +3556,7 @@ fn fear_can_motivate_a_caregiver_and_their_preference_can_change() {
             medicine: 2,
             quantity: 1,
             willing: false,
-            patient_health_at_most: None,
+            patient_health_at_most: Some(100),
             pressured_by: Some(1),
             pressure_threshold: Some(3),
         }],
@@ -3510,7 +3660,7 @@ fn medical_workload(count: u64) -> State {
                 medicine: 2,
                 quantity: 1,
                 willing: true,
-                patient_health_at_most: None,
+                patient_health_at_most: Some(100),
                 pressured_by: None,
                 pressure_threshold: None,
             })
@@ -3891,7 +4041,7 @@ fn one_person_cannot_treat_and_receive_treatment_in_the_same_boundary() {
             medicine: 2,
             quantity: 1,
             willing: true,
-            patient_health_at_most: None,
+            patient_health_at_most: Some(100),
             pressured_by: None,
             pressure_threshold: None,
         },
@@ -3901,7 +4051,7 @@ fn one_person_cannot_treat_and_receive_treatment_in_the_same_boundary() {
             medicine: 2,
             quantity: 1,
             willing: true,
-            patient_health_at_most: None,
+            patient_health_at_most: Some(100),
             pressured_by: None,
             pressure_threshold: None,
         },
@@ -3994,7 +4144,7 @@ fn distributed_medical_workload(count: u64) -> State {
             medicine: 2,
             quantity: 1,
             willing: true,
-            patient_health_at_most: None,
+            patient_health_at_most: Some(100),
             pressured_by: None,
             pressure_threshold: None,
         })

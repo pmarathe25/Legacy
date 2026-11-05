@@ -12,9 +12,9 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 A person's food-response preference can be motivated by affinity above or below a personally chosen threshold. A signed affinity weight also controls how that person ranks multiple requesters, so they can favor people they like, favor people they dislike, or disregard affinity. Fear or felt obligation can independently motivate a response.
 
-An authored medical preference can set `patient_health_at_most` to act on observable poor health without knowing a diagnosis. The caregiver may use an ineffective medicine and still consume it; a cure only follows a successful treatment with a matching remedy. If this setting is absent, the older automatic policy selects only a matching remedy, so it still has privileged diagnostic knowledge.
+An authored medical preference can set `patient_health_at_most` to act on observable health. If omitted, the caregiver acts when health is below the world's maximum. The caregiver may use an ineffective medicine and still consume it; a cure only follows a successful treatment with a matching remedy. The hidden diagnosis does not decide whether they attempt care.
 
-Self-treatment can similarly use `health_at_most` to act on observed health instead of a confirmed diagnosis. Controlled people may attempt their chosen medicine even without an infection. Treatment commands report whether the medicine was consumed, rather than disclosing a hidden diagnosis or whether it was effective. Automatic self-treatment without the health setting retains the older confirmed-remedy behavior.
+Self-treatment similarly uses `health_at_most`, or below maximum health when omitted. Controlled people may attempt their chosen medicine even without an infection. Treatment commands report whether the medicine was consumed, rather than disclosing a hidden diagnosis or whether it was effective.
 
 An optional `medical.acquaintances` preference lets someone choose among local people they have actually met. Their signed urgency and affinity weights rank eligible patients; fear or felt obligation toward a patient may motivate an unwilling caregiver. The selected action competes for both people's time, consumes real medicine on success, and can be ineffective. A person may change their willingness without creating a formal role or binding commitment.
 

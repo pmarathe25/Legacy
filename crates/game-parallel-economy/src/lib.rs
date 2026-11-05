@@ -1510,6 +1510,7 @@ impl Economy {
             resting: &resting,
             seed: self.seed,
             tick,
+            max_health: self.rules.max_health,
             manual: manual_medical,
             locations: &locations,
         }

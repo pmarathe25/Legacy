@@ -18,7 +18,7 @@ pub struct Policy {
     pub medicine: u32,
     pub quantity: u64,
     pub willing: bool,
-    /// If set, act on observable health rather than knowing the correct remedy.
+    /// If set, act at or below this observed health; absent uses below maximum health.
     #[serde(default)]
     pub patient_health_at_most: Option<u32>,
     #[serde(default)]
@@ -127,6 +127,7 @@ pub struct Context<'a> {
     pub resting: &'a [u64],
     pub seed: u64,
     pub tick: u64,
+    pub max_health: u32,
     pub manual: Option<(u64, u64, u32, u64)>,
     pub locations: &'a Colocation,
 }
@@ -197,7 +198,7 @@ impl Context<'_> {
                     && available(patient)
                     && (p.willing || pressured)
                     && p.patient_health_at_most.map_or_else(
-                        || effective(patient.id, p.medicine),
+                        || patient.health < self.max_health,
                         |threshold| patient.health <= threshold,
                     )
                     && self

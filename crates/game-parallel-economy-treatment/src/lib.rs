@@ -14,7 +14,7 @@ pub struct Policy {
     pub medicine: u32,
     pub quantity: u64,
     pub willing: bool,
-    /// Act on observed health, without privileged diagnosis, when configured.
+    /// Act when observed health is at most this value; absent uses below maximum health.
     #[serde(default)]
     pub health_at_most: Option<u32>,
 }
@@ -118,6 +118,11 @@ pub struct Plan {
     pub actors: Vec<u64>,
     effective: Vec<bool>,
 }
+#[derive(Clone, Copy)]
+pub struct Choice {
+    pub manual: Option<u64>,
+    pub max_health: u32,
+}
 pub fn prepare(
     disease: Option<&Disease>,
     policies: &[Policy],
@@ -125,8 +130,9 @@ pub fn prepare(
     busy: &[u64],
     view: &View,
     base: u64,
-    manual: Option<u64>,
+    choice: Choice,
 ) -> Result<Plan, String> {
+    let manual = choice.manual;
     let Some(disease) = disease else {
         if manual.is_some() {
             return Err("treatment is disabled".into());
@@ -193,7 +199,9 @@ pub fn prepare(
                 || (!explicit
                     && policy
                         .health_at_most
-                        .map_or(!effective, |threshold| person.health > threshold))
+                        .map_or(person.health >= choice.max_health, |threshold| {
+                            person.health > threshold
+                        }))
                 || (!explicit
                     && view
                         .container(Place::Person(person.id))
@@ -249,7 +257,10 @@ macro_rules! prepare_treatment {
             &$busy,
             &$view,
             $base,
-            manual,
+            $crate::Choice {
+                manual,
+                max_health: $world.rules.max_health,
+            },
         )?
     }};
 }
