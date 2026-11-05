@@ -182,7 +182,11 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             let (completed, recipient, _) = work_memories[start..end]
                 .iter()
                 .filter_map(|memory| {
-                    let completed = memory.last_success_at?;
+                    let completed = if policy.after_refusal {
+                        memory.last_refusal_at?
+                    } else {
+                        memory.last_success_at?
+                    };
                     if policy
                         .last_work_offer_at
                         .is_some_and(|old| old >= completed)

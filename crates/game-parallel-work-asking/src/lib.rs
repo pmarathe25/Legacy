@@ -1,7 +1,7 @@
 //! Bounded personal requests derived from existing goals and local visibility.
 use game_parallel_goals::Goals;
 use game_parallel_production_model::{PersonSnapshot, person_index};
-use game_parallel_work_requests::{Request, Requests};
+use game_parallel_work_requests::{OfferIndex, Request, Requests};
 use rayon::prelude::*;
 use std::cmp::Reverse;
 
@@ -23,6 +23,7 @@ pub fn prepare(
     goals: Option<&Goals>,
     people: &[PersonSnapshot],
     busy: &[u64],
+    offers: Option<&OfferIndex>,
     tick: u64,
 ) -> Result<Option<Draft>, &'static str> {
     let Some(goals) = goals.filter(|_| !owner.askers.is_empty()) else {
@@ -114,20 +115,37 @@ pub fn prepare(
                     && old
                         .binary_search(&(worker, asker.person, goal.recipe))
                         .is_err()
-                    && !memories[first..last]
+                    && (!memories[first..last]
                         .iter()
                         .any(|row| row.worker == worker && row.failures >= row.successes)
+                        || (asker.retry_after_offer
+                            && offers.is_some_and(|index| index.has_offer(worker, asker.person))))
             };
-            let worker = remembered.filter(|&worker| eligible(worker)).or_else(|| {
-                // There are at most `memory_limit` negative memories. Looking at one
-                // more local person avoids scanning an arbitrarily large region.
-                (1..=(owner.memory_limit + 5).min(end - start - 1))
-                    .map(|step| {
-                        let offset = (index - start + step) % (end - start);
-                        local[start + offset].1
-                    })
-                    .find(|&worker| eligible(worker))
-            });
+            let offered = asker
+                .retry_after_offer
+                .then(|| {
+                    memories[first..last]
+                        .iter()
+                        .find(|row| {
+                            offers.is_some_and(|index| index.has_offer(row.worker, asker.person))
+                                && local.binary_search(&(region, row.worker)).is_ok()
+                                && eligible(row.worker)
+                        })
+                        .map(|row| row.worker)
+                })
+                .flatten();
+            let worker = offered
+                .or_else(|| remembered.filter(|&worker| eligible(worker)))
+                .or_else(|| {
+                    // There are at most `memory_limit` negative memories. Looking at one
+                    // more local person avoids scanning an arbitrarily large region.
+                    (1..=(owner.memory_limit + 5).min(end - start - 1))
+                        .map(|step| {
+                            let offset = (index - start + step) % (end - start);
+                            local[start + offset].1
+                        })
+                        .find(|&worker| eligible(worker))
+                });
             let Some(worker) = worker else {
                 return Ok(None);
             };

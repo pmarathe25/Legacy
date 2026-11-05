@@ -34,7 +34,7 @@ The same scenario includes two named local stores. `view` shows their contents; 
 
 Optional `[[local_transport.goal_fetchers]]` entries enable individuals to fetch locally observed supplies for their own current work goals. The administrative command `fetch-goal PERSON on|off` changes that individual preference; it does not create a goal or guarantee the person acts.
 
-Optional `[[work_promise_offering]]` entries give individuals an inclination to offer a future delivery to someone whose requested work they personally witnessed. `work-offer PERSON on|off` changes that inclination in the administrative runner. The person chooses an observed local helper; the helper may accept or decline, and the maker may later choose whether to deliver real goods.
+Optional `[[work_promise_offering]]` entries give individuals an inclination to offer a future delivery to someone whose requested work they personally witnessed. Set `after_refusal = true` to respond to a personally observed refusal instead. An individual's work asker can set `retry_after_offer = true` to reconsider asking a person to whom they have made an outstanding offer. `work-offer PERSON on|off` changes the offering inclination in the administrative runner. The recipient may accept or decline, and the maker may later choose whether to deliver real goods.
 
 Scenarios can also use `[[aspiration_learning]]` to specify an individual's inclination directly; authored entries override generated ones. With `inherit_aspiration_learning = true` and family birth enrollment enabled, actual newborns can acquire a parent's general inclination, without inheriting their aspirations or experiences.
 

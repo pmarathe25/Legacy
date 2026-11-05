@@ -216,6 +216,8 @@ struct WorkPromiseOfferConfig {
     retry_ticks: u64,
     willing: bool,
     #[serde(default)]
+    after_refusal: bool,
+    #[serde(default)]
     minimum_trust: Option<i32>,
     #[serde(default)]
     pressure_threshold: Option<u64>,
@@ -851,6 +853,7 @@ pub fn scenario_with_options(
                     due_after: p.due_after,
                     retry_ticks: p.retry_ticks,
                     willing: p.willing,
+                    after_refusal: p.after_refusal,
                     minimum_trust: p.minimum_trust,
                     pressure_threshold: p.pressure_threshold,
                     next_review: 0,

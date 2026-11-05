@@ -84,6 +84,15 @@ impl OfferIndex {
             .ok()
             .map_or(0, |i| self.rows[i].3)
     }
+    /// Whether the requester has an outstanding promise addressed to this worker.
+    pub fn has_offer(&self, worker: u64, requester: u64) -> bool {
+        let index = self
+            .rows
+            .partition_point(|row| (row.0, row.1) < (worker, requester));
+        self.rows
+            .get(index)
+            .is_some_and(|row| (row.0, row.1) == (worker, requester))
+    }
 }
 impl Preference {
     /// No agreement or feeling forces compliance; this is the person's present evaluation.
@@ -114,6 +123,9 @@ pub struct Asker {
     pub person: u64,
     pub interval: u64,
     pub lifetime: u64,
+    /// This person may reconsider asking someone to whom they made an offer.
+    #[serde(default)]
+    pub retry_after_offer: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -166,11 +178,13 @@ impl Requests {
     /// Only addressed, still-pending promises can inform a recipient's own choice.
     pub fn offer_index(&self, agreements: Option<&Agreements>, tick: u64) -> Option<OfferIndex> {
         let agreements = agreements.filter(|owner| !owner.contracts.is_empty())?;
-        if !self.preferences.par_iter().any(|p| {
-            p.offer_value
-                .as_ref()
-                .is_some_and(|v| v.value_per_unit != 0)
-        }) {
+        if !self.askers.par_iter().any(|a| a.retry_after_offer)
+            && !self.preferences.par_iter().any(|p| {
+                p.offer_value
+                    .as_ref()
+                    .is_some_and(|v| v.value_per_unit != 0)
+            })
+        {
             return None;
         }
         let mut rows: Vec<_> = agreements

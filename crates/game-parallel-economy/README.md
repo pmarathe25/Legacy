@@ -16,6 +16,7 @@ An optional personal acquaintance-request preference lets a hungry individual as
 
 People with an individual learning inclination can develop a bounded work aspiration after personally witnessing a requested job succeed. Other people's work memories and disabled aspirations are not overwritten; a new aspiration still needs ordinary resources and voluntary action.
 An individual can also decide to offer a revocable promise to a helper whose requested work they personally witnessed. The helper is selected from that person's actual memories, and neither the offer nor acceptance moves goods or compels later delivery.
+Alternatively, an individual may offer after personally observing a refusal, and separately choose to ask again after making an offer. A failed job is distinct from a refusal; an unseen outcome creates no such memory.
 People may give their own trust in a requester a signed weight when deciding whether to begin or continue requested work. This connects actual experiences of fulfilled or broken promises to later cooperation without making a promise binding.
 An individual can also value an outstanding offer of a particular good when considering work. Offers remain personal and revocable, and actual delivery still requires a separate physical action; withdrawing an offer can change the person's decision to continue.
 Individuals may interpret a witnessed work completion or refusal with independent signed affinity changes, including different reactions toward particular people. Unwitnessed outcomes do not create these impressions.

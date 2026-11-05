@@ -92,12 +92,15 @@ pub fn prepare(
         .collect();
     busy.extend_from_slice(reserved);
     let next = world.tick.checked_add(1).ok_or("tick overflow")?;
+    let offers = base
+        .requests
+        .as_ref()
+        .and_then(|requests| requests.offer_index(world.agreements.as_ref(), next));
     let request_draft = base
         .requests
         .as_ref()
         .filter(|requests| !requests.pending.is_empty() || !requests.events.is_empty())
         .map(|requests| {
-            let offers = requests.offer_index(world.agreements.as_ref(), next);
             requests.prepare_with_offers(
                 people,
                 world.opinions.as_ref(),
@@ -118,7 +121,14 @@ pub fn prepare(
         if let Some(draft) = &request_draft {
             occupied.par_extend(draft.decisions.par_iter().map(|row| row.worker));
         }
-        ask::prepare(owner, world.goals.as_ref(), people, &occupied, next)?
+        ask::prepare(
+            owner,
+            world.goals.as_ref(),
+            people,
+            &occupied,
+            offers.as_ref(),
+            next,
+        )?
     } else {
         None
     };

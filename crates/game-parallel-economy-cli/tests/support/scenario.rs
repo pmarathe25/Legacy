@@ -2228,6 +2228,19 @@ fn ruler_observes_only_local_physical_work_sites() {
 }
 
 #[test]
+fn scenario_loads_a_personal_choice_to_retry_after_an_offer() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = source.replace("[work_requests]", "[work_requests]\naskers = [{ person = 2, interval = 6, lifetime = 5, retry_after_offer = true }]");
+    let path = std::env::temp_dir().join(format!("legacy-work-retry-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    assert!(world.snapshot().autowork.unwrap().requests.unwrap().askers[0].retry_after_offer);
+}
+
+#[test]
 fn campaign_loads_personal_offers_for_observed_helpers() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let world = scenario(
@@ -2239,6 +2252,7 @@ fn campaign_loads_personal_offers_for_observed_helpers() {
     let preference = &state.agreements.as_ref().unwrap().work_offering[0];
     assert_eq!(preference.person, 2);
     assert!(!preference.willing);
+    assert!(preference.after_refusal);
     assert_eq!(
         state
             .physical

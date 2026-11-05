@@ -144,6 +144,7 @@ pub fn work_requests(
             person,
             interval: settings.work_request_interval,
             lifetime: settings.work_request_lifetime,
+            retry_after_offer: false,
         })
         .collect();
     let preferences = people

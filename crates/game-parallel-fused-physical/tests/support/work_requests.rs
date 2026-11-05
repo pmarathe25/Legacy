@@ -774,6 +774,7 @@ fn a_person_with_a_goal_can_autonomously_request_help_that_starts_real_work() {
             person: 1,
             interval: 1,
             lifetime: 5,
+            retry_after_offer: false,
         });
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -1006,6 +1007,7 @@ fn a_person_can_choose_a_witnessed_helper_for_a_later_goal() {
             person: 1,
             interval: 1,
             lifetime: 5,
+            retry_after_offer: false,
         });
     let mut engine = Kernel::compile(state).unwrap();
     engine.step().unwrap();
@@ -1077,6 +1079,7 @@ fn witnessed_refusal_changes_whom_the_person_asks_without_compelling_anyone() {
             person: 1,
             interval: 1,
             lifetime: 5,
+            retry_after_offer: false,
         });
     let mut engine = Kernel::compile(state).unwrap();
     engine.step().unwrap();

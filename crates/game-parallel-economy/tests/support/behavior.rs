@@ -6056,6 +6056,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
                 failures: 0,
                 last_tick: 0,
                 last_success_at: Some(0),
+                last_refusal_at: None,
             }],
             preferences: vec![Preference {
                 person: 1,
@@ -6070,6 +6071,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
                 person: 1,
                 interval: 3,
                 lifetime: 4,
+                retry_after_offer: false,
             }],
             pending: vec![],
             events: vec![],
@@ -13292,6 +13294,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                 person: 1,
                 interval: 10,
                 lifetime: 5,
+                retry_after_offer: false,
             }],
             pending: vec![],
             events: vec![],
@@ -16917,6 +16920,13 @@ fn concentrated_offered_work_benchmark() {
                 "workers={workers} people={count} ticks=1 elapsed={:.6}",
                 samples[1]
             );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!(
+                    "{name}: {:.3} ms/call",
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
         });
 }
 
@@ -17115,6 +17125,155 @@ fn concentrated_work_refusals_benchmark() {
 }
 
 #[test]
+fn a_person_can_offer_after_refusal_and_ask_again() {
+    use game_parallel_autowork::requests::{Asker, Preference, Request, Requests};
+    use game_parallel_goals::{Goal, Goals};
+    let mut initial = fixture();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+        person.willing_to_work = false;
+    }
+    initial.people[2].health = 0;
+    initial.people[3].health = 0;
+    initial.opinions = None;
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 1,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+        }],
+        events: vec![],
+    });
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 2,
+            inherit_births: false,
+            memory_limit: 2,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 5,
+                help_value: 0,
+                affinity_weight: 0,
+                trust_weight: 0,
+                offer_value: Some(WorkOfferValue {
+                    good: 1,
+                    value_per_unit: 5,
+                    max_quantity: 1,
+                }),
+                disregard_claims: false,
+            }],
+            askers: vec![Asker {
+                person: 1,
+                interval: 1,
+                lifetime: 5,
+                retry_after_offer: true,
+            }],
+            pending: vec![Request {
+                id: 1,
+                requester: 1,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                created_at: 0,
+                expires: 5,
+            }],
+            events: vec![],
+        }),
+    });
+    let agreements = initial.agreements.as_mut().unwrap();
+    agreements.next_id = 1;
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.policies.clear();
+    agreements.work_offering = vec![WorkPromiseOfferPolicy {
+        person: 1,
+        good: 1,
+        quantity: 1,
+        due_after: 8,
+        retry_ticks: 1,
+        willing: true,
+        after_refusal: true,
+        minimum_trust: None,
+        pressure_threshold: None,
+        next_review: 0,
+        last_work_offer_at: None,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                let refused = world.snapshot();
+                assert_eq!(
+                    refused
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .memories[0]
+                        .last_refusal_at,
+                    Some(1)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&refused).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let mut starts = Vec::new();
+                for _ in 0..6 {
+                    starts.extend(world.advance().unwrap().started);
+                    restored.advance().unwrap();
+                    assert_eq!(world.snapshot(), restored.snapshot());
+                }
+                let state = world.snapshot();
+                assert!(!starts.is_empty());
+                let promise = &state.agreements.as_ref().unwrap().contracts[0];
+                assert_eq!(
+                    (
+                        promise.debtor,
+                        promise.creditor,
+                        promise.status,
+                        promise.delivered
+                    ),
+                    (1, 2, Status::Proposed, 0)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut no_retry = initial;
+    no_retry
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .askers[0]
+        .retry_after_offer = false;
+    let mut world = Economy::compile(no_retry).unwrap();
+    for _ in 0..7 {
+        assert!(world.advance().unwrap().started.is_empty());
+    }
+    assert_eq!(world.snapshot().agreements.unwrap().contracts.len(), 1);
+}
+
+#[test]
 fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
     use game_parallel_autowork::requests::{Preference, Request, Requests};
     let mut initial = fixture();
@@ -17175,6 +17334,7 @@ fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
         due_after: 8,
         retry_ticks: 1,
         willing: true,
+        after_refusal: false,
         minimum_trust: None,
         pressure_threshold: None,
         next_review: 0,
@@ -17283,6 +17443,52 @@ fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
 }
 
 #[test]
+fn concentrated_offers_after_refusals_are_deterministic() {
+    let mut initial = concentrated_selected_helper_offers(4096);
+    make_refusal_memories(&mut initial);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let contracts = &state.agreements.as_ref().unwrap().contracts;
+                assert_eq!(contracts.len(), 4095);
+                assert!(
+                    contracts
+                        .iter()
+                        .all(|c| c.creditor == 1 && c.status == Status::Proposed)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn make_refusal_memories(initial: &mut State) {
+    for policy in &mut initial.agreements.as_mut().unwrap().work_offering {
+        policy.after_refusal = true;
+    }
+    for memory in &mut initial
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .memories
+    {
+        memory.successes = 0;
+        memory.failures = 1;
+        memory.last_success_at = None;
+        memory.last_refusal_at = Some(0);
+    }
+}
+
+#[test]
 fn concentrated_selected_helper_offers_are_deterministic() {
     let initial = concentrated_selected_helper_offers(4096);
     let run = |workers| {
@@ -17320,6 +17526,7 @@ fn concentrated_selected_helper_offers(count: u64) -> State {
             due_after: 5,
             retry_ticks: 3,
             willing: true,
+            after_refusal: false,
             minimum_trust: None,
             pressure_threshold: None,
             next_review: 0,
@@ -17343,6 +17550,7 @@ fn concentrated_selected_helper_offers(count: u64) -> State {
                     failures: 0,
                     last_tick: 0,
                     last_success_at: Some(0),
+                    last_refusal_at: None,
                 })
                 .collect(),
             preferences: vec![],
@@ -17365,7 +17573,10 @@ fn concentrated_selected_helper_offers_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = concentrated_selected_helper_offers(count);
+    let mut initial = concentrated_selected_helper_offers(count);
+    if std::env::var_os("LEGACY_REFUSAL").is_some() {
+        make_refusal_memories(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -17662,6 +17873,7 @@ fn concentrated_remembered_work_offers(count: u64) -> State {
                     failures: 0,
                     last_tick: 0,
                     last_success_at: Some(0),
+                    last_refusal_at: None,
                 })
                 .collect(),
             preferences: vec![],

@@ -155,6 +155,7 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
                         person,
                         interval: rule.ask_interval,
                         lifetime: rule.request_lifetime,
+                        retry_after_offer: false,
                     },
                 );
                 let learning = (random(4) % 100 < u64::from(rule.learning_percent)).then_some(

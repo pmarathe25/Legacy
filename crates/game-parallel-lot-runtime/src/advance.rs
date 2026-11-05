@@ -163,6 +163,8 @@ impl Runtime {
         (growth, custody): (Growth<'_>, &[(u64, game_parallel_lots::Container)]),
         seed: u64,
     ) -> Result<AdvanceDraft, String> {
+        #[cfg(feature = "profile")]
+        let mut profile_phase = game_diagnostics::span("physical.validate_and_plan");
         let mut owners: Vec<_> = custody
             .par_iter()
             .map(|(action, container)| (*action, container.place))
@@ -289,6 +291,11 @@ impl Runtime {
             })
             .collect();
         let delivered = game_parallel_lot_work::deliver(&waiting, next_tick)?;
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("physical.compose");
+        }
         let actions = finished
             .transactions
             .into_par_iter()
@@ -302,6 +309,11 @@ impl Runtime {
         let compact = composed.compact_ids(4, growth.compact_consumption)?;
         let mut containers = start_plan.containers;
         containers.par_extend(custody.par_iter().map(|(_, container)| container.clone()));
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("physical.store_prepare");
+        }
         let mut draft = self.store.prepare_with_empty_compact(
             seed,
             &composed.transactions,
@@ -309,6 +321,11 @@ impl Runtime {
             &compact,
             true,
         )?;
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("physical.finalize");
+        }
         let mut external_index: Vec<_> = external.par_iter().collect();
         if external_index.par_windows(2).any(|p| p[0].id > p[1].id) {
             external_index.par_sort_unstable_by_key(|row| row.id);
@@ -476,6 +493,8 @@ impl Runtime {
             physical_actions,
             physical_movements,
         };
+        #[cfg(feature = "profile")]
+        drop(profile_phase);
         Ok(AdvanceDraft {
             epoch: self.epoch,
             custody: draft,

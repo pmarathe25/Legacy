@@ -72,6 +72,9 @@ pub struct WorkOfferPolicy {
     pub due_after: u64,
     pub retry_ticks: u64,
     pub willing: bool,
+    /// Respond to a personally observed refusal instead of a completed job.
+    #[serde(default)]
+    pub after_refusal: bool,
     #[serde(default)]
     pub minimum_trust: Option<i32>,
     #[serde(default)]

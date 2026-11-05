@@ -236,6 +236,7 @@ quantity = 1
 due_after = 8
 retry_ticks = 6
 willing = false
+after_refusal = true
 
 [work_requests]
 next_id = 1

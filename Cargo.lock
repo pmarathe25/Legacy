@@ -4526,6 +4526,7 @@ dependencies = [
 name = "game-parallel-lot-runtime"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-parallel-content-import",
  "game-parallel-lot-content",
  "game-parallel-lot-work",

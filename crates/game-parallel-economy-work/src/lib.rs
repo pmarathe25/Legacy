@@ -205,7 +205,16 @@ impl Context<'_> {
             .auto
             .requests
             .as_ref()
-            .map(|owner| asking::prepare(owner, self.goals, self.people, &ask_busy, self.tick))
+            .map(|owner| {
+                asking::prepare(
+                    owner,
+                    self.goals,
+                    self.people,
+                    &ask_busy,
+                    self.offers,
+                    self.tick,
+                )
+            })
             .transpose()
             .map_err(str::to_owned)?
             .flatten();

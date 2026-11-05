@@ -1,4 +1,4 @@
-use game_parallel_work_requests::{Requests, WorkLink};
+use game_parallel_work_requests::{Request, Requests, WorkLink};
 
 fn state(limit: usize) -> Requests {
     Requests {
@@ -72,4 +72,41 @@ fn personal_attention_and_retention_are_bounded() {
             .collect::<Vec<_>>(),
         vec![4, 5]
     );
+}
+
+#[test]
+fn a_witness_distinguishes_refusal_from_a_failed_job() {
+    let mut requests = state(2);
+    requests.work_links.push(WorkLink {
+        request: 1,
+        requester: 1,
+        worker: 2,
+        job: 1,
+        region: 1,
+        recipe: 1,
+    });
+    requests.resolve(&[(1, false)], 1, |_| true);
+    assert_eq!(requests.memories[0].last_refusal_at, None);
+    let request = Request {
+        id: 2,
+        requester: 1,
+        worker: 2,
+        region: 1,
+        recipe: 1,
+        created_at: 1,
+        expires: 4,
+    };
+    requests.observe_refusal(&request, 2);
+    assert_eq!(requests.memories[0].last_refusal_at, Some(2));
+    assert_eq!(requests.memories[0].failures, 2);
+    requests.work_links.push(WorkLink {
+        request: 3,
+        requester: 1,
+        worker: 2,
+        job: 3,
+        region: 1,
+        recipe: 1,
+    });
+    requests.resolve(&[(3, false)], 3, |_| false);
+    assert_eq!(requests.memories[0].last_refusal_at, Some(2));
 }
