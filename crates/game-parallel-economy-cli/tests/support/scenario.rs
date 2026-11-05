@@ -70,6 +70,26 @@ fn animal_care_content_resolves_named_goods() {
 }
 
 #[test]
+fn personal_animal_feelings_load_as_signed_content() {
+    let feelings: game_parallel_economy::AnimalFeelings = toml::from_str(
+        r#"
+        [[minds]]
+        person = 1
+        minimum = -10
+        maximum = 10
+        capacity = 4
+        on_feed = -2
+        on_hunt = 3
+        opinions = [{ animal = 1, affinity = -1 }]
+    "#,
+    )
+    .unwrap();
+    assert_eq!(feelings.minds[0].on_feed, -2);
+    assert_eq!(feelings.minds[0].on_hunt, 3);
+    assert_eq!(feelings.minds[0].opinions[0].affinity, -1);
+}
+
+#[test]
 fn hunting_preferences_accept_optional_individual_targets() {
     let hunting: game_parallel_economy::Hunting = toml::from_str(
         r#"
@@ -271,6 +291,17 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
             maximum: 10,
             capacity: 4,
         });
+    initial.animal_feelings = Some(game_parallel_economy::AnimalFeelings {
+        minds: vec![game_parallel_economy::AnimalFeelingMind {
+            person: 1,
+            minimum: -10,
+            maximum: 10,
+            capacity: 4,
+            on_feed: 3,
+            on_hunt: -1,
+            opinions: vec![],
+        }],
+    });
     let grain = initial.fauna.as_ref().unwrap().species[0].food_good;
     let bread = initial
         .physical
@@ -294,6 +325,17 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
                 assert_eq!(
                     world.snapshot().fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
                     -2
+                );
+                assert_eq!(
+                    Player::new(&mut world)
+                        .view()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .find(|a| a.id == 1)
+                        .unwrap()
+                        .affinity,
+                    Some(3)
                 );
                 assert_eq!(
                     world.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
@@ -326,6 +368,17 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
                 assert_eq!(
                     state.fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
                     -4
+                );
+                assert_eq!(
+                    Player::new(&mut world)
+                        .view()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .find(|a| a.id == 1)
+                        .unwrap()
+                        .affinity,
+                    Some(6)
                 );
                 assert_eq!(state.fauna.as_ref().unwrap().animals[0].hunger, hunger - 1);
                 assert!(

@@ -18,6 +18,10 @@ pub struct Policy {
     pub willing: bool,
     pub health_at_most: u32,
     #[serde(default)]
+    pub affinity_at_least: Option<i32>,
+    #[serde(default)]
+    pub affinity_at_most: Option<i32>,
+    #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
@@ -45,6 +49,10 @@ pub struct PolicyConfig {
     willing: bool,
     health_at_most: u32,
     #[serde(default)]
+    affinity_at_least: Option<i32>,
+    #[serde(default)]
+    affinity_at_most: Option<i32>,
+    #[serde(default)]
     pressured_by: Option<u64>,
     #[serde(default)]
     pressure_threshold: Option<u64>,
@@ -64,6 +72,8 @@ impl Config {
                     quantity: p.quantity,
                     willing: p.willing,
                     health_at_most: p.health_at_most,
+                    affinity_at_least: p.affinity_at_least,
+                    affinity_at_most: p.affinity_at_most,
                     pressured_by: p.pressured_by,
                     pressure_threshold: p.pressure_threshold,
                 })
@@ -92,6 +102,9 @@ impl AnimalCare {
                     || !animals.contains(&p.animal)
                     || !goods.contains(&p.good)
                     || p.quantity == 0
+                    || p.affinity_at_least
+                        .zip(p.affinity_at_most)
+                        .is_some_and(|(a, b)| a > b)
                     || p.pressure_threshold == Some(0)
                     || p.pressured_by.is_some() != p.pressure_threshold.is_some()
                     || p.pressured_by
@@ -115,6 +128,7 @@ pub struct Context<'a> {
     pub fauna: Option<&'a Fauna>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
+    pub animal_feelings: Option<&'a crate::AnimalFeelings>,
     pub view: &'a View,
     pub busy: &'a [u64],
     pub max_hunger: u32,
@@ -162,14 +176,22 @@ impl Context<'_> {
                                 fear.saturating_add(obligation) >= threshold
                             })
                         });
+                let affinity = || {
+                    self.animal_feelings
+                        .and_then(|f| f.affinity(actor.id, animal.id))
+                        .unwrap_or(0)
+                };
                 (!actor.controlled
                     && actor.health > 0
                     && actor.hunger <= self.max_hunger
                     && animal.health > 0
-                    && animal.health <= p.health_at_most
                     && actor.region == Some(animal.region)
                     && self.busy.binary_search(&actor.id).is_err()
-                    && (p.willing || pressured)
+                    && (pressured
+                        || (p.willing
+                            && animal.health <= p.health_at_most
+                            && p.affinity_at_least.is_none_or(|min| affinity() >= min)
+                            && p.affinity_at_most.is_none_or(|max| affinity() <= max)))
                     && self
                         .view
                         .container(Place::Person(actor.id))

@@ -65,6 +65,8 @@ pub struct AnimalView {
     pub id: u64,
     pub species: u32,
     pub health: u32,
+    /// This person's own feeling, when they have a configured animal mind.
+    pub affinity: Option<i32>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimView {
@@ -491,6 +493,8 @@ impl<'a> Player<'a> {
                         id: animal.id,
                         species: animal.species,
                         health: animal.health,
+                        affinity: current
+                            .and_then(|person| self.world.animal_affinity(person, animal.id)),
                     })
                     .collect()
             });

@@ -52,8 +52,12 @@ pub use game_parallel_practices::{
     ValueLearning as PracticeValueLearning,
 };
 mod animal_care;
+mod animal_feelings;
 mod construction_planning;
 pub use animal_care::{AnimalCare, Config as AnimalCareConfig, Policy as AnimalCarePolicy};
+pub use animal_feelings::{
+    AnimalFeelings, Mind as AnimalFeelingMind, Opinion as AnimalFeelingOpinion,
+};
 mod development;
 mod environment;
 mod food_search;
@@ -132,6 +136,7 @@ pub struct Economy {
     gathering: Option<Gathering>,
     fauna: Option<Fauna>,
     animal_care: Option<AnimalCare>,
+    animal_feelings: Option<AnimalFeelings>,
     hunting: Option<Hunting>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
@@ -178,6 +183,7 @@ pub struct Draft {
     fed_animal: Option<bool>,
     hunted: Option<bool>,
     hunting_births: Vec<HuntingPolicy>,
+    animal_feelings_update: Option<AnimalFeelings>,
 }
 impl Draft {
     pub fn events(&self) -> &Events {
@@ -862,6 +868,10 @@ impl Economy {
             .as_ref()
             .map_or(&[], |fauna| fauna.species.as_slice())
     }
+    /// Administrative access to a person's own feeling; absent means no configured mind.
+    pub fn animal_affinity(&self, person: u64, animal: u64) -> Option<i32> {
+        self.animal_feelings.as_ref()?.affinity(person, animal)
+    }
     /// Change one person's own gathering preference and chosen site.
     pub fn set_gathering_choice(
         &mut self,
@@ -1090,6 +1100,9 @@ impl Economy {
         if let Some(care) = &state.animal_care {
             care.validate(&ids, &goods, state.fauna.as_ref())?;
         }
+        if let Some(feelings) = &mut state.animal_feelings {
+            feelings.normalize_and_validate(&ids, state.fauna.as_ref())?;
+        }
         if let Some(hunting) = &state.hunting {
             hunting.validate(&ids, &goods, state.fauna.as_ref())?;
         }
@@ -1286,6 +1299,7 @@ impl Economy {
             gathering: state.gathering,
             fauna: state.fauna,
             animal_care: state.animal_care,
+            animal_feelings: state.animal_feelings,
             hunting: state.hunting,
             food_search: state.food_search,
             giving: state.giving,
@@ -1329,6 +1343,7 @@ impl Economy {
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             animal_care: self.animal_care.clone(),
+            animal_feelings: self.animal_feelings.clone(),
             hunting: self.hunting.clone(),
             food_search: self.food_search.clone(),
             giving: self.giving.clone(),
@@ -1820,6 +1835,7 @@ impl Economy {
             fauna: self.fauna.as_ref(),
             people: &self.people,
             opinions: self.opinions.as_ref(),
+            animal_feelings: self.animal_feelings.as_ref(),
             view: &view,
             busy: &busy,
             max_hunger: self.rules.max_work_hunger,
@@ -1863,6 +1879,7 @@ impl Economy {
             fauna: self.fauna.as_ref(),
             people: &self.people,
             opinions: self.opinions.as_ref(),
+            animal_feelings: self.animal_feelings.as_ref(),
             view: &view,
             busy: &busy,
             feed_targets: &feed_targets,
@@ -2873,6 +2890,37 @@ impl Economy {
         });
         let hunted_animals = hunting_plan.accepted(physical.events());
         let hunted = manual_hunt.map(|(person, _)| hunting_plan.caught(person, &hunted_animals));
+        let mut feedings = animal_care_plan.accepted(physical.events());
+        feedings.extend(
+            manual_animal_feed
+                .as_ref()
+                .filter(|_| fed_animal == Some(true))
+                .map(|(_, food, _)| *food),
+        );
+        let animal_feelings_update = self.animal_feelings.as_ref().and_then(|owner| {
+            let mut experiences: Vec<_> = feedings
+                .par_iter()
+                .filter_map(|food| {
+                    food.person.map(|person| animal_feelings::Event {
+                        person,
+                        animal: food.animal,
+                        kind: animal_feelings::Experience::Feed,
+                    })
+                })
+                .collect();
+            experiences.par_extend(hunting_plan.yields.par_iter().filter_map(|yield_| {
+                hunted_animals
+                    .binary_search(&yield_.animal)
+                    .is_ok()
+                    .then_some(animal_feelings::Event {
+                        person: yield_.hunter,
+                        animal: yield_.animal,
+                        kind: animal_feelings::Experience::Hunt,
+                    })
+            }));
+            let relevant = owner.relevant(experiences);
+            (!relevant.is_empty()).then(|| owner.advance(&relevant))
+        });
         let mut gathering = gathering_plan
             .map(|p| {
                 p.publish(
@@ -2897,13 +2945,6 @@ impl Economy {
                     available: node.available,
                 })
                 .collect();
-            let mut feedings = animal_care_plan.accepted(physical.events());
-            feedings.extend(
-                manual_animal_feed
-                    .as_ref()
-                    .filter(|_| fed_animal == Some(true))
-                    .map(|(_, food, _)| *food),
-            );
             let season = self.environment.as_ref().and_then(|env| env.season(tick));
             let exposure: Vec<_> = self
                 .environment
@@ -3628,6 +3669,7 @@ impl Economy {
             fed_animal,
             hunted,
             hunting_births,
+            animal_feelings_update,
         })
     }
     pub fn commit(&mut self, draft: Draft) -> Result<Events, String> {
@@ -3674,6 +3716,9 @@ impl Economy {
         self.purpose = draft.purpose;
         self.gathering = draft.gathering;
         self.fauna = draft.fauna;
+        if let Some(feelings) = draft.animal_feelings_update {
+            self.animal_feelings = Some(feelings);
+        }
         if !draft.hunting_births.is_empty() {
             self.hunting
                 .as_mut()

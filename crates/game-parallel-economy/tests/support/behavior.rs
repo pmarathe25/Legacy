@@ -218,6 +218,7 @@ fn fixture() -> State {
         gathering: None,
         fauna: None,
         animal_care: None,
+        animal_feelings: None,
         hunting: None,
         food_search: None,
         giving: None,
@@ -292,6 +293,8 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
                 quantity: 1,
                 willing: true,
                 health_at_most: 10,
+                affinity_at_least: None,
+                affinity_at_most: None,
                 pressured_by: None,
                 pressure_threshold: None,
             },
@@ -301,7 +304,9 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
                 good: 1,
                 quantity: 1,
                 willing: false,
-                health_at_most: 10,
+                health_at_most: 0,
+                affinity_at_least: Some(9),
+                affinity_at_most: None,
                 pressured_by: Some(1),
                 pressure_threshold: Some(3),
             },
@@ -438,6 +443,187 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
     );
 }
 
+#[test]
+fn people_interpret_their_own_animal_experiences_individually() {
+    let mut initial = hunting_fixture();
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.hunting = None;
+    initial.animal_care = Some(AnimalCare {
+        policies: vec![
+            AnimalCarePolicy {
+                person: 1,
+                animal: 1,
+                good: 1,
+                quantity: 1,
+                willing: true,
+                health_at_most: 10,
+                affinity_at_least: None,
+                affinity_at_most: Some(-1),
+                pressured_by: None,
+                pressure_threshold: None,
+            },
+            AnimalCarePolicy {
+                person: 4,
+                animal: 1,
+                good: 1,
+                quantity: 1,
+                willing: true,
+                health_at_most: 10,
+                affinity_at_least: None,
+                affinity_at_most: None,
+                pressured_by: None,
+                pressure_threshold: None,
+            },
+        ],
+    });
+    initial.animal_feelings = Some(AnimalFeelings {
+        minds: vec![
+            AnimalFeelingMind {
+                person: 1,
+                minimum: -10,
+                maximum: 10,
+                capacity: 4,
+                on_feed: -3,
+                on_hunt: 4,
+                opinions: vec![AnimalFeelingOpinion {
+                    animal: 1,
+                    affinity: -2,
+                }],
+            },
+            AnimalFeelingMind {
+                person: 2,
+                minimum: -10,
+                maximum: 10,
+                capacity: 4,
+                on_feed: 9,
+                on_hunt: 9,
+                opinions: vec![],
+            },
+            AnimalFeelingMind {
+                person: 4,
+                minimum: -10,
+                maximum: 10,
+                capacity: 4,
+                on_feed: 2,
+                on_hunt: -4,
+                opinions: vec![],
+            },
+        ],
+    });
+    let mut stale_world = Economy::compile(initial.clone()).unwrap();
+    let stale = stale_world.prepare().unwrap();
+    stale_world.set_animal_care_choice(1, false).unwrap();
+    assert!(stale_world.commit(stale).is_err());
+    assert_eq!(stale_world.animal_affinity(1, 1), Some(-2));
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(world.animal_affinity(1, 1), Some(-5));
+                assert_eq!(world.animal_affinity(4, 1), Some(2));
+                assert_eq!(world.animal_affinity(2, 1), Some(0));
+                let saved = world.snapshot();
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), saved);
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut hunter = initial;
+    hunter.animal_care = None;
+    hunter.people[0].controlled = true;
+    let mut world = Economy::compile(hunter).unwrap();
+    assert!(world.hunt_animal(1, 1).unwrap());
+    assert_eq!(world.animal_affinity(1, 1), Some(2));
+    assert_eq!(world.animal_affinity(4, 1), Some(0));
+}
+
+#[test]
+fn a_persons_affinity_can_influence_their_hunting_choice_in_either_direction() {
+    let mut state = hunting_fixture();
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.hunting.as_mut().unwrap().policies.truncate(1);
+    state.animal_feelings = Some(AnimalFeelings {
+        minds: vec![AnimalFeelingMind {
+            person: 1,
+            minimum: -10,
+            maximum: 10,
+            capacity: 4,
+            on_feed: 0,
+            on_hunt: 0,
+            opinions: vec![AnimalFeelingOpinion {
+                animal: 1,
+                affinity: 3,
+            }],
+        }],
+    });
+    state.hunting.as_mut().unwrap().policies[0].affinity_at_most = Some(0);
+    let mut avoid_liked = Economy::compile(state.clone()).unwrap();
+    avoid_liked.advance().unwrap();
+    assert!(avoid_liked.snapshot().fauna.unwrap().animals[0].health > 0);
+    let policy = &mut state.hunting.as_mut().unwrap().policies[0];
+    policy.affinity_at_most = None;
+    policy.affinity_at_least = Some(3);
+    let mut seek_liked = Economy::compile(state).unwrap();
+    seek_liked.advance().unwrap();
+    assert_eq!(seek_liked.snapshot().fauna.unwrap().animals[0].health, 0);
+}
+
+#[test]
+fn personal_animal_memories_are_bounded_and_do_not_invent_other_feelings() {
+    let mut state = hunting_fixture();
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.hunting = None;
+    state.animal_care = Some(AnimalCare {
+        policies: vec![AnimalCarePolicy {
+            person: 1,
+            animal: 2,
+            good: 1,
+            quantity: 1,
+            willing: true,
+            health_at_most: 10,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    state.animal_feelings = Some(AnimalFeelings {
+        minds: vec![AnimalFeelingMind {
+            person: 1,
+            minimum: -2,
+            maximum: 2,
+            capacity: 1,
+            on_feed: 2,
+            on_hunt: -2,
+            opinions: vec![AnimalFeelingOpinion {
+                animal: 1,
+                affinity: -1,
+            }],
+        }],
+    });
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let opinions = &state.animal_feelings.unwrap().minds[0].opinions;
+    assert_eq!(
+        opinions,
+        &[AnimalFeelingOpinion {
+            animal: 1,
+            affinity: -1
+        }]
+    );
+    assert_eq!(world.animal_affinity(1, 2), Some(0));
+    assert_eq!(world.animal_affinity(2, 2), None);
+}
+
 fn hunting_fixture() -> State {
     use game_parallel_genetics::{Genome, Sex};
     let mut state = fixture();
@@ -523,6 +709,8 @@ fn hunting_fixture() -> State {
                 person: 1,
                 animal: Some(1),
                 willing: true,
+                affinity_at_least: None,
+                affinity_at_most: None,
                 hunger_at_least: None,
                 reserve_good: None,
                 reserve_below: None,
@@ -533,6 +721,8 @@ fn hunting_fixture() -> State {
                 person: 4,
                 animal: Some(1),
                 willing: false,
+                affinity_at_least: None,
+                affinity_at_most: None,
                 hunger_at_least: None,
                 reserve_good: None,
                 reserve_below: None,
@@ -652,6 +842,8 @@ fn hunting_needs_capacity_and_yields_to_animal_feeding() {
             quantity: 1,
             willing: true,
             health_at_most: 10,
+            affinity_at_least: None,
+            affinity_at_most: None,
             pressured_by: None,
             pressure_threshold: None,
         }],
@@ -886,6 +1078,25 @@ fn controlled_hunting_is_a_choice_and_unwilling_hunters_need_pressure() {
 }
 
 #[test]
+fn fear_can_motivate_hunting_despite_personal_affinity_and_reserve_preferences() {
+    let mut state = hunting_fixture();
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.hunting.as_mut().unwrap().policies.remove(0);
+    let policy = &mut state.hunting.as_mut().unwrap().policies[0];
+    policy.affinity_at_least = Some(9);
+    policy.hunger_at_least = Some(99);
+    policy.reserve_good = Some(2);
+    policy.reserve_below = Some(0);
+    let mut afraid = Economy::compile(state.clone()).unwrap();
+    afraid.advance().unwrap();
+    assert_eq!(afraid.snapshot().fauna.unwrap().animals[0].health, 0);
+    state.opinions.as_mut().unwrap().records.clear();
+    let mut unafraid = Economy::compile(state).unwrap();
+    unafraid.advance().unwrap();
+    assert!(unafraid.snapshot().fauna.unwrap().animals[0].health > 0);
+}
+
+#[test]
 fn an_attempt_does_not_require_private_knowledge_of_the_animals_yield() {
     let mut state = hunting_fixture();
     state.fauna.as_mut().unwrap().species[0].hunting = None;
@@ -943,6 +1154,8 @@ fn concentrated_hunting_benchmark() {
                 person,
                 animal: (!flexible).then_some(1),
                 willing: true,
+                affinity_at_least: None,
+                affinity_at_most: None,
                 hunger_at_least: None,
                 reserve_good: None,
                 reserve_below: None,
@@ -7316,6 +7529,8 @@ fn newborn_hunting_inclinations_do_not_inherit_targets_or_pressure() {
             person: 1,
             animal: Some(1),
             willing: false,
+            affinity_at_least: None,
+            affinity_at_most: None,
             hunger_at_least: Some(5),
             reserve_good: Some(2),
             reserve_below: Some(3),
@@ -15336,6 +15551,7 @@ fn concentrated_animal_care_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let social = std::env::var_os("LEGACY_ANIMAL_RESPONSE").is_some();
+    let human_social = std::env::var_os("LEGACY_HUMAN_ANIMAL_FEELINGS").is_some();
     let mut initial = concentrated(count);
     initial.autowork = None;
     initial.nutrition = None;
@@ -15399,11 +15615,28 @@ fn concentrated_animal_care_benchmark() {
                 quantity: 1,
                 willing: true,
                 health_at_most: 10,
+                affinity_at_least: None,
+                affinity_at_most: None,
                 pressured_by: None,
                 pressure_threshold: None,
             })
             .collect(),
     });
+    if human_social {
+        initial.animal_feelings = Some(AnimalFeelings {
+            minds: (1..=count)
+                .map(|person| AnimalFeelingMind {
+                    person,
+                    minimum: -10,
+                    maximum: 10,
+                    capacity: 1,
+                    on_feed: 1,
+                    on_hunt: 0,
+                    opinions: vec![],
+                })
+                .collect(),
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -15422,13 +15655,18 @@ fn concentrated_animal_care_benchmark() {
                     u32::try_from(count - count / 2 + 1).unwrap()
                 );
                 assert_eq!(fauna.animals[0].opinions.len(), if social { (count / 2).min(64) as usize } else { 0 });
+                if human_social {
+                    let minds = &state.animal_feelings.as_ref().unwrap().minds;
+                    assert_eq!(minds[0].opinions[0].affinity, 1);
+                    assert!(minds[(count / 2) as usize].opinions.is_empty());
+                }
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} social={social} concentrated_animal_care_seconds={:.6}",
+                "workers={workers} people={count} social={social} human_social={human_social} concentrated_animal_care_seconds={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]

@@ -18,6 +18,10 @@ pub struct Policy {
     pub animal: Option<u64>,
     pub willing: bool,
     #[serde(default)]
+    pub affinity_at_least: Option<i32>,
+    #[serde(default)]
+    pub affinity_at_most: Option<i32>,
+    #[serde(default)]
     pub hunger_at_least: Option<u32>,
     #[serde(default)]
     pub reserve_good: Option<u32>,
@@ -53,6 +57,10 @@ pub struct PolicyConfig {
     animal: Option<u64>,
     willing: bool,
     #[serde(default)]
+    affinity_at_least: Option<i32>,
+    #[serde(default)]
+    affinity_at_most: Option<i32>,
+    #[serde(default)]
     hunger_at_least: Option<u32>,
     #[serde(default)]
     reserve_good: Option<String>,
@@ -74,6 +82,8 @@ impl Config {
                     person: p.person,
                     animal: p.animal,
                     willing: p.willing,
+                    affinity_at_least: p.affinity_at_least,
+                    affinity_at_most: p.affinity_at_most,
                     hunger_at_least: p.hunger_at_least,
                     reserve_good: p
                         .reserve_good
@@ -133,6 +143,8 @@ pub fn enroll(owner: Option<&Hunting>, family: Option<&crate::Families>, tick: u
                 person: member.id,
                 animal: None,
                 willing: parent.willing,
+                affinity_at_least: parent.affinity_at_least,
+                affinity_at_most: parent.affinity_at_most,
                 hunger_at_least: parent.hunger_at_least,
                 reserve_good: parent.reserve_good,
                 reserve_below: parent.reserve_below,
@@ -161,6 +173,9 @@ impl Hunting {
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || p.animal.is_some_and(|id| !animals.contains(&id))
+                    || p.affinity_at_least
+                        .zip(p.affinity_at_most)
+                        .is_some_and(|(a, b)| a > b)
                     || p.reserve_good.is_some() != p.reserve_below.is_some()
                     || p.reserve_good.is_some_and(|good| !goods.contains(&good))
                     || p.pressure_threshold == Some(0)
@@ -185,6 +200,7 @@ pub struct Context<'a> {
     pub fauna: Option<&'a Fauna>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
+    pub animal_feelings: Option<&'a crate::AnimalFeelings>,
     pub view: &'a View,
     pub busy: &'a [u64],
     pub feed_targets: &'a [u64],
@@ -267,6 +283,11 @@ impl Context<'_> {
                 })?;
                 let target = animal(target_id)?;
                 let yield_ = species(target.species)?.hunting.as_ref();
+                let affinity = || {
+                    self.animal_feelings
+                        .and_then(|f| f.affinity(actor.id, target.id))
+                        .unwrap_or(0)
+                };
                 let pressured = policy
                     .pressured_by
                     .zip(policy.pressure_threshold)
@@ -279,26 +300,29 @@ impl Context<'_> {
                 (!actor.controlled
                     && actor.health > 0
                     && actor.hunger <= self.max_hunger
-                    && policy.hunger_at_least.is_none_or(|min| actor.hunger >= min)
-                    && policy.reserve_good.zip(policy.reserve_below).is_none_or(
-                        |(good, threshold)| {
-                            self.view
-                                .container(Place::Person(actor.id))
-                                .map_or(0, |c| c.quantity(good))
-                                < threshold
-                        },
-                    )
                     && target.health > 0
                     && actor.region == Some(target.region)
                     && self.busy.binary_search(&actor.id).is_err()
                     && self.feed_targets.binary_search(&target.id).is_err()
-                    && (policy.willing || pressured))
-                    .then_some((
-                        target.id,
-                        game_parallel_genetics::random(self.seed ^ target.id, actor.id, self.tick),
-                        actor.id,
-                        yield_,
-                    ))
+                    && (pressured
+                        || (policy.willing
+                            && policy.affinity_at_least.is_none_or(|min| affinity() >= min)
+                            && policy.affinity_at_most.is_none_or(|max| affinity() <= max)
+                            && policy.hunger_at_least.is_none_or(|min| actor.hunger >= min)
+                            && policy.reserve_good.zip(policy.reserve_below).is_none_or(
+                                |(good, threshold)| {
+                                    self.view
+                                        .container(Place::Person(actor.id))
+                                        .map_or(0, |c| c.quantity(good))
+                                        < threshold
+                                },
+                            ))))
+                .then_some((
+                    target.id,
+                    game_parallel_genetics::random(self.seed ^ target.id, actor.id, self.tick),
+                    actor.id,
+                    yield_,
+                ))
             })
             .collect();
         if let Some((actor_id, animal_id)) = self.manual {
