@@ -291,11 +291,9 @@ impl Fauna {
             .par_chunk_by(|a, b| a.0 == b.0)
             .map(|group| {
                 let total: u128 = group.par_iter().map(|row| u128::from(row.1)).sum();
-                u64::try_from(total)
-                    .map(|total| (group[0].0, total))
-                    .map_err(|_| "animal food overflow")
+                (group[0].0, total.min(u128::from(u64::MAX)) as u64)
             })
-            .collect::<Result<_, _>>()?;
+            .collect();
         let before_grazing = |animal: &Animal, species: &Species| {
             let amount = supplied
                 .binary_search_by_key(&animal.id, |row| row.0)

@@ -217,12 +217,191 @@ fn fixture() -> State {
         recovery: None,
         gathering: None,
         fauna: None,
+        animal_care: None,
         food_search: None,
         giving: None,
         medical: None,
         hauling: None,
         local_transport: None,
     }
+}
+
+#[test]
+fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
+    use game_parallel_genetics::{Genome, Sex};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.fauna = Some(Fauna {
+        last_tick: 0,
+        next_id: 2,
+        species: vec![AnimalSpecies {
+            id: 1,
+            name: "grazer".into(),
+            food_good: 1,
+            intake: 2,
+            hunger_per_tick: 1,
+            relief_per_unit: 1,
+            starvation_threshold: 10,
+            starvation_damage: 1,
+            max_health: 10,
+            adult_age: 1,
+            fertile_until: 10,
+            lifespan: 30,
+            gestation: 2,
+            conception_one_in: 10,
+            breeding_max_hunger: 5,
+            newborn_health: 10,
+            mutation_per_million: 0,
+            mutation_step: 0,
+        }],
+        animals: vec![Animal {
+            id: 1,
+            species: 1,
+            region: 1,
+            age: 1,
+            health: 10,
+            hunger: 4,
+            genome: Genome {
+                sex: Sex::Male,
+                alleles: [[100; 2]; 4],
+            },
+            pregnancy: None,
+            parents: None,
+        }],
+    });
+    initial.animal_care = Some(AnimalCare {
+        policies: vec![
+            AnimalCarePolicy {
+                person: 1,
+                animal: 1,
+                good: 1,
+                quantity: 1,
+                willing: true,
+                health_at_most: 10,
+                pressured_by: None,
+                pressure_threshold: None,
+            },
+            AnimalCarePolicy {
+                person: 4,
+                animal: 1,
+                good: 1,
+                quantity: 1,
+                willing: false,
+                health_at_most: 10,
+                pressured_by: Some(1),
+                pressure_threshold: Some(3),
+            },
+        ],
+    });
+    let mut changing = Economy::compile(initial.clone()).unwrap();
+    let stale = changing.prepare().unwrap();
+    changing.set_animal_care_choice(1, false).unwrap();
+    assert!(changing.commit(stale).is_err());
+    changing.advance().unwrap();
+    assert_eq!(
+        changing.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
+        4
+    );
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let saved = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    let pressured = run(initial.clone(), 1);
+    assert_eq!(pressured, run(initial.clone(), 4));
+    assert_eq!(pressured.fauna.as_ref().unwrap().animals[0].hunger, 3);
+    for id in [1, 4] {
+        assert_eq!(
+            pressured
+                .physical
+                .custody
+                .containers
+                .iter()
+                .find(|c| c.place == Place::Person(id))
+                .unwrap()
+                .used,
+            0
+        );
+    }
+    let mut unwilling = initial.clone();
+    unwilling.opinions.as_mut().unwrap().records.clear();
+    let unwilling = run(unwilling, 4);
+    assert_eq!(unwilling.fauna.as_ref().unwrap().animals[0].hunger, 4);
+    assert_eq!(
+        unwilling
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(4))
+            .unwrap()
+            .used,
+        1
+    );
+    let mut mistaken = initial.clone();
+    mistaken.fauna.as_mut().unwrap().species[0].food_good = 2;
+    let mistaken = run(mistaken, 4);
+    assert_eq!(mistaken.fauna.as_ref().unwrap().animals[0].hunger, 5);
+    for id in [1, 4] {
+        assert_eq!(
+            mistaken
+                .physical
+                .custody
+                .containers
+                .iter()
+                .find(|c| c.place == Place::Person(id))
+                .unwrap()
+                .used,
+            0
+        );
+    }
+    let mut obligated = initial.clone();
+    let opinion = &mut obligated.opinions.as_mut().unwrap().records[0];
+    opinion.fear = 0;
+    opinion.obligation = 4;
+    assert_eq!(
+        run(obligated, 4).fauna.as_ref().unwrap().animals[0].hunger,
+        3
+    );
+    let mut controlled = initial.clone();
+    controlled.people[0].controlled = true;
+    assert_eq!(
+        run(controlled, 4).fauna.as_ref().unwrap().animals[0].hunger,
+        4
+    );
+    let mut remote = initial.clone();
+    remote.people[0].region = None;
+    assert_eq!(run(remote, 4).fauna.as_ref().unwrap().animals[0].hunger, 4);
+    let mut no_stock = initial;
+    let holder = no_stock
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(4))
+        .unwrap();
+    *holder = Container::new(Place::Person(4), 10, vec![]).unwrap();
+    assert_eq!(
+        run(no_stock, 4).fauna.as_ref().unwrap().animals[0].hunger,
+        4
+    );
 }
 
 fn local_store_fixture() -> State {

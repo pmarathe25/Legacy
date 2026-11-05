@@ -71,6 +71,8 @@ pub struct State {
     #[serde(default)]
     pub fauna: Option<game_parallel_fauna::Fauna>,
     #[serde(default)]
+    pub animal_care: Option<crate::animal_care::AnimalCare>,
+    #[serde(default)]
     pub food_search: Option<crate::food_search::FoodSearch>,
     #[serde(default)]
     pub giving: Option<crate::giving::Giving>,

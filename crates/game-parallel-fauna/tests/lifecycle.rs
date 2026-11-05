@@ -132,7 +132,7 @@ fn physically_fed_animals_need_less_food_from_the_patch() {
                 7,
                 1
             )
-            .is_err()
+            .is_ok()
     );
 }
 

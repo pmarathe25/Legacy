@@ -2,6 +2,27 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn animal_care_content_resolves_named_goods() {
+    let config: game_parallel_economy::AnimalCareConfig = toml::from_str(
+        r#"
+        [[policies]]
+        person = 4
+        animal = 1
+        good = "grain"
+        quantity = 2
+        willing = false
+        health_at_most = 8
+        pressured_by = 1
+        pressure_threshold = 3
+    "#,
+    )
+    .unwrap();
+    let care = config.build(|name| (name == "grain").then_some(7)).unwrap();
+    assert_eq!(care.policies[0].good, 7);
+    assert_eq!(care.policies[0].pressure_threshold, Some(3));
+}
+
+#[test]
 fn player_feeds_local_animals_only_with_real_carried_food() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

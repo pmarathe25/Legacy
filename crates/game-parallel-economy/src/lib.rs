@@ -51,7 +51,9 @@ pub use game_parallel_practices::{
     ReportAttitude as PracticeReportAttitude, Reporting as PracticeReporting,
     ValueLearning as PracticeValueLearning,
 };
+mod animal_care;
 mod construction_planning;
+pub use animal_care::{AnimalCare, Config as AnimalCareConfig, Policy as AnimalCarePolicy};
 mod development;
 mod environment;
 mod food_search;
@@ -127,6 +129,7 @@ pub struct Economy {
     recovery: Option<RecoveryRules>,
     gathering: Option<Gathering>,
     fauna: Option<Fauna>,
+    animal_care: Option<AnimalCare>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
     medical: Option<Medical>,
@@ -671,6 +674,31 @@ impl Economy {
         Ok(())
     }
     /// Change a person's own inclination to provide their configured care.
+    pub fn set_animal_care_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self.animal_care.clone().ok_or("animal care is disabled")?;
+        let policy = next
+            .policies
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no animal care preference")?;
+        policy.willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.animal_care = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Change a person's own inclination to provide their configured care.
     pub fn set_medical_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
         if self
             .people
@@ -1008,6 +1036,9 @@ impl Economy {
                 .validate(&regions, &goods, physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(care) = &state.animal_care {
+            care.validate(&ids, &goods, state.fauna.as_ref())?;
+        }
         if let Some(search) = &state.food_search {
             search.validate(&ids, state.knowledge.as_ref(), state.travel.as_ref())?;
         }
@@ -1200,6 +1231,7 @@ impl Economy {
             recovery: state.recovery,
             gathering: state.gathering,
             fauna: state.fauna,
+            animal_care: state.animal_care,
             food_search: state.food_search,
             giving: state.giving,
             medical: state.medical,
@@ -1241,6 +1273,7 @@ impl Economy {
             recovery: self.recovery.clone(),
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
+            animal_care: self.animal_care.clone(),
             food_search: self.food_search.clone(),
             giving: self.giving.clone(),
             medical: self.medical.clone(),
@@ -1725,6 +1758,22 @@ impl Economy {
                 .par_chunk_by(|a, b| a == b)
                 .map(|group| group[0])
                 .collect();
+        }
+        let animal_care_plan = animal_care::Context {
+            owner: self.animal_care.as_ref(),
+            fauna: self.fauna.as_ref(),
+            people: &self.people,
+            opinions: self.opinions.as_ref(),
+            view: &view,
+            busy: &busy,
+            max_hunger: self.rules.max_work_hunger,
+        }
+        .prepare(action_base)?;
+        action_base = action_base
+            .checked_add(animal_care_plan.actions.len() as u64)
+            .ok_or("action count overflow")?;
+        if !animal_care_plan.actors.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, animal_care_plan.actors.iter().copied());
         }
         let mut next_hauling = self.hauling.clone();
         if let Some(hauling) = &mut next_hauling {
@@ -2503,6 +2552,7 @@ impl Economy {
         actions.extend_from_slice(&treatment.actions);
         actions.extend_from_slice(&giving_plan.actions);
         actions.extend_from_slice(&medical_plan.actions);
+        actions.extend_from_slice(&animal_care_plan.actions);
         if let Some(plan) = &hauling_plan {
             actions.extend_from_slice(&plan.actions);
         }
@@ -2736,12 +2786,13 @@ impl Economy {
                     available: node.available,
                 })
                 .collect();
-            let feedings: Vec<_> = manual_animal_feed
-                .as_ref()
-                .filter(|_| fed_animal == Some(true))
-                .map(|(_, food, _)| *food)
-                .into_iter()
-                .collect();
+            let mut feedings = animal_care_plan.accepted(physical.events());
+            feedings.extend(
+                manual_animal_feed
+                    .as_ref()
+                    .filter(|_| fed_animal == Some(true))
+                    .map(|(_, food, _)| *food),
+            );
             let draft = fauna
                 .advance_with_feeding(&patches, &feedings, self.seed, tick)
                 .map_err(str::to_owned)?;
