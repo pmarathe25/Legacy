@@ -470,17 +470,38 @@ pub fn prepare(
         .map(|row| (row.0, row.1, row.2))
         .collect();
     debits.par_sort_unstable_by_key(|row| (row.0, row.1));
-    let mut changes: Vec<_> = containers
+    // Only touched or expiring custody needs materializing. Searching every
+    // unchanged container for incoming and outgoing lots scales with the
+    // entire population even when activity is sparse.
+    let mut touched: Vec<_> = debits
         .par_iter()
-        .enumerate()
-        .filter_map(|(index, container)| {
+        .map(|row| row.0)
+        .chain(incoming.par_iter().map(|row| row.0))
+        .chain(
+            containers
+                .par_iter()
+                .enumerate()
+                .filter_map(|(index, container)| {
+                    container
+                        .next_expiry
+                        .is_some_and(|at| at <= next)
+                        .then_some(index)
+                }),
+        )
+        .collect();
+    touched.par_sort_unstable();
+    let touched: Vec<_> = touched
+        .par_chunk_by(|a, b| a == b)
+        .map(|group| group[0])
+        .collect();
+    let mut changes: Vec<_> = touched
+        .par_iter()
+        .map(|&index| {
+            let container = containers[index];
             let d0 = debits.partition_point(|row| row.0 < index);
             let d1 = debits.partition_point(|row| row.0 <= index);
             let a0 = incoming.partition_point(|row| row.0 < index);
             let a1 = incoming.partition_point(|row| row.0 <= index);
-            if d0 == d1 && a0 == a1 && container.next_expiry.is_none_or(|at| at > next) {
-                return None;
-            }
             let live_lots: Vec<_> = container
                 .lots
                 .par_iter()
@@ -530,7 +551,7 @@ pub fn prepare(
                 .map(|lot| u128::from(lot.quantity))
                 .sum::<u128>() as u64;
             let next_expiry = merged.par_iter().filter_map(|lot| lot.expires_at).min();
-            Some((
+            (
                 index,
                 Container {
                     place: container.place,
@@ -539,7 +560,7 @@ pub fn prepare(
                     used,
                     next_expiry,
                 },
-            ))
+            )
         })
         .collect();
     changes.par_sort_unstable_by_key(|row| row.0);

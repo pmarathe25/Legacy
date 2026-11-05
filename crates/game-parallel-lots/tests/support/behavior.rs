@@ -979,6 +979,45 @@ fn retirement_checks_the_resulting_lots_before_any_publication() {
 }
 
 #[test]
+fn a_single_action_cannot_overfill_a_destination_with_multiple_legs() {
+    let a = Place::Person(1);
+    let b = Place::Person(2);
+    let target = Place::Person(3);
+    let initial = vec![
+        container(a, 1, vec![lot(1, 1, None)]),
+        container(b, 1, vec![lot(2, 1, None)]),
+        container(target, 1, vec![]),
+    ];
+    let action = Transaction {
+        id: 1,
+        movements: vec![
+            Movement {
+                id: 1,
+                from: a,
+                to: Some(target),
+                good: 1,
+                quantity: 1,
+            },
+            Movement {
+                id: 2,
+                from: b,
+                to: Some(target),
+                good: 2,
+                quantity: 1,
+            },
+        ],
+        creations: vec![],
+    };
+    let mut store = store(initial);
+    let draft = store.prepare_transactions_now(1, &[action]).unwrap();
+    assert!(!draft.transactions()[0].accepted);
+    store.commit(draft).unwrap();
+    assert_eq!(store.container(target).unwrap().used, 0);
+    assert_eq!(store.container(a).unwrap().used, 1);
+    assert_eq!(store.container(b).unwrap().used, 1);
+}
+
+#[test]
 fn a_two_way_exchange_fits_full_bags_and_keeps_original_expiry() {
     let a = Place::Person(1);
     let b = Place::Person(2);

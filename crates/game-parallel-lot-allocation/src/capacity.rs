@@ -57,6 +57,25 @@ pub fn grant_destinations(
         .for_each(|groups| {
             let place = groups[0][0].place;
             let available = u128::from(containers[place].capacity - used[place]);
+            // A destination used by only one action needs neither a prefix scan nor
+            // temporary vectors. Most job-input containers are private in this way.
+            if groups.len() == 1 {
+                let group = groups[0];
+                let incoming: u128 = group.iter().map(|row| u128::from(row.quantity)).sum();
+                let granted = incoming <= available || {
+                    let key = (group[0].transaction, place);
+                    let own = outgoing
+                        .binary_search_by_key(&key, |row| (row.0, row.1))
+                        .map_or(0, |index| outgoing[index].2);
+                    incoming.saturating_sub(own) <= available
+                };
+                if granted {
+                    for row in group {
+                        accepted[row.index].store(true, Ordering::Relaxed);
+                    }
+                }
+                return;
+            }
             let needs: Vec<_> = groups
                 .par_iter()
                 .map(|group| {
