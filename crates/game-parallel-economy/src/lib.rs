@@ -2797,8 +2797,19 @@ impl Economy {
                     .filter(|_| fed_animal == Some(true))
                     .map(|(_, food, _)| *food),
             );
+            let season = self.environment.as_ref().and_then(|env| env.season(tick));
+            let exposure: Vec<_> = self
+                .environment
+                .as_ref()
+                .map_or(&[][..], |env| env.regions.as_slice())
+                .par_iter()
+                .map(|hazard| game_parallel_fauna::Exposure {
+                    region: hazard.region,
+                    severity: season.map_or(hazard.damage, |season| season.exposure(hazard.damage)),
+                })
+                .collect();
             let draft = fauna
-                .advance_with_feeding(&patches, &feedings, self.seed, tick)
+                .advance_with_feeding_and_exposure(&patches, &feedings, &exposure, self.seed, tick)
                 .map_err(str::to_owned)?;
             if let Some(gathering) = &mut gathering {
                 gathering

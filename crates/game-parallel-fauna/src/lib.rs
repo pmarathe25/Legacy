@@ -29,6 +29,25 @@ pub struct Species {
     pub mutation_per_million: u32,
     #[serde(default)]
     pub mutation_step: u16,
+    /// Optional response to regional seasonal exposure; absent means no modeled stress.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub climate: Option<Climate>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Climate {
+    pub tolerance: u32,
+    /// Additional tolerance at the maximum mean value of the selected diploid locus.
+    pub inherited_tolerance: u32,
+    pub hardiness_locus: usize,
+    pub damage_per_excess: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Exposure {
+    pub region: u64,
+    pub severity: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -160,6 +179,9 @@ impl Fauna {
                     || s.newborn_health > s.max_health
                     || s.mutation_per_million > 1_000_000
                     || s.mutation_step > 1000
+                    || s.climate
+                        .as_ref()
+                        .is_some_and(|climate| climate.hardiness_locus >= 4)
             })
             || ids.first() == Some(&0)
             || ids.last().is_some_and(|id| *id >= self.next_id)
@@ -235,8 +257,29 @@ impl Fauna {
         seed: u64,
         tick: u64,
     ) -> Result<Draft, &'static str> {
+        self.advance_with_feeding_and_exposure(patches, feeding, &[], seed, tick)
+    }
+
+    /// Apply accepted feed and data-defined regional exposure in the same staged boundary.
+    pub fn advance_with_feeding_and_exposure(
+        &self,
+        patches: &[Patch],
+        feeding: &[Feeding],
+        exposure: &[Exposure],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Draft, &'static str> {
         if self.last_tick.checked_add(1) != Some(tick) {
             return Err("fauna phase must advance one tick");
+        }
+        let mut exposure = exposure.to_vec();
+        exposure.par_sort_unstable_by_key(|row| row.region);
+        if exposure.first().is_some_and(|row| row.region == 0)
+            || exposure
+                .par_windows(2)
+                .any(|pair| pair[0].region == pair[1].region)
+        {
+            return Err("invalid animal exposure");
         }
         let mut species: Vec<_> = self.species.par_iter().collect();
         species.par_sort_unstable_by_key(|s| s.id);
@@ -385,6 +428,26 @@ impl Fauna {
                     next.health = 0;
                 } else if next.hunger >= s.starvation_threshold {
                     next.health = next.health.saturating_sub(s.starvation_damage);
+                }
+                if let Some(climate) = &s.climate {
+                    let severity = exposure
+                        .binary_search_by_key(&a.region, |row| row.region)
+                        .ok()
+                        .map_or(0, |i| exposure[i].severity);
+                    let alleles = a
+                        .genome
+                        .alleles
+                        .get(climate.hardiness_locus)
+                        .ok_or("invalid climate hardiness locus")?;
+                    let mean = (u32::from(alleles[0]) + u32::from(alleles[1])) / 2;
+                    let inherited = (u64::from(mean) * u64::from(climate.inherited_tolerance)
+                        / 1000)
+                        .min(u64::from(u32::MAX)) as u32;
+                    let excess =
+                        severity.saturating_sub(climate.tolerance.saturating_add(inherited));
+                    next.health = next
+                        .health
+                        .saturating_sub(excess.saturating_mul(climate.damage_per_excess));
                 }
                 if next.health == 0 {
                     next.pregnancy = None;

@@ -2,6 +2,53 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn wildlife_receives_the_current_seasonal_exposure() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut state = scenario(
+        &root.join("content/parallel/economy-wildlife.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    state.fauna.as_mut().unwrap().species[0].climate = Some(game_parallel_fauna::Climate {
+        tolerance: 0,
+        inherited_tolerance: 0,
+        hardiness_locus: 1,
+        damage_per_excess: 1,
+    });
+    let environment = state.environment.as_mut().unwrap();
+    environment.seasons[0].duration = 1;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(state.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().fauna.as_ref().unwrap().animals[0].health,
+                    9
+                );
+                let mut restored = game_parallel_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().fauna.as_ref().unwrap().animals[0].health,
+                    7
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn animal_care_content_resolves_named_goods() {
     let config: game_parallel_economy::AnimalCareConfig = toml::from_str(
         r#"
@@ -20,6 +67,46 @@ fn animal_care_content_resolves_named_goods() {
     let care = config.build(|name| (name == "grain").then_some(7)).unwrap();
     assert_eq!(care.policies[0].good, 7);
     assert_eq!(care.policies[0].pressure_threshold, Some(3));
+}
+
+#[test]
+fn wildlife_climate_settings_are_loaded_from_content() {
+    let text = r#"
+        next_id = 1
+        animals = []
+        [[species]]
+        id = 1
+        name = "grazer"
+        food_good = "grain"
+        intake = 1
+        hunger_per_tick = 1
+        relief_per_unit = 1
+        starvation_threshold = 10
+        starvation_damage = 1
+        max_health = 10
+        adult_age = 1
+        fertile_until = 10
+        lifespan = 20
+        gestation = 2
+        conception_one_in = 4
+        breeding_max_hunger = 3
+        newborn_health = 10
+        [species.climate]
+        tolerance = 1
+        inherited_tolerance = 4
+        hardiness_locus = 1
+        damage_per_excess = 2
+    "#;
+    let config: game_parallel_fauna::content::Config = toml::from_str(text).unwrap();
+    let fauna = config.build(|name| (name == "grain").then_some(1)).unwrap();
+    assert_eq!(
+        fauna.species[0]
+            .climate
+            .as_ref()
+            .unwrap()
+            .inherited_tolerance,
+        4
+    );
 }
 
 #[test]

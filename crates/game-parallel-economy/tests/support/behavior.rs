@@ -257,6 +257,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             newborn_health: 10,
             mutation_per_million: 0,
             mutation_step: 0,
+            climate: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -14693,6 +14694,7 @@ fn concentrated_animal_care_benchmark() {
             newborn_health: 10,
             mutation_per_million: 0,
             mutation_step: 0,
+            climate: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -14876,6 +14878,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
             newborn_health: 10,
             mutation_per_million: 0,
             mutation_step: 0,
+            climate: None,
         }],
         animals: (1..=2)
             .map(|id| Animal {

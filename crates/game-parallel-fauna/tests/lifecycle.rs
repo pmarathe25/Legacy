@@ -1,4 +1,4 @@
-use game_parallel_fauna::{Animal, Fauna, Feeding, Patch, Pregnancy, Species};
+use game_parallel_fauna::{Animal, Climate, Exposure, Fauna, Feeding, Patch, Pregnancy, Species};
 use game_parallel_genetics::{Genome, Sex};
 use std::collections::HashSet;
 
@@ -28,6 +28,7 @@ fn species() -> Species {
         newborn_health: 8,
         mutation_per_million: 0,
         mutation_step: 0,
+        climate: None,
     }
 }
 fn animal(id: u64, sex: Sex, allele: u16) -> Animal {
@@ -50,6 +51,81 @@ fn initial() -> Fauna {
         next_id: 3,
         last_tick: 0,
     }
+}
+
+#[test]
+fn inherited_hardiness_changes_individual_response_to_local_exposure() {
+    let mut state = initial();
+    state.species[0].climate = Some(Climate {
+        tolerance: 1,
+        inherited_tolerance: 4,
+        hardiness_locus: 1,
+        damage_per_excess: 1,
+    });
+    let weather = [Exposure {
+        region: 1,
+        severity: 6,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let draft = state
+                    .advance_with_feeding_and_exposure(&[], &[], &weather, 7, 1)
+                    .unwrap();
+                assert_eq!(
+                    draft
+                        .fauna
+                        .animals
+                        .iter()
+                        .map(|a| a.health)
+                        .collect::<Vec<_>>(),
+                    vec![5, 8]
+                );
+                let saved: Fauna =
+                    serde_json::from_str(&serde_json::to_string(&draft.fauna).unwrap()).unwrap();
+                assert_eq!(saved, draft.fauna);
+                draft.fauna
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let unexposed = state
+        .advance_with_feeding_and_exposure(
+            &[],
+            &[],
+            &[Exposure {
+                region: 2,
+                severity: 6,
+            }],
+            7,
+            1,
+        )
+        .unwrap();
+    assert!(
+        unexposed
+            .fauna
+            .animals
+            .iter()
+            .all(|animal| animal.health == 10)
+    );
+    assert!(
+        state
+            .advance_with_feeding_and_exposure(&[], &[], &[weather[0], weather[0]], 7, 1)
+            .is_err()
+    );
+    state.species[0].climate.as_mut().unwrap().hardiness_locus = 4;
+    assert!(
+        state
+            .validate(&HashSet::from([1]), &HashSet::from([1]), 0)
+            .is_err()
+    );
+    assert!(
+        state
+            .advance_with_feeding_and_exposure(&[], &[], &weather, 7, 1)
+            .is_err()
+    );
 }
 
 #[test]

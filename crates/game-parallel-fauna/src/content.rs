@@ -1,5 +1,5 @@
 //! Data-file conversion for species with named food goods.
-use crate::{Animal, Fauna, Species};
+use crate::{Animal, Climate, Fauna, Species};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -34,6 +34,8 @@ struct SpeciesConfig {
     mutation_per_million: u32,
     #[serde(default)]
     mutation_step: u16,
+    #[serde(default)]
+    climate: Option<Climate>,
 }
 impl Config {
     pub fn build(self, lookup: impl Fn(&str) -> Option<u32>) -> Result<Fauna, String> {
@@ -61,6 +63,7 @@ impl Config {
                     newborn_health: s.newborn_health,
                     mutation_per_million: s.mutation_per_million,
                     mutation_step: s.mutation_step,
+                    climate: s.climate,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
