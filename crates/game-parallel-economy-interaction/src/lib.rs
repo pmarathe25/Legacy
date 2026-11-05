@@ -16,13 +16,27 @@ pub struct Request {
 }
 #[derive(Clone, Copy)]
 pub enum WorkAction {
-    Start { actor: u64, recipe: u32, units: u32 },
-    Continue { actor: u64 },
+    Start {
+        actor: u64,
+        recipe: u32,
+        units: u32,
+    },
+    Continue {
+        actor: u64,
+    },
+    /// Respond to a request personally received by the controlled worker.
+    Respond {
+        actor: u64,
+        request: u64,
+        accept: bool,
+    },
 }
 impl WorkAction {
     pub fn actor(self) -> u64 {
         match self {
-            Self::Start { actor, .. } | Self::Continue { actor } => actor,
+            Self::Start { actor, .. } | Self::Continue { actor } | Self::Respond { actor, .. } => {
+                actor
+            }
         }
     }
 }
@@ -323,6 +337,26 @@ macro_rules! work_methods {
             let draft = self.prepare_interaction(
                 None,
                 Some($crate::WorkAction::Continue { actor }),
+                None,
+                None,
+            )?;
+            self.commit(draft)
+        }
+        /// Choose personally whether to undertake an addressed request.
+        pub fn respond_work_request(
+            &mut self,
+            actor: u64,
+            request: u64,
+            accept: bool,
+        ) -> Result<game_parallel_lot_runtime::Events, String> {
+            game_parallel_economy_campaign::preflight!(self);
+            let draft = self.prepare_interaction(
+                None,
+                Some($crate::WorkAction::Respond {
+                    actor,
+                    request,
+                    accept,
+                }),
                 None,
                 None,
             )?;

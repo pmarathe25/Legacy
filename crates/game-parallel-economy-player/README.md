@@ -11,3 +11,5 @@ The ruler can inspect local physical work sites and their occupied capacity, and
 The ruler can assert a personal claim over local stock or a local work site, inspect their own assertions, and withdraw them even after leaving or after a site is destroyed. The view includes the ruler's locally witnessed uses of their claimed sites. Other people's private claims are not exposed by this view; assertions do not themselves prevent anyone from taking goods or using a site.
 
 The ruler can independently choose whether to assert a claim automatically after personally constructing a site.
+
+The controlled person sees work requests addressed to them and can accept or decline each one. Acceptance attempts the requested physical work, subject to actual materials and site requirements; a failed start does not become a completed job. The requester can only learn outcomes they witness.

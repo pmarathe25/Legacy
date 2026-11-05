@@ -423,6 +423,32 @@ fn visible(people: &[PersonSnapshot], requester: u64, worker: u64, region: u64) 
     matches!((a, b), (Some((_, Some(ar), ah, _)), Some((_, Some(br), bh, _))) if ar == region && br == ar && ah > 0 && bh > 0)
 }
 impl Plan {
+    /// Include a controlled person's independent decision in the same outcome
+    /// and witness accounting as an autonomous request response.
+    pub fn record_manual_response(
+        &mut self,
+        decision: game_parallel_work_requests::Decision,
+        start: Option<game_parallel_production_model::Start>,
+        next_id: Option<u64>,
+    ) {
+        self.request
+            .as_mut()
+            .expect("validated work requests")
+            .decisions
+            .push(decision);
+        if let Some(start) = start {
+            let work = self.work.get_or_insert_with(|| WorkPlan {
+                requests: Vec::new(),
+                next_id: next_id.expect("manual start has a next id"),
+                actors: Vec::new(),
+            });
+            work.requests.push(start);
+            work.actors.push(start.worker);
+            work.next_id = work
+                .next_id
+                .max(next_id.expect("manual start has a next id"));
+        }
+    }
     /// Requests actually admitted to a receiver's bounded inbox this boundary.
     pub fn asks(&self) -> &[game_parallel_work_requests::Request] {
         self.asks.as_ref().map_or(&[], |draft| &draft.requests)

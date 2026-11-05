@@ -1750,6 +1750,127 @@ fn player_fights_on_the_authored_generated_map() {
 }
 
 #[test]
+fn controlled_worker_can_receive_and_independently_respond_to_real_work_requests() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/parallel/economy-campaign.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let recipe = Player::new(&mut world)
+                    .catalog()
+                    .unwrap()
+                    .1
+                    .into_iter()
+                    .find(|r| r.name == "fixture-tool")
+                    .unwrap()
+                    .id;
+                let declined = world.ask_work(2, 1, recipe, 15).unwrap();
+                {
+                    let mut player = Player::new(&mut world);
+                    assert!(
+                        player
+                            .view()
+                            .unwrap()
+                            .pending_work_requests
+                            .iter()
+                            .any(|r| r.id == declined)
+                    );
+                    assert!(!player.respond_work_request(declined, false).unwrap());
+                    assert!(
+                        !player
+                            .view()
+                            .unwrap()
+                            .pending_work_requests
+                            .iter()
+                            .any(|r| r.id == declined)
+                    );
+                }
+                let request = world.ask_work(2, 1, recipe, 15).unwrap();
+                let saved = world.snapshot();
+                let mut restored = game_parallel_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(
+                    Player::new(&mut world)
+                        .respond_work_request(request, true)
+                        .unwrap()
+                );
+                assert!(
+                    Player::new(&mut restored)
+                        .respond_work_request(request, true)
+                        .unwrap()
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                let requests = state.autowork.as_ref().unwrap().requests.as_ref().unwrap();
+                assert!(
+                    requests
+                        .work_links
+                        .iter()
+                        .any(|link| link.request == request && link.worker == 1)
+                );
+                assert!(!requests.pending.iter().any(|row| row.id == request));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn controlled_work_response_requires_a_real_admitted_start() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut state = world.snapshot();
+    let recipe = state
+        .physical
+        .recipes
+        .iter()
+        .find(|r| r.name == "fixture-tool")
+        .unwrap()
+        .id;
+    let tool = state
+        .physical
+        .goods
+        .iter()
+        .find(|g| g.name == "tool")
+        .unwrap()
+        .id;
+    state.work_tools.push(game_parallel_economy::WorkTool {
+        recipe,
+        good: tool,
+        quantity: 100_000,
+    });
+    let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+    let request = world.ask_work(2, 1, recipe, 15).unwrap();
+    let before = world.snapshot();
+    assert!(world.respond_work_request(2, request, true).is_err());
+    assert_eq!(world.snapshot(), before);
+    assert!(
+        !Player::new(&mut world)
+            .respond_work_request(request, true)
+            .unwrap()
+    );
+    let state = world.snapshot();
+    let requests = state.autowork.as_ref().unwrap().requests.as_ref().unwrap();
+    assert!(requests.pending.iter().any(|row| row.id == request));
+    assert!(!requests.work_links.iter().any(|row| row.request == request));
+}
+
+#[test]
 fn player_request_can_be_refused_or_followed_from_personal_fear() {
     use game_parallel_economy_combat::Order;
     use game_parallel_economy_player::Player;

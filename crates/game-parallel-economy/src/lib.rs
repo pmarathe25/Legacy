@@ -1170,6 +1170,42 @@ impl Economy {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
+        let (player_work, manual_response) = match player_work {
+            Some(game_parallel_economy_interaction::WorkAction::Respond {
+                actor,
+                request,
+                accept,
+            }) => {
+                let person = self
+                    .people
+                    .binary_search_by_key(&actor, |p| p.id)
+                    .ok()
+                    .map(|i| &self.people[i])
+                    .ok_or("unknown person")?;
+                let row = self
+                    .autowork
+                    .as_ref()
+                    .and_then(|a| a.requests.as_ref())
+                    .and_then(|r| {
+                        r.pending
+                            .iter()
+                            .find(|r| r.id == request && r.worker == actor)
+                    })
+                    .filter(|r| r.expires >= tick && person.region == Some(r.region))
+                    .ok_or("unknown or unavailable personal work request")?;
+                if !person.controlled || person.health == 0 {
+                    return Err("work response requires a living controlled person".into());
+                }
+                let action =
+                    accept.then_some(game_parallel_economy_interaction::WorkAction::Start {
+                        actor,
+                        recipe: row.recipe,
+                        units: 1,
+                    });
+                (action, Some((row.clone(), accept)))
+            }
+            other => (other, None),
+        };
         let campaign_draft = game_parallel_economy_campaign::prepare_world!(self);
         let view = self.physical.view(tick)?;
         let destroy_site =
@@ -2272,7 +2308,7 @@ impl Economy {
                     })
             })
             .collect();
-        let work = game_parallel_economy_goals::prepare_work!(
+        let mut work = game_parallel_economy_goals::prepare_work!(
             self,
             view,
             people,
@@ -2294,6 +2330,31 @@ impl Economy {
             claims,
             claim_uses
         );
+        let starts = if let Some((request, accept)) = manual_response {
+            // The physical candidate is already in `starts`; retain it in the
+            // request plan too, so only an admitted job produces an outcome.
+            let starts = starts.into_owned();
+            let start = accept
+                .then(|| starts.iter().find(|s| s.worker == request.worker).copied())
+                .flatten();
+            work.as_mut()
+                .expect("validated request planner")
+                .record_manual_response(
+                    game_parallel_autowork::requests::Decision {
+                        request: request.id,
+                        worker: request.worker,
+                        region: request.region,
+                        recipe: request.recipe,
+                        help: accept,
+                        disregard_claims: true,
+                    },
+                    start,
+                    manual_job,
+                );
+            std::borrow::Cow::Owned(starts)
+        } else {
+            starts
+        };
         let starts = if self.work_tools.is_empty() {
             starts
         } else {

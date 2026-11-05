@@ -9,7 +9,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
         [] => {}
         ["quit"] | ["exit"] => return Ok(false),
         ["help"] => println!(
-            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | goal-help RECIPE on|off | practice-decide AUTHOR SEQUENCE accept|decline | work-practice-propose WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice FIELD on|off | work-practice-reserve AMOUNT | work-practice-evaluation off|BASE AFFINITY TRUST THRESHOLD | work-outcome off|WAIT TRUST AFFINITY | work-practice-decide AUTHOR SEQUENCE accept|decline | practice-withdraw AUTHOR SEQUENCE | practice-report PERSON SEQUENCE ready|unready | practice-belief PERSON SEQUENCE believe|doubt|unassessed | practice-require-report on|off | practice-unanswered retain|believe|doubt|unassessed | practice-value off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport off|DELTA [TARGET] | food-report-reception default|all|none|MIN | practice-willing on|off | practice-ask on|off | practice-invent on|off | practice-approve on|off | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | salvage-site SITE GOOD QUANTITY | take-store STORE GOOD QUANTITY | put-store STORE GOOD QUANTITY | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | claim-built-sites on|off | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
+            "view | catalog | guardians | past-knowledge LIFE | meet PERSON | ask-work PERSON RECIPE LIFETIME | respond-work REQUEST accept|decline | goal-help RECIPE on|off | practice-decide AUTHOR SEQUENCE accept|decline | work-practice-propose WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice FIELD on|off | work-practice-reserve AMOUNT | work-practice-evaluation off|BASE AFFINITY TRUST THRESHOLD | work-outcome off|WAIT TRUST AFFINITY | work-practice-decide AUTHOR SEQUENCE accept|decline | practice-withdraw AUTHOR SEQUENCE | practice-report PERSON SEQUENCE ready|unready | practice-belief PERSON SEQUENCE believe|doubt|unassessed | practice-require-report on|off | practice-unanswered retain|believe|doubt|unassessed | practice-value off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport off|DELTA [TARGET] | food-report-reception default|all|none|MIN | practice-willing on|off | practice-ask on|off | practice-invent on|off | practice-approve on|off | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | salvage-site SITE GOOD QUANTITY | take-store STORE GOOD QUANTITY | put-store STORE GOOD QUANTITY | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | claim-built-sites on|off | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | store GOOD QUANTITY | recover DECEASED GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["view"] => {
             let view = player.view()?;
@@ -394,6 +394,17 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 worker.parse().map_err(|_| "invalid worker")?,
                 recipe.parse().map_err(|_| "invalid recipe")?,
                 lifetime.parse().map_err(|_| "invalid lifetime")?
+            )?
+        ),
+        ["respond-work", request, choice] => println!(
+            "started={}",
+            player.respond_work_request(
+                request.parse().map_err(|_| "invalid request")?,
+                match *choice {
+                    "accept" => true,
+                    "decline" => false,
+                    _ => return Err("expected accept or decline".into()),
+                },
             )?
         ),
         ["ask-food", target, lifetime] => player.ask_food(

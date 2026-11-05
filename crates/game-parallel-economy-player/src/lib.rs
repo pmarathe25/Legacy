@@ -488,7 +488,10 @@ impl<'a> Player<'a> {
                     requests
                         .pending
                         .par_iter()
-                        .filter(|r| r.requester == id && nearby.binary_search(&r.worker).is_ok())
+                        .filter(|r| {
+                            r.worker == id
+                                || (r.requester == id && nearby.binary_search(&r.worker).is_ok())
+                        })
                         .cloned()
                         .collect()
                 })
@@ -764,6 +767,19 @@ impl<'a> Player<'a> {
         }
         self.world
             .ask_work(self.current()?, worker, recipe, lifetime)
+    }
+    /// Accept or decline a personally received request; accepting attempts real work.
+    pub fn respond_work_request(&mut self, request: u64, accept: bool) -> Result<bool, String> {
+        let actor = self.current()?;
+        let events = self.world.respond_work_request(actor, request, accept)?;
+        Ok(accept
+            && self
+                .world
+                .read()
+                .physical
+                .work()
+                .iter()
+                .any(|work| work.job.worker == actor && events.started.contains(&work.job.id)))
     }
     pub fn set_goal_help_recognition(&mut self, recipe: u32, enabled: bool) -> Result<(), String> {
         self.world
