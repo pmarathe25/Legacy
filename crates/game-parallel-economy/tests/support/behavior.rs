@@ -8860,8 +8860,20 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
             needs: None,
         }),
     });
-    let run_reaction = |workers, trust_change, affinity_change, funded| {
+    let run_reaction = |workers, trust_change, affinity_change, funded, via_promise| {
         let mut state = initial.clone();
+        if via_promise {
+            let mut agreements = fixture().agreements.unwrap();
+            agreements.contracts.clear();
+            agreements.events.clear();
+            agreements.policies.clear();
+            agreements.offering.clear();
+            agreements.work_offering.clear();
+            agreements.bulk_debtors.clear();
+            agreements.next_id = 1;
+            state.agreements = Some(agreements);
+            state.opinions.as_mut().unwrap().rules.fulfilled_gain = 0;
+        }
         let worker = &mut state
             .giving
             .as_mut()
@@ -8960,7 +8972,27 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                     serde_json::from_str(&serde_json::to_string(&finished).unwrap()).unwrap(),
                 )
                 .unwrap();
-                if funded {
+                if via_promise {
+                    for candidate in [&mut world, &mut restored] {
+                        let id = candidate
+                            .propose_promises(&[PromiseProposal {
+                                debtor: 1,
+                                creditor: 2,
+                                good: 1,
+                                quantity: 1,
+                                due: candidate.tick() + 5,
+                            }])
+                            .unwrap()[0];
+                        candidate
+                            .decide_promises(&[PromiseDecision {
+                                contract: id,
+                                actor: 2,
+                                accept: true,
+                            }])
+                            .unwrap();
+                        assert_eq!(candidate.fulfill_promise(1, id).unwrap(), funded);
+                    }
+                } else if funded {
                     assert!(world.give(1, 2, 1, 1).unwrap());
                     assert!(restored.give(1, 2, 1, 1).unwrap());
                 } else {
@@ -9017,10 +9049,18 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                 state
             })
     };
-    assert_eq!(run_reaction(1, -2, 3, false), run_reaction(4, -2, 3, false));
-    run_reaction(1, 2, -3, false);
-    run_reaction(1, -2, 3, true);
-    run_reaction(1, 0, 0, false);
+    assert_eq!(
+        run_reaction(1, -2, 3, false, false),
+        run_reaction(4, -2, 3, false, false)
+    );
+    run_reaction(1, 2, -3, false, false);
+    run_reaction(1, -2, 3, true, false);
+    run_reaction(1, 0, 0, false, false);
+    assert_eq!(
+        run_reaction(1, -2, 3, true, true),
+        run_reaction(4, -2, 3, true, true)
+    );
+    run_reaction(1, -2, 3, false, true);
     let mut absent = initial.clone();
     let worker = &mut absent
         .giving

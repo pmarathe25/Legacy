@@ -1,7 +1,7 @@
 //! Connect personal practices to actual needs, contacts, requests, and gifts.
 use crate::{Giving, Person, giving::Plan};
 use game_parallel_lot_runtime::Events;
-use game_parallel_lots::{Place, View};
+use game_parallel_lots::{Place, Transaction, View};
 use game_parallel_opinions::Opinions;
 use game_parallel_practices::{Case, Observation, Practices};
 use game_parallel_production_model::Good;
@@ -22,6 +22,8 @@ pub struct Context<'a> {
     pub started_work: &'a [game_parallel_economy_work::StartedRequest],
     pub encounters: &'a [Encounter],
     pub gifts: &'a Plan,
+    /// Other personally received transfers, such as delivery of a promise.
+    pub promise_deliveries: &'a [Transaction],
     pub events: &'a Events,
     pub tick: u64,
 }
@@ -328,6 +330,45 @@ pub fn advance(
                 .as_ref()
                 .is_some_and(|work| work.outcome_policy.is_some() || !work.experiences.is_empty())
         }) {
+            // A worker can notice a real receipt even when it was delivered
+            // through a promise rather than the direct-gift action. The
+            // sender's private reason for transferring it is not consulted.
+            let mut receipts = std::borrow::Cow::Borrowed(observed_gifts.as_slice());
+            if !context.promise_deliveries.is_empty() {
+                let accepted: HashSet<_> = context
+                    .events
+                    .physical_actions
+                    .par_iter()
+                    .filter(|event| event.accepted)
+                    .map(|event| event.id)
+                    .collect();
+                receipts.to_mut().par_extend(
+                    context
+                        .promise_deliveries
+                        .par_iter()
+                        .filter(|action| accepted.contains(&action.id))
+                        .flat_map_iter(|action| {
+                            action.movements.iter().filter_map(|movement| {
+                                let (Place::Person(giver), Some(Place::Person(recipient))) =
+                                    (movement.from, movement.to)
+                                else {
+                                    return None;
+                                };
+                                Some(game_parallel_practices::work::GiftObservation {
+                                    person: recipient,
+                                    action: action.id,
+                                    gift: game_parallel_practices::work::Gift {
+                                        tick: context.tick,
+                                        other: giver,
+                                        good: movement.good,
+                                        quantity: movement.quantity,
+                                        given: false,
+                                    },
+                                })
+                            })
+                        }),
+                );
+            }
             let starts: Vec<_> = context
                 .started_work
                 .par_iter()
@@ -352,7 +393,7 @@ pub fn advance(
                 &starts,
                 &context.events.finished,
                 &failed,
-                &observed_gifts,
+                &receipts,
                 context.tick,
             );
         }

@@ -2931,6 +2931,10 @@ impl Economy {
                     started_work: &started_work,
                     encounters,
                     gifts: &giving_plan,
+                    promise_deliveries: promises
+                        .delivery
+                        .as_ref()
+                        .map_or(&[], |plan| plan.actions()),
                     events: physical.events(),
                     tick,
                 },
