@@ -45,10 +45,9 @@ pub struct BattleView {
     pub fighters: Vec<FighterView>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InfectionView {
-    pub strain: u32,
-    pub name: String,
-    pub medicine: Option<(u32, u64)>,
+pub struct TreatmentView {
+    pub medicine: u32,
+    pub quantity: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Conditions {
@@ -109,7 +108,8 @@ pub struct View {
     pub hauling_requests: Vec<game_parallel_economy::HaulingRequest>,
     pub observed_work: Vec<game_parallel_autowork::requests::WorkLink>,
     pub work_memories: Vec<game_parallel_autowork::requests::Memory>,
-    pub infection: Option<InfectionView>,
+    /// The controlled person's own selected medicine, not a diagnosis.
+    pub treatment: Option<TreatmentView>,
     pub fields: Vec<game_parallel_economy::Field>,
     pub resource_sites: Vec<game_parallel_economy::ResourceNode>,
     pub work_sites: Vec<WorkSiteView>,
@@ -471,27 +471,16 @@ impl<'a> Player<'a> {
                         .cloned()
                         .collect()
                 });
-        let infection = current.and_then(|id| {
-            let dynamics = state.dynamics?;
-            let disease = dynamics.disease.as_ref()?;
-            let case = disease.cases.par_iter().find_any(|c| c.person == id)?;
-            let strain = disease.strains.iter().find(|s| s.id == case.strain)?;
-            let medicine = dynamics
+        let treatment = current.and_then(|id| {
+            state
+                .dynamics?
                 .treatment
                 .iter()
-                .find(|p| {
-                    p.person == id
-                        && disease
-                            .treatments
-                            .iter()
-                            .any(|t| t.strain == case.strain && t.medicine == p.medicine)
+                .find(|policy| policy.person == id)
+                .map(|policy| TreatmentView {
+                    medicine: policy.medicine,
+                    quantity: policy.quantity,
                 })
-                .map(|p| (p.medicine, p.quantity));
-            Some(InfectionView {
-                strain: strain.id,
-                name: strain.name.clone(),
-                medicine,
-            })
         });
         let pending_work_requests = current
             .and_then(|id| {
@@ -651,7 +640,7 @@ impl<'a> Player<'a> {
             }),
             observed_work,
             work_memories,
-            infection,
+            treatment,
             fields,
             resource_sites,
             work_sites,

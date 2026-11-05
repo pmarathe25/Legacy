@@ -1819,6 +1819,45 @@ fn player_request_can_be_refused_or_followed_from_personal_fear() {
 }
 
 #[test]
+fn player_view_does_not_reveal_an_unobserved_infection_or_its_remedy() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let healthy = world.snapshot();
+    let mut infected = healthy.clone();
+    infected
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .cases
+        .push(game_parallel_disease::Case {
+            person: 1,
+            strain: 1,
+            infected_at: 0,
+            source: None,
+        });
+    let mut healthy = game_parallel_economy::Economy::compile(healthy).unwrap();
+    let mut infected = game_parallel_economy::Economy::compile(infected).unwrap();
+    let healthy_view = Player::new(&mut healthy).view().unwrap();
+    let infected_view = Player::new(&mut infected).view().unwrap();
+    assert!(
+        healthy_view.treatment.is_some(),
+        "the player may see their own selected medicine"
+    );
+    assert_eq!(
+        healthy_view, infected_view,
+        "the unseen infection cannot alter the player's view"
+    );
+}
+
+#[test]
 fn player_treats_infection_with_authored_medicine_taken_from_stock() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -1844,10 +1883,11 @@ fn player_treats_infection_with_authored_medicine_taken_from_stock() {
         });
     let mut world = game_parallel_economy::Economy::compile(state).unwrap();
     let mut player = Player::new(&mut world);
-    let (medicine, quantity) = player.view().unwrap().infection.unwrap().medicine.unwrap();
+    let treatment = player.view().unwrap().treatment.unwrap();
+    let (medicine, quantity) = (treatment.medicine, treatment.quantity);
     assert!(player.transfer_stock(medicine, quantity, true).unwrap());
     assert!(player.treat().unwrap());
-    assert!(player.view().unwrap().infection.is_none());
+    assert_eq!(player.view().unwrap().treatment.unwrap(), treatment);
 }
 
 #[test]

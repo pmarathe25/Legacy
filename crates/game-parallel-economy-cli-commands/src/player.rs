@@ -46,8 +46,8 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             if let Some(battle) = view.battle {
                 println!("battle={battle:?}");
             }
-            if let Some(infection) = view.infection {
-                println!("infection={infection:?}");
+            if let Some(treatment) = view.treatment {
+                println!("treatment={treatment:?}");
             }
             if let Some(fatigue) = view.fatigue {
                 println!("fatigue={fatigue:?}");
