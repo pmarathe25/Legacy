@@ -10,6 +10,8 @@ Individuals can gather finite or renewable local resources, subject to personal 
 
 People can ask for food, give supplies, or provide medical care through real local contact and consumed medicine. Requests expire and do not require a response; actual food delivery satisfies them. Individual willingness and feelings influence autonomous help; treatment can expose a caregiver to infection and does not compel later cooperation. All distinct successful physical contacts can transmit disease, including several contacts involving the same person at one boundary.
 
+An authored medical preference can set `patient_health_at_most` to act on observable poor health without knowing a diagnosis. The caregiver may use an ineffective medicine and still consume it; a cure only follows a successful treatment with a matching remedy. If this setting is absent, the older automatic policy selects only a matching remedy, so it still has privileged diagnostic knowledge.
+
 Diseases can separately define transmission through actual combat strikes. Out-of-range attacks and strains without that route do not cause combat exposure.
 
 An optional personal acquaintance-request preference lets a hungry individual ask someone they have actually met and can currently reach. Familiarity and the requester's signed affinity can guide their choice; unanswered requests can lead them to try another known person. The recipient independently decides whether to help, including under fear or felt obligation.

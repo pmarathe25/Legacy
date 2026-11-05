@@ -2244,6 +2244,11 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
         "report_attitude = \"doubt\"",
         "report_attitude = { trust_at_least = 3 }",
     );
+    let configured = configured.replacen(
+        "[[medical.policies]]",
+        "[[medical.policies]]\npatient_health_at_most = 70",
+        1,
+    );
     let path = std::env::temp_dir().join(format!(
         "legacy-personal-practices-{}.toml",
         std::process::id()
@@ -2251,6 +2256,10 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     std::fs::write(&path, configured).unwrap();
     let mut world = scenario(&path, &root.join("content")).unwrap();
     std::fs::remove_file(path).unwrap();
+    assert_eq!(
+        world.snapshot().medical.unwrap().policies[0].patient_health_at_most,
+        Some(70)
+    );
     let mut player = game_parallel_economy_player::Player::new(&mut world);
     let own = player.view().unwrap().practices.unwrap();
     assert_eq!(own.person, 1);

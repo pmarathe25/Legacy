@@ -401,6 +401,8 @@ struct MedicalPolicyConfig {
     quantity: u64,
     willing: bool,
     #[serde(default)]
+    patient_health_at_most: Option<u32>,
+    #[serde(default)]
     pressured_by: Option<u64>,
     #[serde(default)]
     pressure_threshold: Option<u64>,
@@ -1004,6 +1006,7 @@ pub fn scenario_with_options(
                             .ok_or_else(|| format!("unknown medicine {}", p.medicine))?,
                         quantity: p.quantity,
                         willing: p.willing,
+                        patient_health_at_most: p.patient_health_at_most,
                         pressured_by: p.pressured_by,
                         pressure_threshold: p.pressure_threshold,
                     })

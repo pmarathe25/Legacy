@@ -18,6 +18,9 @@ pub struct Policy {
     pub medicine: u32,
     pub quantity: u64,
     pub willing: bool,
+    /// If set, act on observable health rather than knowing the correct remedy.
+    #[serde(default)]
+    pub patient_health_at_most: Option<u32>,
     #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
@@ -154,7 +157,10 @@ impl Context<'_> {
                     && self.busy.binary_search(&actor.id).is_err()
                     && available(patient)
                     && (p.willing || pressured)
-                    && effective(patient.id, p.medicine)
+                    && p.patient_health_at_most.map_or_else(
+                        || effective(patient.id, p.medicine),
+                        |threshold| patient.health <= threshold,
+                    )
                     && self
                         .view
                         .container(Place::Person(actor.id))
@@ -164,7 +170,7 @@ impl Context<'_> {
                     patient: patient.id,
                     medicine: p.medicine,
                     quantity: p.quantity,
-                    effective: true,
+                    effective: effective(patient.id, p.medicine),
                 })
             })
             .collect();

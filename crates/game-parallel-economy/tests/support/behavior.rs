@@ -3242,6 +3242,7 @@ fn fear_can_motivate_a_caregiver_and_their_preference_can_change() {
             medicine: 2,
             quantity: 1,
             willing: false,
+            patient_health_at_most: None,
             pressured_by: Some(1),
             pressure_threshold: Some(3),
         }],
@@ -3344,12 +3345,97 @@ fn medical_workload(count: u64) -> State {
                 medicine: 2,
                 quantity: 1,
                 willing: true,
+                patient_health_at_most: None,
                 pressured_by: None,
                 pressure_threshold: None,
             })
             .collect(),
     });
     state
+}
+
+#[test]
+fn a_caregiver_can_treat_observed_poor_health_without_knowing_the_diagnosis() {
+    let mut initial = medical_workload(4);
+    initial.people[0].health = 70;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .cases
+        .clear();
+    let policies = &mut initial.medical.as_mut().unwrap().policies;
+    policies.truncate(1);
+    policies[0].patient_health_at_most = Some(80);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let medicine = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Person(2))
+                    .unwrap();
+                assert_eq!(medicine.used, 0);
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .disease
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty()
+                );
+                assert!(
+                    !state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .disease
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.kind == game_parallel_disease::EventKind::Treated)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    initial.medical.as_mut().unwrap().policies[0].patient_health_at_most = Some(60);
+    let mut cautious = Economy::compile(initial).unwrap();
+    cautious.advance().unwrap();
+    assert_eq!(
+        cautious
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
 }
 
 #[test]
@@ -3476,6 +3562,7 @@ fn one_person_cannot_treat_and_receive_treatment_in_the_same_boundary() {
             medicine: 2,
             quantity: 1,
             willing: true,
+            patient_health_at_most: None,
             pressured_by: None,
             pressure_threshold: None,
         },
@@ -3485,6 +3572,7 @@ fn one_person_cannot_treat_and_receive_treatment_in_the_same_boundary() {
             medicine: 2,
             quantity: 1,
             willing: true,
+            patient_health_at_most: None,
             pressured_by: None,
             pressure_threshold: None,
         },
@@ -3577,6 +3665,7 @@ fn distributed_medical_workload(count: u64) -> State {
             medicine: 2,
             quantity: 1,
             willing: true,
+            patient_health_at_most: None,
             pressured_by: None,
             pressure_threshold: None,
         })
