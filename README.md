@@ -12,17 +12,14 @@ Legacy is a headless simulation game built as a modular Rust 2024 workspace wher
 
 The [economic runner](crates/game-parallel-economy-cli/README.md), `cargo run -p game-parallel-economy-cli`, is the current parallel-first development host. It composes dated goods, personal work and exchange, family care, cultivation, claims, health, tactical combat, expeditions, lineage, skills and personal food knowledge. Run it with `-- --player` for the ruler-facing interface. It is not yet the complete campaign host. Institutions and labor arrangements are patterns of individual behavior; people may comply from fear or obligation and may break promises.
 
-The earlier [`game-parallel`](crates/game-parallel/README.md) and fused block hosts remain experimental references. They encode institutional bodies and therefore do not satisfy the current social design; they are not the replacement's intended campaign architecture. Full-game scaling has not yet been established.
+The earlier [`game-parallel`](crates/game-parallel/README.md) and block hosts remain experimental references and reject preset institutional bodies. The older `game-cli`/`game-assembly` application still installs an explicit institution and office registry, so it does not satisfy the current social design. It is retained as a historical reference while the replacement remains incomplete. Full-game scaling has not yet been established.
 ## Quick start
 
 Run from the repository root:
 
 ```sh
 cargo build --workspace                                      # Build all crates
-cargo run -p game-cli -- --list                              # List scenarios and fixtures
-cargo run -p game-cli -- --seed 1                            # Start default generated world
-cargo run -p game-cli -- --scenario rivermeet --seed 1       # Start a community fixture
-cargo run -p game-cli -- --scenario kernel-fixture --seed 1  # Start minimal test fixture
+cargo run -p game-parallel-economy-cli -- --player           # Run the parallel-first development host
 cargo test -p game-agriculture                               # Test a single feature crate
 cargo test --workspace                                       # Run all workspace tests
 cargo fmt --all -- --check                                   # Check formatting
@@ -33,6 +30,8 @@ cargo bench -p game-sim --bench kernel                       # Run kernel benchm
 ---
 
 ## How to play
+
+The following scenarios and commands describe the older `game-cli` reference application, not the parallel-first development host. See the [economic runner](crates/game-parallel-economy-cli/README.md) for its current scenarios and commands.
 
 - **Generated start (`generated`):** Reads [`content/worldgen/default.toml`](content/worldgen/default.toml), spawns 96 mortals and 2 immortal guardians across 12 connected areas, and runs 2 days of autonomous history before player control begins. No institutions, social bonds, or shared words are pre-scripted.
 - **Authored communities:** [`rivermeet`](tools/fixtures/content/scenarios/rivermeet.toml), [`bracken-coast`](tools/fixtures/content/scenarios/bracken-coast.toml), and [`ashridge`](tools/fixtures/content/scenarios/ashridge.toml) provide populated starting settlements with distinct climates, local stores, gardens, and directed relationships.
