@@ -89,6 +89,78 @@ fn compact_consumption_keeps_mixed_fefo_arbitration_and_atomic_state() {
 }
 
 #[test]
+fn independent_compact_consumption_matches_general_planning_with_expiry() {
+    let initial: Vec<_> = (1..=300)
+        .map(|id| {
+            container(
+                Place::Person(id),
+                20,
+                vec![lot(1, 2, Some(1)), lot(1, 3, Some(3)), lot(2, 2, None)],
+            )
+        })
+        .collect();
+    let actions: Vec<_> = (1..=256)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id: 1000 - id,
+                from: Place::Person(id),
+                to: None,
+                good: if id % 3 == 0 { 2 } else { 1 },
+                quantity: if id % 5 == 0 { 4 } else { 2 },
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let ids: Vec<_> = actions.iter().map(|action| action.id).collect();
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                if reverse {
+                    actions.reverse();
+                }
+                let mut general = store(initial.clone());
+                let mut fast = store(initial.clone());
+                let full = general
+                    .prepare_with_empty(13, &actions, vec![], true)
+                    .unwrap();
+                let compact = fast
+                    .prepare_with_empty_compact(13, &actions, vec![], &ids, true)
+                    .unwrap();
+                assert_eq!(full.transactions(), compact.transactions());
+                assert_eq!(full.spoiled(), compact.spoiled());
+                for (a, b) in full.outcomes().iter().zip(compact.outcomes()) {
+                    assert_eq!((a.id, a.accepted), (b.id, b.accepted));
+                    assert!(b.lots.is_empty());
+                }
+                general.commit(full).unwrap();
+                fast.commit(compact).unwrap();
+                assert_eq!(general.export(), fast.export());
+                fast.export()
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+    let mut overlapping = actions;
+    overlapping[1].movements[0].from = overlapping[0].movements[0].from;
+    let mut general = store(initial.clone());
+    let mut compact = store(initial);
+    let full = general
+        .prepare_with_empty(13, &overlapping, vec![], true)
+        .unwrap();
+    let short = compact
+        .prepare_with_empty_compact(13, &overlapping, vec![], &ids, true)
+        .unwrap();
+    assert_eq!(full.transactions(), short.transactions());
+    general.commit(full).unwrap();
+    compact.commit(short).unwrap();
+    assert_eq!(general.export(), compact.export());
+}
+
+#[test]
 fn late_empty_holders_do_not_shift_planned_physical_changes() {
     let mut store = store(vec![
         container(Place::Person(1), 10, vec![lot(1, 3, Some(5))]),

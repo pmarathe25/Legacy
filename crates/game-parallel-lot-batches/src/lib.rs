@@ -2,6 +2,7 @@
 use game_parallel_lot_model::{Container, State, Transaction};
 use game_parallel_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
+mod independent;
 
 pub fn prepare(
     state: &State,
@@ -52,6 +53,11 @@ pub fn prepare(
         .any(|row| row.movements.is_empty() && row.creations.is_empty())
     {
         return Err("empty physical transaction".into());
+    }
+    if additions.is_empty()
+        && let Some(draft) = independent::prepare(state, instance, transactions, &compact, advance)?
+    {
+        return Ok((draft, additions));
     }
     let moves: Vec<_> = transactions
         .par_iter()
