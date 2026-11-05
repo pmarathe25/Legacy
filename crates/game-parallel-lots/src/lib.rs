@@ -187,6 +187,10 @@ impl Store {
     pub fn view(&self, boundary: u64) -> Result<View, String> {
         view::prepare(&self.state, boundary)
     }
+    /// Read only regional stock without materializing personal or job custody.
+    pub fn stock_view(&self, boundary: u64) -> Result<View, String> {
+        view::prepare_stocks(&self.state, boundary)
+    }
     pub fn tick(&self) -> u64 {
         self.state.tick
     }

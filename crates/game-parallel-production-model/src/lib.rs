@@ -172,13 +172,48 @@ fn enabled_builder() -> bool {
 pub type PersonSnapshot = (u64, Option<u64>, u32, u32);
 
 /// Locate an ID in a validated, sorted physical-person index.
-/// Dense ID ranges use direct addressing; sparse IDs retain binary search.
+/// Dense ranges and a verified contiguous suffix use direct addressing; other IDs use binary search.
+#[inline]
 pub fn person_index(people: &[PersonSnapshot], id: u64) -> Option<usize> {
     let (first, last) = (people.first()?.0, people.last()?.0);
     if last.checked_sub(first) == Some((people.len() - 1) as u64) {
         let index = usize::try_from(id.checked_sub(first)?).ok()?;
         (index < people.len()).then_some(index)
     } else {
+        if let Some(index) = last
+            .checked_sub(id)
+            .and_then(|distance| usize::try_from(distance).ok())
+            .and_then(|distance| distance.checked_add(1))
+            .and_then(|distance| people.len().checked_sub(distance))
+            && people[index].0 == id
+        {
+            return Some(index);
+        }
         people.binary_search_by_key(&id, |person| person.0).ok()
+    }
+}
+
+#[cfg(test)]
+mod index_tests {
+    use super::*;
+    #[test]
+    fn direct_suffix_lookup_matches_binary_search_with_arbitrary_gaps() {
+        for mask in 0u16..256 {
+            let mut ids: Vec<u64> = (1..=8).filter(|n| mask & (1 << (n - 1)) != 0).collect();
+            ids.extend(1000..1010);
+            let people: Vec<_> = ids.into_iter().map(|id| (id, Some(1), 1, 0)).collect();
+            for id in (0..=1011).chain([u64::MAX]) {
+                assert_eq!(
+                    person_index(&people, id),
+                    people.binary_search_by_key(&id, |row| row.0).ok()
+                );
+            }
+        }
+        assert_eq!(person_index(&[], 1), None);
+        let high = [(u64::MAX - 1, None, 1, 0), (u64::MAX, None, 1, 0)];
+        assert_eq!(person_index(&high, u64::MAX), Some(1));
+        let sparse_high = [(1, None, 1, 0), (u64::MAX, None, 1, 0)];
+        assert_eq!(person_index(&sparse_high, 0), None);
+        assert_eq!(person_index(&sparse_high, u64::MAX), Some(1));
     }
 }

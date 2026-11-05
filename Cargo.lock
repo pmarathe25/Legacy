@@ -3221,6 +3221,7 @@ dependencies = [
 name = "game-parallel-economy"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-parallel-agreements",
  "game-parallel-autowork",
  "game-parallel-conflict",
@@ -3350,6 +3351,7 @@ dependencies = [
 name = "game-parallel-economy-cli"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-parallel-agreements",
  "game-parallel-autowork",
  "game-parallel-content-import",
@@ -3471,6 +3473,7 @@ dependencies = [
  "game-parallel-economy-dynamics",
  "game-parallel-economy-person",
  "game-parallel-families",
+ "game-parallel-family-index",
  "game-parallel-family-model",
  "rayon",
 ]
@@ -3665,6 +3668,7 @@ dependencies = [
 name = "game-parallel-families"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-parallel-family-index",
  "game-parallel-family-model",
  "game-parallel-genetics",
@@ -3704,6 +3708,7 @@ name = "game-parallel-family-index"
 version = "0.2.0"
 dependencies = [
  "game-parallel-family-model",
+ "game-parallel-genetics",
  "rayon",
 ]
 

@@ -1237,6 +1237,20 @@ fn generated_campaign_benchmark() {
                 samples[1]
             );
         });
+    #[cfg(feature = "profile")]
+    if std::env::var_os("LEGACY_PROFILE").is_some() {
+        for (name, measurement) in game_diagnostics::snapshot() {
+            if (name.starts_with("economy.") || name.starts_with("family."))
+                && measurement.calls > 0
+            {
+                println!(
+                    "phase={name} calls={} mean_ms={:.3}",
+                    measurement.calls,
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
+        }
+    }
 }
 
 #[test]

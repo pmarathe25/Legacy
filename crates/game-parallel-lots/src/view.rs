@@ -1,5 +1,5 @@
 //! Read-only physical quantities for compatibility with decision owners.
-use game_parallel_lot_model::{Place, State};
+use game_parallel_lot_model::{Container, Place, State};
 use rayon::prelude::*;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Balance {
@@ -35,11 +35,23 @@ impl View {
     }
 }
 pub fn prepare(state: &State, boundary: u64) -> Result<View, String> {
+    prepare_rows(state, boundary, &state.containers)
+}
+/// A view containing only regional stock, with the same expiry boundary.
+pub fn prepare_stocks(state: &State, boundary: u64) -> Result<View, String> {
+    let start = state
+        .containers
+        .partition_point(|row| row.place < (Place::Stock { region: 0, good: 0 }));
+    let end = state
+        .containers
+        .partition_point(|row| row.place < Place::Person(0));
+    prepare_rows(state, boundary, &state.containers[start..end])
+}
+fn prepare_rows(state: &State, boundary: u64, rows: &[Container]) -> Result<View, String> {
     if boundary != state.tick && state.tick.checked_add(1) != Some(boundary) {
         return Err("invalid physical view boundary".into());
     }
-    let containers = state
-        .containers
+    let containers = rows
         .par_iter()
         .map(|container| {
             let goods: Vec<_> = container

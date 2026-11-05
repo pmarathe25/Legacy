@@ -42,6 +42,8 @@ Profiles can also live in a separate TOML file. For example, `cargo run -p game-
 
 To measure three complete campaign boundaries with generated individuals, set `LEGACY_PEOPLE` and `LEGACY_WORKERS`, then run `cargo test --release -p game-parallel-economy-cli generated_campaign_benchmark -- --ignored --nocapture`. The timed interval excludes scenario loading and reports the median of three warmed samples. It is a concentrated two-region scenario, not a claim about every possible campaign.
 
+For separate phase attribution, enable the `profile` feature and set `LEGACY_PROFILE=1` when running that benchmark. Phase timings include instrumentation and should not be compared directly with ordinary throughput measurements.
+
 `generated_acquaintance_requests_benchmark` uses the same environment variables and measures one boundary after a large generated population has met others and become hungry. It checks that a substantial number of actual requests were made.
 
 For a ruler and guardians in the same dated-goods world, run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-campaign.toml`. `ruler` shows the current incarnation, guardians and any pending invocation warning. `invoke`, `dismiss-invocation`, `accept-warning`, and `guardian-release` operate those personal abilities and choices. A pending warning leaves the simulation time unchanged until it is accepted or invocation is dismissed.

@@ -6,3 +6,6 @@ license.workspace = true
 [dependencies]
 game-parallel-family-model = { path = "../game-parallel-family-model" }
 rayon.workspace = true
+
+[dev-dependencies]
+game-parallel-genetics = { path = "../game-parallel-genetics" }

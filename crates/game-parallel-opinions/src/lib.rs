@@ -4,7 +4,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod harm;
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opinions {
     pub rules: Rules,
@@ -14,6 +14,16 @@ pub struct Opinions {
     pub records: Vec<Opinion>,
     #[serde(default)]
     pub events: Vec<Event>,
+}
+impl Clone for Opinions {
+    fn clone(&self) -> Self {
+        Self {
+            rules: self.rules.clone(),
+            sensitivities: self.sensitivities.par_iter().cloned().collect(),
+            records: self.records.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+        }
+    }
 }
 pub use game_parallel_opinions_model::{
     AffinityRules, Confrontation, Event, ObligationDevelopment, Opinion, RelationshipCase, Rules,

@@ -134,7 +134,7 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
 macro_rules! prepare_world {
     ($world:expr, $dynamics:expr) => {{
         if $world.knowledge.is_some() {
-            let view = $world.physical.view($world.tick())?;
+            let view = $world.physical.stock_view($world.tick())?;
             $crate::advance(
                 $world.knowledge.as_ref(),
                 &$world.people,

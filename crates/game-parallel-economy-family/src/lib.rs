@@ -245,26 +245,20 @@ pub fn enroll_dynamics(
 }
 struct View<'a> {
     people: &'a [Person],
-    dense: Option<u64>,
+    suffix: Option<game_parallel_family_index::DenseSuffix>,
 }
 impl<'a> View<'a> {
     fn new(people: &'a [Person]) -> Self {
-        let dense = people.first().and_then(|first| {
-            people.last().and_then(|last| {
-                (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64))
-                    .then_some(first.id)
-            })
-        });
-        Self { people, dense }
+        Self {
+            people,
+            suffix: game_parallel_family_index::DenseSuffix::new(people.len(), |i| people[i].id),
+        }
     }
     fn index(&self, id: u64) -> Option<usize> {
-        match self.dense {
-            Some(first) => id
-                .checked_sub(first)
-                .and_then(|n| usize::try_from(n).ok())
-                .filter(|&i| i < self.people.len()),
-            None => self.people.binary_search_by_key(&id, |p| p.id).ok(),
-        }
+        self.suffix
+            .as_ref()
+            .and_then(|suffix| suffix.index(id))
+            .or_else(|| self.people.binary_search_by_key(&id, |p| p.id).ok())
     }
 }
 impl PhysicalView for View<'_> {
@@ -352,8 +346,15 @@ pub fn advance_validated(
             controlled: false,
         });
     }
-    people.par_sort_unstable_by_key(|p| p.id);
-    if let Some(travel) = travel {
+    if people.par_windows(2).any(|rows| rows[0].id > rows[1].id) {
+        people.par_sort_unstable_by_key(|p| p.id);
+    }
+    if let Some(travel) = travel
+        && travel
+            .journeys
+            .par_windows(2)
+            .any(|rows| rows[0].person > rows[1].person)
+    {
         travel.journeys.par_sort_unstable_by_key(|j| j.person);
     }
     Ok(ResultFrame {

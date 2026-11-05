@@ -4,7 +4,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+profile = ["dep:game-diagnostics"]
+
 [dependencies]
+game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-parallel-economy-building = { path = "../game-parallel-economy-building" }
 game-parallel-economy-local-transport = { path = "../game-parallel-economy-local-transport" }
 game-parallel-disease = { path = "../game-parallel-disease" }

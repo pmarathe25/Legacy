@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+profile = ["game-parallel-economy/profile", "game-parallel-families/profile"]
+
 [dependencies]
 game-parallel-economy-combat = { path = "../game-parallel-economy-combat" }
 game-parallel-economy-dynamics = { path = "../game-parallel-economy-dynamics" }
@@ -28,6 +31,7 @@ serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
+game-diagnostics = { path = "../game-diagnostics" }
 game-parallel-economy-player = { path = "../game-parallel-economy-player" }
 game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }
 game-parallel-agreements = { path = "../game-parallel-agreements" }

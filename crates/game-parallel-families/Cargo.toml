@@ -3,7 +3,10 @@ name="game-parallel-families"
 version.workspace=true
 edition.workspace=true
 license.workspace=true
+[features]
+profile = ["dep:game-diagnostics"]
 [dependencies]
+game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-parallel-genetics = { path = "../game-parallel-genetics" }
 game-parallel-matching = { path = "../game-parallel-matching" }
 rayon.workspace=true

@@ -1102,6 +1102,8 @@ impl Economy {
         player_meal: Option<person::meal::Choice>,
         player_transfer: Option<game_parallel_economy_interaction::PhysicalChoice>,
     ) -> Result<Draft, String> {
+        #[cfg(feature = "profile")]
+        let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
         let campaign_draft = game_parallel_economy_campaign::prepare_world!(self);
         let view = self.physical.view(tick)?;
@@ -1158,6 +1160,11 @@ impl Economy {
             player_meal,
             player_transfer
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.coordination");
+        }
         let interaction =
             game_parallel_economy_interaction::prepare_world!(self, request, busy, tick);
         let mut action_base = u64::try_from(meals.actions().len())
@@ -1619,6 +1626,11 @@ impl Economy {
             claim_uses.par_extend(plan.uses.par_iter().copied());
             game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.planning");
+        }
         let expedition =
             game_parallel_economy_expeditions::prepare_world!(self, people, busy, tick);
         let search_plan = self
@@ -2066,6 +2078,11 @@ impl Economy {
             game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
         game_parallel_economy_claims::include_care_farming!(claim_uses, care, farming);
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.work_admission");
+        }
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
         if let Some(plan) = tool_pickup {
             actions.extend(plan.actions);
@@ -2197,6 +2214,11 @@ impl Economy {
         let staged_custody = construction_plan
             .as_ref()
             .map_or(&[][..], |plan| plan.custody.as_slice());
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.physical");
+        }
         let mut physical = self.physical.prepare_with_growth_and_custody(
             &rates,
             &actions,
@@ -2250,6 +2272,11 @@ impl Economy {
             physical.events(),
         )?;
         let effects = meals.effects(physical.events())?;
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.person");
+        }
         let mut person = person::prepare(
             &self.people,
             &self.rules,
@@ -2258,6 +2285,11 @@ impl Economy {
             effects,
             tick,
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.dynamics");
+        }
         let mut combat = self
             .combat
             .as_ref()
@@ -2285,6 +2317,11 @@ impl Economy {
                 dynamics.as_ref().and_then(|d| d.disease.as_ref()),
             )
         });
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.purpose_and_health");
+        }
         let blocked = game_parallel_economy_goals::blocked(
             self.goals.as_ref(),
             self.autowork.as_ref(),
@@ -2322,6 +2359,11 @@ impl Economy {
             tick,
             self.rules.max_health,
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.knowledge_and_skills");
+        }
         let mut knowledge = game_parallel_economy_knowledge::prepare_world!(self, dynamics);
         let mut skills = game_parallel_economy_skills::advance(
             self.skills.as_ref(),
@@ -2331,6 +2373,11 @@ impl Economy {
             &self.people,
             tick,
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.travel");
+        }
         let mut next_care = self.care.clone();
         if let (Some(plan), Some(care)) = (care, &mut next_care) {
             plan.apply(care, &mut person.people);
@@ -2381,6 +2428,11 @@ impl Economy {
         if let (Some(plan), Some(search)) = (search_plan, food_search.as_mut()) {
             search.publish(&search_departures, &plan.targets, &plan.abandoned, tick)?;
         }
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.family");
+        }
         let (family, campaign) = family::advance_world!(
             self,
             person,
@@ -2406,6 +2458,11 @@ impl Economy {
         giving_inheritance::enroll(next_giving.as_mut(), family.as_ref(), tick);
         gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.sites");
+        }
         let deaths: Vec<_> = person
             .people
             .par_iter()
@@ -2613,6 +2670,11 @@ impl Economy {
         let missions = game_parallel_economy_expeditions::finish_world!(
             self, expedition, person, travel, dynamics, tick
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.social");
+        }
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
         development::enroll(&mut next_opinions, family.as_ref(), tick);
@@ -2693,6 +2755,11 @@ impl Economy {
             tick,
         );
         agreement::decay(next_opinions.as_mut());
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.work_publish");
+        }
         let mut autowork = self.autowork.clone();
         if let (Some(auto), Some(plan)) = (&mut autowork, work) {
             if let Some(opinions) = next_opinions.as_mut().filter(|o| {
@@ -2714,6 +2781,11 @@ impl Economy {
             requests.enroll(family, tick);
         }
         game_parallel_economy_interaction::publish_work!(autowork, manual_job);
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.goals");
+        }
         let (goals, mut dreams) = game_parallel_economy_goals::advance(
             self.goals.as_ref(),
             self.dreams.as_ref(),
@@ -2755,6 +2827,8 @@ impl Economy {
                 owner.events.par_sort_unstable_by_key(|event| event.person);
             }
         }
+        #[cfg(feature = "profile")]
+        drop(profile_phase);
         Ok(Draft {
             epoch: self.epoch,
             physical,
@@ -2792,6 +2866,8 @@ impl Economy {
         })
     }
     pub fn commit(&mut self, draft: Draft) -> Result<Events, String> {
+        #[cfg(feature = "profile")]
+        let mut profile_phase = game_diagnostics::span("economy.commit_physical");
         if draft.epoch != self.epoch {
             return Err("stale economic draft".into());
         }
@@ -2801,6 +2877,11 @@ impl Economy {
             .ok_or("economic generation overflow")?;
         self.physical.validate_advance(&draft.physical)?;
         let events = self.physical.commit_advance(draft.physical)?;
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("economy.commit_owners");
+        }
         self.people = draft.people;
         self.market = draft.market;
         self.agreements = draft.agreements;
@@ -2830,6 +2911,8 @@ impl Economy {
         self.hauling = draft.hauling;
         self.local_transport = draft.local_transport;
         self.epoch = epoch;
+        #[cfg(feature = "profile")]
+        drop(profile_phase);
         Ok(events)
     }
     pub fn advance(&mut self) -> Result<Events, String> {

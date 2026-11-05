@@ -108,6 +108,9 @@ impl Runtime {
     pub fn view(&self, boundary: u64) -> Result<game_parallel_lots::View, String> {
         self.store.view(boundary)
     }
+    pub fn stock_view(&self, boundary: u64) -> Result<game_parallel_lots::View, String> {
+        self.store.stock_view(boundary)
+    }
     pub fn custody(&self, place: Place) -> Option<&game_parallel_lots::Container> {
         self.store.container(place)
     }

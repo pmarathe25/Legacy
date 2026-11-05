@@ -1,4 +1,5 @@
 use super::*;
+use game_parallel_family_index::OrderedMemberIndex;
 use game_parallel_genetics::inherit;
 use game_parallel_matching::resolve;
 use rayon::prelude::*;
@@ -39,7 +40,7 @@ impl Ancestors {
             .all(|id| !other.ids[..other.len].contains(id))
     }
 }
-fn ancestors(id: u64, members: &MemberIndex<'_>) -> Ancestors {
+fn ancestors(id: u64, members: &OrderedMemberIndex<'_>) -> Ancestors {
     let mut all = Ancestors {
         ids: [0; 7],
         len: 1,
@@ -86,6 +87,8 @@ impl Families {
         tick: u64,
         penalty: Option<(u64, u64)>,
     ) -> Result<Draft, &'static str> {
+        #[cfg(feature = "profile")]
+        let mut profile_phase = game_diagnostics::span("family.life");
         if self.last_tick.checked_add(1) != Some(tick) {
             return Err("family phase must advance one tick");
         }
@@ -167,8 +170,18 @@ impl Families {
                 m.partner = None;
             }
         });
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("family.reconsider");
+        }
         game_parallel_family_index::reconsider(&mut members, physical, rules.fertile_until)?;
-        let index = MemberIndex::new(&members)?;
+        let index = OrderedMemberIndex::new(&members);
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("family.matching");
+        }
         let mut local: Vec<_> = members
             .par_iter()
             .filter_map(|m| {
@@ -182,7 +195,7 @@ impl Families {
             .par_chunk_by(|a, b| a.0 == b.0)
             .map(|group| {
                 let area = group[0].0;
-                let mut females: Vec<_> = group
+                let females: Vec<_> = group
                     .par_iter()
                     .map(|(_, member)| *member)
                     .filter(|m| m.genome.sex == Sex::Female)
@@ -192,7 +205,6 @@ impl Families {
                     .map(|(_, member)| *member)
                     .filter(|m| m.genome.sex == Sex::Male)
                     .collect();
-                females.par_sort_unstable_by_key(|m| (random(seed, m.id, tick), m.id));
                 males.par_sort_unstable_by_key(|m| (random(seed ^ 31, m.id, tick), m.id));
                 let kin: Vec<_> = males.par_iter().map(|m| ancestors(m.id, &index)).collect();
                 let proposed: Vec<_> = females
@@ -237,7 +249,12 @@ impl Families {
                 }
             });
         }
-        let index = MemberIndex::new(&members)?;
+        let index = OrderedMemberIndex::new(&members);
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("family.births");
+        }
         let due: Vec<_> = members
             .par_iter()
             .filter(|m| m.alive && m.pregnancy.as_ref().is_some_and(|p| p.due <= tick))
@@ -310,6 +327,11 @@ impl Families {
             .into_par_iter()
             .map(|(child, birth, _)| (child, birth))
             .unzip();
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("family.conceptions");
+        }
         let conceptions: Vec<_> = members
             .par_iter()
             .filter_map(|mother| {
@@ -387,6 +409,11 @@ impl Families {
                 }
             }
         });
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("family.finish");
+        }
         let deaths = events
             .iter()
             .filter(|e| e.kind == "death")
@@ -434,6 +461,8 @@ impl Families {
         {
             *total = total.checked_add(count).ok_or("family counter overflow")?;
         }
+        #[cfg(feature = "profile")]
+        drop(profile_phase);
         Ok(Draft {
             families: Families {
                 rules: rules.clone(),

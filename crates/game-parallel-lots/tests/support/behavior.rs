@@ -1137,6 +1137,48 @@ fn custody_ids_cannot_be_zero_even_when_empty() {
 }
 
 #[test]
+fn stock_only_views_match_full_views_at_both_expiry_boundaries() {
+    let inventory = Place::Inventory(1);
+    let person = Place::Person(1);
+    let store = store(vec![
+        container(inventory, 10, vec![lot(1, 3, None)]),
+        container(
+            Place::Stock { region: 1, good: 1 },
+            10,
+            vec![lot(1, 2, Some(1)), lot(1, 3, Some(4))],
+        ),
+        container(
+            Place::Stock { region: 1, good: 2 },
+            10,
+            vec![lot(2, 1, None)],
+        ),
+        container(Place::Stock { region: 2, good: 1 }, 10, vec![]),
+        container(person, 10, vec![lot(1, 1, None)]),
+        container(Place::JobInput(1), 10, vec![]),
+    ]);
+    let before = store.export();
+    for boundary in [0, 1] {
+        let full = store.view(boundary).unwrap();
+        let stocks = store.stock_view(boundary).unwrap();
+        assert_eq!(
+            (stocks.boundary, stocks.revision),
+            (full.boundary, full.revision)
+        );
+        assert_eq!(
+            stocks.containers,
+            full.containers
+                .into_iter()
+                .filter(|row| matches!(row.place, Place::Stock { .. }))
+                .collect::<Vec<_>>()
+        );
+        assert!(stocks.container(inventory).is_none());
+        assert!(stocks.container(person).is_none());
+    }
+    assert!(store.stock_view(2).is_err());
+    assert_eq!(store.export(), before);
+}
+
+#[test]
 fn read_only_views_use_the_requested_boundary_without_mutating_custody() {
     let person = Place::Person(1);
     let stock = Place::Stock { region: 1, good: 1 };
