@@ -22,6 +22,8 @@ Diseases can separately define transmission through actual combat strikes. Out-o
 
 An optional personal acquaintance-request preference lets a hungry individual ask someone they have actually met and can currently reach. Familiarity and the requester's signed affinity can guide their choice; unanswered requests can lead them to try another known person. The recipient independently decides whether to help, including under fear or felt obligation.
 
+The requester can set minimum and maximum affinity, a signed preference for higher or lower affinity, and whether to avoid their previous target. These are personal choices; an unanswered request does not force the requester to abandon someone.
+
 People with an individual learning inclination can develop a bounded work aspiration after personally witnessing a requested job succeed. Other people's work memories and disabled aspirations are not overwritten; a new aspiration still needs ordinary resources and voluntary action.
 An individual can also decide to offer a revocable promise to a helper whose requested work they personally witnessed. The helper is selected from that person's actual memories, and neither the offer nor acceptance moves goods or compels later delivery.
 Alternatively, an individual may offer after personally observing a refusal, and separately choose to ask again after making an offer. A failed job is distinct from a refusal; an unseen outcome creates no such memory.

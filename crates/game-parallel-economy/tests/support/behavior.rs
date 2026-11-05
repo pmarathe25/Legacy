@@ -2462,6 +2462,9 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
             min_familiarity: 1,
             min_affinity: None,
             prefer_affinity: false,
+            max_affinity: None,
+            affinity_weight: None,
+            avoid_last: None,
             next_review: 0,
             last_target: None,
         }],
@@ -2617,6 +2620,9 @@ fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
             min_familiarity: 1,
             min_affinity: None,
             prefer_affinity: true,
+            max_affinity: None,
+            affinity_weight: None,
+            avoid_last: None,
             next_review: 0,
             last_target: None,
         }],
@@ -2647,6 +2653,44 @@ fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
     };
     assert_eq!(run(1, None), run(4, None));
     assert_eq!(run(1, Some(0)), run(4, Some(0)));
+    let mut subjective = initial.clone();
+    let preference = &mut subjective.giving.as_mut().unwrap().acquaintance_asking[0];
+    preference.affinity_weight = Some(-1);
+    preference.avoid_last = Some(false);
+    let select = |workers, state: &State| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().giving.as_ref().unwrap().requests[0].target,
+                    2
+                );
+                let saved = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.giving.as_ref().unwrap().requests[0].target, 2);
+                state
+            })
+    };
+    assert_eq!(select(1, &subjective), select(4, &subjective));
+    let preference = &mut subjective.giving.as_mut().unwrap().acquaintance_asking[0];
+    preference.affinity_weight = Some(1);
+    preference.max_affinity = Some(-1);
+    assert_eq!(select(4, &subjective).giving.unwrap().requests[0].target, 2);
+    subjective.giving.as_mut().unwrap().acquaintance_asking[0].min_affinity = Some(0);
+    assert!(Economy::compile(subjective).is_err());
 }
 
 #[test]
@@ -6514,6 +6558,9 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
             min_familiarity: 1,
             min_affinity: Some(-2),
             prefer_affinity: true,
+            max_affinity: None,
+            affinity_weight: None,
+            avoid_last: None,
             next_review: 0,
             last_target: Some(2),
         }],

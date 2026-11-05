@@ -215,7 +215,13 @@ struct AcquaintanceProfile {
     #[serde(default)]
     min_affinity: Option<i32>,
     #[serde(default)]
+    max_affinity: Option<i32>,
+    #[serde(default)]
     prefer_affinity: bool,
+    #[serde(default)]
+    affinity_weight: Option<i32>,
+    #[serde(default)]
+    avoid_last: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -306,7 +312,10 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                         request_lifetime: asking.request_lifetime,
                         min_familiarity: asking.min_familiarity,
                         min_affinity: asking.min_affinity,
+                        max_affinity: asking.max_affinity,
                         prefer_affinity: asking.prefer_affinity,
+                        affinity_weight: asking.affinity_weight,
+                        avoid_last: asking.avoid_last,
                         next_review: 0,
                         last_target: None,
                     });

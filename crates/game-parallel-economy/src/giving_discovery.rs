@@ -22,7 +22,15 @@ pub struct Policy {
     #[serde(default)]
     pub min_affinity: Option<i32>,
     #[serde(default)]
+    pub max_affinity: Option<i32>,
+    #[serde(default)]
     pub prefer_affinity: bool,
+    /// Signed weight for ranking known people; absent retains prefer_affinity.
+    #[serde(default)]
+    pub affinity_weight: Option<i32>,
+    /// Whether to prefer someone other than the previous target.
+    #[serde(default)]
+    pub avoid_last: Option<bool>,
     #[serde(default)]
     pub next_review: u64,
     #[serde(default)]
@@ -37,6 +45,10 @@ pub fn validate(rows: &[Policy], people: &HashSet<u64>) -> Result<(), String> {
             !people.contains(&row.person)
                 || row.retry_ticks == 0
                 || row.request_lifetime == 0
+                || row
+                    .min_affinity
+                    .zip(row.max_affinity)
+                    .is_some_and(|(min, max)| min > max)
                 || row
                     .last_target
                     .is_some_and(|target| target == row.person || !people.contains(&target))
@@ -131,17 +143,22 @@ pub fn prepare(owner: &mut Giving, context: Context<'_>) -> Result<Vec<u64>, Str
                 if preference
                     .min_affinity
                     .is_some_and(|minimum| affinity < minimum)
+                    || preference
+                        .max_affinity
+                        .is_some_and(|maximum| affinity > maximum)
                 {
                     return None;
                 }
                 Some((
                     actor_id,
-                    preference.last_target == Some(target_id),
-                    if preference.prefer_affinity {
-                        -i64::from(affinity)
-                    } else {
-                        0
-                    },
+                    preference.avoid_last.unwrap_or(true)
+                        && preference.last_target == Some(target_id),
+                    -i64::from(affinity)
+                        * i64::from(
+                            preference
+                                .affinity_weight
+                                .unwrap_or(i32::from(preference.prefer_affinity)),
+                        ),
                     game_parallel_genetics::random(
                         context.seed ^ actor_id,
                         target_id,

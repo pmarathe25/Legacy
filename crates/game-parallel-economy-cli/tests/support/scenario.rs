@@ -1136,6 +1136,37 @@ fn generated_hungry_person_can_ask_a_previously_met_acquaintance() {
     assert_eq!(run(1), run(4));
 }
 
+#[test]
+fn population_profiles_seed_personal_acquaintance_preferences() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let profile = std::fs::read_to_string(root.join("content/parallel/campaign-population.toml"))
+        .unwrap()
+        .replace(
+            "prefer_affinity = true",
+            "prefer_affinity = true\nmax_affinity = -1\naffinity_weight = -2\navoid_last = false",
+        );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-personal-acquaintance-profile-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, profile).unwrap();
+    let world = super::scenario_with_options(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+        Some(42),
+        Some(&path),
+    )
+    .unwrap();
+    std::fs::remove_file(path).unwrap();
+    let state = world.snapshot();
+    let rows = &state.giving.as_ref().unwrap().acquaintance_asking;
+    assert!(!rows.is_empty());
+    assert!(rows.iter().all(
+        |row| (row.max_affinity, row.affinity_weight, row.avoid_last)
+            == (Some(-1), Some(-2), Some(false))
+    ));
+}
+
 fn hungry_generated_campaign(count: u64) -> game_parallel_economy::State {
     let mut world = generated_campaign(count);
     world.advance().unwrap();
@@ -2255,6 +2286,9 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
         "[[giving.responses]]\naffinity_at_most = -2\naffinity_weight = -1",
         1,
     );
+    let configured = format!(
+        "{configured}\n[[giving.acquaintance_asking]]\nperson = 1\nenabled = true\nmin_hunger = 5\nretry_ticks = 2\nrequest_lifetime = 3\nmax_affinity = -1\naffinity_weight = -2\navoid_last = false\n"
+    );
     let path = std::env::temp_dir().join(format!(
         "legacy-personal-practices-{}.toml",
         std::process::id()
@@ -2269,6 +2303,15 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     assert_eq!(
         world.snapshot().giving.unwrap().responses[0].affinity_at_most,
         Some(-2)
+    );
+    let asking = world.snapshot().giving.unwrap().acquaintance_asking;
+    assert_eq!(
+        (
+            asking[0].max_affinity,
+            asking[0].affinity_weight,
+            asking[0].avoid_last
+        ),
+        (Some(-1), Some(-2), Some(false))
     );
     assert_eq!(
         world.snapshot().medical.unwrap().policies[0].patient_health_at_most,

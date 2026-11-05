@@ -20,6 +20,8 @@ An optional `[population.help]` table seeds individual responses to food request
 
 Both `[[giving.responses]]` and `[population.help]` may set `affinity_threshold` to motivate responses above a signed value, `affinity_at_most` to motivate responses below one, and a signed `affinity_weight` to rank requesters. Omitted weight preserves the default preference for higher affinity; zero disregards affinity in ranking.
 
+An individual `[[giving.acquaintance_asking]]` or `[population.help.acquaintance_asking]` can set `max_affinity`, a signed `affinity_weight`, and `avoid_last = false` to choose among known people in their own way. If omitted, existing `prefer_affinity` and previous-target avoidance remain in effect.
+
 Optional `[population.help.acquaintance_asking]` settings let people ask someone they have actually met when hungry. They can set a minimum familiarity or affinity and choose to prefer those they like; the recipient remains free to refuse. No remote locations or unobserved acquaintances are revealed.
 
 Optional `[population.work_support]` settings seed individual aspirations, inclinations to ask for help, and personal evaluations of requested work. A signed `affinity_weight` specifies how each person's own affinity affects that evaluation. The scenario must enable work requests, and aspirations use the profile's named recipe. Requests, refusals, and actual work emerge during simulation; these settings create no employment, institution, or binding agreement.
