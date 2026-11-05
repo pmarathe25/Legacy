@@ -15,6 +15,9 @@ pub struct Dream {
     pub next_review: u64,
     #[serde(default = "enabled")]
     pub enabled: bool,
+    /// Newly created goals may count personally witnessed help.
+    #[serde(default)]
+    pub recognize_help: bool,
 }
 /// A person creates or revises their own enduring aspiration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +172,7 @@ impl Dreams {
                         review_interval: rule.review_interval,
                         next_review: tick,
                         enabled: true,
+                        recognize_help: false,
                     })
             })
             .collect();
@@ -238,6 +242,7 @@ impl Dreams {
                             progress: 0,
                             next_review: 0,
                             enabled: true,
+                            recognize_help: dream.recognize_help,
                         },
                     )),
                 };
@@ -436,6 +441,7 @@ mod tests {
             review_interval: 3,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }
     }
     fn goals() -> Goals {

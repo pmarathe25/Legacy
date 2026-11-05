@@ -416,6 +416,7 @@ fn autowork_benchmark(
                     progress: 0,
                     next_review: 0,
                     enabled: true,
+                    recognize_help: false,
                 })
                 .collect(),
             events: Vec::new(),

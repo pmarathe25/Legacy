@@ -91,6 +91,8 @@ pub struct View {
     pub site_observations: Vec<SiteObservation>,
     pub food_reports: Vec<Record>,
     pub job: Option<Job>,
+    /// Only the controlled person's own goals are visible.
+    pub goals: Vec<game_parallel_economy::Goal>,
     pub warning: Option<InvocationWarning>,
     pub past_lives: Vec<Life>,
     pub active_lives: Vec<u64>,
@@ -536,6 +538,16 @@ impl<'a> Player<'a> {
             local_stock,
             food_reports,
             job,
+            goals: current.map_or_else(Vec::new, |id| {
+                state.goals.map_or_else(Vec::new, |owner| {
+                    owner
+                        .people
+                        .par_iter()
+                        .filter(|goal| goal.person == id)
+                        .cloned()
+                        .collect()
+                })
+            }),
             warning,
             past_lives: current.map_or_else(Vec::new, |_| campaign.lineage.history.clone()),
             active_lives: invocation.map_or_else(Vec::new, |i| i.active.clone()),
@@ -759,6 +771,10 @@ impl<'a> Player<'a> {
         }
         self.world
             .ask_work(self.current()?, worker, recipe, lifetime)
+    }
+    pub fn set_goal_help_recognition(&mut self, recipe: u32, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_goal_help_recognition(self.current()?, recipe, enabled)
     }
     pub fn combat_order(&mut self, order: Order) -> Result<(), String> {
         let actor = self.current()?;

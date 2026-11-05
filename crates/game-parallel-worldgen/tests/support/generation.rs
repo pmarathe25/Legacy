@@ -136,6 +136,7 @@ fn generated_dispositions_can_produce_a_real_asked_work_action() {
         progress: 0,
         next_review: 0,
         enabled: true,
+        recognize_help: false,
     });
     let inventory = world
         .production

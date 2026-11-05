@@ -99,6 +99,7 @@ fn blocked_goal_backs_off_and_a_lower_priority_feasible_plan_can_run() {
         progress: 0,
         next_review: 0,
         enabled: true,
+        recognize_help: false,
     });
     let mut kernel = Kernel::compile(state).unwrap();
     kernel.step().unwrap();

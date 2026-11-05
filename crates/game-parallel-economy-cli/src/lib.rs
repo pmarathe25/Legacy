@@ -427,6 +427,8 @@ struct Aspiration {
     priority: i32,
     batch: u64,
     review_interval: u64,
+    #[serde(default)]
+    recognize_help: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1152,6 +1154,7 @@ pub fn scenario_with_options(
                 review_interval: dream.review_interval,
                 next_review: 0,
                 enabled: true,
+                recognize_help: dream.recognize_help,
             })
         })
         .collect::<Result<_, String>>()?;

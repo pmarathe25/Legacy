@@ -759,6 +759,7 @@ fn a_person_with_a_goal_can_autonomously_request_help_that_starts_real_work() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -861,7 +862,7 @@ fn requested_work_is_remembered_only_when_completion_is_witnessed() {
                 let mut engine = Kernel::compile(state.clone()).unwrap();
                 engine.request_work(proposal()).unwrap();
                 engine.step().unwrap();
-                let started = engine.export();
+                let mut started = engine.export();
                 let requests = started
                     .autowork
                     .as_ref()
@@ -871,6 +872,21 @@ fn requested_work_is_remembered_only_when_completion_is_witnessed() {
                     .unwrap();
                 assert_eq!(requests.work_links.len(), 1);
                 assert!(requests.memories.is_empty());
+                started.goals = Some(game_parallel::Goals {
+                    retry_interval: 3,
+                    plan_inputs: false,
+                    people: vec![game_parallel::Goal {
+                        person: 1,
+                        recipe: 1,
+                        priority: 1,
+                        target: 1,
+                        progress: 0,
+                        next_review: 0,
+                        enabled: true,
+                        recognize_help: true,
+                    }],
+                    events: vec![],
+                });
                 engine = Kernel::compile(
                     World::from_json(&serde_json::to_string(&started).unwrap()).unwrap(),
                 )
@@ -900,6 +916,10 @@ fn requested_work_is_remembered_only_when_completion_is_witnessed() {
                         (1, 2, 1)
                     );
                 }
+                assert_eq!(
+                    result.goals.as_ref().unwrap().people[0].progress,
+                    u64::from(!leave)
+                );
                 result
             })
     };
@@ -992,6 +1012,7 @@ fn a_person_can_choose_a_witnessed_helper_for_a_later_goal() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -1064,6 +1085,7 @@ fn witnessed_refusal_changes_whom_the_person_asks_without_compelling_anyone() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });

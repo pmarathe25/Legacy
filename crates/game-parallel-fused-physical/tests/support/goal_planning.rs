@@ -104,6 +104,7 @@ fn many_local_plans_are_worker_invariant_after_reload() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         })
         .collect();
     let run = |workers| {

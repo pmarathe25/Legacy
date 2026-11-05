@@ -290,6 +290,7 @@ fn view_includes_only_rulers_own_goals() {
                 progress: 1,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             },
             Goal {
                 person: 2,
@@ -299,6 +300,7 @@ fn view_includes_only_rulers_own_goals() {
                 progress: 0,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             },
         ],
         events: vec![],
@@ -379,6 +381,7 @@ fn view_exposes_only_the_rulers_own_aspirations() {
         review_interval: 3,
         next_review: 0,
         enabled: true,
+        recognize_help: false,
     };
     state.dreams = Some(Dreams {
         inherit_births: false,

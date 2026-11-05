@@ -17,7 +17,7 @@ pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as Mis
 use game_parallel_economy_family as family;
 pub use game_parallel_economy_family::Families;
 pub use game_parallel_economy_fatigue::Fatigue;
-pub use game_parallel_economy_goals::{Dream, Dreams, Goals, Learning};
+pub use game_parallel_economy_goals::{Dream, Dreams, Goal, Goals, Learning};
 pub use game_parallel_economy_knowledge::Knowledge;
 pub use game_parallel_economy_local_transport::goal::Preference as GoalFetchPreference;
 pub use game_parallel_economy_local_transport::{
@@ -2814,6 +2814,7 @@ impl Economy {
             physical.events(),
             &person.people,
             &blocked,
+            autowork.as_ref().and_then(|auto| auto.requests.as_ref()),
         )?;
         development::enroll_dream_learning(&mut dreams, family.as_ref(), tick);
         if !physical.events().finished.is_empty()

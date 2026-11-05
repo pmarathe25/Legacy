@@ -460,6 +460,7 @@ fn a_person_fetches_observed_local_inputs_for_their_own_work_goal() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -585,6 +586,7 @@ fn goal_fetching_finds_inputs_for_a_real_production_chain() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -856,6 +858,7 @@ fn concentrated_goal_fetching(count: u64) -> State {
                 progress: 0,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             })
             .collect(),
         events: vec![],
@@ -6026,6 +6029,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
             review_interval: 2,
             next_review: 0,
             enabled: false,
+            recognize_help: false,
         }],
         learning: vec![Learning {
             person: 1,
@@ -10653,6 +10657,7 @@ fn aspirations_form_goals_and_renew_only_after_actual_work() {
             review_interval: 2,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -10724,6 +10729,7 @@ fn unavailable_goal_inputs_schedule_a_bounded_retry_without_pressuring_an_unwill
                 progress: 0,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             },
             Goal {
                 person: 3,
@@ -10733,6 +10739,7 @@ fn unavailable_goal_inputs_schedule_a_bounded_retry_without_pressuring_an_unwill
                 progress: 0,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             },
         ],
         events: vec![],
@@ -13269,6 +13276,7 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -13300,13 +13308,14 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
             events: vec![],
         }),
     });
-    let run = |workers| {
+    let run = |workers, recognize| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
                 let mut economy = Economy::compile(initial.clone()).unwrap();
+                economy.set_goal_help_recognition(1, 1, recognize).unwrap();
                 assert!(economy.advance().unwrap().started.is_empty());
                 let state = economy.snapshot();
                 let pending = &state
@@ -13340,10 +13349,19 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                     (memory[0].observer, memory[0].worker, memory[0].successes),
                     (1, 2, 1)
                 );
+                assert_eq!(
+                    state.goals.as_ref().unwrap().people[0].progress,
+                    u64::from(recognize)
+                );
                 state
             })
     };
-    assert_eq!(run(1), run(4));
+    assert_eq!(run(1, false), run(4, false));
+    assert_eq!(run(1, true), run(4, true));
+    let mut economy = Economy::compile(initial).unwrap();
+    let before = economy.snapshot();
+    assert!(economy.set_goal_help_recognition(1, 999, true).is_err());
+    assert_eq!(economy.snapshot(), before);
 }
 #[test]
 fn a_persons_goal_progresses_only_after_their_actual_work_finishes() {
@@ -13363,6 +13381,7 @@ fn a_persons_goal_progresses_only_after_their_actual_work_finishes() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -16930,6 +16949,119 @@ fn concentrated_offered_work_benchmark() {
         });
 }
 
+fn concentrated_witnessed_goal_work(count: u64) -> State {
+    use game_parallel_goals::{Goal, Goals};
+    let mut state = concentrated_work_refusals(count);
+    state.opinions = None;
+    let requests = state.autowork.as_mut().unwrap().requests.as_mut().unwrap();
+    requests.memory_limit = 1;
+    for preference in &mut requests.preferences {
+        preference.help_value = 1;
+    }
+    state.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: (1..=count / 2)
+            .map(|person| Goal {
+                person,
+                recipe: 1,
+                priority: 1,
+                target: 1,
+                progress: 0,
+                next_review: 0,
+                enabled: true,
+                recognize_help: true,
+            })
+            .collect(),
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn many_people_recognize_only_completed_requested_work_across_workers() {
+    let count = 4096;
+    let initial = concentrated_witnessed_goal_work(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), count as usize / 2);
+                assert!(
+                    world
+                        .snapshot()
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .all(|goal| goal.progress == 0)
+                );
+                assert_eq!(world.advance().unwrap().finished.len(), count as usize / 2);
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .all(|goal| goal.progress == 1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_witnessed_goal_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_witnessed_goal_work(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                assert!(
+                    world
+                        .snapshot()
+                        .goals
+                        .unwrap()
+                        .people
+                        .iter()
+                        .all(|goal| goal.progress == 1)
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=2 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
 fn concentrated_work_refusals(count: u64) -> State {
     use game_parallel_autowork::requests::{Preference, Request, Requests};
     use game_parallel_opinions::AffinityRules;
@@ -17148,6 +17280,7 @@ fn a_person_can_offer_after_refusal_and_ask_again() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: true,
         }],
         events: vec![],
     });
@@ -17242,6 +17375,7 @@ fn a_person_can_offer_after_refusal_and_ask_again() {
                 }
                 let state = world.snapshot();
                 assert!(!starts.is_empty());
+                assert_eq!(state.goals.as_ref().unwrap().people[0].progress, 1);
                 let promise = &state.agreements.as_ref().unwrap().contracts[0];
                 assert_eq!(
                     (
@@ -17271,6 +17405,7 @@ fn a_person_can_offer_after_refusal_and_ask_again() {
         assert!(world.advance().unwrap().started.is_empty());
     }
     assert_eq!(world.snapshot().agreements.unwrap().contracts.len(), 1);
+    assert_eq!(world.snapshot().goals.unwrap().people[0].progress, 0);
 }
 
 #[test]
@@ -19021,6 +19156,7 @@ fn a_person_can_fetch_a_tool_for_their_own_work_goal() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -19134,6 +19270,7 @@ fn goal_input_planning_gets_the_tool_for_the_selected_prerequisite() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -19210,6 +19347,7 @@ fn concentrated_goal_tool_pickups(count: u64) -> State {
                 progress: 0,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             })
             .collect(),
         events: vec![],
@@ -20657,6 +20795,7 @@ fn site_claims_influence_goal_building_without_forcing_compliance() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     let construction = initial.construction.as_mut().unwrap();
@@ -21031,6 +21170,7 @@ fn a_person_builds_a_needed_site_for_their_own_work_goal() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     let construction = initial.construction.as_mut().unwrap();
@@ -21098,6 +21238,7 @@ fn goal_builders_choose_a_sufficient_blueprint_with_an_available_kit() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     initial.work_sites.as_mut().unwrap().requirements[0].slots = 2;
@@ -21150,6 +21291,7 @@ fn a_person_plans_a_tool_and_kit_before_building_for_their_work_goal() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     initial.physical.recipes.push(Recipe {
@@ -21265,6 +21407,7 @@ fn a_person_builds_an_intermediate_site_to_make_their_goal_site_kit() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     initial.physical.recipes.push(Recipe {
@@ -21385,6 +21528,7 @@ fn mutually_dependent_sites_do_not_create_kits_or_loop() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     for good in [2, 3] {
@@ -21489,6 +21633,7 @@ fn a_goal_plan_can_build_two_layers_of_intermediate_sites() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     let stock = initial
@@ -21632,6 +21777,7 @@ fn repeated_goal_reviews_eventually_try_later_kit_recipes() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     let kit = initial
@@ -21707,6 +21853,7 @@ fn goal_builders_do_not_build_when_a_suitable_site_already_exists() {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
     });
     initial.work_sites.as_mut().unwrap().sites.push(WorkSite {
@@ -22341,6 +22488,7 @@ fn later_failure_rolls_back_staged_site_material_and_construction() {
             review_interval: u64::MAX,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }],
         events: vec![],
     });
@@ -23067,6 +23215,7 @@ fn concentrated_goal_construction(count: u64) -> State {
                 progress: 0,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             })
             .collect(),
     });

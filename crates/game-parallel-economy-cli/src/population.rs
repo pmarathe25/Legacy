@@ -139,6 +139,7 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
                         priority: rule.priority,
                         batch: rule.batch,
                         review_interval: rule.review_interval,
+                        recognize_help: false,
                     });
                 let preference = game_parallel_autowork::requests::Preference {
                     person,

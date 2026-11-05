@@ -3,7 +3,7 @@ use game_parallel_autowork::Autowork;
 pub use game_parallel_dreams::{Dream, Dreams, Learning};
 use game_parallel_economy_person::Person;
 use game_parallel_goals::Completion;
-pub use game_parallel_goals::Goals;
+pub use game_parallel_goals::{Goal, Goals};
 use game_parallel_lot_runtime::{Events, Work};
 use game_parallel_production_model::{PersonSnapshot, Recipe, person_index};
 use rayon::prelude::*;
@@ -161,8 +161,9 @@ pub fn advance(
     events: &Events,
     people: &[Person],
     blocked: &[Completion],
+    requests: Option<&game_parallel_autowork::requests::Requests>,
 ) -> Result<(Option<Goals>, Option<Dreams>), String> {
-    let completed: Vec<_> = events
+    let mut completed: Vec<_> = events
         .finished
         .par_iter()
         .filter_map(|id| {
@@ -177,6 +178,17 @@ pub fn advance(
                 })
         })
         .collect();
+    if let (Some(goals), Some(requests)) = (goals, requests)
+        && goals.people.par_iter().any(|goal| goal.recognize_help)
+    {
+        let observations: Vec<_> = requests
+            .memories
+            .par_iter()
+            .filter(|memory| memory.last_success_at == Some(events.tick))
+            .map(|memory| (memory.observer, memory.recipe))
+            .collect();
+        completed.par_extend(goals.recognized_help(&observations));
+    }
     let mut goals = goals
         .map(|owner| {
             owner
@@ -220,6 +232,36 @@ pub fn advance(
 #[macro_export]
 macro_rules! request_method {
     () => {
+        /// Change whether this goal's owner counts witnessed requested work as progress.
+        pub fn set_goal_help_recognition(
+            &mut self,
+            person: u64,
+            recipe: u32,
+            enabled: bool,
+        ) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("invalid goal owner".into());
+            }
+            let mut goals = self.goals.clone().ok_or("goals are disabled")?;
+            goals
+                .people
+                .iter_mut()
+                .find(|goal| goal.person == person && goal.recipe == recipe)
+                .ok_or("unknown personal goal")?
+                .recognize_help = enabled;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            self.goals = Some(goals);
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Change how this person values a future offer when considering work.
         pub fn set_work_offer_value(
             &mut self,

@@ -209,6 +209,7 @@ fn configure_owners(world: &mut World, settings: &Settings, ids: &[u64]) -> Resu
                 review_interval: 5,
                 next_review: 0,
                 enabled: true,
+                recognize_help: false,
             })
             .collect();
         dreams.events.clear();

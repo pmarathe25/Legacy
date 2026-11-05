@@ -8,6 +8,7 @@ pub struct Draft {
     completed: Vec<(u64, bool)>,
     witnessed: Vec<u64>,
     help: Vec<(u64, u64)>,
+    recognized: Vec<(u64, u32)>,
 }
 pub fn prepare(
     world: &World,
@@ -85,8 +86,20 @@ pub fn prepare(
             first.4.then_some((first.0, first.1))
         })
         .collect();
+    let recognized = if requests.memory_limit == 0 {
+        Vec::new()
+    } else {
+        observations
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .filter_map(|group| {
+                let first = group[0];
+                first.4.then_some((first.0, first.2))
+            })
+            .collect()
+    };
     Some(Draft {
         help,
+        recognized,
         completed: resolved
             .par_iter()
             .map(|(link, success)| (link.job, *success))
@@ -95,6 +108,9 @@ pub fn prepare(
     })
 }
 impl Draft {
+    pub fn recognized(&self) -> &[(u64, u32)] {
+        &self.recognized
+    }
     pub fn commit(mut self, world: &mut World, tick: u64) {
         if let Some(opinions) = world.opinions.as_mut().filter(|owner| owner.tracks_help()) {
             opinions.learn_help(&self.help);

@@ -29,6 +29,9 @@ pub struct Goal {
     pub next_review: u64,
     #[serde(default = "enabled")]
     pub enabled: bool,
+    /// This person's goal can recognize work they personally witnessed a helper complete.
+    #[serde(default)]
+    pub recognize_help: bool,
 }
 fn enabled() -> bool {
     true
@@ -62,6 +65,30 @@ pub struct Completion {
     pub recipe: u32,
 }
 impl Goals {
+    /// Select witnessed completions that each goal's owner personally counts.
+    pub fn recognized_help(&self, observations: &[(u64, u32)]) -> Vec<Completion> {
+        if observations.is_empty() || !self.people.par_iter().any(|goal| goal.recognize_help) {
+            return Vec::new();
+        }
+        let mut selected: Vec<_> = self
+            .people
+            .par_iter()
+            .filter(|goal| goal.enabled && goal.recognize_help && goal.progress < goal.target)
+            .map(|goal| (goal.person, goal.recipe))
+            .collect();
+        if selected.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            selected.par_sort_unstable();
+        }
+        observations
+            .par_iter()
+            .filter_map(|&(person, recipe)| {
+                selected
+                    .binary_search(&(person, recipe))
+                    .is_ok()
+                    .then_some(Completion { person, recipe })
+            })
+            .collect()
+    }
     pub fn validate(
         &self,
         people: &HashSet<u64>,
@@ -258,6 +285,7 @@ mod tests {
             progress: 0,
             next_review: 0,
             enabled: true,
+            recognize_help: false,
         }
     }
     #[test]

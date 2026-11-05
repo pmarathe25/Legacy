@@ -2228,6 +2228,58 @@ fn ruler_observes_only_local_physical_work_sites() {
 }
 
 #[test]
+fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = source.replace("[[aspirations]]", "[[aspirations]]\nrecognize_help = true");
+    let path = std::env::temp_dir().join(format!("legacy-goal-help-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    for _ in 0..4 {
+        if !world.snapshot().goals.as_ref().unwrap().people.is_empty() {
+            break;
+        }
+        world.advance().unwrap();
+    }
+    let mut state = world.snapshot();
+    let other = state
+        .goals
+        .as_ref()
+        .unwrap()
+        .people
+        .iter()
+        .find(|goal| goal.person == 2)
+        .unwrap()
+        .clone();
+    assert!(other.recognize_help);
+    let mut own = other.clone();
+    own.person = 1;
+    state.goals.as_mut().unwrap().people.push(own);
+    let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut world);
+    let view = player.view().unwrap();
+    assert_eq!(view.goals.len(), 1);
+    assert_eq!(view.goals[0].person, 1);
+    player
+        .set_goal_help_recognition(other.recipe, false)
+        .unwrap();
+    assert!(!player.view().unwrap().goals[0].recognize_help);
+    assert!(
+        world
+            .snapshot()
+            .goals
+            .unwrap()
+            .people
+            .iter()
+            .find(|goal| goal.person == 2)
+            .unwrap()
+            .recognize_help
+    );
+}
+
+#[test]
 fn scenario_loads_a_personal_choice_to_retry_after_an_offer() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =

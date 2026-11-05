@@ -40,6 +40,7 @@ pub fn set(
             progress: 0,
             next_review: 0,
             enabled: request.enabled,
+            recognize_help: false,
         });
     }
     Ok(())
@@ -88,7 +89,7 @@ pub fn set_dream(
         return Err("invalid aspiration or recipe".into());
     }
     let dreams = world.dreams.as_mut().ok_or("aspirations are disabled")?;
-    let replacement = Dream {
+    let mut replacement = Dream {
         person: request.person,
         recipe: request.recipe,
         priority: request.priority,
@@ -96,12 +97,14 @@ pub fn set_dream(
         review_interval: request.review_interval,
         next_review: world.tick,
         enabled: request.enabled,
+        recognize_help: false,
     };
     if let Some(existing) = dreams
         .people
         .iter_mut()
         .find(|dream| dream.person == request.person && dream.recipe == request.recipe)
     {
+        replacement.recognize_help = existing.recognize_help;
         *existing = replacement;
     } else {
         dreams.people.push(replacement);

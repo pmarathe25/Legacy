@@ -256,13 +256,16 @@ impl Context<'_> {
             .goals
             .as_ref()
             .map(|goals| {
-                let completed: Vec<_> = completions
+                let mut completed: Vec<_> = completions
                     .par_iter()
                     .map(|row| game_parallel::GoalCompletion {
                         person: row.worker,
                         recipe: row.recipe,
                     })
                     .collect();
+                if let Some(memory) = &work_memory {
+                    completed.par_extend(goals.recognized_help(memory.recognized()));
+                }
                 goals.prepare(&completed, &decisions.goal_blocked, next)
             })
             .transpose()?
