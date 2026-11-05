@@ -4,7 +4,7 @@ Run `cargo run -p game-parallel-economy-cli`, optionally passing a scenario TOML
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
-Run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-wildlife.toml --player` to see local animals grazing a shared finite patch. Species use named food goods in the scenario; the player view shows only locally observable animals. Use `feed-animal ANIMAL GOOD QUANTITY` to give an animal real carried food.
+Run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-wildlife.toml --player` to see local animals grazing a shared finite patch. Species use named food goods in the scenario; the player view shows only locally observable animals. Use `feed-animal ANIMAL GOOD QUANTITY` to give an animal real carried food or `hunt-animal ANIMAL` to hunt for raw meat. Another person may hunt when hungry and short of their own reserve.
 
 Optional `[[animal_care.policies]]` records define individual preferences using `person`, `animal`, a named `good`, `quantity`, `willing`, and `health_at_most`. Optional `pressured_by` and `pressure_threshold` let fear or felt obligation toward another person motivate an unwilling caregiver. A caregiver must be available, local, and possess the goods; the preference does not grant knowledge of an animal's diet or enforce a role.
 

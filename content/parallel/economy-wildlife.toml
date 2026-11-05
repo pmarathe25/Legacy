@@ -443,6 +443,16 @@ capacity = 20
 regrowth = 1
 yield_per_action = 2
 
+[hunting]
+inherit_births = true
+
+[[hunting.policies]]
+person = 2
+willing = true
+hunger_at_least = 12
+reserve_good = "raw-meat"
+reserve_below = 2
+
 [fauna]
 next_id = 4
 last_tick = 0
@@ -464,6 +474,7 @@ gestation = 3
 conception_one_in = 4
 breeding_max_hunger = 4
 newborn_health = 10
+hunting = { good = "raw-meat", quantity = 2, success_per_thousand = 1000 }
 
 [[fauna.animals]]
 id = 1

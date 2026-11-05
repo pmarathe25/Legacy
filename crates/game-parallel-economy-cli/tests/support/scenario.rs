@@ -154,25 +154,34 @@ fn wildlife_climate_settings_are_loaded_from_content() {
 fn player_hunts_a_local_animal_into_actual_possessions() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let mut state = scenario(
+    let state = scenario(
         &root.join("content/parallel/economy-wildlife.toml"),
         &root.join("content"),
     )
     .unwrap()
     .snapshot();
-    let grain = state.fauna.as_ref().unwrap().species[0].food_good;
-    state.fauna.as_mut().unwrap().species[0].hunting = Some(game_parallel_fauna::HuntYield {
-        good: grain,
-        quantity: 1,
-        success_per_thousand: 1000,
-    });
+    let meat = state
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "raw-meat")
+        .unwrap()
+        .id;
+    assert_eq!(
+        state.fauna.as_ref().unwrap().species[0]
+            .hunting
+            .as_ref()
+            .unwrap()
+            .good,
+        meat
+    );
     let mut world = game_parallel_economy::Economy::compile(state).unwrap();
     assert!(Player::new(&mut world).hunt_animal(1).unwrap());
     let view = Player::new(&mut world).view().unwrap();
     assert!(
         view.possessions
             .iter()
-            .any(|lot| lot.good == grain && lot.quantity == 1)
+            .any(|lot| lot.good == meat && lot.quantity == 2 && lot.expires_at == Some(49))
     );
     assert_eq!(
         view.animals
@@ -183,6 +192,55 @@ fn player_hunts_a_local_animal_into_actual_possessions() {
         0
     );
     assert!(Player::new(&mut world).hunt_animal(1).is_err());
+}
+
+#[test]
+fn wildlife_scenario_hungry_person_can_hunt_for_their_own_reserve() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut state = scenario(
+        &root.join("content/parallel/economy-wildlife.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let meat = state.fauna.as_ref().unwrap().species[0]
+        .hunting
+        .as_ref()
+        .unwrap()
+        .good;
+    state.people[1].hunger = 12;
+    state.people[1].seek_meals = false;
+    if let Some(social) = state.dynamics.as_mut().and_then(|d| d.social.as_mut()) {
+        for participant in &mut social.participants {
+            participant.willing = false;
+        }
+    }
+    let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let carried = state
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|c| c.place == game_parallel_lots::Place::Person(2))
+        .unwrap();
+    assert!(
+        carried
+            .lots
+            .iter()
+            .any(|lot| lot.good == meat && lot.quantity == 2)
+    );
+    assert_eq!(
+        state
+            .fauna
+            .unwrap()
+            .animals
+            .iter()
+            .filter(|animal| animal.health == 0)
+            .count(),
+        1
+    );
 }
 
 #[test]
