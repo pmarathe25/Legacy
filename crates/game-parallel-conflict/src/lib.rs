@@ -103,11 +103,21 @@ impl Conflict {
         Ok(())
     }
     pub fn actors(&self) -> Vec<u64> {
-        let mut actors: Vec<_> = self
+        let mut actors: Vec<_> = if self
             .encounters
             .par_iter()
-            .flat_map(|fight| fight.fighters.par_iter().map(|fighter| fighter.person))
-            .collect();
+            .any(|fight| fight.fighters.len() >= 4096)
+        {
+            self.encounters
+                .par_iter()
+                .flat_map(|fight| fight.fighters.par_iter().map(|fighter| fighter.person))
+                .collect()
+        } else {
+            self.encounters
+                .par_iter()
+                .flat_map_iter(|fight| fight.fighters.iter().map(|fighter| fighter.person))
+                .collect()
+        };
         if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
             actors.par_sort_unstable();
         }
