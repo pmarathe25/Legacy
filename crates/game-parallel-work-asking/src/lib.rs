@@ -10,6 +10,15 @@ pub struct Draft {
     pub actors: Vec<u64>,
     pub next_id: u64,
 }
+/// A person's current intention to ask a specific worker under personal terms.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PracticeRequest {
+    pub requester: u64,
+    pub worker: u64,
+    pub recipe: u32,
+    pub expires: u64,
+}
+#[derive(Clone, Copy)]
 struct Candidate {
     requester: u64,
     worker: u64,
@@ -26,15 +35,29 @@ pub fn prepare(
     offers: Option<&OfferIndex>,
     tick: u64,
 ) -> Result<Option<Draft>, &'static str> {
-    let Some(goals) = goals.filter(|_| !owner.askers.is_empty()) else {
+    prepare_with_practices(owner, goals, people, busy, offers, &[], tick)
+}
+
+pub fn prepare_with_practices(
+    owner: &Requests,
+    goals: Option<&Goals>,
+    people: &[PersonSnapshot],
+    busy: &[u64],
+    offers: Option<&OfferIndex>,
+    practices: &[PracticeRequest],
+    tick: u64,
+) -> Result<Option<Draft>, &'static str> {
+    let Some(goals) = goals.filter(|_| !owner.askers.is_empty() || !practices.is_empty()) else {
         return Ok(None);
     };
     let mut busy = busy.to_vec();
     busy.par_sort_unstable();
-    if !owner.askers.par_iter().any(|asker| {
-        tick % asker.interval == asker.person % asker.interval
-            && busy.binary_search(&asker.person).is_err()
-    }) {
+    if practices.is_empty()
+        && !owner.askers.par_iter().any(|asker| {
+            tick % asker.interval == asker.person % asker.interval
+                && busy.binary_search(&asker.person).is_err()
+        })
+    {
         return Ok(None);
     }
     let mut goals: Vec<_> = goals
@@ -42,6 +65,11 @@ pub fn prepare(
         .par_iter()
         .filter(|row| row.enabled && row.progress < row.target && row.next_review < tick)
         .collect();
+    let mut active_goals: Vec<_> = goals
+        .par_iter()
+        .map(|row| (row.person, row.recipe))
+        .collect();
+    active_goals.par_sort_unstable();
     goals.par_sort_unstable_by_key(|row| (row.person, Reverse(row.priority), row.recipe));
     let goals: Vec<_> = goals
         .par_chunk_by(|a, b| a.person == b.person)
@@ -63,6 +91,51 @@ pub fn prepare(
         .map(|row| (row.worker, row.requester, row.recipe))
         .collect();
     old.par_sort_unstable();
+    let mut active_work: Vec<_> = owner
+        .work_links
+        .par_iter()
+        .map(|row| (row.worker, row.requester, row.recipe))
+        .collect();
+    active_work.par_sort_unstable();
+    let mut preferred: Vec<_> = practices
+        .par_iter()
+        .filter_map(|practice| {
+            if practice.expires <= tick
+                || practice.requester == practice.worker
+                || busy.binary_search(&practice.requester).is_ok()
+                || active_goals
+                    .binary_search(&(practice.requester, practice.recipe))
+                    .is_err()
+                || old
+                    .binary_search(&(practice.worker, practice.requester, practice.recipe))
+                    .is_ok()
+                || active_work
+                    .binary_search(&(practice.worker, practice.requester, practice.recipe))
+                    .is_ok()
+            {
+                return None;
+            }
+            let actor = person_index(people, practice.requester).map(|i| people[i])?;
+            let worker = person_index(people, practice.worker).map(|i| people[i])?;
+            let region = actor.1?;
+            (actor.2 > 0 && worker.2 > 0 && worker.1 == Some(region)).then_some(Candidate {
+                requester: practice.requester,
+                worker: practice.worker,
+                region,
+                recipe: practice.recipe,
+                expires: practice.expires,
+            })
+        })
+        .collect();
+    preferred.par_sort_unstable_by_key(|row| (row.requester, row.worker, row.recipe, row.expires));
+    let preferred: Vec<_> = preferred
+        .par_chunk_by(|a, b| a.requester == b.requester)
+        .map(|group| group[0])
+        .collect();
+    let preferred_people: std::collections::HashSet<_> = preferred
+        .par_iter()
+        .map(|candidate| candidate.requester)
+        .collect();
     let mut memories: Vec<_> = owner.memories.par_iter().collect();
     memories.par_sort_unstable_by_key(|row| {
         (
@@ -76,7 +149,8 @@ pub fn prepare(
         .askers
         .par_iter()
         .map(|asker| -> Result<Option<Candidate>, &'static str> {
-            if tick % asker.interval != asker.person % asker.interval
+            if preferred_people.contains(&asker.person)
+                || tick % asker.interval != asker.person % asker.interval
                 || busy.binary_search(&asker.person).is_ok()
             {
                 return Ok(None);
@@ -163,10 +237,11 @@ pub fn prepare(
         .into_par_iter()
         .flatten()
         .collect();
-    if candidates.is_empty() {
+    if candidates.is_empty() && preferred.is_empty() {
         return Ok(None);
     }
     let mut candidates = candidates;
+    candidates.par_extend(preferred);
     candidates.par_sort_unstable_by_key(|row| (row.worker, row.requester));
     let mut granted: Vec<_> = candidates
         .par_chunk_by(|a, b| a.worker == b.worker)
@@ -207,4 +282,121 @@ pub fn prepare(
 pub fn publish(owner: &mut Requests, draft: Draft) {
     owner.pending.extend(draft.requests);
     owner.next_id = draft.next_id;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_parallel_goals::Goal;
+    use game_parallel_work_requests::WorkLink;
+
+    #[test]
+    fn personal_terms_create_only_one_local_request_for_an_active_goal() {
+        let mut owner = Requests {
+            next_id: 1,
+            inherit_births: false,
+            memory_limit: 0,
+            work_links: vec![],
+            memories: vec![],
+            preferences: vec![],
+            askers: vec![],
+            pending: vec![],
+            events: vec![],
+        };
+        let goals = Goals {
+            retry_interval: 1,
+            plan_inputs: false,
+            events: vec![],
+            people: vec![Goal {
+                person: 1,
+                recipe: 7,
+                priority: 1,
+                target: 1,
+                progress: 0,
+                next_review: 0,
+                enabled: true,
+                recognize_help: false,
+            }],
+        };
+        let people = [
+            (1, Some(4), 10, 0),
+            (2, Some(4), 10, 0),
+            (3, Some(5), 10, 0),
+        ];
+        let terms = PracticeRequest {
+            requester: 1,
+            worker: 2,
+            recipe: 7,
+            expires: 10,
+        };
+        let draft =
+            prepare_with_practices(&owner, Some(&goals), &people, &[], None, &[terms, terms], 1)
+                .unwrap()
+                .unwrap();
+        assert_eq!(draft.requests.len(), 1);
+        assert_eq!(
+            (
+                draft.requests[0].requester,
+                draft.requests[0].worker,
+                draft.requests[0].recipe
+            ),
+            (1, 2, 7)
+        );
+        assert!(
+            prepare_with_practices(&owner, Some(&goals), &people, &[1], None, &[terms], 1)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            prepare_with_practices(
+                &owner,
+                Some(&goals),
+                &people,
+                &[],
+                None,
+                &[PracticeRequest { worker: 3, ..terms }],
+                1
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            prepare_with_practices(
+                &owner,
+                Some(&goals),
+                &people,
+                &[],
+                None,
+                &[PracticeRequest { recipe: 8, ..terms }],
+                1
+            )
+            .unwrap()
+            .is_none()
+        );
+        assert!(
+            prepare_with_practices(&owner, Some(&goals), &people, &[], None, &[terms], 10)
+                .unwrap()
+                .is_none()
+        );
+        publish(&mut owner, draft);
+        assert!(
+            prepare_with_practices(&owner, Some(&goals), &people, &[], None, &[terms], 2)
+                .unwrap()
+                .is_none()
+        );
+        owner.pending.clear();
+        owner.work_links.push(WorkLink {
+            request: 1,
+            requester: 1,
+            worker: 2,
+            job: 1,
+            region: 4,
+            recipe: 7,
+        });
+        assert!(
+            prepare_with_practices(&owner, Some(&goals), &people, &[], None, &[terms], 2)
+                .unwrap()
+                .is_none()
+        );
+    }
 }

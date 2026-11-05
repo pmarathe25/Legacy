@@ -15,6 +15,8 @@ pub struct Context<'a> {
     pub goods: &'a [Good],
     pub view: &'a View,
     pub opinions: Option<&'a Opinions>,
+    pub goals: Option<&'a game_parallel_goals::Goals>,
+    pub requests: Option<&'a game_parallel_autowork::requests::Requests>,
     pub encounters: &'a [Encounter],
     pub gifts: &'a Plan,
     pub events: &'a Events,
@@ -102,7 +104,7 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
         .map(|event| (event.a, event.b))
         .collect();
     let opinions = context.opinions.map(Opinions::index);
-    owner
+    let mut next = owner
         .prepare_with_relationships(
             &contacts,
             &observations,
@@ -139,7 +141,59 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                     .is_some_and(|holder| holder.quantity(good) >= needed)
             },
         )
-        .map_err(str::to_owned)
+        .map_err(str::to_owned)?;
+    if owner.minds.par_iter().any(|mind| mind.work.is_some()) {
+        let goals: Vec<_> = context
+            .goals
+            .map_or(&[][..], |owner| owner.people.as_slice())
+            .par_iter()
+            .filter(|goal| goal.enabled && goal.progress < goal.target)
+            .map(|goal| (goal.person, goal.recipe))
+            .collect();
+        let witnesses: Vec<_> = context
+            .requests
+            .map_or(&[][..], |owner| owner.memories.as_slice())
+            .par_iter()
+            .filter_map(|memory| {
+                let receipt = memory.last_success?;
+                Some(game_parallel_practices::work::Witness {
+                    observer: memory.observer,
+                    worker: memory.worker,
+                    recipe: memory.recipe,
+                    request: receipt.request,
+                    job: receipt.job,
+                    tick: memory.last_success_at?,
+                })
+            })
+            .collect();
+        game_parallel_practices::work::advance(
+            owner,
+            &mut next,
+            game_parallel_practices::work::Context {
+                goals: &goals,
+                witnesses: &witnesses,
+                contacts: &contacts,
+                tick: context.tick,
+                can_decide: |person| {
+                    context
+                        .people
+                        .binary_search_by_key(&person, |p| p.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            context.people[i].health > 0 && !context.people[i].controlled
+                        })
+                },
+                pressure: |person, other| {
+                    opinions.as_ref().map_or(0, |index| {
+                        let (fear, obligation) = index.feelings(person, other);
+                        fear.saturating_add(obligation)
+                    })
+                },
+            },
+        )
+        .map_err(str::to_owned)?;
+    }
+    Ok(next)
 }
 
 /// Reclaim independent old personal generations without serializing a large tick.

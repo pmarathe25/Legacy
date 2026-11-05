@@ -76,6 +76,16 @@ pub struct OfferValue {
 /// Snapshot of outstanding personal promises, indexed by recipient, maker, and good.
 pub struct OfferIndex {
     rows: Vec<(u64, u64, u32, u64)>,
+    practices: Vec<PracticeOffer>,
+}
+/// Terms received by the worker, scoped to one recipe and not enforceable.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PracticeOffer {
+    pub worker: u64,
+    pub requester: u64,
+    pub recipe: u32,
+    pub good: u32,
+    pub quantity: u64,
 }
 impl OfferIndex {
     pub fn quantity(&self, worker: u64, requester: u64, good: u32) -> u64 {
@@ -92,6 +102,44 @@ impl OfferIndex {
         self.rows
             .get(index)
             .is_some_and(|row| (row.0, row.1) == (worker, requester))
+    }
+    /// Include personally received practice terms without creating an agreement.
+    pub fn with_practices(
+        existing: Option<Self>,
+        mut practices: Vec<PracticeOffer>,
+    ) -> Option<Self> {
+        if practices.is_empty() {
+            return existing;
+        }
+        practices.par_sort_unstable_by_key(|row| (row.worker, row.requester, row.recipe, row.good));
+        let practices = practices
+            .par_chunk_by(|a, b| {
+                (a.worker, a.requester, a.recipe, a.good)
+                    == (b.worker, b.requester, b.recipe, b.good)
+            })
+            .map(|group| PracticeOffer {
+                // Revisions of one person's terms are alternatives, not separate gifts.
+                quantity: group.par_iter().map(|row| row.quantity).max().unwrap_or(0),
+                ..group[0]
+            })
+            .collect();
+        let mut index = existing.unwrap_or(Self {
+            rows: vec![],
+            practices: vec![],
+        });
+        index.practices = practices;
+        Some(index)
+    }
+    pub fn quantity_for(&self, worker: u64, requester: u64, recipe: u32, good: u32) -> u64 {
+        let practice = self
+            .practices
+            .binary_search_by_key(&(worker, requester, recipe, good), |row| {
+                (row.worker, row.requester, row.recipe, row.good)
+            })
+            .ok()
+            .map_or(0, |i| self.practices[i].quantity);
+        self.quantity(worker, requester, good)
+            .saturating_add(practice)
     }
 }
 impl Preference {
@@ -220,7 +268,10 @@ impl Requests {
                 )
             })
             .collect();
-        Some(OfferIndex { rows })
+        Some(OfferIndex {
+            rows,
+            practices: vec![],
+        })
     }
     /// Copy only personal inclinations for actual newborns; no pending requests or memories.
     pub fn enroll(&mut self, family: &game_parallel_families::Families, tick: u64) {
@@ -514,8 +565,14 @@ impl Requests {
                         .offer_value
                         .as_ref()
                         .and_then(|value| {
-                            offers
-                                .map(|index| index.quantity(row.worker, row.requester, value.good))
+                            offers.map(|index| {
+                                index.quantity_for(
+                                    row.worker,
+                                    row.requester,
+                                    row.recipe,
+                                    value.good,
+                                )
+                            })
                         })
                         .unwrap_or(0),
                 ),
@@ -551,7 +608,7 @@ impl Requests {
 extern crate self as game_parallel_work_requests;
 #[cfg(test)]
 mod preference_tests {
-    use super::{OfferValue, Preference, Requests};
+    use super::{OfferIndex, OfferValue, PracticeOffer, Preference, Requests};
     use game_parallel_agreements::{Agreements, Contract, Status};
 
     #[test]
@@ -637,6 +694,29 @@ mod preference_tests {
         assert_eq!(index.quantity(2, 1, 2), 8);
         assert_eq!(index.quantity(1, 2, 1), 0);
         assert!(preference.motivated(0, 0, 0, 0, index.quantity(2, 1, 1)));
+        let index = OfferIndex::with_practices(
+            Some(index),
+            vec![
+                PracticeOffer {
+                    worker: 2,
+                    requester: 1,
+                    recipe: 9,
+                    good: 1,
+                    quantity: 4,
+                },
+                PracticeOffer {
+                    worker: 2,
+                    requester: 1,
+                    recipe: 9,
+                    good: 1,
+                    quantity: 2,
+                },
+            ],
+        )
+        .unwrap();
+        assert_eq!(index.quantity_for(2, 1, 9, 1), 7);
+        assert_eq!(index.quantity_for(2, 1, 8, 1), 3);
+        assert_eq!(index.quantity_for(3, 1, 9, 1), 7);
         assert!(!preference.motivated(0, 0, 0, 0, 1));
         let mut dislike = preference;
         dislike.help_value = 5;

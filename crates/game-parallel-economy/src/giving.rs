@@ -146,6 +146,7 @@ impl Giving {
         &self,
         people: &HashSet<u64>,
         catalog: &[Good],
+        recipes: &[game_parallel_production_model::Recipe],
         now: u64,
     ) -> Result<(), String> {
         crate::giving_discovery::validate(&self.acquaintance_asking, people)?;
@@ -159,6 +160,16 @@ impl Giving {
             practices
                 .validate(people, &food, now)
                 .map_err(str::to_owned)?;
+            if practices.minds.par_iter().any(|mind| {
+                mind.work.as_ref().is_some_and(|work| {
+                    work.authored
+                        .iter()
+                        .chain(work.inbox.iter().map(|row| &row.proposal))
+                        .any(|proposal| !recipes.iter().any(|recipe| recipe.id == proposal.recipe))
+                })
+            }) {
+                return Err("unknown work practice recipe".into());
+            }
         }
         let mut ids: Vec<_> = self
             .policies

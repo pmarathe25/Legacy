@@ -3,6 +3,7 @@ pub mod care;
 mod site_filter;
 pub use game_parallel_work_sites as sites;
 pub mod tools;
+pub use asking::PracticeRequest;
 use game_parallel_autowork::{Autowork, Plan as WorkPlan, Policy};
 use game_parallel_goals::Goals;
 use game_parallel_lot_runtime::{Events, Phase, Work};
@@ -117,6 +118,7 @@ pub struct Context<'a> {
     pub view: &'a game_parallel_lots::View,
     pub opinions: Option<&'a Opinions>,
     pub offers: Option<&'a OfferIndex>,
+    pub practice_requests: &'a [PracticeRequest],
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub goals: Option<&'a Goals>,
     pub preplanned_goals: Option<&'a Autowork>,
@@ -206,12 +208,13 @@ impl Context<'_> {
             .requests
             .as_ref()
             .map(|owner| {
-                asking::prepare(
+                asking::prepare_with_practices(
                     owner,
                     self.goals,
                     self.people,
                     &ask_busy,
                     self.offers,
+                    self.practice_requests,
                     self.tick,
                 )
             })
@@ -392,7 +395,9 @@ pub fn pressured_workers(
                 .offer_value
                 .as_ref()
                 .and_then(|value| {
-                    offers.map(|index| index.quantity(link.worker, link.requester, value.good))
+                    offers.map(|index| {
+                        index.quantity_for(link.worker, link.requester, link.recipe, value.good)
+                    })
                 })
                 .unwrap_or(0);
             pref.motivated(fear, obligation, affinity, trust, offered)

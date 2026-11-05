@@ -918,7 +918,7 @@ impl Economy {
             search.validate(&ids, state.knowledge.as_ref(), state.travel.as_ref())?;
         }
         if let Some(giving) = &state.giving {
-            giving.validate(&ids, physical.goods(), physical.tick())?;
+            giving.validate(&ids, physical.goods(), physical.recipes(), physical.tick())?;
         }
         if let Some(hauling) = &state.hauling {
             hauling.validate(&ids, &goods, &view, state.travel.as_ref())?;
@@ -1785,11 +1785,44 @@ impl Economy {
                 ));
             }
         }
-        let work_offers = self
+        let requests = self
             .autowork
             .as_ref()
-            .and_then(|auto| auto.requests.as_ref())
-            .and_then(|requests| requests.offer_index(self.agreements.as_ref(), tick));
+            .and_then(|auto| auto.requests.as_ref());
+        let work_offers =
+            requests.and_then(|requests| requests.offer_index(self.agreements.as_ref(), tick));
+        let practice_offers: Vec<_> = if requests.is_some_and(|requests| {
+            requests.preferences.par_iter().any(|p| {
+                p.offer_value
+                    .as_ref()
+                    .is_some_and(|value| value.value_per_unit != 0)
+            })
+        }) {
+            self.giving
+                .as_ref()
+                .and_then(|giving| giving.practices.as_ref())
+                .map_or(&[][..], |p| p.minds.as_slice())
+                .par_iter()
+                .flat_map_iter(|person| person.work.iter().flat_map(|work| &work.inbox))
+                .filter(|received| {
+                    received.decision == PracticeDecision::Adopted
+                        && received.proposal.expires >= tick
+                })
+                .map(|received| game_parallel_autowork::requests::PracticeOffer {
+                    worker: received.proposal.worker,
+                    requester: received.proposal.author,
+                    recipe: received.proposal.recipe,
+                    good: received.proposal.good,
+                    quantity: received.proposal.quantity,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let work_offers = game_parallel_autowork::requests::OfferIndex::with_practices(
+            work_offers,
+            practice_offers,
+        );
         let (mut rates, abandon) = family::work_rates!(
             self,
             meal_candidates,
@@ -2187,6 +2220,31 @@ impl Economy {
         }
         let compact =
             game_parallel_economy_agriculture::append_planting(&mut farming, &mut actions);
+        let practice_requests: Vec<_> = self
+            .giving
+            .as_ref()
+            .and_then(|giving| giving.practices.as_ref())
+            .map_or(&[][..], |practices| practices.minds.as_slice())
+            .par_iter()
+            .filter_map(|mind| {
+                let work = mind.work.as_ref()?;
+                let proposal = work.authored.as_ref()?;
+                let index = self
+                    .people
+                    .binary_search_by_key(&mind.person, |p| p.id)
+                    .ok()?;
+                (work.ask_willing
+                    && proposal.expires > tick
+                    && self.people[index].health > 0
+                    && !self.people[index].controlled)
+                    .then_some(game_parallel_economy_work::PracticeRequest {
+                        requester: mind.person,
+                        worker: proposal.worker,
+                        recipe: proposal.recipe,
+                        expires: proposal.expires,
+                    })
+            })
+            .collect();
         let work = game_parallel_economy_goals::prepare_work!(
             self,
             view,
@@ -2196,7 +2254,8 @@ impl Economy {
             tick,
             goal_work,
             site_classes,
-            work_offers
+            work_offers,
+            practice_requests
         );
         let starts =
             game_parallel_economy_claims::work_actions!(work, claims, self, claim_uses, busy);
@@ -2759,6 +2818,11 @@ impl Economy {
                     goods: self.physical.goods(),
                     view: &view,
                     opinions: self.opinions.as_ref(),
+                    goals: self.goals.as_ref(),
+                    requests: self
+                        .autowork
+                        .as_ref()
+                        .and_then(|auto| auto.requests.as_ref()),
                     encounters,
                     gifts: &giving_plan,
                     events: physical.events(),

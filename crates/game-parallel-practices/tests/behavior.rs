@@ -27,6 +27,7 @@ fn mind(person: u64) -> Mind {
         acceptance_threshold: 0,
         value_learning: None,
         precedent: None,
+        work: None,
         reporting: Default::default(),
         report_attitude: Default::default(),
         unanswered_report_belief: None,
@@ -39,6 +40,200 @@ fn mind(person: u64) -> Mind {
         sent_reports: vec![].into(),
         reports: vec![].into(),
     }
+}
+
+#[test]
+fn work_practice_candidate_combines_only_personally_known_work_and_gifts() {
+    use game_parallel_practices::work::{Schedule, Witness, propose};
+    let mut author = mind(1);
+    author.cases = vec![
+        Case::Received {
+            tick: 1,
+            helper: 4,
+            good: 8,
+            quantity: 2,
+        },
+        Case::Gave {
+            tick: 2,
+            recipient: 4,
+            good: 9,
+            quantity: 3,
+        },
+        Case::Gave {
+            tick: 6,
+            recipient: 4,
+            good: 9,
+            quantity: 99,
+        },
+    ]
+    .into();
+    let witnesses = [
+        Witness {
+            observer: 1,
+            worker: 2,
+            recipe: 7,
+            request: 11,
+            job: 20,
+            tick: 3,
+        },
+        Witness {
+            observer: 1,
+            worker: 3,
+            recipe: 7,
+            request: 12,
+            job: 21,
+            tick: 4,
+        },
+        Witness {
+            observer: 4,
+            worker: 5,
+            recipe: 7,
+            request: 13,
+            job: 22,
+            tick: 4,
+        },
+    ];
+    let schedule = Schedule {
+        sequence: 1,
+        lifetime: 5,
+        reserve: 1,
+        tick: 5,
+    };
+    let proposal = propose(&author, &[7], &witnesses, |_, target| target == 2, schedule)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        (
+            proposal.author,
+            proposal.worker,
+            proposal.recipe,
+            proposal.good,
+            proposal.quantity,
+            proposal.reserve,
+            proposal.expires
+        ),
+        (1, 2, 7, 9, 3, 1, 10)
+    );
+    assert_eq!(
+        serde_json::from_str::<game_parallel_practices::work::Proposal>(
+            &serde_json::to_string(&proposal).unwrap()
+        )
+        .unwrap(),
+        proposal
+    );
+    assert!(
+        propose(&author, &[6], &witnesses, |_, _| true, schedule)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        propose(&author, &[7], &witnesses, |_, _| false, schedule)
+            .unwrap()
+            .is_none()
+    );
+    assert!(
+        propose(
+            &author,
+            &[7],
+            &witnesses,
+            |_, _| true,
+            Schedule {
+                tick: u64::MAX,
+                ..schedule
+            }
+        )
+        .is_err()
+    );
+}
+
+#[test]
+fn work_practice_is_delivered_through_contact_and_considered_independently() {
+    use game_parallel_practices::work::{Context, Mind as WorkMind, Witness, advance};
+    let preference = || WorkMind {
+        invent: true,
+        approve: false,
+        willing: false,
+        ask_willing: true,
+        review_interval: 2,
+        proposal_lifetime: 5,
+        reserve: 1,
+        pressure_threshold: Some(3),
+        next_review: 0,
+        sequence: 0,
+        authored: None,
+        inbox: vec![],
+    };
+    let mut author = mind(1);
+    author.work = Some(std::sync::Arc::new(preference()));
+    author.cases = vec![Case::Received {
+        tick: 1,
+        helper: 3,
+        good: 4,
+        quantity: 2,
+    }]
+    .into();
+    let mut worker = mind(2);
+    let mut worker_work = preference();
+    worker_work.invent = false;
+    worker.work = Some(std::sync::Arc::new(worker_work));
+    let initial = Practices {
+        minds: vec![author, worker],
+    };
+    let goals = [(1, 7)];
+    let witnesses = [Witness {
+        observer: 1,
+        worker: 2,
+        recipe: 7,
+        request: 1,
+        job: 9,
+        tick: 1,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let context = |tick, contacts| Context {
+                    goals: &goals,
+                    witnesses: &witnesses,
+                    contacts,
+                    tick,
+                    can_decide: |_| true,
+                    pressure: |observer, author| if (observer, author) == (2, 1) { 3 } else { 0 },
+                };
+                let mut absent = initial.clone();
+                advance(&initial, &mut absent, context(2, &[])).unwrap();
+                assert!(absent.minds[0].work.as_ref().unwrap().authored.is_none());
+                let mut delivered = initial.clone();
+                advance(&initial, &mut delivered, context(2, &[(1, 2)])).unwrap();
+                assert_eq!(
+                    delivered.minds[1].work.as_ref().unwrap().inbox[0].decision,
+                    Decision::Pending
+                );
+                assert_eq!(
+                    delivered.minds[0]
+                        .work
+                        .as_ref()
+                        .unwrap()
+                        .authored
+                        .as_ref()
+                        .unwrap()
+                        .quantity,
+                    2
+                );
+                let saved: Practices =
+                    serde_json::from_str(&serde_json::to_string(&delivered).unwrap()).unwrap();
+                let mut later = saved.clone();
+                advance(&saved, &mut later, context(3, &[])).unwrap();
+                let item = &later.minds[1].work.as_ref().unwrap().inbox[0];
+                assert_eq!(item.decision, Decision::Adopted);
+                assert!(!item.approved);
+                assert!(!later.minds[0].work.as_ref().unwrap().willing);
+                later
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

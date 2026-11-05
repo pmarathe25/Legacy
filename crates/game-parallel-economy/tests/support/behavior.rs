@@ -8582,6 +8582,7 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
         acceptance_threshold: 0,
         value_learning: None,
         precedent: None,
+        work: None,
         reporting: Default::default(),
         report_attitude: Default::default(),
         unanswered_report_belief: None,
@@ -8594,6 +8595,290 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
         sent_reports: vec![].into(),
         reports: vec![].into(),
     }
+}
+
+#[test]
+fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
+    use game_parallel_autowork::requests::{Preference, Request, Requests};
+    use game_parallel_practices::work::Mind as WorkMind;
+    use game_parallel_social::{Participant, Rules as SocialRules, Social};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.willing_to_work = false;
+    }
+    initial.people[2].hunger = 5;
+    let make_work = |invent, approve| WorkMind {
+        invent,
+        approve,
+        willing: false,
+        ask_willing: false,
+        review_interval: 2,
+        proposal_lifetime: 8,
+        reserve: 0,
+        pressure_threshold: None,
+        next_review: 0,
+        sequence: 0,
+        authored: None,
+        inbox: vec![],
+    };
+    let mut author = practice_mind(1, false);
+    author.work = Some(std::sync::Arc::new(make_work(true, false)));
+    let mut worker = practice_mind(2, false);
+    worker.work = Some(std::sync::Arc::new(make_work(false, true)));
+    initial.giving = Some(Giving {
+        practices: Some(PersonalPractices {
+            minds: vec![author, worker],
+        }),
+        inherit_births: false,
+        acquaintance_asking: vec![],
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        policies: vec![GivingPolicy {
+            person: 1,
+            recipient: 3,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 5,
+            willing: true,
+            requires_request: false,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 2,
+        plan_inputs: false,
+        events: vec![],
+        people: vec![Goal {
+            person: 1,
+            recipe: 1,
+            priority: 1,
+            target: 5,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+            recognize_help: false,
+        }],
+    });
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 2,
+            inherit_births: false,
+            memory_limit: 2,
+            work_links: vec![],
+            memories: vec![],
+            askers: vec![],
+            events: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 1,
+                help_value: 1,
+                affinity_weight: 0,
+                trust_weight: 0,
+                offer_value: None,
+                disregard_claims: false,
+            }],
+            pending: vec![Request {
+                id: 1,
+                requester: 1,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                created_at: 0,
+                expires: 5,
+            }],
+        }),
+    });
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        disease: None,
+        treatment: vec![],
+        claims: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 1,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: vec![
+                Participant {
+                    person: 1,
+                    willing: true,
+                },
+                Participant {
+                    person: 2,
+                    willing: true,
+                },
+            ],
+            pressures: vec![],
+            relationships: vec![],
+            events: vec![],
+            needs: None,
+        }),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut delivered = None;
+                for _ in 0..8 {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let minds = &state
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds;
+                    if !minds[1].work.as_ref().unwrap().inbox.is_empty() {
+                        delivered = Some(state);
+                        break;
+                    }
+                }
+                let delivered =
+                    delivered.expect("proposal delivered after real work, gift, and contact");
+                let minds = &delivered
+                    .giving
+                    .as_ref()
+                    .unwrap()
+                    .practices
+                    .as_ref()
+                    .unwrap()
+                    .minds;
+                assert!(minds[0].cases.iter().any(|case| matches!(
+                    case,
+                    PracticeCase::Gave {
+                        recipient: 3,
+                        good: 1,
+                        quantity: 1,
+                        ..
+                    }
+                )));
+                let proposal = &minds[1].work.as_ref().unwrap().inbox[0].proposal;
+                assert_eq!(
+                    (
+                        proposal.author,
+                        proposal.worker,
+                        proposal.recipe,
+                        proposal.good,
+                        proposal.quantity
+                    ),
+                    (1, 2, 1, 1, 1)
+                );
+                assert_eq!(
+                    minds[1].work.as_ref().unwrap().inbox[0].decision,
+                    PracticeDecision::Pending
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&delivered).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds[1]
+                        .work
+                        .as_ref()
+                        .unwrap()
+                        .inbox[0]
+                        .decision,
+                    PracticeDecision::Adopted
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                // The author can now ask; the worker's own assessment controls
+                // whether the communicated terms contribute to motivation.
+                let mut offered = state.clone();
+                let minds = &mut offered
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds;
+                std::sync::Arc::make_mut(minds[0].work.as_mut().unwrap()).ask_willing = true;
+                let preference = &mut offered
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0];
+                preference.effort = 5;
+                preference.help_value = 0;
+                preference.offer_value = Some(game_parallel_autowork::requests::OfferValue {
+                    good: 1,
+                    value_per_unit: 5,
+                    max_quantity: 1,
+                });
+                let mut rejected = offered.clone();
+                let recipient = &mut rejected
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds[1];
+                let received =
+                    &mut std::sync::Arc::make_mut(recipient.work.as_mut().unwrap()).inbox[0];
+                received.decision = PracticeDecision::Declined;
+                received.approved = false;
+                let mut willing_world = Economy::compile(offered).unwrap();
+                let mut unwilling_world = Economy::compile(rejected).unwrap();
+                let mut willing_started = false;
+                let mut unwilling_started = false;
+                for _ in 0..4 {
+                    willing_started |= !willing_world.advance().unwrap().started.is_empty();
+                    unwilling_started |= !unwilling_world.advance().unwrap().started.is_empty();
+                }
+                assert!(
+                    willing_started,
+                    "an assessed offer can motivate actual work"
+                );
+                assert!(
+                    !unwilling_started,
+                    "an unaccepted offer does not motivate work"
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

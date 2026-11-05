@@ -1,4 +1,5 @@
 //! Bounded personal invention of conditional action from experienced events.
+pub mod work;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -66,6 +67,9 @@ pub struct Mind {
     /// Optional interpretation of a relevant personal precedent when evaluating a proposal.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precedent: Option<Arc<PrecedentReasoning>>,
+    /// Optional personally held work-and-goods practice.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work: Option<Arc<work::Mind>>,
     /// How this person chooses to describe their own current ability to deliver.
     #[serde(default)]
     pub reporting: Reporting,
@@ -490,6 +494,10 @@ impl Practices {
         if ids.par_windows(2).any(|p| p[0] == p[1])
             || self.minds.par_iter().any(|mind| {
                 !people.contains(&mind.person)
+                    || mind
+                        .work
+                        .as_ref()
+                        .is_some_and(|work| !work::valid(work, mind.person, people, food, now))
                     || mind
                         .value_learning
                         .as_ref()
