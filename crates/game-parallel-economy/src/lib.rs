@@ -13,7 +13,8 @@ pub use game_parallel_economy_building::{
 pub use game_parallel_economy_campaign::{Campaign, ReleaseDecision};
 pub use game_parallel_economy_combat::Combat;
 pub use game_parallel_economy_confinement::{
-    Cell as ConfinementCell, Confinement, EscapePreference, Hold as ConfinementHold,
+    CaptureResponse as ConfinementCaptureResponse, Cell as ConfinementCell, Confinement,
+    EscapePreference, Hold as ConfinementHold,
 };
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
@@ -1564,6 +1565,7 @@ impl Economy {
                     PhysicalChoice::TreatOther { patient, .. } => unavailable.push(patient),
                     PhysicalChoice::AskFood { target, .. } => unavailable.push(target),
                     PhysicalChoice::AskHaul { carrier, .. } => unavailable.push(carrier),
+                    PhysicalChoice::Confine { target, .. } => unavailable.push(target),
                     _ => {}
                 }
             }
@@ -1601,7 +1603,7 @@ impl Economy {
             player_transfer,
             initial_fighters
         );
-        let held: Vec<_> = self
+        let mut held: Vec<_> = self
             .confinement
             .as_ref()
             .map_or(&[][..], |owner| owner.holds.as_slice())
@@ -1635,19 +1637,36 @@ impl Economy {
                 }) {
                     return Err("a working person cannot confine someone".into());
                 }
-                next_confinement
-                    .as_mut()
-                    .ok_or("confinement is disabled")?
-                    .capture(
-                        person,
+                let owner = next_confinement.as_mut().ok_or("confinement is disabled")?;
+                let pressured = owner
+                    .capture_responses
+                    .binary_search_by_key(&target, |rule| rule.person)
+                    .ok()
+                    .and_then(|i| owner.capture_responses[i].pressure_threshold)
+                    .is_some_and(|threshold| {
+                        self.opinions.as_ref().is_some_and(|opinions| {
+                            let (fear, obligation) = opinions.index().feelings(target, person);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                let captured = owner.capture(
+                    game_parallel_economy_confinement::Capture {
+                        actor: person,
                         target,
                         site,
-                        &self.people,
-                        self.work_sites
-                            .as_ref()
-                            .ok_or("confinement requires physical sites")?,
-                        tick,
-                    )?;
+                    },
+                    &self.people,
+                    self.work_sites
+                        .as_ref()
+                        .ok_or("confinement requires physical sites")?,
+                    &busy,
+                    pressured,
+                    tick,
+                )?;
+                if captured && held.binary_search(&target).is_err() {
+                    held.push(target);
+                    held.par_sort_unstable();
+                }
             }
             Some(game_parallel_economy_interaction::PhysicalChoice::ReleaseHeld {
                 person,

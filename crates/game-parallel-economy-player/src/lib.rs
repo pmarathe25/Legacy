@@ -856,9 +856,12 @@ impl<'a> Player<'a> {
     pub fn escape_confinement(&mut self) -> Result<bool, String> {
         self.world.escape_confinement(self.current()?)
     }
+    pub fn set_capture_yield(&mut self, willing: bool) -> Result<(), String> {
+        self.world.set_capture_yield(self.current()?, willing)
+    }
     pub fn confine_person(&mut self, target: u64, site: u64) -> Result<bool, String> {
         let view = self.view()?;
-        if !view.bodies.iter().any(|body| body.person == target)
+        if !(view.bodies.iter().any(|body| body.person == target) || view.nearby.contains(&target))
             || !view.work_sites.iter().any(|row| row.site.id == site)
         {
             return Err("target or cell is not present".into());

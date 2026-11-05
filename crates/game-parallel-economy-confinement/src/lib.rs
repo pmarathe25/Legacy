@@ -36,6 +36,23 @@ pub struct EscapePreference {
     pub effort: u64,
 }
 
+/// A person's own inclination to yield; force can succeed regardless of this choice.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaptureResponse {
+    pub person: u64,
+    pub yield_willingly: bool,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Capture {
+    pub actor: u64,
+    pub target: u64,
+    pub site: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Event {
@@ -51,6 +68,8 @@ pub enum EventKind {
     EscapeAttempt,
     Confined,
     Released,
+    CaptureResisted,
+    CaptureUnavailable,
 }
 
 fn default_effort() -> u64 {
@@ -68,6 +87,8 @@ pub struct Confinement {
     #[serde(default)]
     pub escape: Vec<EscapePreference>,
     #[serde(default)]
+    pub capture_responses: Vec<CaptureResponse>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -76,6 +97,8 @@ impl Confinement {
         self.cells.par_sort_unstable_by_key(|cell| cell.site);
         self.holds.par_sort_unstable_by_key(|hold| hold.person);
         self.escape.par_sort_unstable_by_key(|rule| rule.person);
+        self.capture_responses
+            .par_sort_unstable_by_key(|rule| rule.person);
     }
 
     pub fn validate(&self, people: &[Person], sites: &Facilities, tick: u64) -> Result<(), String> {
@@ -99,6 +122,10 @@ impl Confinement {
                 .escape
                 .par_windows(2)
                 .any(|w| w[0].person >= w[1].person)
+            || self
+                .capture_responses
+                .par_windows(2)
+                .any(|w| w[0].person >= w[1].person)
             || self.cells.par_iter().any(|cell| {
                 sites
                     .sites
@@ -109,6 +136,10 @@ impl Confinement {
             })
             || self.escape.par_iter().any(|rule| {
                 rule.effort == 0 || people.binary_search_by_key(&rule.person, |p| p.id).is_err()
+            })
+            || self.capture_responses.par_iter().any(|rule| {
+                rule.pressure_threshold == Some(0)
+                    || people.binary_search_by_key(&rule.person, |p| p.id).is_err()
             })
             || self.holds.par_iter().any(|hold| {
                 let person = people
@@ -161,16 +192,21 @@ impl Confinement {
             .is_ok()
     }
 
-    /// Place an incapacitated immortal in an intact, local physical cell.
+    /// Attempt a physical capture; a conscious person can yield, resist, or be overpowered.
     pub fn capture(
         &mut self,
-        actor: u64,
-        target: u64,
-        site_id: u64,
+        action: Capture,
         people: &[Person],
         sites: &Facilities,
+        busy: &[u64],
+        pressured: bool,
         tick: u64,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
+        let Capture {
+            actor,
+            target,
+            site: site_id,
+        } = action;
         let person = &people[people
             .binary_search_by_key(&actor, |p| p.id)
             .map_err(|_| "unknown person")?];
@@ -190,8 +226,7 @@ impl Confinement {
             || person.health == 0
             || person.region != Some(site.region)
             || target_person.region != Some(site.region)
-            || target_person.health != 0
-            || target_person.immortal.is_none()
+            || (target_person.health == 0 && target_person.immortal.is_none())
             || cell.resistance == 0
             || self.held(target)
             || self
@@ -201,10 +236,34 @@ impl Confinement {
                 .count() as u128
                 >= u128::from(site.capacity)
         {
-            return Err(
-                "capture requires an available local cell and an incapacitated living target"
-                    .into(),
-            );
+            return Err("capture requires an available local cell and a living target".into());
+        }
+        if target_person.health > 0 {
+            let response = ordered_index(&self.capture_responses, target, |row| row.person)
+                .map(|index| &self.capture_responses[index]);
+            let effort = |id| {
+                ordered_index(&self.escape, id, |row| row.person)
+                    .map_or(self.default_effort, |index| self.escape[index].effort)
+            };
+            let kind = if busy.binary_search(&target).is_ok() {
+                Some(EventKind::CaptureUnavailable)
+            } else if !response.is_some_and(|row| row.yield_willingly)
+                && !pressured
+                && effort(actor) <= effort(target)
+            {
+                Some(EventKind::CaptureResisted)
+            } else {
+                None
+            };
+            if let Some(kind) = kind {
+                self.events.push(Event {
+                    tick,
+                    person: target,
+                    site: site_id,
+                    kind,
+                });
+                return Ok(false);
+            }
         }
         self.holds.push(Hold {
             person: target,
@@ -217,7 +276,7 @@ impl Confinement {
             site: site_id,
             kind: EventKind::Confined,
         });
-        Ok(())
+        Ok(true)
     }
 
     /// Any capable local person can physically open the cell.
@@ -314,6 +373,7 @@ impl Confinement {
             cells: self.cells.par_iter().cloned().collect(),
             holds: self.holds.par_iter().cloned().collect(),
             escape: self.escape.par_iter().cloned().collect(),
+            capture_responses: self.capture_responses.par_iter().cloned().collect(),
             events: attempts
                 .par_iter()
                 .map(|&(site, person, _)| Event {
@@ -380,6 +440,33 @@ impl Confinement {
 #[macro_export]
 macro_rules! escape_method {
     () => {
+        /// Change only this person's own inclination to yield to capture.
+        pub fn set_capture_yield(&mut self, person: u64, willing: bool) -> Result<(), String> {
+            self.people
+                .binary_search_by_key(&person, |row| row.id)
+                .map_err(|_| "unknown person")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            let owner = self.confinement.as_mut().ok_or("confinement is disabled")?;
+            match owner
+                .capture_responses
+                .binary_search_by_key(&person, |row| row.person)
+            {
+                Ok(index) => owner.capture_responses[index].yield_willingly = willing,
+                Err(index) => owner.capture_responses.insert(
+                    index,
+                    $crate::CaptureResponse {
+                        person,
+                        yield_willingly: willing,
+                        pressure_threshold: None,
+                    },
+                ),
+            }
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Spend a boundary on this person's own attempt to break their barrier.
         pub fn escape_confinement(&mut self, person: u64) -> Result<bool, String> {
             game_parallel_economy_campaign::preflight!(self);
@@ -396,7 +483,7 @@ macro_rules! escape_method {
             self.commit(draft)?;
             Ok(escaped)
         }
-        /// Physically place an incapacitated living person into an available cell.
+        /// Attempt to place a living person into an available cell.
         pub fn confine_person(
             &mut self,
             person: u64,
@@ -477,6 +564,7 @@ mod tests {
                     effort: 1,
                 })
                 .collect(),
+            capture_responses: vec![],
             events: vec![],
         };
         let sites = Facilities {

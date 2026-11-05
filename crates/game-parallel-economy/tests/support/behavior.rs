@@ -9058,6 +9058,7 @@ fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        capture_responses: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
             site: 1,
@@ -9148,6 +9149,7 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        capture_responses: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
             site: 1,
@@ -9211,6 +9213,116 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
 }
 
 #[test]
+fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+        }],
+        holds: vec![],
+        escape: vec![
+            EscapePreference {
+                person: 2,
+                willing: false,
+                effort: 2,
+            },
+            EscapePreference {
+                person: 3,
+                willing: false,
+                effort: 1,
+            },
+        ],
+        capture_responses: vec![ConfinementCaptureResponse {
+            person: 2,
+            yield_willingly: false,
+            pressure_threshold: Some(3),
+        }],
+        events: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let success = world.confine_person(3, 2, 1).unwrap();
+                (success, world.snapshot())
+            })
+    };
+    let (success, resisted) = run(initial.clone(), 1);
+    assert!(!success);
+    assert_eq!(
+        resisted.confinement.unwrap().events[0].kind,
+        game_parallel_economy_confinement::EventKind::CaptureResisted
+    );
+    let mut stronger = initial.clone();
+    stronger.confinement.as_mut().unwrap().escape[1].effort = 3;
+    let (success, forced) = run(stronger.clone(), 1);
+    assert!(success);
+    assert!(forced.confinement.as_ref().unwrap().held(2));
+    assert_eq!((success, forced), run(stronger, 4));
+    let mut yielding = Economy::compile(initial.clone()).unwrap();
+    let stale = yielding.prepare().unwrap();
+    yielding.set_capture_yield(2, true).unwrap();
+    assert!(yielding.commit(stale).is_err());
+    assert!(yielding.confine_person(3, 2, 1).unwrap());
+    let mut pressured = initial.clone();
+    pressured.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 2,
+        target: 3,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    });
+    assert!(run(pressured.clone(), 1).0);
+    pressured.confinement.as_mut().unwrap().capture_responses[0].pressure_threshold = None;
+    assert!(!run(pressured, 1).0);
+    let mut occupied = initial;
+    occupied.confinement.as_mut().unwrap().escape[1].effort = 3;
+    occupied.people[1].hunger = 5;
+    occupied.people[1].seek_meals = true;
+    let holder = occupied
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let (success, state) = run(occupied, 1);
+    assert!(!success);
+    assert_eq!(
+        state.confinement.unwrap().events[0].kind,
+        game_parallel_economy_confinement::EventKind::CaptureUnavailable
+    );
+}
+
+#[test]
 fn controlled_person_can_choose_repeated_physical_escape_attempts() {
     let mut initial = campaign_fixture();
     initial.pending_food.clear();
@@ -9226,6 +9338,7 @@ fn controlled_person_can_choose_repeated_physical_escape_attempts() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        capture_responses: vec![],
         default_effort: 2,
         cells: vec![ConfinementCell {
             site: 1,
