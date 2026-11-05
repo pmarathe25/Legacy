@@ -283,13 +283,53 @@ impl<'a> Preparation<'a> {
         accept: impl Fn(u64, u64) -> bool + Sync,
     ) -> Draft {
         let now = self.draft.tick - 1;
-        let mut partners: Vec<_> = encounters
-            .par_iter()
-            .flat_map_iter(|e| [(e.a, e.b), (e.b, e.a)])
-            .filter(|&(receiver, sender)| accept(receiver, sender))
-            .collect();
-        partners.par_sort_unstable();
         let ids = self.read.ids;
+        // Dense identities permit independent slots instead of sorting every
+        // report. If callers provide duplicate participants, the lowest partner
+        // wins, matching the sorted path regardless of execution order.
+        let dense = ids
+            .first()
+            .zip(ids.last())
+            .filter(|(first, last)| {
+                **last != u64::MAX && last.checked_sub(**first) == Some((ids.len() - 1) as u64)
+            })
+            .map(|(&first, _)| {
+                let slots: Vec<_> = (0..ids.len())
+                    .into_par_iter()
+                    .map(|_| AtomicU64::new(u64::MAX))
+                    .collect();
+                let index = |person: u64| {
+                    person
+                        .checked_sub(first)
+                        .and_then(|v| usize::try_from(v).ok())
+                        .filter(|&i| i < ids.len())
+                };
+                encounters.par_iter().for_each(|event| {
+                    if let Some(a) = index(event.a)
+                        && accept(event.a, event.b)
+                    {
+                        slots[a].fetch_min(event.b, Ordering::Relaxed);
+                    }
+                    if let Some(b) = index(event.b)
+                        && accept(event.b, event.a)
+                    {
+                        slots[b].fetch_min(event.a, Ordering::Relaxed);
+                    }
+                });
+                slots
+            });
+        let mut partners: Vec<_> = if dense.is_some() {
+            Vec::new()
+        } else {
+            encounters
+                .par_iter()
+                .flat_map_iter(|e| [(e.a, e.b), (e.b, e.a)])
+                .filter(|&(receiver, sender)| accept(receiver, sender))
+                .collect()
+        };
+        if dense.is_none() {
+            partners.par_sort_unstable();
+        }
         let blocks = self.read.current;
         let limit = self.limit;
         self.next
@@ -320,13 +360,22 @@ impl<'a> Preparation<'a> {
                             true,
                         );
                     }
-                    while partner_index < partners.len() && partners[partner_index].0 < person {
-                        partner_index += 1;
-                    }
-                    if let Some(&(_, partner)) =
-                        partners.get(partner_index).filter(|p| p.0 == person)
-                        && let Some(slot) = locate(ids, partner)
-                    {
+                    let slot = if let Some(slots) = &dense {
+                        let partner = slots[base + offset].load(Ordering::Relaxed);
+                        (partner != u64::MAX)
+                            .then(|| locate(ids, partner))
+                            .flatten()
+                    } else {
+                        while partner_index < partners.len() && partners[partner_index].0 < person {
+                            partner_index += 1;
+                        }
+                        partners
+                            .get(partner_index)
+                            .filter(|p| p.0 == person)
+                            .and_then(|&(_, partner)| locate(ids, partner))
+                    };
+                    if let Some(slot) = slot {
+                        let partner = ids[slot];
                         let local = observation.local.map(|(region, _)| region);
                         let report = blocks[slot / BLOCK][slot % BLOCK]
                             .iter()

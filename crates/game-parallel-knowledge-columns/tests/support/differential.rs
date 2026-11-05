@@ -277,6 +277,61 @@ fn targeted_false_reports_match_reference_and_never_rewrite_the_speakers_memory(
 }
 
 #[test]
+fn dense_encounter_index_matches_sorted_selection_for_duplicate_and_unknown_partners() {
+    let (initial, view, regions) = fixture(4, 4, false);
+    for contacts in [
+        vec![
+            Encounter {
+                tick: 1,
+                region: 1,
+                a: 1,
+                b: 3,
+                pressured: None,
+            },
+            Encounter {
+                tick: 1,
+                region: 1,
+                a: 1,
+                b: 2,
+                pressured: None,
+            },
+        ],
+        vec![
+            Encounter {
+                tick: 1,
+                region: 1,
+                a: 1,
+                b: 2,
+                pressured: None,
+            },
+            Encounter {
+                tick: 1,
+                region: 1,
+                a: 0,
+                b: 1,
+                pressured: None,
+            },
+        ],
+    ] {
+        let expected = initial
+            .prepare_validated(&view.0, &regions, &contacts, 0)
+            .unwrap();
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut runtime = Runtime::compile_validated(&initial, 0).unwrap();
+                    let draft = runtime.prepare_validated(&view, &contacts, 0).unwrap();
+                    runtime.commit(draft).unwrap();
+                    assert_eq!(runtime.export(), expected);
+                });
+        }
+    }
+}
+
+#[test]
 fn thousands_of_births_fill_partial_and_new_blocks_deterministically() {
     let (initial, view, _) = fixture(1023, 4, false);
     let births: Vec<_> = (1024..=7000).collect();
