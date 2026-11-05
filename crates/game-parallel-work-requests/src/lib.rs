@@ -1,6 +1,6 @@
 //! Addressed requests for physical work; no agreement or organization is required.
 mod experience;
-pub use experience::{Memory, WorkLink};
+pub use experience::{Memory, SuccessReceipt, WorkLink};
 use game_parallel_agreements::{Agreements, Status};
 use game_parallel_opinions::Opinions;
 use game_parallel_production::Production;

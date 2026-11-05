@@ -5,6 +5,9 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
+// Observer, worker, recipe, request, success, refusal, and completed job.
+type WorkObservation = (u64, u64, u32, u64, bool, bool, Option<u64>);
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct WorkLink {
@@ -27,9 +30,18 @@ pub struct Memory {
     /// Latest personally observed successful completion, distinct from later refusals.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_success_at: Option<u64>,
+    /// Identity of the latest personally witnessed completed job, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_success: Option<SuccessReceipt>,
     /// Latest personally observed refusal, distinct from a failed job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_refusal_at: Option<u64>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuccessReceipt {
+    pub request: u64,
+    pub job: u64,
 }
 impl Requests {
     pub(super) fn valid_experience(
@@ -71,6 +83,12 @@ impl Requests {
                     && (r.successes > 0 || r.failures > 0)
                     && r.last_success_at
                         .is_none_or(|tick| r.successes > 0 && tick <= r.last_tick)
+                    && r.last_success.is_none_or(|receipt| {
+                        r.last_success_at.is_some()
+                            && receipt.request > 0
+                            && receipt.request < self.next_id
+                            && receipt.job > 0
+                    })
                     && r.last_refusal_at
                         .is_none_or(|tick| r.failures > 0 && tick <= r.last_tick)
             })
@@ -134,6 +152,7 @@ impl Requests {
                     link.request,
                     completed[i].1,
                     false,
+                    Some(link.job),
                 ))
             })
             .collect();
@@ -160,7 +179,7 @@ impl Requests {
             .pending
             .par_iter()
             .filter(|r| ids.binary_search(&r.id).is_ok())
-            .map(|r| (r.requester, r.worker, r.recipe, r.id, false, true))
+            .map(|r| (r.requester, r.worker, r.recipe, r.id, false, true, None))
             .collect();
         self.learn(observations, tick);
     }
@@ -174,12 +193,13 @@ impl Requests {
                     request.id,
                     false,
                     true,
+                    None,
                 )],
                 tick,
             );
         }
     }
-    fn learn(&mut self, mut observations: Vec<(u64, u64, u32, u64, bool, bool)>, tick: u64) {
+    fn learn(&mut self, mut observations: Vec<WorkObservation>, tick: u64) {
         if self.memory_limit == 0 || observations.is_empty() {
             return;
         }
@@ -192,50 +212,56 @@ impl Requests {
         old.par_sort_unstable_by_key(|r| (r.observer, r.worker, r.recipe));
         let changed: Vec<Vec<Memory>> = observations
             .par_iter()
-            .map(|&(observer, worker, recipe, _, success, refused)| {
-                let start = old.partition_point(|r| r.observer < observer);
-                let end = old.partition_point(|r| r.observer <= observer);
-                let mut rows = old[start..end].to_vec();
-                if rows.iter().any(|row| row.last_tick == tick) {
-                    return rows;
-                }
-                if let Some(row) = rows
-                    .iter_mut()
-                    .find(|r| r.worker == worker && r.recipe == recipe)
-                {
-                    if success {
-                        row.successes = row.successes.saturating_add(1);
-                        row.last_success_at = Some(tick);
-                    } else {
-                        row.failures = row.failures.saturating_add(1);
-                        if refused {
-                            row.last_refusal_at = Some(tick);
+            .map(
+                |&(observer, worker, recipe, request, success, refused, job)| {
+                    let start = old.partition_point(|r| r.observer < observer);
+                    let end = old.partition_point(|r| r.observer <= observer);
+                    let mut rows = old[start..end].to_vec();
+                    if rows.iter().any(|row| row.last_tick == tick) {
+                        return rows;
+                    }
+                    if let Some(row) = rows
+                        .iter_mut()
+                        .find(|r| r.worker == worker && r.recipe == recipe)
+                    {
+                        if success {
+                            row.successes = row.successes.saturating_add(1);
+                            row.last_success_at = Some(tick);
+                            row.last_success = job.map(|job| SuccessReceipt { request, job });
+                        } else {
+                            row.failures = row.failures.saturating_add(1);
+                            if refused {
+                                row.last_refusal_at = Some(tick);
+                            }
                         }
+                        row.last_tick = tick;
+                    } else {
+                        if rows.len() == self.memory_limit {
+                            let i = rows
+                                .iter()
+                                .enumerate()
+                                .min_by_key(|(_, r)| (r.last_tick, r.worker, r.recipe))
+                                .unwrap()
+                                .0;
+                            rows.remove(i);
+                        }
+                        rows.push(Memory {
+                            observer,
+                            worker,
+                            recipe,
+                            successes: u64::from(success),
+                            failures: u64::from(!success),
+                            last_tick: tick,
+                            last_success_at: success.then_some(tick),
+                            last_success: success
+                                .then(|| job.map(|job| SuccessReceipt { request, job }))
+                                .flatten(),
+                            last_refusal_at: refused.then_some(tick),
+                        });
                     }
-                    row.last_tick = tick;
-                } else {
-                    if rows.len() == self.memory_limit {
-                        let i = rows
-                            .iter()
-                            .enumerate()
-                            .min_by_key(|(_, r)| (r.last_tick, r.worker, r.recipe))
-                            .unwrap()
-                            .0;
-                        rows.remove(i);
-                    }
-                    rows.push(Memory {
-                        observer,
-                        worker,
-                        recipe,
-                        successes: u64::from(success),
-                        failures: u64::from(!success),
-                        last_tick: tick,
-                        last_success_at: success.then_some(tick),
-                        last_refusal_at: refused.then_some(tick),
-                    });
-                }
-                rows
-            })
+                    rows
+                },
+            )
             .collect();
         let mut result: Vec<_> = old
             .into_par_iter()

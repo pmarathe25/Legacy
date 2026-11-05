@@ -1,4 +1,4 @@
-use game_parallel_work_requests::{Request, Requests, WorkLink};
+use game_parallel_work_requests::{Request, Requests, SuccessReceipt, WorkLink};
 
 fn state(limit: usize) -> Requests {
     Requests {
@@ -39,10 +39,56 @@ fn concentrated_outcomes_are_bounded_and_deterministic() {
                 assert!(requests.work_links.is_empty());
                 assert_eq!(requests.memories.len(), 1);
                 assert_eq!(requests.memories[0].worker, 2);
+                assert_eq!(
+                    requests.memories[0].last_success,
+                    Some(SuccessReceipt { request: 2, job: 2 })
+                );
                 requests
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn only_personally_witnessed_successes_replace_completion_identity() {
+    let mut requests = state(2);
+    let link = |request, job| WorkLink {
+        request,
+        requester: 1,
+        worker: 2,
+        job,
+        region: 1,
+        recipe: 1,
+    };
+    requests.work_links.push(link(3, 11));
+    requests.resolve(&[(11, true)], 1, |_| true);
+    assert_eq!(
+        requests.memories[0].last_success,
+        Some(SuccessReceipt {
+            request: 3,
+            job: 11
+        })
+    );
+    requests.work_links.push(link(4, 12));
+    requests.resolve(&[(12, true)], 2, |_| false);
+    requests.work_links.push(link(5, 13));
+    requests.resolve(&[(13, false)], 3, |_| true);
+    assert_eq!(
+        requests.memories[0].last_success,
+        Some(SuccessReceipt {
+            request: 3,
+            job: 11
+        })
+    );
+    requests.work_links.push(link(6, 14));
+    requests.resolve(&[(14, true)], 4, |_| true);
+    assert_eq!(
+        requests.memories[0].last_success,
+        Some(SuccessReceipt {
+            request: 6,
+            job: 14
+        })
+    );
 }
 
 #[test]

@@ -6663,6 +6663,7 @@ fn newborn_work_cooperation_preferences_do_not_inherit_work_memories() {
                 failures: 0,
                 last_tick: 0,
                 last_success_at: Some(0),
+                last_success: None,
                 last_refusal_at: None,
             }],
             preferences: vec![Preference {
@@ -19509,6 +19510,17 @@ fn a_person_can_offer_the_actual_helper_a_revocable_promise() {
                         .is_empty()
                 );
                 assert_eq!(world.advance().unwrap().finished, vec![1]);
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .autowork
+                        .unwrap()
+                        .requests
+                        .unwrap()
+                        .memories[0]
+                        .last_success,
+                    Some(game_parallel_autowork::requests::SuccessReceipt { request: 1, job: 1 })
+                );
                 let mut restored = Economy::compile(
                     serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
                         .unwrap(),
@@ -19701,6 +19713,7 @@ fn concentrated_selected_helper_offers(count: u64) -> State {
                     failures: 0,
                     last_tick: 0,
                     last_success_at: Some(0),
+                    last_success: None,
                     last_refusal_at: None,
                 })
                 .collect(),
@@ -20024,6 +20037,7 @@ fn concentrated_remembered_work_offers(count: u64) -> State {
                     failures: 0,
                     last_tick: 0,
                     last_success_at: Some(0),
+                    last_success: None,
                     last_refusal_at: None,
                 })
                 .collect(),
