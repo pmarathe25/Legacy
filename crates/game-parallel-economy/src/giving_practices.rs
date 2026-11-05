@@ -103,16 +103,23 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
         .collect();
     let opinions = context.opinions.map(Opinions::index);
     owner
-        .prepare_with_evidence(
+        .prepare_with_judgments(
             &contacts,
             &observations,
             context.tick,
-            |person, other| {
-                opinions.as_ref().map_or(0, |index| {
-                    let (fear, obligation) = index.feelings(person, other);
-                    fear.saturating_add(obligation)
-                })
-            },
+            (
+                |person, other| {
+                    opinions.as_ref().map_or(0, |index| {
+                        let (fear, obligation) = index.feelings(person, other);
+                        fear.saturating_add(obligation)
+                    })
+                },
+                |person, other| {
+                    opinions
+                        .as_ref()
+                        .map_or(0, |index| index.trust(person, other))
+                },
+            ),
             |person| {
                 context
                     .people

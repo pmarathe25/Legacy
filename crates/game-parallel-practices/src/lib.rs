@@ -178,6 +178,8 @@ pub enum ReportAttitude {
     Ignore,
     Trust,
     Doubt,
+    /// Believe this speaker only when personal directed trust meets the threshold.
+    TrustAtLeast(i32),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -618,6 +620,8 @@ impl Practices {
         )
     }
     /// Readiness is evaluated only from the speaker's own current custody.
+    /// This convenience form uses neutral trust (zero); hosts with personal
+    /// opinions should use `prepare_with_judgments` to supply directed trust.
     pub fn prepare_with_evidence<F, G, H>(
         &self,
         contacts: &[(u64, u64)],
@@ -632,6 +636,32 @@ impl Practices {
         G: Fn(u64) -> bool + Sync,
         H: Fn(u64, u32, u64) -> bool + Sync,
     {
+        self.prepare_with_judgments(
+            contacts,
+            observations,
+            tick,
+            (pressure, |_, _| 0),
+            can_decide,
+            ready,
+        )
+    }
+    /// Pressure and directed trust are independently supplied by the person's social view.
+    pub fn prepare_with_judgments<F, G, H, J>(
+        &self,
+        contacts: &[(u64, u64)],
+        observations: &[Observation],
+        tick: u64,
+        impressions: (F, J),
+        can_decide: G,
+        ready: H,
+    ) -> Result<Self, &'static str>
+    where
+        F: Fn(u64, u64) -> u64 + Sync,
+        G: Fn(u64) -> bool + Sync,
+        H: Fn(u64, u32, u64) -> bool + Sync,
+        J: Fn(u64, u64) -> i32 + Sync,
+    {
+        let (pressure, trust) = impressions;
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("practices.setup");
         let mut contacts: Vec<_> = contacts
@@ -890,6 +920,13 @@ impl Practices {
                             ReportAttitude::Ignore => Belief::Unassessed,
                             ReportAttitude::Trust => Belief::Believes,
                             ReportAttitude::Doubt => Belief::Disbelieves,
+                            ReportAttitude::TrustAtLeast(threshold) => {
+                                if trust(mind.person, report.statement.speaker) >= threshold {
+                                    Belief::Believes
+                                } else {
+                                    Belief::Disbelieves
+                                }
+                            }
                         };
                     }
                 }

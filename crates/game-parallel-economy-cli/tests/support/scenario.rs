@@ -2240,6 +2240,10 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
         "precedent = { same_person = 3, same_good = 2, quantity_difference = -1, received = 4, gave = -2 }\nshortage_threshold = 5",
         1,
     );
+    let configured = configured.replace(
+        "report_attitude = \"doubt\"",
+        "report_attitude = { trust_at_least = 3 }",
+    );
     let path = std::env::temp_dir().join(format!(
         "legacy-personal-practices-{}.toml",
         std::process::id()
@@ -2254,7 +2258,7 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     assert_eq!(own.reporting, game_parallel_economy::PracticeReporting::Lie);
     assert_eq!(
         own.report_attitude,
-        game_parallel_economy::PracticeReportAttitude::Doubt
+        game_parallel_economy::PracticeReportAttitude::TrustAtLeast(3)
     );
     assert!(own.require_believed_ready);
     assert_eq!(own.value_learning.as_ref().unwrap().value, 1);

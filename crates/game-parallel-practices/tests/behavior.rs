@@ -397,6 +397,51 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
         game_parallel_practices::Belief::Unassessed
     );
     assert!(statement.minds[2].reports.is_empty());
+    let mut selective = statement.clone();
+    selective.minds[0].report_attitude = game_parallel_practices::ReportAttitude::TrustAtLeast(3);
+    let restored: Practices =
+        serde_json::from_str(&serde_json::to_string(&selective).unwrap()).unwrap();
+    for workers in [1, 4] {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let judge = |trust| {
+                    restored
+                        .prepare_with_judgments(
+                            &[],
+                            &[],
+                            7,
+                            (
+                                |_, _| 0,
+                                move |observer, speaker| {
+                                    if (observer, speaker) == (1, 2) {
+                                        trust
+                                    } else {
+                                        -100
+                                    }
+                                },
+                            ),
+                            |_| true,
+                            |_, _, _| false,
+                        )
+                        .unwrap()
+                };
+                assert_eq!(
+                    judge(3).minds[0].reports[0].belief,
+                    game_parallel_practices::Belief::Believes
+                );
+                assert_eq!(
+                    judge(2).minds[0].reports[0].belief,
+                    game_parallel_practices::Belief::Disbelieves
+                );
+                assert_eq!(
+                    selective.minds[0].reports[0].belief,
+                    game_parallel_practices::Belief::Unassessed
+                );
+            });
+    }
     let concealment = liar
         .prepare_with_evidence(&[(1, 2)], &[], 6, |_, _| 0, |_| true, |_, _, _| true)
         .unwrap();

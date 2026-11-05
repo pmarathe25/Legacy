@@ -8168,9 +8168,20 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                         .as_mut()
                         .unwrap()
                         .minds[0];
-                    author.report_attitude = PracticeReportAttitude::Trust;
+                    author.report_attitude = PracticeReportAttitude::TrustAtLeast(3);
                     author.require_believed_ready = true;
                     author.unanswered_report_belief = Some(PracticeBelief::Disbelieves);
+                    state.opinions.as_mut().unwrap().records.insert(
+                        0,
+                        Opinion {
+                            observer: 1,
+                            target: 2,
+                            trust: 4,
+                            fear: 0,
+                            obligation: 0,
+                            affinity: 0,
+                        },
+                    );
                 }
                 let mut world = Economy::compile(state).unwrap();
                 world.advance().unwrap();
