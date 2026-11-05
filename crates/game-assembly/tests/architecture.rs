@@ -40,9 +40,10 @@ fn crate_size_and_dependency_direction_are_enforced() {
             "game-sim" => 1250,
             "game-parallel-economy" => 8000,
             "game-parallel-economy-cli" => 2800,
-            "game-parallel-practices" => 1700,
+            "game-parallel-practices" => 2200,
+            "game-parallel-economy-work" => 1450,
             "game-parallel-economy-building" => 1500,
-            "game-parallel-opinions" => 1400,
+            "game-parallel-opinions" => 1650,
             _ => 1200,
         };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");

@@ -19,12 +19,22 @@ pub struct Context<'a> {
     pub requests: Option<&'a game_parallel_autowork::requests::Requests>,
     pub work_asks: &'a [game_parallel_autowork::requests::Request],
     pub practice_requests: &'a [game_parallel_economy_work::PracticeRequest],
+    pub started_work: &'a [game_parallel_economy_work::StartedRequest],
     pub encounters: &'a [Encounter],
     pub gifts: &'a Plan,
     pub events: &'a Events,
     pub tick: u64,
 }
-pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, String> {
+pub fn advance(
+    owner: &Practices,
+    context: Context<'_>,
+) -> Result<
+    (
+        Practices,
+        Vec<game_parallel_practices::work::outcome::Reaction>,
+    ),
+    String,
+> {
     let food: Vec<_> = context
         .goods
         .iter()
@@ -60,8 +70,8 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
     observations.par_extend(
         gifts
             .par_iter()
-            .filter(|row| food_ids.contains(&row.2))
-            .map(|&(helper, person, good, quantity)| Observation {
+            .filter(|row| food_ids.contains(&row.3))
+            .map(|&(_, helper, person, good, quantity)| Observation {
                 person,
                 case: Case::Received {
                     tick: context.tick,
@@ -74,8 +84,8 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
     observations.par_extend(
         gifts
             .par_iter()
-            .filter(|row| food_ids.contains(&row.2))
-            .map(|&(person, recipient, good, quantity)| Observation {
+            .filter(|row| food_ids.contains(&row.3))
+            .map(|&(_, person, recipient, good, quantity)| Observation {
                 person,
                 case: Case::Gave {
                     tick: context.tick,
@@ -144,6 +154,7 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
             },
         )
         .map_err(str::to_owned)?;
+    let mut reactions = Vec::new();
     if owner.minds.par_iter().any(|mind| mind.work.is_some()) {
         let may_invent = owner.minds.par_iter().any(|mind| {
             mind.work.as_ref().is_some_and(|work| {
@@ -284,11 +295,12 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
         }
         let observed_gifts: Vec<_> = gifts
             .par_iter()
-            .flat_map_iter(|&(giver, recipient, good, quantity)| {
+            .flat_map_iter(|&(action, giver, recipient, good, quantity)| {
                 use game_parallel_practices::work::{Gift, GiftObservation};
                 [
                     GiftObservation {
                         person: giver,
+                        action,
                         gift: Gift {
                             tick: context.tick,
                             other: recipient,
@@ -299,6 +311,7 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                     },
                     GiftObservation {
                         person: recipient,
+                        action,
                         gift: Gift {
                             tick: context.tick,
                             other: giver,
@@ -310,9 +323,42 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                 ]
             })
             .collect();
+        if owner.minds.par_iter().any(|mind| {
+            mind.work
+                .as_ref()
+                .is_some_and(|work| work.outcome_policy.is_some() || !work.experiences.is_empty())
+        }) {
+            let starts: Vec<_> = context
+                .started_work
+                .par_iter()
+                .map(|row| game_parallel_practices::work::outcome::Start {
+                    requester: row.requester,
+                    worker: row.worker,
+                    recipe: row.recipe,
+                    request: row.request,
+                    job: row.job,
+                })
+                .collect();
+            let failed: Vec<_> = context
+                .events
+                .interrupted
+                .par_iter()
+                .chain(context.events.abandoned.par_iter())
+                .copied()
+                .collect();
+            reactions = game_parallel_practices::work::outcome::advance(
+                owner,
+                &mut next,
+                &starts,
+                &context.events.finished,
+                &failed,
+                &observed_gifts,
+                context.tick,
+            );
+        }
         game_parallel_practices::work::remember_gifts(&mut next, &observed_gifts);
     }
-    Ok(next)
+    Ok((next, reactions))
 }
 
 /// Reclaim independent old personal generations without serializing a large tick.
@@ -434,6 +480,20 @@ macro_rules! methods {
                     .as_mut()
                     .ok_or("person has no work practice mind")?;
                 std::sync::Arc::make_mut(work).evaluation = evaluation;
+                Ok(())
+            })
+        }
+        pub fn set_work_outcome_policy(
+            &mut self,
+            person: u64,
+            policy: Option<game_parallel_practices::work::outcome::Policy>,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                let work = mind
+                    .work
+                    .as_mut()
+                    .ok_or("person has no work practice mind")?;
+                std::sync::Arc::make_mut(work).outcome_policy = policy;
                 Ok(())
             })
         }

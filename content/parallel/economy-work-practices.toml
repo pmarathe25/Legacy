@@ -149,6 +149,11 @@ affinity_weight = 1
 trust_weight = 1
 threshold = 1
 
+[giving.practices.minds.work.outcome_policy]
+wait_ticks = 4
+missing_trust = -2
+missing_affinity = -1
+
 [hauling]
 policies = [{ person = 2, source = 2, destination = 1, good = "bread", quantity = 2, willing = true, requires_request = true, request_pressure_threshold = 3 }]
 

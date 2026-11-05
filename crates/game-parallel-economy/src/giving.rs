@@ -165,6 +165,7 @@ impl Giving {
                     work.authored
                         .iter()
                         .chain(work.engagement.iter().map(|entry| &entry.proposal))
+                        .chain(work.experiences.iter().map(|entry| &entry.proposal))
                         .chain(work.inbox.iter().map(|row| &row.proposal))
                         .any(|proposal| !recipes.iter().any(|recipe| recipe.id == proposal.recipe))
                 })
@@ -965,7 +966,7 @@ impl Plan {
             .map(|row| (row.1, row.2, row.3))
             .collect()
     }
-    pub(crate) fn practice_gifts(&self, events: &Events) -> Vec<(u64, u64, u32, u64)> {
+    pub(crate) fn practice_gifts(&self, events: &Events) -> Vec<(u64, u64, u64, u32, u64)> {
         let accepted: HashSet<_> = events
             .physical_actions
             .par_iter()
@@ -976,7 +977,15 @@ impl Plan {
             .par_iter()
             .zip(self.actions.par_iter())
             .filter(|(record, _)| accepted.contains(&record.0))
-            .map(|(record, action)| (record.1, record.2, record.3, action.movements[0].quantity))
+            .map(|(record, action)| {
+                (
+                    record.0,
+                    record.1,
+                    record.2,
+                    record.3,
+                    action.movements[0].quantity,
+                )
+            })
             .collect()
     }
     /// Learn only from food that was actually received in this boundary.

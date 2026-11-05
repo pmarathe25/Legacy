@@ -50,6 +50,7 @@ fn paired_work_practices(count: u64) -> Workload {
         invent: true,
         approve: true,
         evaluation: None,
+        outcome_policy: None,
         willing: true,
         ask_willing: true,
         review_interval: 2,
@@ -61,6 +62,7 @@ fn paired_work_practices(count: u64) -> Workload {
         authored: None,
         engagement: None,
         gifts: vec![],
+        experiences: vec![],
         inbox: vec![],
     });
     let mut minds: Vec<_> = (1..=count)
@@ -208,6 +210,7 @@ fn personal_non_food_gift_memories_are_bounded_and_deterministic() {
         .rev()
         .map(|tick| GiftObservation {
             person: 1,
+            action: tick,
             gift: Gift {
                 tick,
                 other: 2,

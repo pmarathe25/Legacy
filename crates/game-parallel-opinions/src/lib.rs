@@ -5,7 +5,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
 mod harm;
+mod personal_change;
 mod report_trust;
+pub use personal_change::PersonalChange;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opinions {
@@ -107,6 +109,10 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    /// Apply simultaneous signed interpretations supplied by their observers.
+    pub fn apply_personal_changes(&mut self, changes: &[PersonalChange], tick: u64) {
+        personal_change::apply(self, changes, tick);
+    }
     /// Detach a personal disposition generation only when it is actually changed.
     /// Parallel indexed cloning preserves canonical order for large populations.
     pub fn sensitivities_mut(&mut self) -> &mut Vec<Sensitivity> {

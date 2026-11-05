@@ -153,6 +153,7 @@ fn work_practice_is_delivered_through_contact_and_considered_independently() {
         invent: true,
         approve: false,
         evaluation: None,
+        outcome_policy: None,
         willing: false,
         ask_willing: true,
         review_interval: 2,
@@ -164,6 +165,7 @@ fn work_practice_is_delivered_through_contact_and_considered_independently() {
         authored: None,
         engagement: None,
         gifts: vec![],
+        experiences: vec![],
         inbox: vec![],
     };
     let mut author = mind(1);
@@ -255,6 +257,7 @@ fn work_proposal_approval_uses_each_recipients_directed_relationship() {
             trust_weight: 1,
             threshold: 1,
         }),
+        outcome_policy: None,
         willing: false,
         ask_willing: false,
         review_interval: 1,
@@ -266,6 +269,7 @@ fn work_proposal_approval_uses_each_recipients_directed_relationship() {
         authored: None,
         engagement: None,
         gifts: vec![],
+        experiences: vec![],
         inbox: vec![WorkReceived {
             proposal: WorkProposal {
                 author: 1,

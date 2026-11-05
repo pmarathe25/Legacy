@@ -827,6 +827,12 @@ impl<'a> Player<'a> {
         self.world
             .set_work_practice_evaluation(self.current()?, evaluation)
     }
+    pub fn set_work_outcome_policy(
+        &mut self,
+        policy: Option<game_parallel_economy::WorkOutcomePolicy>,
+    ) -> Result<(), String> {
+        self.world.set_work_outcome_policy(self.current()?, policy)
+    }
     pub fn report_practice(
         &mut self,
         listener: u64,

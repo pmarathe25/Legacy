@@ -24,6 +24,15 @@ pub struct Plan {
     request: Option<RequestDraft>,
     asks: Option<asking::Draft>,
 }
+/// A request that led to an actually started job, visible to its worker.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StartedRequest {
+    pub request: u64,
+    pub requester: u64,
+    pub worker: u64,
+    pub recipe: u32,
+    pub job: u64,
+}
 fn site_disregards(
     auto: &Autowork,
     claims: Option<&game_parallel_economy_claims::Index<'_>>,
@@ -417,6 +426,49 @@ impl Plan {
     /// Requests actually admitted to a receiver's bounded inbox this boundary.
     pub fn asks(&self) -> &[game_parallel_work_requests::Request] {
         self.asks.as_ref().map_or(&[], |draft| &draft.requests)
+    }
+    pub fn started_requests(&self, auto: &Autowork, physical: &Events) -> Vec<StartedRequest> {
+        let (Some(owner), Some(decisions), Some(work)) =
+            (&auto.requests, &self.request, &self.work)
+        else {
+            return Vec::new();
+        };
+        if physical.started.is_empty() {
+            return Vec::new();
+        }
+        let mut pending: Vec<_> = owner.pending.par_iter().collect();
+        pending.par_sort_unstable_by_key(|request| request.id);
+        let mut started: Vec<_> = work
+            .requests
+            .par_iter()
+            .filter(|job| physical.started.binary_search(&job.id).is_ok())
+            .collect();
+        started.par_sort_unstable_by_key(|job| job.worker);
+        decisions
+            .decisions
+            .par_iter()
+            .filter(|decision| decision.help)
+            .filter_map(|decision| {
+                let request = pending
+                    .binary_search_by_key(&decision.request, |request| request.id)
+                    .ok()
+                    .map(|i| pending[i])?;
+                let job = started
+                    .binary_search_by_key(&decision.worker, |job| job.worker)
+                    .ok()
+                    .map(|i| started[i])?;
+                (request.worker == job.worker
+                    && request.region == job.region
+                    && request.recipe == job.recipe)
+                    .then_some(StartedRequest {
+                        request: request.id,
+                        requester: request.requester,
+                        worker: request.worker,
+                        recipe: request.recipe,
+                        job: job.id,
+                    })
+            })
+            .collect()
     }
     /// Avoid scanning personal preferences on boundaries with no relevant outcomes.
     pub fn may_have_work_experiences(&self, physical: &Events) -> bool {

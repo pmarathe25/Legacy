@@ -4,6 +4,7 @@ use crate::{Case, Decision, Mind as PersonalMind};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+pub mod outcome;
 
 /// A person's own inclinations and bounded records, not an organization.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -14,6 +15,9 @@ pub struct Mind {
     /// Optional personal interpretation of the author's relationship.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evaluation: Option<Evaluation>,
+    /// Optional personal expectation and response to unreceived terms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome_policy: Option<outcome::Policy>,
     pub willing: bool,
     pub ask_willing: bool,
     pub review_interval: u64,
@@ -34,6 +38,8 @@ pub struct Mind {
     /// Directly experienced gifts, independent of whether the good is food.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub gifts: Vec<Gift>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub experiences: Vec<outcome::Experience>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox: Vec<Received>,
 }
@@ -81,6 +87,8 @@ pub struct Gift {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GiftObservation {
     pub person: u64,
+    /// Unique within the physical boundary; used to ignore duplicate receipts.
+    pub action: u64,
     pub gift: Gift,
 }
 
@@ -107,6 +115,7 @@ pub fn valid(
         && mind.pressure_threshold != Some(0)
         && mind.inbox.len() <= crate::MAX_PROPOSALS
         && mind.gifts.len() <= crate::MAX_CASES
+        && mind.experiences.len() <= crate::MAX_PROPOSALS
         && mind
             .gifts
             .windows(2)
@@ -128,6 +137,23 @@ pub fn valid(
                 && entry.proposal.author == person
                 && entry.proposal.sequence <= mind.sequence
                 && entry.delivered < entry.proposal.quantity
+        })
+        && mind.experiences.iter().enumerate().all(|(i, experience)| {
+            valid_proposal(&experience.proposal)
+                && experience.proposal.worker == person
+                && experience.request > 0
+                && experience.job > 0
+                && experience.delivered >= experience.proposal.created
+                && experience.delivered < experience.started
+                && experience.started <= now
+                && experience.received <= experience.proposal.quantity
+                && experience
+                    .completed
+                    .is_none_or(|tick| tick >= experience.started && tick <= now)
+                && (!experience.assessed || experience.completed.is_some())
+                && !mind.experiences[..i]
+                    .iter()
+                    .any(|old| old.job == experience.job || old.request == experience.request)
         })
         && mind.inbox.iter().enumerate().all(|(i, r)| {
             valid_proposal(&r.proposal)
@@ -195,6 +221,7 @@ pub fn remember_gifts(next: &mut crate::Practices, observations: &[GiftObservati
     sorted.par_sort_unstable_by_key(|row| {
         (
             row.person,
+            row.action,
             row.gift.tick,
             row.gift.other,
             row.gift.good,
@@ -202,6 +229,10 @@ pub fn remember_gifts(next: &mut crate::Practices, observations: &[GiftObservati
             row.gift.given,
         )
     });
+    let sorted: Vec<_> = sorted
+        .par_chunk_by(|a, b| (a.person, a.action) == (b.person, b.action))
+        .map(|rows| rows[0])
+        .collect();
     next.minds.par_iter_mut().for_each(|person| {
         let start = sorted.partition_point(|row| row.person < person.person);
         let end = sorted.partition_point(|row| row.person <= person.person);

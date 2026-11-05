@@ -1595,6 +1595,29 @@ fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
     .unwrap();
     let mut player = Player::new(&mut world);
     player
+        .set_work_outcome_policy(Some(game_parallel_economy::WorkOutcomePolicy {
+            wait_ticks: 2,
+            missing_trust: 1,
+            missing_affinity: -2,
+        }))
+        .unwrap();
+    assert_eq!(
+        player
+            .view()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .work
+            .as_ref()
+            .unwrap()
+            .outcome_policy
+            .unwrap()
+            .missing_affinity,
+        -2
+    );
+    player.set_work_outcome_policy(None).unwrap();
+    player
         .set_work_practice_evaluation(Some(game_parallel_economy::WorkPracticeEvaluation {
             base: 1,
             affinity_weight: -2,

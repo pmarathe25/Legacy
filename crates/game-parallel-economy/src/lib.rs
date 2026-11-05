@@ -41,6 +41,7 @@ pub use game_parallel_opinions::{
     Sensitivity as OpinionSensitivity,
 };
 pub use game_parallel_practices::work::Evaluation as WorkPracticeEvaluation;
+pub use game_parallel_practices::work::outcome::Policy as WorkOutcomePolicy;
 pub use game_parallel_practices::{
     Belief as PracticeBelief, Case as PracticeCase, Decision as PracticeDecision,
     Mind as PracticeMind, Practices as PersonalPractices, PrecedentReasoning as PracticePrecedent,
@@ -926,12 +927,15 @@ impl Economy {
                 .and_then(|auto| auto.requests.as_ref());
             if giving.practices.as_ref().is_some_and(|practices| {
                 practices.minds.par_iter().any(|mind| {
-                    mind.work
-                        .as_ref()
-                        .and_then(|work| work.engagement.as_ref())
-                        .is_some_and(|entry| {
-                            requests.is_none_or(|requests| entry.request >= requests.next_id)
-                        })
+                    mind.work.as_ref().is_some_and(|work| {
+                        work.engagement
+                            .iter()
+                            .map(|entry| entry.request)
+                            .chain(work.experiences.iter().map(|entry| entry.request))
+                            .any(|request| {
+                                requests.is_none_or(|requests| request >= requests.next_id)
+                            })
+                    })
                 })
             }) {
                 return Err("work practice references an unknown request".into());
@@ -2822,6 +2826,7 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.social");
         }
+        let mut work_reactions = Vec::new();
         if let Some((giving, practices)) = self.giving.as_ref().and_then(|giving| {
             giving
                 .practices
@@ -2832,7 +2837,21 @@ impl Economy {
                 .as_ref()
                 .and_then(|d| d.social.as_ref())
                 .map_or(&[][..], |social| social.events.as_slice());
-            let next = giving_practices::advance(
+            let track_work = practices.minds.par_iter().any(|mind| {
+                mind.work.as_ref().is_some_and(|work| {
+                    work.outcome_policy.is_some() || !work.experiences.is_empty()
+                })
+            });
+            let started_work = if track_work {
+                work.as_ref()
+                    .zip(self.autowork.as_ref())
+                    .map_or_else(Vec::new, |(plan, auto)| {
+                        plan.started_requests(auto, physical.events())
+                    })
+            } else {
+                Vec::new()
+            };
+            let (next, reactions) = giving_practices::advance(
                 practices,
                 giving_practices::Context {
                     giving,
@@ -2847,12 +2866,14 @@ impl Economy {
                         .and_then(|auto| auto.requests.as_ref()),
                     work_asks: work.as_ref().map_or(&[][..], |plan| plan.asks()),
                     practice_requests: &practice_requests,
+                    started_work: &started_work,
                     encounters,
                     gifts: &giving_plan,
                     events: physical.events(),
                     tick,
                 },
             )?;
+            work_reactions = reactions;
             next_giving
                 .as_mut()
                 .expect("giving remains enabled")
@@ -2860,6 +2881,18 @@ impl Economy {
         }
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
+        if let Some(opinions) = &mut next_opinions {
+            let changes: Vec<_> = work_reactions
+                .par_iter()
+                .map(|reaction| game_parallel_opinions::PersonalChange {
+                    observer: reaction.observer,
+                    target: reaction.target,
+                    trust: reaction.trust,
+                    affinity: reaction.affinity,
+                })
+                .collect();
+            opinions.apply_personal_changes(&changes, tick);
+        }
         development::enroll(&mut next_opinions, family.as_ref(), tick);
         if let Some(claims) = dynamics
             .as_ref()

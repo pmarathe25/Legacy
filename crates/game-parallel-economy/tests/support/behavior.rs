@@ -8624,6 +8624,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
         invent: false,
         approve: true,
         evaluation: None,
+        outcome_policy: None,
         willing: false,
         ask_willing: false,
         review_interval: 1,
@@ -8635,6 +8636,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
         authored: None,
         engagement: None,
         gifts: vec![],
+        experiences: vec![],
         inbox: vec![],
     };
     author.work = Some(std::sync::Arc::new(work.clone()));
@@ -8708,6 +8710,228 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
             needs: None,
         }),
     });
+    let run_reaction = |workers, trust_change, affinity_change, funded| {
+        let mut state = initial.clone();
+        let worker = &mut state
+            .giving
+            .as_mut()
+            .unwrap()
+            .practices
+            .as_mut()
+            .unwrap()
+            .minds[1];
+        std::sync::Arc::make_mut(worker.work.as_mut().unwrap()).outcome_policy =
+            Some(game_parallel_practices::work::outcome::Policy {
+                wait_ticks: 2,
+                missing_trust: trust_change,
+                missing_affinity: affinity_change,
+            });
+        state.opinions.as_mut().unwrap().rules.affinity =
+            Some(game_parallel_opinions::AffinityRules {
+                limit: 10,
+                encounter_change: 0,
+                pressured_encounter_change: 0,
+                help_change: 0,
+                harm_change_per_damage: 0,
+            });
+        if funded {
+            let holder = state
+                .physical
+                .custody
+                .containers
+                .iter_mut()
+                .find(|holder| holder.place == Place::Person(1))
+                .unwrap();
+            *holder = Container::new(
+                Place::Person(1),
+                10,
+                vec![Lot {
+                    good: 1,
+                    quantity: 1,
+                    expires_at: Some(20),
+                }],
+            )
+            .unwrap();
+        }
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                assert!(world.propose_work_practice(1, 2, 1, 1, 1, 8).unwrap());
+                world.advance().unwrap();
+                let request = world.ask_work(1, 2, 1, 5).unwrap();
+                let mut finished = None;
+                for _ in 0..5 {
+                    world.advance().unwrap();
+                    let saved = world.snapshot();
+                    let work = saved
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds[1]
+                        .work
+                        .as_ref()
+                        .unwrap();
+                    if work.experiences.iter().any(|experience| {
+                        experience.request == request && experience.completed.is_some()
+                    }) {
+                        finished = Some(saved);
+                        break;
+                    }
+                }
+                let finished =
+                    finished.expect("the worker remembers their own completed requested job");
+                let experience = &finished
+                    .giving
+                    .as_ref()
+                    .unwrap()
+                    .practices
+                    .as_ref()
+                    .unwrap()
+                    .minds[1]
+                    .work
+                    .as_ref()
+                    .unwrap()
+                    .experiences[0];
+                assert_eq!(
+                    (
+                        experience.request,
+                        experience.proposal.good,
+                        experience.proposal.quantity
+                    ),
+                    (request, 1, 1)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&finished).unwrap()).unwrap(),
+                )
+                .unwrap();
+                if funded {
+                    assert!(world.give(1, 2, 1, 1).unwrap());
+                    assert!(restored.give(1, 2, 1, 1).unwrap());
+                } else {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                let work = state
+                    .giving
+                    .as_ref()
+                    .unwrap()
+                    .practices
+                    .as_ref()
+                    .unwrap()
+                    .minds[1]
+                    .work
+                    .as_ref()
+                    .unwrap();
+                assert!(work.experiences[0].assessed);
+                assert_eq!(work.experiences[0].received, u64::from(funded));
+                let opinion = state
+                    .opinions
+                    .as_ref()
+                    .unwrap()
+                    .records
+                    .iter()
+                    .find(|row| row.observer == 2 && row.target == 1);
+                let actual = opinion.map_or((0, 0), |row| (row.trust, row.affinity));
+                assert_eq!(
+                    actual,
+                    if funded {
+                        (0, 0)
+                    } else {
+                        (trust_change, affinity_change)
+                    }
+                );
+                world.advance().unwrap();
+                let repeated = world.snapshot();
+                let opinion = repeated
+                    .opinions
+                    .as_ref()
+                    .unwrap()
+                    .records
+                    .iter()
+                    .find(|row| row.observer == 2 && row.target == 1);
+                assert_eq!(
+                    opinion.map_or((0, 0), |row| (row.trust, row.affinity)),
+                    actual,
+                    "one personal assessment cannot be applied twice"
+                );
+                state
+            })
+    };
+    assert_eq!(run_reaction(1, -2, 3, false), run_reaction(4, -2, 3, false));
+    run_reaction(1, 2, -3, false);
+    run_reaction(1, -2, 3, true);
+    run_reaction(1, 0, 0, false);
+    let mut absent = initial.clone();
+    let worker = &mut absent
+        .giving
+        .as_mut()
+        .unwrap()
+        .practices
+        .as_mut()
+        .unwrap()
+        .minds[1];
+    std::sync::Arc::make_mut(worker.work.as_mut().unwrap()).outcome_policy =
+        Some(game_parallel_practices::work::outcome::Policy {
+            wait_ticks: 1,
+            missing_trust: -1,
+            missing_affinity: 0,
+        });
+    let mut absent = Economy::compile(absent).unwrap();
+    assert!(absent.propose_work_practice(1, 2, 1, 1, 1, 8).unwrap());
+    absent.advance().unwrap();
+    let request = absent.ask_work(1, 2, 1, 5).unwrap();
+    assert!(!absent.advance().unwrap().started.is_empty());
+    let mut state = absent.snapshot();
+    state.people[0].health = 0;
+    let mut absent = Economy::compile(state).unwrap();
+    for _ in 0..3 {
+        absent.advance().unwrap();
+    }
+    let state = absent.snapshot();
+    assert!(
+        state
+            .giving
+            .as_ref()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .minds[1]
+            .work
+            .as_ref()
+            .unwrap()
+            .experiences
+            .iter()
+            .any(|experience| experience.request == request
+                && experience.completed.is_some()
+                && experience.assessed)
+    );
+    assert!(
+        !state
+            .autowork
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()
+            .memories
+            .iter()
+            .any(|memory| memory.observer == 1
+                && memory
+                    .last_success
+                    .is_some_and(|receipt| receipt.request == request)),
+        "the absent requester did not personally witness completion"
+    );
     let mut funded = initial.clone();
     let holder = funded
         .physical
@@ -8965,6 +9189,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         invent,
         approve,
         evaluation: None,
+        outcome_policy: None,
         willing: false,
         ask_willing: false,
         review_interval: 2,
@@ -8976,6 +9201,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         authored: None,
         engagement: None,
         gifts: vec![],
+        experiences: vec![],
         inbox: vec![],
     };
     let mut author = practice_mind(1, false);

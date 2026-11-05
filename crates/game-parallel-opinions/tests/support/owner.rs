@@ -1,5 +1,64 @@
 use super::*;
 #[test]
+fn simultaneous_personal_changes_are_signed_bounded_and_worker_invariant() {
+    let mut rules = rules();
+    rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let initial = Opinions {
+        rules,
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![].into(),
+    };
+    let mut changes: Vec<_> = (1..=3000)
+        .rev()
+        .map(|observer| PersonalChange {
+            observer,
+            target: 9000,
+            trust: -2,
+            affinity: 3,
+        })
+        .collect();
+    changes.extend([
+        PersonalChange {
+            observer: 1,
+            target: 9000,
+            trust: 5,
+            affinity: -10,
+        },
+        PersonalChange {
+            observer: 2,
+            target: 9000,
+            trust: 2,
+            affinity: -3,
+        },
+    ]);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut result = initial.clone();
+                result.apply_personal_changes(&changes, 5);
+                result
+            })
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    let index = result.index();
+    assert_eq!((index.trust(1, 9000), index.affinity(1, 9000)), (3, -7));
+    assert_eq!((index.trust(2, 9000), index.affinity(2, 9000)), (0, 0));
+    assert_eq!((index.trust(3, 9000), index.affinity(3, 9000)), (-2, 3));
+    assert_eq!(result.records.len(), 2999);
+    assert!(result.events.iter().all(|event| event.tick == 5));
+}
+#[test]
 fn personal_dispositions_share_until_a_real_change_then_detach() {
     use std::sync::Arc;
     let development = ObligationDevelopment {
