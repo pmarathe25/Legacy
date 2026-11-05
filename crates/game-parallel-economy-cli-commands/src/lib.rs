@@ -256,6 +256,37 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 _ => return Err("expected on or off".into()),
             },
         )?,
+        ["practice-precedent", person, "off"] => {
+            world.set_practice_precedent(person.parse().map_err(|_| "invalid person")?, None)?
+        }
+        [
+            "practice-precedent",
+            person,
+            person_weight,
+            good,
+            distance,
+            received,
+            gave,
+            unanswered,
+            shortage,
+        ] => world.set_practice_precedent(
+            person.parse().map_err(|_| "invalid person")?,
+            Some(game_parallel_economy::PracticePrecedent {
+                same_person: person_weight.parse().map_err(|_| "invalid person weight")?,
+                same_good: good.parse().map_err(|_| "invalid good weight")?,
+                quantity_difference: distance.parse().map_err(|_| "invalid quantity weight")?,
+                received: received
+                    .parse()
+                    .map_err(|_| "invalid received interpretation")?,
+                gave: gave.parse().map_err(|_| "invalid giving interpretation")?,
+                unanswered: unanswered
+                    .parse()
+                    .map_err(|_| "invalid unanswered interpretation")?,
+                shortage: shortage
+                    .parse()
+                    .map_err(|_| "invalid shortage interpretation")?,
+            }),
+        )?,
         _ => return Ok(false),
     }
     Ok(true)

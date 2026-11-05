@@ -832,6 +832,13 @@ impl<'a> Player<'a> {
         self.world
             .set_practice_value_learning(self.current()?, value)
     }
+    pub fn set_practice_precedent(
+        &mut self,
+        precedent: Option<game_parallel_economy::PracticePrecedent>,
+    ) -> Result<(), String> {
+        self.world
+            .set_practice_precedent(self.current()?, precedent)
+    }
     pub fn set_food_misreport(
         &mut self,
         choice: Option<game_parallel_economy::Misreport>,

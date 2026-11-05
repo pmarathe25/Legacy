@@ -264,6 +264,16 @@ macro_rules! methods {
                 Ok(())
             })
         }
+        pub fn set_practice_precedent(
+            &mut self,
+            person: u64,
+            precedent: Option<game_parallel_practices::PrecedentReasoning>,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                mind.precedent = precedent.map(std::sync::Arc::new);
+                Ok(())
+            })
+        }
         pub fn assess_practice_report(
             &mut self,
             person: u64,

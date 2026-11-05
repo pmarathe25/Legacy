@@ -2235,6 +2235,11 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     let configured = format!(
         "{source}\n[[giving.practices.minds]]\nperson = 1\ninvent = true\napprove = false\nwilling = false\nask_willing = true\nreporting = \"lie\"\nreport_attitude = \"doubt\"\nunanswered_report_belief = \"believes\"\nrequire_believed_ready = true\nvalue_learning = {{ value = 1, minimum = -4, maximum = 4, received = 2, gave = -1, unanswered = 1 }}\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n\n[[giving.practices.minds]]\nperson = 2\ninvent = false\napprove = true\nwilling = true\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n"
     );
+    let configured = configured.replacen(
+        "shortage_threshold = 5",
+        "precedent = { same_person = 3, same_good = 2, quantity_difference = -1, received = 4, gave = -2 }\nshortage_threshold = 5",
+        1,
+    );
     let path = std::env::temp_dir().join(format!(
         "legacy-personal-practices-{}.toml",
         std::process::id()
@@ -2253,6 +2258,17 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     );
     assert!(own.require_believed_ready);
     assert_eq!(own.value_learning.as_ref().unwrap().value, 1);
+    assert_eq!(own.precedent.as_ref().unwrap().same_person, 3);
+    player.set_practice_precedent(None).unwrap();
+    assert!(
+        player
+            .view()
+            .unwrap()
+            .practices
+            .unwrap()
+            .precedent
+            .is_none()
+    );
     let invalid = game_parallel_economy::PracticeValueLearning {
         value: 1,
         minimum: 2,
@@ -2291,6 +2307,37 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     assert!(player.view().unwrap().practices.unwrap().willing);
     assert!(player.decide_practice(2, 1, true).is_err());
     assert!(world.personal_practice(2).unwrap().willing);
+    assert!(
+        game_parallel_economy_cli_commands::handle(
+            &mut world,
+            &[
+                "practice-precedent",
+                "1",
+                "3",
+                "2",
+                "-1",
+                "4",
+                "-2",
+                "0",
+                "0"
+            ]
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        world
+            .personal_practice(1)
+            .unwrap()
+            .precedent
+            .as_ref()
+            .unwrap()
+            .same_person,
+        3
+    );
+    assert!(
+        game_parallel_economy_cli_commands::handle(&mut world, &["practice-precedent", "1", "off"])
+            .unwrap()
+    );
 }
 
 #[test]

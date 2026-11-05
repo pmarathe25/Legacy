@@ -7964,6 +7964,7 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
         shortage_experience_weight: 0,
         acceptance_threshold: 0,
         value_learning: None,
+        precedent: None,
         reporting: Default::default(),
         report_attitude: Default::default(),
         unanswered_report_belief: None,
@@ -8274,6 +8275,45 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
     );
     let declined = run(1, false, true, false, false);
     assert_eq!(declined, run(4, false, true, false, false));
+    // The helper's actual earlier gift becomes a precedent for a later personal decision.
+    for (use_precedent, expected) in [
+        (false, PracticeDecision::Declined),
+        (true, PracticeDecision::Adopted),
+    ] {
+        let mut state = declined.clone();
+        let mind = &mut state
+            .giving
+            .as_mut()
+            .unwrap()
+            .practices
+            .as_mut()
+            .unwrap()
+            .minds[1];
+        mind.approve = true;
+        mind.willing = false;
+        mind.acceptance_threshold = 2;
+        mind.precedent = use_precedent.then(|| {
+            std::sync::Arc::new(PracticePrecedent {
+                same_person: 2,
+                same_good: 2,
+                quantity_difference: -1,
+                gave: 3,
+                ..Default::default()
+            })
+        });
+        let item = std::sync::Arc::make_mut(&mut mind.inbox)
+            .first_mut()
+            .unwrap();
+        item.decision = PracticeDecision::Pending;
+        item.approved = false;
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        assert_eq!(
+            world.personal_practice(2).unwrap().inbox[0].decision,
+            expected
+        );
+        assert!(!world.personal_practice(2).unwrap().willing);
+    }
     let mut coerced = declined;
     let mind = &mut coerced
         .giving

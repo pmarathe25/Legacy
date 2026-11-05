@@ -60,6 +60,9 @@ pub struct Mind {
     /// Optional personal attachment to conditional aid, learned from relevant experience.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_learning: Option<Arc<ValueLearning>>,
+    /// Optional interpretation of a relevant personal precedent when evaluating a proposal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precedent: Option<Arc<PrecedentReasoning>>,
     /// How this person chooses to describe their own current ability to deliver.
     #[serde(default)]
     pub reporting: Reporting,
@@ -103,6 +106,59 @@ pub struct ValueLearning {
 impl ValueLearning {
     fn valid(self) -> bool {
         self.minimum <= self.value && self.value <= self.maximum
+    }
+}
+/// Signed similarity weights select a case; the person's signed interpretation
+/// of that case then contributes to their decision about the new proposal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct PrecedentReasoning {
+    pub same_person: i64,
+    pub same_good: i64,
+    pub quantity_difference: i64,
+    pub received: i64,
+    pub gave: i64,
+    pub unanswered: i64,
+    pub shortage: i64,
+}
+impl PrecedentReasoning {
+    fn judgment(&self, cases: &[Case], proposal: &Proposal) -> i64 {
+        cases
+            .iter()
+            .map(|case| {
+                let (other, good, quantity, judgment) = match *case {
+                    Case::Received {
+                        helper,
+                        good,
+                        quantity,
+                        ..
+                    } => (Some(helper), Some(good), Some(quantity), self.received),
+                    Case::Gave {
+                        recipient,
+                        good,
+                        quantity,
+                        ..
+                    } => (Some(recipient), Some(good), Some(quantity), self.gave),
+                    Case::Unanswered { target, .. } => (Some(target), None, None, self.unanswered),
+                    Case::Shortage { .. } => (None, None, None, self.shortage),
+                };
+                let mut similarity = 0i128;
+                if other == Some(proposal.author) {
+                    similarity += i128::from(self.same_person);
+                }
+                if good == Some(proposal.good) {
+                    similarity += i128::from(self.same_good);
+                }
+                if let Some(quantity) = quantity {
+                    similarity = similarity.saturating_add(
+                        i128::from(self.quantity_difference)
+                            .saturating_mul(i128::from(quantity.abs_diff(proposal.quantity))),
+                    );
+                }
+                (similarity, case.key(), judgment)
+            })
+            .max_by_key(|(similarity, key, _)| (*similarity, *key))
+            .map_or(0, |(_, _, judgment)| judgment)
     }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -814,7 +870,8 @@ impl Practices {
                             .saturating_add(i128::from(mind.reserve_weight).saturating_mul(i128::from(item.proposal.reserve)))
                             .saturating_add(i128::from(mind.giving_experience_weight).saturating_mul(given))
                             .saturating_add(i128::from(mind.shortage_experience_weight).saturating_mul(shortages))
-                            .saturating_add(i128::from(mind.value_learning.as_ref().map_or(0, |v| v.value)));
+                            .saturating_add(i128::from(mind.value_learning.as_ref().map_or(0, |v| v.value)))
+                            .saturating_add(i128::from(mind.precedent.as_ref().map_or(0, |p| p.judgment(&mind.cases, &item.proposal))));
                         item.approved = mind.approve && score >= i128::from(mind.acceptance_threshold);
                         let pressured = mind.pressure_threshold.is_some_and(|threshold| {
                             pressure(mind.person, item.proposal.author) >= threshold
