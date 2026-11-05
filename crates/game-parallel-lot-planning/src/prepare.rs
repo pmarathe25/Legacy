@@ -546,6 +546,43 @@ pub fn prepare(
             let d1 = debits.partition_point(|row| row.0 <= index);
             let a0 = incoming.partition_point(|row| row.0 < index);
             let a1 = incoming.partition_point(|row| row.0 <= index);
+            // A single carried lot with no incoming goods needs no per-good
+            // grouping, prefix scan, or merge when it is consumed or expires.
+            if a0 == a1
+                && let [lot] = container.lots.as_slice()
+            {
+                let debit = debits[d0..d1]
+                    .binary_search_by_key(&lot.good, |row| row.1)
+                    .ok()
+                    .map_or(0, |i| debits[d0 + i].2);
+                let quantity = if live(lot, next) {
+                    lot.quantity
+                        .checked_sub(debit)
+                        .expect("validated lot debit")
+                } else {
+                    debug_assert_eq!(debit, 0);
+                    0
+                };
+                let lots = if quantity == 0 {
+                    Vec::new()
+                } else {
+                    vec![Lot {
+                        good: lot.good,
+                        quantity,
+                        expires_at: lot.expires_at,
+                    }]
+                };
+                return (
+                    index,
+                    Container {
+                        place: container.place,
+                        capacity: container.capacity,
+                        lots,
+                        used: quantity,
+                        next_expiry: (quantity > 0).then_some(lot.expires_at).flatten(),
+                    },
+                );
+            }
             let live_lots: Vec<_> = container
                 .lots
                 .par_iter()

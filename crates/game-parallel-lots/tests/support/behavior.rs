@@ -123,6 +123,33 @@ fn late_empty_holders_do_not_shift_planned_physical_changes() {
 }
 
 #[test]
+fn a_partially_consumed_single_lot_retains_its_expiry_until_it_spoils() {
+    let person = Place::Person(1);
+    let mut store = store(vec![container(person, 10, vec![lot(1, 5, Some(2))])]);
+    let draft = store
+        .prepare(
+            1,
+            &[Movement {
+                id: 1,
+                from: person,
+                to: None,
+                good: 1,
+                quantity: 2,
+            }],
+        )
+        .unwrap();
+    let (outcomes, _) = store.commit(draft).unwrap();
+    assert!(outcomes[0].accepted);
+    assert_eq!(store.container(person).unwrap().used, 3);
+    assert_eq!(store.container(person).unwrap().next_expiry, Some(2));
+    let draft = store.prepare(1, &[]).unwrap();
+    let (_, spoiled) = store.commit(draft).unwrap();
+    assert_eq!(spoiled[0].quantity, 3);
+    assert_eq!(store.container(person).unwrap().used, 0);
+    assert_eq!(store.container(person).unwrap().next_expiry, None);
+}
+
+#[test]
 fn single_source_move_preserves_expiry_order_and_rejects_an_overfull_destination() {
     let source = Place::Inventory(1);
     let target = Place::Person(1);
