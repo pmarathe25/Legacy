@@ -1042,6 +1042,18 @@ impl<'a> Player<'a> {
     pub fn treat(&mut self) -> Result<bool, String> {
         self.world.treat(self.current()?)
     }
+    pub fn feed_animal(&mut self, animal: u64, good: u32, quantity: u64) -> Result<bool, String> {
+        if !self
+            .view()?
+            .animals
+            .iter()
+            .any(|row| row.id == animal && row.health > 0)
+        {
+            return Err("animal is not present".into());
+        }
+        self.world
+            .feed_animal(self.current()?, animal, good, quantity)
+    }
     pub fn rest(&mut self) -> Result<(), String> {
         self.world.rest(self.current()?)
     }

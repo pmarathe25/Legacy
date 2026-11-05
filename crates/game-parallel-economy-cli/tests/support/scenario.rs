@@ -2,6 +2,86 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn player_feeds_local_animals_only_with_real_carried_food() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let base = scenario(
+        &root.join("content/parallel/economy-wildlife.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut initial = base.snapshot();
+    let patch = initial
+        .gathering
+        .as_mut()
+        .unwrap()
+        .nodes
+        .iter_mut()
+        .find(|node| node.id == 3)
+        .unwrap();
+    patch.available = 0;
+    patch.regrowth = 0;
+    initial.fauna.as_mut().unwrap().animals[0].hunger = 4;
+    let grain = initial.fauna.as_ref().unwrap().species[0].food_good;
+    let bread = initial
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = game_parallel_economy::Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                assert!(Player::new(&mut world).feed_animal(3, grain, 1).is_err());
+                assert!(Player::new(&mut world).feed_animal(1, u32::MAX, 1).is_err());
+                assert_eq!(world.snapshot(), before);
+                assert!(Player::new(&mut world).feed_animal(1, bread, 1).unwrap());
+                assert_eq!(
+                    world.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
+                    5
+                );
+                assert!(!Player::new(&mut world).feed_animal(1, grain, 2).unwrap());
+                assert_eq!(
+                    world.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
+                    6
+                );
+                assert!(
+                    Player::new(&mut world)
+                        .transfer_stock(grain, 2, true)
+                        .unwrap()
+                );
+                let saved = world.snapshot();
+                let hunger = saved.fauna.as_ref().unwrap().animals[0].hunger;
+                let mut restored = game_parallel_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(Player::new(&mut world).feed_animal(1, grain, 2).unwrap());
+                assert!(Player::new(&mut restored).feed_animal(1, grain, 2).unwrap());
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.fauna.as_ref().unwrap().animals[0].hunger, hunger - 1);
+                assert!(
+                    !Player::new(&mut world)
+                        .view()
+                        .unwrap()
+                        .possessions
+                        .iter()
+                        .any(|lot| lot.good == grain)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_wildlife_uses_named_food_and_exposes_only_local_observations() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

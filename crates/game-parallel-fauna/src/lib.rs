@@ -64,6 +64,14 @@ pub struct Patch {
     pub available: u64,
 }
 
+/// Food already consumed in an accepted physical transaction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Feeding {
+    pub animal: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fauna {
@@ -91,6 +99,18 @@ struct Claim {
 }
 
 impl Fauna {
+    /// Validate a feeding's target; dietary response remains private to the animal.
+    pub fn check_feeding(&self, feeding: Feeding) -> Result<u64, &'static str> {
+        let animal = self
+            .animals
+            .iter()
+            .find(|a| a.id == feeding.animal && a.health > 0)
+            .ok_or("unknown living animal")?;
+        if feeding.quantity == 0 {
+            return Err("invalid animal food");
+        }
+        Ok(animal.region)
+    }
     pub fn validate(
         &self,
         regions: &HashSet<u64>,
@@ -204,6 +224,17 @@ impl Fauna {
         seed: u64,
         tick: u64,
     ) -> Result<Draft, &'static str> {
+        self.advance_with_feeding(patches, &[], seed, tick)
+    }
+
+    /// Apply physically accepted feedings before animals choose whether to graze.
+    pub fn advance_with_feeding(
+        &self,
+        patches: &[Patch],
+        feeding: &[Feeding],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Draft, &'static str> {
         if self.last_tick.checked_add(1) != Some(tick) {
             return Err("fauna phase must advance one tick");
         }
@@ -222,6 +253,61 @@ impl Fauna {
                 .ok()
                 .map(|i| species[i])
         };
+        let classify =
+            |food: &Feeding, animal: Option<&Animal>| -> Result<Option<(u64, u64)>, &'static str> {
+                let animal = animal
+                    .filter(|a| a.health > 0)
+                    .ok_or("unknown living animal")?;
+                let species = lookup(animal.species).ok_or("unknown animal species")?;
+                if food.quantity == 0 {
+                    return Err("invalid animal food");
+                }
+                Ok((food.good == species.food_good).then_some((food.animal, food.quantity)))
+            };
+        let supplied = if feeding.len() <= 1 {
+            feeding
+                .iter()
+                .map(|food| classify(food, self.animals.iter().find(|a| a.id == food.animal)))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let mut animals: Vec<_> = self.animals.par_iter().collect();
+            if animals.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+                animals.par_sort_unstable_by_key(|animal| animal.id);
+            }
+            feeding
+                .par_iter()
+                .map(|food| {
+                    let animal = animals
+                        .binary_search_by_key(&food.animal, |a| a.id)
+                        .ok()
+                        .map(|i| animals[i]);
+                    classify(food, animal)
+                })
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut supplied: Vec<_> = supplied.into_par_iter().flatten().collect();
+        supplied.par_sort_unstable_by_key(|row| row.0);
+        let supplied: Vec<_> = supplied
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                let total: u128 = group.par_iter().map(|row| u128::from(row.1)).sum();
+                u64::try_from(total)
+                    .map(|total| (group[0].0, total))
+                    .map_err(|_| "animal food overflow")
+            })
+            .collect::<Result<_, _>>()?;
+        let before_grazing = |animal: &Animal, species: &Species| {
+            let amount = supplied
+                .binary_search_by_key(&animal.id, |row| row.0)
+                .ok()
+                .map_or(0, |i| supplied[i].1);
+            let relief = (u128::from(amount) * u128::from(species.relief_per_unit))
+                .min(u128::from(u32::MAX)) as u32;
+            animal
+                .hunger
+                .saturating_sub(relief)
+                .saturating_add(species.hunger_per_tick)
+        };
         let mut claims: Vec<_> = self
             .animals
             .par_iter()
@@ -230,7 +316,7 @@ impl Fauna {
                     return None;
                 }
                 let s = lookup(a.species)?;
-                let hunger = a.hunger.saturating_add(s.hunger_per_tick);
+                let hunger = before_grazing(a, s);
                 if hunger == 0 {
                     return None;
                 }
@@ -293,7 +379,7 @@ impl Fauna {
                     .binary_search_by_key(&a.id, |row| row.0)
                     .ok()
                     .map_or(0, |i| eaten[i].1);
-                next.hunger = a.hunger.saturating_add(s.hunger_per_tick).saturating_sub(
+                next.hunger = before_grazing(a, s).saturating_sub(
                     (u128::from(food) * u128::from(s.relief_per_unit)).min(u128::from(u32::MAX))
                         as u32,
                 );

@@ -1,4 +1,4 @@
-use game_parallel_fauna::{Animal, Fauna, Patch, Pregnancy, Species};
+use game_parallel_fauna::{Animal, Fauna, Feeding, Patch, Pregnancy, Species};
 use game_parallel_genetics::{Genome, Sex};
 use std::collections::HashSet;
 
@@ -92,6 +92,48 @@ fn grazers_consume_actual_food_and_inherit_from_local_parents() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn physically_fed_animals_need_less_food_from_the_patch() {
+    let state = initial();
+    let patch = Patch {
+        id: 1,
+        region: 1,
+        good: 1,
+        available: 10,
+    };
+    let feed = Feeding {
+        animal: 1,
+        good: 1,
+        quantity: 2,
+    };
+    assert_eq!(state.check_feeding(feed).unwrap(), 1);
+    let draft = state.advance_with_feeding(&[patch], &[feed], 7, 1).unwrap();
+    assert_eq!(draft.consumed, vec![(1, 3)]);
+    assert!(draft.fauna.animals.iter().all(|animal| animal.hunger == 0));
+    let unsuitable = Feeding { good: 99, ..feed };
+    assert_eq!(state.check_feeding(unsuitable).unwrap(), 1);
+    let wrong = state
+        .advance_with_feeding(&[], &[unsuitable], 7, 1)
+        .unwrap();
+    assert_eq!(wrong.fauna.animals[0].hunger, 2);
+    assert!(
+        state
+            .advance_with_feeding(
+                &[patch],
+                &[
+                    Feeding {
+                        quantity: u64::MAX,
+                        ..feed
+                    },
+                    feed
+                ],
+                7,
+                1
+            )
+            .is_err()
+    );
 }
 
 #[test]

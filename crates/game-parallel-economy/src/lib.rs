@@ -169,6 +169,7 @@ pub struct Draft {
     local_transport: Option<LocalTransport>,
     given: Option<bool>,
     treated_other: Option<bool>,
+    fed_animal: Option<bool>,
 }
 impl Draft {
     pub fn events(&self) -> &Events {
@@ -878,6 +879,32 @@ impl Economy {
         let delivered = draft.given.unwrap_or(false);
         self.commit(draft)?;
         Ok(delivered)
+    }
+    /// Attempt to feed a nearby animal with real carried food.
+    pub fn feed_animal(
+        &mut self,
+        person: u64,
+        animal: u64,
+        good: u32,
+        quantity: u64,
+    ) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::FeedAnimal {
+                    person,
+                    animal,
+                    good,
+                    quantity,
+                },
+            ),
+        )?;
+        let fed = draft.fed_animal.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(fed)
     }
     /// Attempt treatment; the result reports whether medicine was consumed.
     pub fn treat_other(
@@ -2378,6 +2405,71 @@ impl Economy {
         if let Some(plan) = &salvage_plan {
             game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
+        let manual_animal_feed =
+            if let Some(game_parallel_economy_interaction::PhysicalChoice::FeedAnimal {
+                person,
+                animal,
+                good,
+                quantity,
+            }) = player_transfer
+            {
+                let actor = self
+                    .people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .map(|i| &self.people[i])
+                    .ok_or("unknown person")?;
+                let food = game_parallel_fauna::Feeding {
+                    animal,
+                    good,
+                    quantity,
+                };
+                if !self.physical.goods().iter().any(|item| item.id == good) {
+                    return Err("unknown good".into());
+                }
+                let region = self
+                    .fauna
+                    .as_ref()
+                    .ok_or("wildlife is disabled")?
+                    .check_feeding(food)
+                    .map_err(str::to_owned)?;
+                if !actor.controlled
+                    || actor.health == 0
+                    || actor.region != Some(region)
+                    || self.family.as_ref().is_some_and(|f| {
+                        f.members
+                            .iter()
+                            .any(|m| m.id == person && m.age < f.rules.min_work_age)
+                    })
+                    || self.physical.work().iter().any(|w| {
+                        w.job.worker == person
+                            && w.phase == game_parallel_lot_runtime::Phase::Working
+                    })
+                {
+                    return Err("feeding requires an available local person and animal".into());
+                }
+                let id = action_base
+                    .checked_add(salvage_plan.as_ref().map_or(0, |p| p.actions.len() as u64))
+                    .ok_or("action count overflow")?;
+                id.checked_add(1).ok_or("action count overflow")?;
+                Some((
+                    id,
+                    food,
+                    Transaction {
+                        id,
+                        movements: vec![game_parallel_lots::Movement {
+                            id,
+                            from: game_parallel_lots::Place::Person(person),
+                            to: None,
+                            good,
+                            quantity,
+                        }],
+                        creations: vec![],
+                    },
+                ))
+            } else {
+                None
+            };
         game_parallel_economy_claims::include_care_farming!(claim_uses, care, farming);
         #[cfg(feature = "profile")]
         {
@@ -2385,6 +2477,9 @@ impl Economy {
             profile_phase = game_diagnostics::span("economy.work_admission");
         }
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
+        if let Some((_, _, action)) = &manual_animal_feed {
+            actions.push(action.clone());
+        }
         if let Some(plan) = tool_pickup {
             actions.extend(plan.actions);
             claim_uses.extend(plan.uses);
@@ -2612,6 +2707,13 @@ impl Economy {
                 .as_ref()
                 .is_some_and(|p| p.admitted(person, physical.events()))
         });
+        let fed_animal = manual_animal_feed.as_ref().map(|(id, _, _)| {
+            physical
+                .events()
+                .physical_actions
+                .iter()
+                .any(|event| event.id == *id && event.accepted)
+        });
         let mut gathering = gathering_plan
             .map(|p| {
                 p.publish(
@@ -2634,8 +2736,14 @@ impl Economy {
                     available: node.available,
                 })
                 .collect();
+            let feedings: Vec<_> = manual_animal_feed
+                .as_ref()
+                .filter(|_| fed_animal == Some(true))
+                .map(|(_, food, _)| *food)
+                .into_iter()
+                .collect();
             let draft = fauna
-                .advance_validated(&patches, self.seed, tick)
+                .advance_with_feeding(&patches, &feedings, self.seed, tick)
                 .map_err(str::to_owned)?;
             if let Some(gathering) = &mut gathering {
                 gathering
@@ -3336,6 +3444,7 @@ impl Economy {
             local_transport: next_local_transport,
             given,
             treated_other,
+            fed_animal,
         })
     }
     pub fn commit(&mut self, draft: Draft) -> Result<Events, String> {
