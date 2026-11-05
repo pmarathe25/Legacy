@@ -522,6 +522,9 @@ fn hunting_fixture() -> State {
                 person: 1,
                 animal: Some(1),
                 willing: true,
+                hunger_at_least: None,
+                reserve_good: None,
+                reserve_below: None,
                 pressured_by: None,
                 pressure_threshold: None,
             },
@@ -529,6 +532,9 @@ fn hunting_fixture() -> State {
                 person: 4,
                 animal: Some(1),
                 willing: false,
+                hunger_at_least: None,
+                reserve_good: None,
+                reserve_below: None,
                 pressured_by: Some(1),
                 pressure_threshold: Some(3),
             },
@@ -778,6 +784,91 @@ fn hunters_can_select_another_local_animal_and_change_their_mind() {
 }
 
 #[test]
+fn individual_hunting_preferences_can_consider_hunger_and_carried_reserves() {
+    let mut initial = hunting_fixture();
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.people[0].hunger = 4;
+    initial.hunting.as_mut().unwrap().policies.truncate(1);
+    let policy = &mut initial.hunting.as_mut().unwrap().policies[0];
+    policy.animal = None;
+    policy.hunger_at_least = Some(5);
+    policy.reserve_good = Some(2);
+    policy.reserve_below = Some(2);
+    let mut invalid = initial.clone();
+    invalid.hunting.as_mut().unwrap().policies[0].reserve_good = None;
+    assert!(Economy::compile(invalid).is_err());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .all(|a| a.health > 0)
+                );
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                assert_eq!(
+                    saved
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .filter(|a| a.health == 0)
+                        .count(),
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .filter(|a| a.health == 0)
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == 2)
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    2
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn controlled_hunting_is_a_choice_and_unwilling_hunters_need_pressure() {
     let mut initial = hunting_fixture();
     initial.hunting.as_mut().unwrap().policies.remove(0);
@@ -850,6 +941,9 @@ fn concentrated_hunting_benchmark() {
                 person,
                 animal: (!flexible).then_some(1),
                 willing: true,
+                hunger_at_least: None,
+                reserve_good: None,
+                reserve_below: None,
                 pressured_by: None,
                 pressure_threshold: None,
             })

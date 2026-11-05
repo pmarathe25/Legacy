@@ -74,7 +74,7 @@ pub use giving_discovery::Policy as AcquaintanceAsking;
 pub use hauling::{
     Asking as HaulingAsking, Hauling, Policy as HaulingPolicy, Request as HaulingRequest,
 };
-pub use hunting::{Hunting, Policy as HuntingPolicy};
+pub use hunting::{Config as HuntingConfig, Hunting, Policy as HuntingPolicy};
 pub use medical::{
     AcquaintancePolicy as MedicalAcquaintancePolicy, Medical, Policy as MedicalPolicy,
 };
@@ -1090,7 +1090,7 @@ impl Economy {
             care.validate(&ids, &goods, state.fauna.as_ref())?;
         }
         if let Some(hunting) = &state.hunting {
-            hunting.validate(&ids, state.fauna.as_ref())?;
+            hunting.validate(&ids, &goods, state.fauna.as_ref())?;
         }
         if let Some(search) = &state.food_search {
             search.validate(&ids, state.knowledge.as_ref(), state.travel.as_ref())?;
@@ -1862,6 +1862,7 @@ impl Economy {
             fauna: self.fauna.as_ref(),
             people: &self.people,
             opinions: self.opinions.as_ref(),
+            view: &view,
             busy: &busy,
             feed_targets: &feed_targets,
             max_hunger: self.rules.max_work_hunger,

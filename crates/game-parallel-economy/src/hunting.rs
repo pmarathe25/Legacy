@@ -3,6 +3,7 @@ use game_parallel_economy_person::Person;
 use game_parallel_fauna::Fauna;
 use game_parallel_lot_content::AnimalYield;
 use game_parallel_lot_runtime::Events;
+use game_parallel_lots::{Place, View};
 use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -17,6 +18,12 @@ pub struct Policy {
     pub animal: Option<u64>,
     pub willing: bool,
     #[serde(default)]
+    pub hunger_at_least: Option<u32>,
+    #[serde(default)]
+    pub reserve_good: Option<u32>,
+    #[serde(default)]
+    pub reserve_below: Option<u64>,
+    #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
@@ -28,8 +35,65 @@ pub struct Hunting {
     pub policies: Vec<Policy>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Config {
+    pub policies: Vec<PolicyConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PolicyConfig {
+    person: u64,
+    #[serde(default)]
+    animal: Option<u64>,
+    willing: bool,
+    #[serde(default)]
+    hunger_at_least: Option<u32>,
+    #[serde(default)]
+    reserve_good: Option<String>,
+    #[serde(default)]
+    reserve_below: Option<u64>,
+    #[serde(default)]
+    pressured_by: Option<u64>,
+    #[serde(default)]
+    pressure_threshold: Option<u64>,
+}
+
+impl Config {
+    pub fn build(self, lookup: impl Fn(&str) -> Option<u32>) -> Result<Hunting, String> {
+        let policies = self
+            .policies
+            .into_iter()
+            .map(|p| {
+                Ok(Policy {
+                    person: p.person,
+                    animal: p.animal,
+                    willing: p.willing,
+                    hunger_at_least: p.hunger_at_least,
+                    reserve_good: p
+                        .reserve_good
+                        .map(|name| {
+                            lookup(&name).ok_or_else(|| format!("unknown hunting reserve {name}"))
+                        })
+                        .transpose()?,
+                    reserve_below: p.reserve_below,
+                    pressured_by: p.pressured_by,
+                    pressure_threshold: p.pressure_threshold,
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        Ok(Hunting { policies })
+    }
+}
+
 impl Hunting {
-    pub fn validate(&self, people: &HashSet<u64>, fauna: Option<&Fauna>) -> Result<(), String> {
+    pub fn validate(
+        &self,
+        people: &HashSet<u64>,
+        goods: &HashSet<u32>,
+        fauna: Option<&Fauna>,
+    ) -> Result<(), String> {
         let animals: HashSet<_> = fauna
             .into_iter()
             .flat_map(|f| f.animals.iter().map(|a| a.id))
@@ -41,6 +105,8 @@ impl Hunting {
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || p.animal.is_some_and(|id| !animals.contains(&id))
+                    || p.reserve_good.is_some() != p.reserve_below.is_some()
+                    || p.reserve_good.is_some_and(|good| !goods.contains(&good))
                     || p.pressure_threshold == Some(0)
                     || p.pressured_by.is_some() != p.pressure_threshold.is_some()
                     || p.pressured_by
@@ -63,6 +129,7 @@ pub struct Context<'a> {
     pub fauna: Option<&'a Fauna>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
+    pub view: &'a View,
     pub busy: &'a [u64],
     pub feed_targets: &'a [u64],
     pub max_hunger: u32,
@@ -156,6 +223,15 @@ impl Context<'_> {
                 (!actor.controlled
                     && actor.health > 0
                     && actor.hunger <= self.max_hunger
+                    && policy.hunger_at_least.is_none_or(|min| actor.hunger >= min)
+                    && policy.reserve_good.zip(policy.reserve_below).is_none_or(
+                        |(good, threshold)| {
+                            self.view
+                                .container(Place::Person(actor.id))
+                                .map_or(0, |c| c.quantity(good))
+                                < threshold
+                        },
+                    )
                     && target.health > 0
                     && actor.region == Some(target.region)
                     && self.busy.binary_search(&actor.id).is_err()

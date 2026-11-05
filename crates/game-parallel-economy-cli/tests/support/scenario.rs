@@ -88,6 +88,24 @@ fn hunting_preferences_accept_optional_individual_targets() {
 }
 
 #[test]
+fn hunting_preferences_resolve_named_reserves() {
+    let config: game_parallel_economy::HuntingConfig = toml::from_str(
+        r#"
+        [[policies]]
+        person = 1
+        willing = true
+        hunger_at_least = 5
+        reserve_good = "meat"
+        reserve_below = 3
+    "#,
+    )
+    .unwrap();
+    let hunting = config.build(|name| (name == "meat").then_some(7)).unwrap();
+    assert_eq!(hunting.policies[0].reserve_good, Some(7));
+    assert_eq!(hunting.policies[0].reserve_below, Some(3));
+}
+
+#[test]
 fn wildlife_climate_settings_are_loaded_from_content() {
     let text = r#"
         next_id = 1
