@@ -63,6 +63,9 @@ pub struct Mind {
     /// Their private disposition toward reports they receive.
     #[serde(default)]
     pub report_attitude: ReportAttitude,
+    /// Optional personal reassessment after a request to that speaker goes unanswered.
+    #[serde(default)]
+    pub unanswered_report_belief: Option<Belief>,
     /// Ask under a proposal only after personally believing a readiness claim.
     #[serde(default)]
     pub require_believed_ready: bool,
@@ -357,22 +360,36 @@ impl Practices {
             claimed_ready,
             tick,
         };
-        let inbox = Arc::clone(&self.minds[source].inbox);
-        Arc::make_mut(&mut self.minds[source].sent_reports).retain(|report| {
-            inbox.iter().any(|item| {
-                item.proposal.author == report.listener
-                    && item.proposal.sequence == report.sequence
-                    && item.proposal.expires >= tick
-            })
-        });
-        let authored = Arc::clone(&self.minds[target].authored);
-        Arc::make_mut(&mut self.minds[target].reports).retain(|report| {
-            authored.iter().any(|proposal| {
-                proposal.recipient == report.statement.speaker
-                    && proposal.sequence == report.statement.sequence
-                    && proposal.expires >= tick
-            })
-        });
+        if self.minds[source].sent_reports.len() == MAX_PROPOSALS {
+            let inbox = Arc::clone(&self.minds[source].inbox);
+            let reports = Arc::make_mut(&mut self.minds[source].sent_reports);
+            let obsolete = reports
+                .iter()
+                .position(|report| {
+                    !inbox.iter().any(|item| {
+                        item.proposal.author == report.listener
+                            && item.proposal.sequence == report.sequence
+                            && item.proposal.expires >= tick
+                    })
+                })
+                .expect("speech capacity checked");
+            reports.remove(obsolete);
+        }
+        if self.minds[target].reports.len() == MAX_PROPOSALS {
+            let authored = Arc::clone(&self.minds[target].authored);
+            let reports = Arc::make_mut(&mut self.minds[target].reports);
+            let obsolete = reports
+                .iter()
+                .position(|report| {
+                    !authored.iter().any(|proposal| {
+                        proposal.recipient == report.statement.speaker
+                            && proposal.sequence == report.statement.sequence
+                            && proposal.expires >= tick
+                    })
+                })
+                .expect("speech capacity checked");
+            reports.remove(obsolete);
+        }
         Arc::make_mut(&mut self.minds[source].sent_reports).push(report.clone());
         Arc::make_mut(&mut self.minds[target].reports).push(ReceivedReport {
             statement: report,
@@ -792,23 +809,25 @@ impl Practices {
                 }
                 if mind.authored.iter().any(|p| p.expires < tick) { Arc::make_mut(&mut mind.authored).retain(|p| p.expires >= tick); }
                 if mind.inbox.iter().any(|p| p.proposal.expires < tick) { Arc::make_mut(&mut mind.inbox).retain(|p| p.proposal.expires >= tick); }
-                if mind.sent_reports.iter().any(|r| !mind.inbox.iter().any(|item| item.proposal.author == r.listener && item.proposal.sequence == r.sequence)) {
-                    let inbox = &mind.inbox;
-                    Arc::make_mut(&mut mind.sent_reports).retain(|r| inbox.iter().any(|item| item.proposal.author == r.listener && item.proposal.sequence == r.sequence));
-                }
-                if mind.reports.iter().any(|r| !mind.authored.iter().any(|p| p.sequence == r.statement.sequence && p.recipient == r.statement.speaker)) {
-                    let authored = &mind.authored;
-                    Arc::make_mut(&mut mind.reports).retain(|r| authored.iter().any(|p| p.sequence == r.statement.sequence && p.recipient == r.statement.speaker));
-                }
                 if let Ok(i) = reports_by_speaker.binary_search_by_key(&mind.person, |r| r.speaker)
-                    && mind.sent_reports.len() < MAX_PROPOSALS {
-                    Arc::make_mut(&mut mind.sent_reports).push(reports_by_speaker[i].clone());
+                {
+                    let inbox = &mind.inbox;
+                    let sent = Arc::make_mut(&mut mind.sent_reports);
+                    if sent.len() == MAX_PROPOSALS
+                        && let Some(obsolete) = sent.iter().position(|r| !inbox.iter().any(|item| item.proposal.author == r.listener && item.proposal.sequence == r.sequence)) {
+                        sent.remove(obsolete);
+                    }
+                    if sent.len() < MAX_PROPOSALS { sent.push(reports_by_speaker[i].clone()); }
                 }
                 let report_rows = reports.partition_point(|r| r.listener < mind.person)..reports.partition_point(|r| r.listener <= mind.person);
                 if !report_rows.is_empty() {
+                    let authored = &mind.authored;
                     let inbox = Arc::make_mut(&mut mind.reports);
                     for report in &reports[report_rows] {
-                        if inbox.len() == MAX_PROPOSALS { break; }
+                        if inbox.len() == MAX_PROPOSALS {
+                            let Some(obsolete) = inbox.iter().position(|r| !authored.iter().any(|p| p.sequence == r.statement.sequence && p.recipient == r.statement.speaker)) else { break; };
+                            inbox.remove(obsolete);
+                        }
                         inbox.push(ReceivedReport { statement: report.clone(), belief: Belief::Unassessed });
                     }
                 }
@@ -839,6 +858,14 @@ impl Practices {
                 }
                 let observation_rows = observed.partition_point(|o| o.person < mind.person)..observed.partition_point(|o| o.person <= mind.person);
                 if !observation_rows.is_empty() {
+                    if let Some(reassessment) = mind.unanswered_report_belief.filter(|_| can_act)
+                        && mind.reports.iter().any(|report| report.statement.claimed_ready && observed[observation_rows.clone()].iter().any(|observation| matches!(observation.case, Case::Unanswered { target, .. } if target == report.statement.speaker))) {
+                        for report in Arc::make_mut(&mut mind.reports) {
+                            if report.statement.claimed_ready && observed[observation_rows.clone()].iter().any(|observation| matches!(observation.case, Case::Unanswered { target, .. } if target == report.statement.speaker)) {
+                                report.belief = reassessment;
+                            }
+                        }
+                    }
                     let cases = Arc::make_mut(&mut mind.cases);
                     for observation in &observed[observation_rows] {
                         if cases.len() == MAX_CASES { cases.remove(0); }

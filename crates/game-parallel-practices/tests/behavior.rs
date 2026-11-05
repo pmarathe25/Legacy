@@ -22,6 +22,7 @@ fn mind(person: u64) -> Mind {
         acceptance_threshold: 0,
         reporting: Default::default(),
         report_attitude: Default::default(),
+        unanswered_report_belief: None,
         require_believed_ready: false,
         next_review: 0,
         sequence: 0,
@@ -89,6 +90,34 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
     assert_eq!(next, saved.prepare(&[], &[], 5, |_, _| 0).unwrap());
     assert_eq!(next.minds[1].inbox[0].decision, Decision::Adopted);
     assert!(next.minds[1].inbox[0].approved);
+    let mut full_history = next.clone();
+    full_history.minds[0].reports = (100..108)
+        .map(|sequence| game_parallel_practices::ReceivedReport {
+            statement: game_parallel_practices::ReadinessReport {
+                speaker: 2,
+                listener: 1,
+                sequence,
+                claimed_ready: false,
+                tick: 1,
+            },
+            belief: game_parallel_practices::Belief::Unassessed,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    full_history.speak(2, 1, 1, true, 6).unwrap();
+    assert_eq!(full_history.minds[0].reports.len(), 8);
+    assert!(
+        !full_history.minds[0]
+            .reports
+            .iter()
+            .any(|r| r.statement.sequence == 100)
+    );
+    assert!(
+        full_history.minds[0]
+            .reports
+            .iter()
+            .any(|r| r.statement.sequence == 1 && r.statement.claimed_ready)
+    );
     let mut liar = next.clone();
     liar.minds[1].reporting = game_parallel_practices::Reporting::Lie;
     liar.minds[0].report_attitude = game_parallel_practices::ReportAttitude::Trust;
@@ -116,6 +145,30 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
         believed.minds[0].reports[0].belief,
         game_parallel_practices::Belief::Believes
     );
+    let unanswered = [Observation {
+        person: 1,
+        case: Case::Unanswered {
+            tick: 13,
+            target: 2,
+        },
+    }];
+    let unchanged = believed.prepare(&[], &unanswered, 13, |_, _| 0).unwrap();
+    assert_eq!(
+        unchanged.minds[0].reports[0].belief,
+        game_parallel_practices::Belief::Believes
+    );
+    let mut skeptical = believed.clone();
+    skeptical.minds[0].unanswered_report_belief =
+        Some(game_parallel_practices::Belief::Disbelieves);
+    let skeptical = skeptical.prepare(&[], &unanswered, 13, |_, _| 0).unwrap();
+    assert_eq!(
+        skeptical.minds[0].reports[0].belief,
+        game_parallel_practices::Belief::Disbelieves
+    );
+    assert!(skeptical.minds[0].authored.is_empty());
+    skeptical
+        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 13)
+        .unwrap();
     liar.minds[1].reporting = game_parallel_practices::Reporting::Truthful;
     liar.minds[0].report_attitude = game_parallel_practices::ReportAttitude::Doubt;
     let truthful = liar

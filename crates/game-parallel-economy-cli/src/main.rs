@@ -12,7 +12,7 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
     match words.as_slice() {
         [] => {}
         ["help"] => println!(
-            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON MODE | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
+            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON MODE | practice-unanswered PERSON MODE | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["status"] => {
@@ -265,6 +265,16 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
                 "trust" => game_parallel_economy::PracticeReportAttitude::Trust,
                 "doubt" => game_parallel_economy::PracticeReportAttitude::Doubt,
                 _ => return Err("invalid report attitude".into()),
+            },
+        )?,
+        ["practice-unanswered", person, choice] => world.set_practice_unanswered_belief(
+            person.parse().map_err(|_| "invalid person")?,
+            match *choice {
+                "retain" => None,
+                "believe" => Some(game_parallel_economy::PracticeBelief::Believes),
+                "doubt" => Some(game_parallel_economy::PracticeBelief::Disbelieves),
+                "unassessed" => Some(game_parallel_economy::PracticeBelief::Unassessed),
+                _ => return Err("expected retain, believe, doubt, or unassessed".into()),
             },
         )?,
         ["work-value", person, "off"] => {

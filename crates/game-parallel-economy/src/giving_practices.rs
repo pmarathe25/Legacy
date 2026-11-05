@@ -241,6 +241,16 @@ macro_rules! methods {
                 Ok(())
             })
         }
+        pub fn set_practice_unanswered_belief(
+            &mut self,
+            person: u64,
+            belief: Option<game_parallel_practices::Belief>,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                mind.unanswered_report_belief = belief;
+                Ok(())
+            })
+        }
         pub fn assess_practice_report(
             &mut self,
             person: u64,

@@ -7874,6 +7874,7 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
         acceptance_threshold: 0,
         reporting: Default::default(),
         report_attitude: Default::default(),
+        unanswered_report_belief: None,
         require_believed_ready: false,
         next_review: 0,
         sequence: 0,
@@ -8033,6 +8034,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                         .minds[0];
                     author.report_attitude = PracticeReportAttitude::Trust;
                     author.require_believed_ready = true;
+                    author.unanswered_report_belief = Some(PracticeBelief::Disbelieves);
                 }
                 let mut world = Economy::compile(state).unwrap();
                 world.advance().unwrap();
@@ -8205,6 +8207,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
             .iter()
             .any(|case| matches!(case, PracticeCase::Unanswered { target: 2, .. }))
     );
+    assert_eq!(author.reports[0].belief, PracticeBelief::Disbelieves);
     let revised = author
         .authored
         .iter()

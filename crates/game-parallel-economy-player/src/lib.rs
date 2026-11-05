@@ -818,6 +818,13 @@ impl<'a> Player<'a> {
         self.world
             .set_practice_require_report(self.current()?, enabled)
     }
+    pub fn set_practice_unanswered_belief(
+        &mut self,
+        belief: Option<game_parallel_economy::PracticeBelief>,
+    ) -> Result<(), String> {
+        self.world
+            .set_practice_unanswered_belief(self.current()?, belief)
+    }
     pub fn set_practice_willingness(&mut self, enabled: bool) -> Result<(), String> {
         self.world
             .set_practice_willingness(self.current()?, enabled)
