@@ -116,7 +116,7 @@ impl PhysicalChoice {
         }
     }
 }
-/// A dead person's possessions remain physical and can be recovered locally.
+/// Possessions can be taken from a local incapacitated or dead person without consent.
 pub fn recover(
     choice: Option<(u64, u64, u32, u64)>,
     people: &[Person],
@@ -135,7 +135,7 @@ pub fn recover(
         .binary_search_by_key(&deceased, |p| p.id)
         .ok()
         .map(|i| &people[i])
-        .ok_or("unknown deceased person")?;
+        .ok_or("unknown person")?;
     if !actor.controlled
         || actor.health == 0
         || actor.region.is_none()
@@ -146,7 +146,7 @@ pub fn recover(
         || view.container(Place::Person(deceased)).is_none()
     {
         return Err(
-            "recovery requires a living controlled person and a local deceased person".into(),
+            "recovery requires a living controlled person and a local incapacitated person".into(),
         );
     }
     Ok(Some(Transaction {
@@ -265,7 +265,7 @@ macro_rules! transfer_method {
                     }
             }))
         }
-        /// Attempt to recover possessions from a local deceased person.
+        /// Attempt to take possessions from a local incapacitated or dead person.
         pub fn recover_possessions(
             &mut self,
             person: u64,

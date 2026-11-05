@@ -2035,6 +2035,85 @@ fn campaign_guardians_share_people_travel_and_player_encounters() {
 }
 
 #[test]
+fn player_can_take_from_an_incapacitated_guardian_who_later_recovers() {
+    use game_parallel_economy_player::Player;
+    use game_parallel_lots::{Container, Lot, Place};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut state = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let bread = state
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    let guardian = state
+        .people
+        .iter_mut()
+        .find(|person| person.id == 99)
+        .unwrap();
+    guardian.region = Some(1);
+    guardian.health = 0;
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| container.place == Place::Person(99))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: bread,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+    assert!(
+        Player::new(&mut world)
+            .view()
+            .unwrap()
+            .bodies
+            .iter()
+            .any(|body| body.person == 99)
+    );
+    assert!(
+        Player::new(&mut world)
+            .recover_possessions(99, bread, 1)
+            .unwrap()
+    );
+    let state = world.snapshot();
+    assert_eq!(
+        state
+            .people
+            .iter()
+            .find(|person| person.id == 99)
+            .unwrap()
+            .health,
+        5
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|container| container.place == Place::Person(99))
+            .unwrap()
+            .used,
+        0
+    );
+}
+
+#[test]
 fn ruler_view_excludes_remote_people_stock_and_other_minds() {
     use game_parallel_economy_knowledge::Record;
     use game_parallel_economy_player::Player;

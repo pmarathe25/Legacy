@@ -1191,7 +1191,7 @@ impl<'a> Player<'a> {
             .iter()
             .any(|body| body.person == deceased)
         {
-            return Err("deceased person is not present".into());
+            return Err("incapacitated person is not present".into());
         }
         self.world
             .recover_possessions(self.current()?, deceased, good, quantity)
