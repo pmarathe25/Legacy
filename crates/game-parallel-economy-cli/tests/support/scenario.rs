@@ -2,6 +2,83 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn authored_wildlife_uses_named_food_and_exposes_only_local_observations() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/parallel/economy-wildlife.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let initial = world.snapshot();
+                let species = &initial.fauna.as_ref().unwrap().species[0];
+                assert_eq!(
+                    initial
+                        .physical
+                        .goods
+                        .iter()
+                        .find(|g| g.id == species.food_good)
+                        .unwrap()
+                        .name,
+                    "grain"
+                );
+                let view = Player::new(&mut world).view().unwrap();
+                assert_eq!(
+                    view.animals
+                        .iter()
+                        .map(|animal| animal.id)
+                        .collect::<Vec<_>>(),
+                    vec![1, 2]
+                );
+                let mut altered = initial.clone();
+                let fauna = altered.fauna.as_mut().unwrap();
+                fauna.animals[0].genome.alleles[0] = [999, 999];
+                let father = fauna.animals[1].genome.clone();
+                fauna.animals[0].pregnancy = Some(game_parallel_economy::AnimalPregnancy {
+                    father: 2,
+                    father_genome: father,
+                    due: 3,
+                });
+                let mut other = game_parallel_economy::Economy::compile(altered).unwrap();
+                assert_eq!(
+                    Player::new(&mut other).view().unwrap().animals,
+                    view.animals
+                );
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .gathering
+                        .as_ref()
+                        .unwrap()
+                        .nodes
+                        .iter()
+                        .find(|n| n.id == 3)
+                        .unwrap()
+                        .available,
+                    9
+                );
+                assert_eq!(state.fauna.as_ref().unwrap().animals[2].hunger, 2);
+                let mut restored = game_parallel_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn generated_population_is_seeded_individual_and_worker_invariant() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

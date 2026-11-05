@@ -216,6 +216,7 @@ fn fixture() -> State {
         purpose: None,
         recovery: None,
         gathering: None,
+        fauna: None,
         food_search: None,
         giving: None,
         medical: None,
@@ -14536,6 +14537,121 @@ fn controlled_cultivation_uses_real_seed_and_publishes_actual_harvest() {
         world.snapshot().agriculture.unwrap().fields[0].phase,
         CropPhase::Fallow
     );
+}
+
+#[test]
+fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
+    use game_parallel_genetics::{Genome, Sex};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.gathering = Some(Gathering {
+        inherit_births: false,
+        max_hunger: 20,
+        nodes: vec![ResourceNode {
+            id: 1,
+            region: 1,
+            good: 1,
+            available: 3,
+            capacity: 3,
+            regrowth: 0,
+            yield_per_action: 2,
+        }],
+        policies: vec![GatherPolicy {
+            person: 2,
+            node: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    initial.fauna = Some(Fauna {
+        last_tick: 0,
+        next_id: 3,
+        species: vec![AnimalSpecies {
+            id: 1,
+            name: "grazer".into(),
+            food_good: 1,
+            intake: 2,
+            hunger_per_tick: 1,
+            relief_per_unit: 1,
+            starvation_threshold: 10,
+            starvation_damage: 1,
+            max_health: 10,
+            adult_age: 1,
+            fertile_until: 10,
+            lifespan: 30,
+            gestation: 2,
+            conception_one_in: 10,
+            breeding_max_hunger: 5,
+            newborn_health: 10,
+            mutation_per_million: 0,
+            mutation_step: 0,
+        }],
+        animals: (1..=2)
+            .map(|id| Animal {
+                id,
+                species: 1,
+                region: 1,
+                age: 1,
+                health: 10,
+                hunger: 1,
+                genome: Genome {
+                    sex: Sex::Male,
+                    alleles: [[100; 2]; 4],
+                },
+                pregnancy: None,
+                parents: None,
+            })
+            .collect(),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), state);
+                assert_eq!(state.gathering.as_ref().unwrap().nodes[0].available, 0);
+                let stock = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                assert_eq!(stock.used, 2);
+                assert_eq!(
+                    state
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .map(|a| 2 - a.hunger)
+                        .sum::<u32>(),
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

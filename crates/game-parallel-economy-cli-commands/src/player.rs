@@ -27,6 +27,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             for body in view.bodies {
                 println!("body={body:?}");
             }
+            for animal in view.animals {
+                println!("animal={animal:?}");
+            }
             println!(
                 "lives={:?} active={:?} burden={} exposure={}",
                 view.past_lives,

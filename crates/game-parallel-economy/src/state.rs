@@ -69,6 +69,8 @@ pub struct State {
     #[serde(default)]
     pub gathering: Option<crate::gathering::Gathering>,
     #[serde(default)]
+    pub fauna: Option<game_parallel_fauna::Fauna>,
+    #[serde(default)]
     pub food_search: Option<crate::food_search::FoodSearch>,
     #[serde(default)]
     pub giving: Option<crate::giving::Giving>,

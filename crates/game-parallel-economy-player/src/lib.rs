@@ -61,6 +61,12 @@ pub struct BodyView {
     pub possessions: Vec<Lot>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnimalView {
+    pub id: u64,
+    pub species: u32,
+    pub health: u32,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimView {
     pub region: u64,
     pub good: u32,
@@ -80,6 +86,8 @@ pub struct View {
     pub journey: Option<game_parallel_economy::Journey>,
     pub nearby: Vec<u64>,
     pub bodies: Vec<BodyView>,
+    /// Observable local animals, without their genetics or hidden pregnancy.
+    pub animals: Vec<AnimalView>,
     pub possessions: Vec<Lot>,
     pub local_stock: Vec<Lot>,
     /// The ruler's own assertions, including assertions made in other regions.
@@ -471,6 +479,21 @@ impl<'a> Player<'a> {
                         .cloned()
                         .collect()
                 });
+        let animals = person
+            .as_ref()
+            .and_then(|p| p.region)
+            .map_or_else(Vec::new, |region| {
+                self.world
+                    .animals()
+                    .par_iter()
+                    .filter(|animal| animal.region == region)
+                    .map(|animal| AnimalView {
+                        id: animal.id,
+                        species: animal.species,
+                        health: animal.health,
+                    })
+                    .collect()
+            });
         let treatment = current.and_then(|id| {
             state
                 .dynamics?
@@ -527,6 +550,7 @@ impl<'a> Player<'a> {
             journey,
             nearby,
             bodies,
+            animals,
             possessions,
             local_stock,
             food_reports,

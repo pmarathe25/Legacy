@@ -95,6 +95,22 @@ fn grazers_consume_actual_food_and_inherit_from_local_parents() {
 }
 
 #[test]
+fn a_nearly_sated_animal_does_not_consume_its_full_maximum_intake() {
+    let mut state = initial();
+    state.animals.truncate(1);
+    state.animals[0].hunger = 0;
+    let patch = Patch {
+        id: 1,
+        region: 1,
+        good: 1,
+        available: 10,
+    };
+    let draft = state.advance(&[patch], 7, 1).unwrap();
+    assert_eq!(draft.consumed, vec![(1, 1)]);
+    assert_eq!(draft.fauna.animals[0].hunger, 0);
+}
+
+#[test]
 fn contested_grazing_conserves_stock_and_is_worker_invariant() {
     let count = 20_000;
     let mut state = initial();
@@ -180,6 +196,31 @@ fn concentrated_grazing_benchmark() {
                 samples[2]
             );
         });
+}
+
+#[test]
+fn impossible_parentage_and_fabricated_fathers_are_rejected() {
+    let mut state = initial();
+    state.next_id = 100;
+    state.animals[0].pregnancy = Some(Pregnancy {
+        father: 99,
+        father_genome: genome(Sex::Male, 900),
+        due: 1,
+    });
+    assert!(
+        state
+            .validate(&HashSet::from([1]), &HashSet::from([1]), 0)
+            .is_err()
+    );
+    state.animals[0].pregnancy = None;
+    let mut child = animal(3, Sex::Male, 100);
+    child.parents = Some([1, 99]);
+    state.animals.push(child);
+    assert!(
+        state
+            .validate(&HashSet::from([1]), &HashSet::from([1]), 0)
+            .is_err()
+    );
 }
 
 #[test]

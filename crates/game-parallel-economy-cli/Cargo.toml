@@ -8,6 +8,7 @@ license.workspace = true
 profile = ["game-parallel-economy/profile", "game-parallel-families/profile"]
 
 [dependencies]
+game-parallel-fauna = { path = "../game-parallel-fauna" }
 game-parallel-economy-combat = { path = "../game-parallel-economy-combat" }
 game-parallel-economy-dynamics = { path = "../game-parallel-economy-dynamics" }
 game-parallel-opinions = { path = "../game-parallel-opinions" }

@@ -36,6 +36,9 @@ pub use game_parallel_economy_work::sites::{
     Site as WorkSite,
 };
 pub use game_parallel_economy_work::tools::Requirement as WorkTool;
+pub use game_parallel_fauna::{
+    Animal, Fauna, Pregnancy as AnimalPregnancy, Species as AnimalSpecies,
+};
 pub use game_parallel_opinions::{
     ObligationDevelopment, Opinion, RelationshipCase, ReportReception,
     Sensitivity as OpinionSensitivity,
@@ -123,6 +126,7 @@ pub struct Economy {
     purpose: Option<Purpose>,
     recovery: Option<RecoveryRules>,
     gathering: Option<Gathering>,
+    fauna: Option<Fauna>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
     medical: Option<Medical>,
@@ -157,6 +161,7 @@ pub struct Draft {
     fatigue: Option<game_parallel_economy_fatigue::Draft>,
     purpose: Option<Purpose>,
     gathering: Option<Gathering>,
+    fauna: Option<Fauna>,
     gathered: Option<bool>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
@@ -787,6 +792,17 @@ impl Economy {
     pub fn resource_nodes(&self) -> &[ResourceNode] {
         self.gathering.as_ref().map_or(&[], |g| g.nodes.as_slice())
     }
+    /// Administrative access; player views must restrict observations to the local area.
+    pub fn animals(&self) -> &[Animal] {
+        self.fauna
+            .as_ref()
+            .map_or(&[], |fauna| fauna.animals.as_slice())
+    }
+    pub fn animal_species(&self) -> &[AnimalSpecies] {
+        self.fauna
+            .as_ref()
+            .map_or(&[], |fauna| fauna.species.as_slice())
+    }
     /// Change one person's own gathering preference and chosen site.
     pub fn set_gathering_choice(
         &mut self,
@@ -951,6 +967,19 @@ impl Economy {
         environment::validate(state.environment.as_ref(), &view, &goods)?;
         if let Some(gathering) = &state.gathering {
             gathering.validate(&ids, &goods, &view)?;
+        }
+        if let Some(fauna) = &state.fauna {
+            let regions: HashSet<_> = view
+                .containers
+                .par_iter()
+                .filter_map(|holder| match holder.place {
+                    game_parallel_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            fauna
+                .validate(&regions, &goods, physical.tick())
+                .map_err(str::to_owned)?;
         }
         if let Some(search) = &state.food_search {
             search.validate(&ids, state.knowledge.as_ref(), state.travel.as_ref())?;
@@ -1143,6 +1172,7 @@ impl Economy {
             purpose: state.purpose,
             recovery: state.recovery,
             gathering: state.gathering,
+            fauna: state.fauna,
             food_search: state.food_search,
             giving: state.giving,
             medical: state.medical,
@@ -1183,6 +1213,7 @@ impl Economy {
             purpose: self.purpose.clone(),
             recovery: self.recovery.clone(),
             gathering: self.gathering.clone(),
+            fauna: self.fauna.clone(),
             food_search: self.food_search.clone(),
             giving: self.giving.clone(),
             medical: self.medical.clone(),
@@ -2589,6 +2620,43 @@ impl Economy {
                 )
             })
             .transpose()?;
+        // Human gathering and renewal have already been staged. Wildlife now
+        // competes for the remaining physical patches in the same draft.
+        let fauna = if let Some(fauna) = &self.fauna {
+            let patches: Vec<_> = gathering
+                .as_ref()
+                .map_or(&[][..], |g| g.nodes.as_slice())
+                .par_iter()
+                .map(|node| game_parallel_fauna::Patch {
+                    id: node.id,
+                    region: node.region,
+                    good: node.good,
+                    available: node.available,
+                })
+                .collect();
+            let draft = fauna
+                .advance_validated(&patches, self.seed, tick)
+                .map_err(str::to_owned)?;
+            if let Some(gathering) = &mut gathering {
+                gathering
+                    .nodes
+                    .par_iter_mut()
+                    .try_for_each(|node| -> Result<(), String> {
+                        if let Ok(i) = draft.consumed.binary_search_by_key(&node.id, |row| row.0) {
+                            node.available = node
+                                .available
+                                .checked_sub(draft.consumed[i].1)
+                                .ok_or("animal grazing exceeds physical resource")?;
+                        }
+                        Ok(())
+                    })?;
+            } else if !draft.consumed.is_empty() {
+                return Err("animal grazing requires physical resources".into());
+            }
+            Some(draft.fauna)
+        } else {
+            None
+        };
         let mut agriculture = game_parallel_economy_agriculture::publish_optional(
             farming,
             self.agriculture.as_ref(),
@@ -3260,6 +3328,7 @@ impl Economy {
             fatigue,
             purpose,
             gathering,
+            fauna,
             gathered,
             food_search,
             giving: next_giving,
@@ -3312,6 +3381,7 @@ impl Economy {
         self.fatigue = draft.fatigue.map(|fatigue| fatigue.state);
         self.purpose = draft.purpose;
         self.gathering = draft.gathering;
+        self.fauna = draft.fauna;
         self.food_search = draft.food_search;
         let old_giving = std::mem::replace(&mut self.giving, draft.giving);
         self.hauling = draft.hauling;

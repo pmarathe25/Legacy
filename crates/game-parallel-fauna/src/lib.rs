@@ -1,4 +1,5 @@
 //! Independent animals, local grazing and inherited life histories.
+pub mod content;
 use game_parallel_genetics::{Genome, Sex, inherit, random};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,24 @@ impl Fauna {
         species.par_sort_unstable_by_key(|s| s.id);
         let mut ids: Vec<_> = self.animals.par_iter().map(|a| a.id).collect();
         ids.par_sort_unstable();
+        let mut pedigree: Vec<_> = if self
+            .animals
+            .par_iter()
+            .any(|a| a.parents.is_some() || a.pregnancy.is_some())
+        {
+            self.animals.par_iter().collect()
+        } else {
+            Vec::new()
+        };
+        if pedigree.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+            pedigree.par_sort_unstable_by_key(|animal| animal.id);
+        }
+        let parent = |id| {
+            pedigree
+                .binary_search_by_key(&id, |animal| animal.id)
+                .ok()
+                .map(|index| pedigree[index])
+        };
         if species.par_windows(2).any(|p| p[0].id == p[1].id)
             || species.par_iter().any(|s| {
                 s.id == 0
@@ -137,6 +156,12 @@ impl Fauna {
                         || a.parents.is_some_and(|parents| {
                             parents[0] == parents[1]
                                 || parents.iter().any(|parent| *parent == 0 || *parent >= a.id)
+                                || parent(parents[0]).is_none_or(|mother| {
+                                    mother.species != a.species || mother.genome.sex != Sex::Female
+                                })
+                                || parent(parents[1]).is_none_or(|father| {
+                                    father.species != a.species || father.genome.sex != Sex::Male
+                                })
                         })
                         || a.pregnancy.as_ref().is_some_and(|p| {
                             a.genome.sex != Sex::Female
@@ -146,6 +171,9 @@ impl Fauna {
                                 || p.father >= self.next_id
                                 || p.due <= now
                                 || p.father_genome.sex != Sex::Male
+                                || parent(p.father).is_none_or(|father| {
+                                    father.species != a.species || father.genome != p.father_genome
+                                })
                                 || p.father_genome
                                     .alleles
                                     .iter()
@@ -202,7 +230,8 @@ impl Fauna {
                     return None;
                 }
                 let s = lookup(a.species)?;
-                if a.hunger.saturating_add(s.hunger_per_tick) == 0 {
+                let hunger = a.hunger.saturating_add(s.hunger_per_tick);
+                if hunger == 0 {
                     return None;
                 }
                 let start =
@@ -219,7 +248,9 @@ impl Fauna {
                     patch: patch.id,
                     animal: a.id,
                     priority: random(seed ^ 0x666f72616765, a.id, tick),
-                    amount: s.intake,
+                    amount: s
+                        .intake
+                        .min(u64::from(hunger).div_ceil(u64::from(s.relief_per_unit))),
                     available: patch.available,
                 })
             })

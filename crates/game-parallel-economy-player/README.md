@@ -15,3 +15,5 @@ The ruler can independently choose whether to assert a claim automatically after
 The controlled person sees work requests addressed to them and can accept or decline each one. Acceptance attempts the requested physical work, subject to actual materials and site requirements; a failed start does not become a completed job. The requester can only learn outcomes they witness.
 
 The controlled person can configure their own signed trust reactions to witnessed fulfilled and unfulfilled promises, or use the scenario defaults.
+
+Local wildlife appears in the person's view by identity, species, and observable health. Remote animals, genomes, and pregnancies are not exposed.

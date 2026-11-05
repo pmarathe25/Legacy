@@ -4,6 +4,8 @@ Run `cargo run -p game-parallel-economy-cli`, optionally passing a scenario TOML
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
+Run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-wildlife.toml --player` to see local animals grazing a shared finite patch. Species use named food goods in the scenario; the player view shows only locally observable animals.
+
 When a person's optional work-practice mind is configured, `work-practice-choice PERSON FIELD on|off` changes their `invent`, `approve`, `ask`, or `willing` preference, and `work-practice-reserve PERSON AMOUNT` sets their retained stock preference. `work-practice-decide PERSON AUTHOR SEQUENCE accept|decline` changes that person's assessment of terms they received. A controlled person can propose terms during an actual meeting with `work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME`; communicating them does not require possession of the offered good. The player interface uses the same commands without the controlled person's ID; it exposes only that person's choices. A controlled person chooses actual work and gifts explicitly.
 
 Run `cargo run -p game-parallel-economy-cli -- content/parallel/economy-work-practices.toml --player` to try these choices in an authored campaign. `catalog` and `view` show the recipe, food and nearby person IDs.
