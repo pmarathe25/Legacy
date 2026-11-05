@@ -201,6 +201,17 @@ fn player_hunts_a_local_animal_into_actual_possessions() {
         .unwrap()
         .id;
     assert_eq!(
+        state.giving.as_ref().unwrap().responses[0].alternatives,
+        vec![meat]
+    );
+    assert!(
+        state.hunting.as_ref().unwrap().policies[0]
+            .request_response
+            .as_ref()
+            .unwrap()
+            .willing
+    );
+    assert_eq!(
         state.fauna.as_ref().unwrap().species[0]
             .hunting
             .as_ref()

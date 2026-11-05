@@ -277,6 +277,7 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                 let response = FoodResponseConfig {
                     person,
                     good: rule.good.clone(),
+                    alternatives: vec![],
                     quantity: rule.quantity,
                     recipient_hunger_at_least: rule.recipient_hunger_at_least,
                     willing: random(0) % 100 < u64::from(rule.willing_percent),

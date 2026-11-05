@@ -1030,6 +1030,7 @@ fn requested_hunting_fixture() -> State {
         responses: vec![FoodResponse {
             person: 1,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 0,
             willing: true,
@@ -1041,6 +1042,114 @@ fn requested_hunting_fixture() -> State {
         }],
     });
     state
+}
+
+#[test]
+fn requested_hunting_can_supply_an_individually_chosen_alternative_food() {
+    let mut initial = requested_hunting_fixture();
+    initial.physical.goods[2].food = initial.physical.goods[0].food.clone();
+    initial.fauna.as_mut().unwrap().species[0]
+        .hunting
+        .as_mut()
+        .unwrap()
+        .good = 3;
+    initial.giving.as_mut().unwrap().responses[0].alternatives = vec![3];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let hunted = world.snapshot();
+                assert_eq!(hunted.fauna.as_ref().unwrap().animals[0].health, 0);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&hunted).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.set_giving_choice(1, false).unwrap();
+                restored.set_giving_choice(1, false).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                world.set_giving_choice(1, true).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let recipient = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Person(2))
+                    .unwrap();
+                assert_eq!(recipient.used, 1);
+                assert_eq!(recipient.lots[0].good, 3);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+
+    // A person with both foods chooses their primary preference first.
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        10,
+        vec![
+            Lot {
+                good: 1,
+                quantity: 1,
+                expires_at: Some(10),
+            },
+            Lot {
+                good: 3,
+                quantity: 1,
+                expires_at: Some(10),
+            },
+        ],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let recipient = state
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|c| c.place == Place::Person(2))
+        .unwrap();
+    assert_eq!(recipient.lots[0].good, 1);
+}
+
+#[test]
+fn food_response_alternatives_must_be_distinct_known_foods_and_bounded() {
+    let mut state = requested_hunting_fixture();
+    state.physical.goods[2].food = state.physical.goods[0].food.clone();
+    for alternatives in [vec![1], vec![2], vec![99], vec![3, 3], vec![3; 16]] {
+        state.giving.as_mut().unwrap().responses[0].alternatives = alternatives;
+        assert!(Economy::compile(state.clone()).is_err());
+    }
+    state.giving.as_mut().unwrap().responses[0].alternatives = vec![3];
+    assert!(Economy::compile(state).is_ok());
 }
 
 #[test]
@@ -3941,6 +4050,7 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
         responses: vec![FoodResponse {
             person: 2,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 0,
             willing: false,
@@ -8345,6 +8455,7 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
         responses: vec![FoodResponse {
             person: 1,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 3,
             willing: false,
@@ -12875,6 +12986,7 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
         responses: vec![FoodResponse {
             person: 2,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 5,
             willing: true,
@@ -13005,6 +13117,7 @@ fn food_response_workload(count: u64) -> State {
     giving.responses = vec![FoodResponse {
         person: 1,
         good: 1,
+        alternatives: vec![],
         quantity: 1,
         recipient_hunger_at_least: 5,
         willing: true,
@@ -19506,6 +19619,7 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
         responses: vec![FoodResponse {
             person: 2,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 5,
             willing: false,
@@ -19639,6 +19753,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
         responses: vec![FoodResponse {
             person: 2,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 5,
             willing: false,
@@ -19727,6 +19842,7 @@ fn sharing_learning_workload(count: u64) -> State {
     giving.responses.push(FoodResponse {
         person: 1,
         good: 1,
+        alternatives: vec![],
         quantity: 1,
         recipient_hunger_at_least: 1,
         willing: false,
@@ -19824,6 +19940,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
         responses: vec![FoodResponse {
             person: 2,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 5,
             willing: false,
@@ -19961,6 +20078,7 @@ fn reciprocal_sharing_workload(count: u64) -> State {
         .map(|person| FoodResponse {
             person,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 5,
             willing: false,
@@ -20095,6 +20213,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
         responses: vec![FoodResponse {
             person: 2,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 1,
             willing: false,
@@ -20168,6 +20287,7 @@ fn learned_food_asking_workload(count: u64) -> State {
         .map(|person| FoodResponse {
             person,
             good: 1,
+            alternatives: vec![],
             quantity: 1,
             recipient_hunger_at_least: 5,
             willing: false,

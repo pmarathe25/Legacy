@@ -80,6 +80,9 @@ pub struct HelperAsking {
 pub struct Response {
     pub person: u64,
     pub good: u32,
+    /// Other foods this person is willing to offer, in order of preference.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub alternatives: Vec<u32>,
     pub quantity: u64,
     pub recipient_hunger_at_least: u32,
     pub willing: bool,
@@ -225,6 +228,12 @@ impl Giving {
             || self.responses.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || !food.contains(&p.good)
+                    || p.alternatives.len() > 15
+                    || p.alternatives.iter().enumerate().any(|(i, good)| {
+                        !food.contains(good)
+                            || *good == p.good
+                            || p.alternatives[..i].contains(good)
+                    })
                     || p.quantity == 0
                     || p.pressure_threshold == Some(0)
             })
@@ -631,6 +640,13 @@ impl Context<'_> {
                         fear.saturating_add(obligation) >= threshold
                     })
                 });
+                let good = std::iter::once(policy.good)
+                    .chain(policy.alternatives.iter().copied())
+                    .find(|good| {
+                        food_goods.contains(good)
+                            && from.quantity(*good) >= policy.quantity
+                            && to.quantity(*good) < policy.quantity
+                    })?;
                 (!sender.controlled
                     && sender.health > 0
                     && recipient.health > 0
@@ -645,9 +661,6 @@ impl Context<'_> {
                             || affinity_motivated
                             || learners.binary_search(&sender.id).is_ok())
                             && policy.minimum_trust.is_none_or(|minimum| trust >= minimum)))
-                    && food_goods.contains(&policy.good)
-                    && from.quantity(policy.good) >= policy.quantity
-                    && to.quantity(policy.good) < policy.quantity
                     && to.capacity.saturating_sub(to.used) >= policy.quantity)
                     .then_some((
                         sender.id,
@@ -660,7 +673,7 @@ impl Context<'_> {
                             self.tick,
                         ),
                         recipient.id,
-                        policy.good,
+                        good,
                         policy.quantity,
                     ))
             })

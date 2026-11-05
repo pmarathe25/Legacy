@@ -371,6 +371,8 @@ struct GivingConfig {
 struct FoodResponseConfig {
     person: u64,
     good: String,
+    #[serde(default)]
+    alternatives: Vec<String>,
     quantity: u64,
     recipient_hunger_at_least: u32,
     willing: bool,
@@ -953,6 +955,16 @@ pub fn scenario_with_options(
                         good: *goods
                             .get(p.good.as_str())
                             .ok_or_else(|| format!("unknown giving good {}", p.good))?,
+                        alternatives: p
+                            .alternatives
+                            .iter()
+                            .map(|name| {
+                                goods
+                                    .get(name.as_str())
+                                    .copied()
+                                    .ok_or_else(|| format!("unknown giving good {name}"))
+                            })
+                            .collect::<Result<Vec<_>, _>>()?,
                         quantity: p.quantity,
                         recipient_hunger_at_least: p.recipient_hunger_at_least,
                         willing: p.willing,
