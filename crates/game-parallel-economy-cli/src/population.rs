@@ -184,6 +184,8 @@ pub fn work_support(seed: u64, profiles: &[Profile]) -> Result<WorkRows, String>
 #[serde(deny_unknown_fields)]
 struct HelpProfile {
     good: String,
+    #[serde(default)]
+    alternatives: Vec<String>,
     quantity: u64,
     recipient_hunger_at_least: u32,
     willing_percent: u8,
@@ -277,7 +279,7 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                 let response = FoodResponseConfig {
                     person,
                     good: rule.good.clone(),
-                    alternatives: vec![],
+                    alternatives: rule.alternatives.clone(),
                     quantity: rule.quantity,
                     recipient_hunger_at_least: rule.recipient_hunger_at_least,
                     willing: random(0) % 100 < u64::from(rule.willing_percent),

@@ -1473,6 +1473,23 @@ fn generated_aspiration_can_lead_to_an_actual_work_request() {
 #[test]
 fn generated_person_learns_help_only_from_an_actual_food_transfer() {
     let initial = generated_campaign(128).snapshot();
+    let meat = initial
+        .physical
+        .goods
+        .iter()
+        .find(|g| g.name == "raw-meat")
+        .unwrap()
+        .id;
+    assert!(
+        initial
+            .giving
+            .as_ref()
+            .unwrap()
+            .responses
+            .iter()
+            .filter(|response| response.person >= 1000)
+            .all(|response| response.alternatives == [meat])
+    );
     let target = initial
         .giving
         .as_ref()

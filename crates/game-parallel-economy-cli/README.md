@@ -40,7 +40,7 @@ An optional `[population.social]` table seeds willingness, individual ranges of 
 
 An optional `[population.claims]` table independently seeds preferences for asserting delivered outputs, disregarding others' assertions, and asserting sites the person builds; it can also set a personal hunger threshold for considering claimed food. The scenario must enable personal claims. No assertion exists until an individual actually makes it, and individually authored preferences take precedence.
 
-An optional `[population.help]` table seeds individual responses to food requests, using a named carried good and independent willingness, trust, affinity, and pressure settings. Optional `[population.help.learning]` settings allow a seeded fraction to develop reciprocal inclinations from their own experiences. The scenario must enable giving. These profiles create neither requests nor obligations, and individually authored choices take precedence.
+An optional `[population.help]` table seeds individual responses to food requests, using a named carried good, optional ordered food `alternatives`, and independent willingness, trust, affinity, and pressure settings. Optional `[population.help.learning]` settings allow a seeded fraction to develop reciprocal inclinations from their own experiences. The scenario must enable giving. These profiles create neither requests nor obligations, and individually authored choices take precedence.
 
 Both `[[giving.responses]]` and `[population.help]` may set `affinity_threshold` to motivate responses above a signed value, `affinity_at_most` to motivate responses below one, and a signed `affinity_weight` to rank requesters. Omitted weight preserves the default preference for higher affinity; zero disregards affinity in ranking.
 

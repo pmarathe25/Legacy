@@ -42,6 +42,7 @@ desperate_hunger = 35
 
 [population.help]
 good = "bread"
+alternatives = ["raw-meat"]
 quantity = 1
 recipient_hunger_at_least = 0
 willing_percent = 30
