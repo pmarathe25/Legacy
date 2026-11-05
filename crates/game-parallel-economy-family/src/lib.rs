@@ -365,7 +365,7 @@ pub fn advance_validated(
 
 #[macro_export]
 macro_rules! prepare_people {
-    ($world:expr, $view:expr, $request:expr, $work:expr, $meal:expr, $physical:expr) => {{
+    ($world:expr, $view:expr, $request:expr, $work:expr, $meal:expr, $physical:expr, $fighters:expr) => {{
         game_parallel_economy_combat::validate_manual!(
             $world.combat,
             $request,
@@ -374,10 +374,7 @@ macro_rules! prepare_people {
             $physical
         );
         game_parallel_economy_interaction::validate_work_world!($world, $work);
-        let fighters = $world
-            .combat
-            .as_ref()
-            .map_or(&[][..], |combat| combat.actors());
+        let fighters = $fighters;
         let people: Vec<game_parallel_production_model::PersonSnapshot> = $world
             .people
             .par_iter()

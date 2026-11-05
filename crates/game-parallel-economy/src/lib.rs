@@ -1289,13 +1289,83 @@ impl Economy {
         let site_classes = claims
             .as_ref()
             .map_or_else(Vec::new, |index| index.site_classes());
+        let confrontation = if self.combat.is_some()
+            && self.opinions.as_ref().is_some_and(|opinions| {
+                opinions.sensitivities.par_iter().any(|row| {
+                    row.confrontation.as_ref().is_some_and(|policy| {
+                        policy.enabled && tick.is_multiple_of(policy.interval)
+                    })
+                })
+            }) {
+            #[cfg(feature = "profile")]
+            let _confrontation_span = game_diagnostics::span("economy.confrontation_select");
+            let mut unable_to_initiate =
+                game_parallel_economy_fatigue::resting(self.fatigue.as_ref(), &self.people);
+            unable_to_initiate.par_extend(
+                self.physical
+                    .work()
+                    .par_iter()
+                    .filter(|row| row.phase == game_parallel_lot_runtime::Phase::Working)
+                    .map(|row| row.job.worker),
+            );
+            unable_to_initiate.par_sort_unstable();
+            unable_to_initiate.dedup();
+            let mut unavailable = Vec::new();
+            if let Some(combat) = &self.combat {
+                unavailable.extend_from_slice(combat.actors());
+            }
+            if let Some(row) = request {
+                unavailable.extend([row.actor, row.target]);
+            }
+            unavailable.extend(player_work.map(|row| row.actor()));
+            unavailable.extend(player_meal.map(|row| row.person));
+            unavailable.extend(player_transfer.map(|row| row.person()));
+            if let Some((row, _)) = &manual_response {
+                unavailable.push(row.worker);
+            }
+            if let Some(choice) = player_transfer {
+                use game_parallel_economy_interaction::PhysicalChoice;
+                match choice {
+                    PhysicalChoice::Give { recipient, .. } => unavailable.push(recipient),
+                    PhysicalChoice::TreatOther { patient, .. } => unavailable.push(patient),
+                    PhysicalChoice::AskFood { target, .. } => unavailable.push(target),
+                    PhysicalChoice::AskHaul { carrier, .. } => unavailable.push(carrier),
+                    _ => {}
+                }
+            }
+            unavailable.par_sort_unstable();
+            unavailable.dedup();
+            game_parallel_economy_combat::confrontation::select(
+                self.combat.as_ref(),
+                self.opinions.as_ref(),
+                &self.people,
+                &unavailable,
+                &unable_to_initiate,
+                tick,
+            )
+        } else {
+            None
+        };
+        let current_fighters = self
+            .combat
+            .as_ref()
+            .map_or(&[][..], |combat| combat.actors());
+        let combined_fighters = confrontation.as_ref().map(|selected| {
+            let mut fighters = current_fighters.to_vec();
+            fighters.extend_from_slice(&selected.actors);
+            fighters.par_sort_unstable();
+            fighters.dedup();
+            fighters
+        });
+        let initial_fighters = combined_fighters.as_deref().unwrap_or(current_fighters);
         let (fighters, resting, people, meal_candidates, meals, mut busy) = family::prepare_people!(
             self,
             view,
             request,
             player_work,
             player_meal,
-            player_transfer
+            player_transfer,
+            initial_fighters
         );
         #[cfg(feature = "profile")]
         {
@@ -2916,6 +2986,11 @@ impl Economy {
             );
         }
         game_parallel_economy_combat::finish_world!(combat, person);
+        if let Some((combat, selected)) = combat.as_mut().zip(confrontation.as_ref()) {
+            #[cfg(feature = "profile")]
+            let _confrontation_span = game_diagnostics::span("economy.confrontation_start");
+            combat.add_confrontations(selected, &person.people)?;
+        }
         let missions = game_parallel_economy_expeditions::finish_world!(
             self, expedition, person, travel, dynamics, tick
         );

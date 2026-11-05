@@ -1,4 +1,5 @@
 //! Tactical encounters over the economic world's authoritative people.
+pub mod confrontation;
 pub use game_parallel_conflict::{Command, Order};
 use game_parallel_conflict::{Conflict, Encounter, Fighter};
 use game_parallel_conflict_packed::{Plan, Round};

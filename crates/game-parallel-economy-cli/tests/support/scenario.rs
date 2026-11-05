@@ -1759,6 +1759,108 @@ fn player_can_make_a_promise_and_later_choose_real_delivery() {
 }
 
 #[test]
+fn distrust_can_initiate_tactical_conflict_with_a_controlled_person() {
+    use game_parallel_economy_combat::{Order, Reaction, Response};
+    use game_parallel_economy_player::Player;
+    use game_parallel_opinions::{Confrontation, Opinion};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let initial = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                for person in &mut state.people {
+                    person.willing_to_work = false;
+                    person.seek_meals = false;
+                }
+                for member in &mut state.family.as_mut().unwrap().members {
+                    member.pregnancy = None;
+                    member.reproduction_allowed = false;
+                }
+                let opinions = state.opinions.as_mut().unwrap();
+                opinions
+                    .records
+                    .retain(|row| (row.observer, row.target) != (2, 1));
+                opinions.records.push(Opinion {
+                    observer: 2,
+                    target: 1,
+                    trust: -3,
+                    fear: 0,
+                    obligation: 0,
+                    affinity: 0,
+                });
+                let sensitivity = opinions
+                    .sensitivities_mut()
+                    .iter_mut()
+                    .find(|p| p.person == 2)
+                    .unwrap();
+                sensitivity.confrontation = Some(Confrontation {
+                    trust_at_most: -2,
+                    fear_at_most: 0,
+                    interval: 1,
+                    enabled: true,
+                });
+                state.combat.as_mut().unwrap().reactions.push(Reaction {
+                    person: 1,
+                    response: Response::Fight,
+                    retreat_at_or_below: None,
+                    pursue: false,
+                });
+                let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+                Player::new(&mut world).rest().unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .encounters
+                        .is_empty()
+                );
+                let before = world.snapshot().people[0].health;
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state.people[0].health, before,
+                    "new fights begin after the existing round"
+                );
+                let combat = state.combat.as_ref().unwrap();
+                assert_eq!(combat.conflict.encounters.len(), 1);
+                let fight = &combat.conflict.encounters[0];
+                assert_eq!(
+                    fight.fighters.iter().find(|f| f.person == 1).unwrap().order,
+                    Order::Defend
+                );
+                assert!(matches!(
+                    fight.fighters.iter().find(|f| f.person == 2).unwrap().order,
+                    Order::Attack { target: 1 }
+                ));
+                assert_eq!(combat.tactics.battles[0].encounter, fight.id);
+                assert!(Player::new(&mut world).view().unwrap().battle.is_some());
+                let mut restored = game_parallel_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert!(world.snapshot().people[0].health < before);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn player_fights_on_the_authored_generated_map() {
     use game_parallel_economy_combat::Order;
     use game_parallel_economy_player::Player;
