@@ -8708,6 +8708,113 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
             needs: None,
         }),
     });
+    let mut funded = initial.clone();
+    let holder = funded
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|holder| holder.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 3,
+            expires_at: Some(20),
+        }],
+    )
+    .unwrap();
+    let mut funded = Economy::compile(funded).unwrap();
+    assert!(funded.propose_work_practice(1, 2, 1, 1, 2, 8).unwrap());
+    funded.advance().unwrap();
+    let request = funded.ask_work(1, 2, 1, 5).unwrap();
+    assert!(funded.give(1, 2, 1, 1).unwrap());
+    assert_eq!(
+        funded
+            .snapshot()
+            .giving
+            .as_ref()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .minds[0]
+            .work
+            .as_ref()
+            .unwrap()
+            .engagement
+            .as_ref()
+            .unwrap()
+            .delivered,
+        0,
+        "a gift before personally observing the job is not attributed to it"
+    );
+    let mut saw_job = false;
+    for _ in 0..4 {
+        funded.advance().unwrap();
+        saw_job |= funded
+            .snapshot()
+            .autowork
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()
+            .memories
+            .iter()
+            .any(|memory| {
+                memory
+                    .last_success
+                    .is_some_and(|receipt| receipt.request == request)
+            });
+        if saw_job {
+            break;
+        }
+    }
+    assert!(saw_job);
+    assert!(funded.give(1, 2, 1, 1).unwrap());
+    let partial = funded.snapshot();
+    assert_eq!(
+        partial
+            .giving
+            .as_ref()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .minds[0]
+            .work
+            .as_ref()
+            .unwrap()
+            .engagement
+            .as_ref()
+            .unwrap()
+            .delivered,
+        1
+    );
+    let mut funded =
+        Economy::compile(serde_json::from_str(&serde_json::to_string(&partial).unwrap()).unwrap())
+            .unwrap();
+    assert!(funded.give(1, 2, 1, 1).unwrap());
+    assert!(
+        funded
+            .snapshot()
+            .giving
+            .as_ref()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .minds[0]
+            .work
+            .as_ref()
+            .unwrap()
+            .engagement
+            .is_none(),
+        "separate accepted gifts can complete the person's remembered intention"
+    );
     let mut material = initial.clone();
     material
         .autowork

@@ -254,6 +254,7 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
             let engagement = game_parallel_practices::work::Engagement {
                 proposal: proposal.clone(),
                 request: request.id,
+                delivered: 0,
             };
             std::sync::Arc::make_mut(person.work.as_mut().expect("work mind")).engagement =
                 Some(engagement);
@@ -265,13 +266,19 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                 let Some(work) = person.work.as_ref() else {
                     return;
                 };
-                if work.engagement.as_ref().is_some_and(|entry| {
-                    completed
-                        .binary_search(&(person.person, entry.request))
-                        .is_ok()
-                }) {
-                    std::sync::Arc::make_mut(person.work.as_mut().expect("work mind")).engagement =
-                        None;
+                let Some(entry) = work.engagement.as_ref() else {
+                    return;
+                };
+                let Ok(index) = completed
+                    .binary_search_by_key(&(person.person, entry.request), |row| (row.0, row.1))
+                else {
+                    return;
+                };
+                let work = std::sync::Arc::make_mut(person.work.as_mut().expect("work mind"));
+                let entry = work.engagement.as_mut().expect("engagement");
+                entry.delivered = entry.delivered.saturating_add(completed[index].2);
+                if entry.delivered >= entry.proposal.quantity {
+                    work.engagement = None;
                 }
             });
         }

@@ -509,7 +509,7 @@ pub struct Plan {
     pub actors: Vec<u64>,
     pub actions: Vec<Transaction>,
     records: Vec<(u64, u64, u64, u32)>,
-    work_gifts: Vec<(u64, u64, u64)>,
+    work_gifts: Vec<(u64, u64, u64, u64)>,
 }
 pub struct Context<'a> {
     pub owner: Option<&'a Giving>,
@@ -769,6 +769,7 @@ impl Context<'_> {
                     let work = person.work.as_ref()?;
                     let entry = work.engagement.as_ref()?;
                     let proposal = &entry.proposal;
+                    let remaining = proposal.quantity.checked_sub(entry.delivered)?;
                     let sender = find(person.person)?;
                     let recipient = find(proposal.worker)?;
                     let from = self.view.container(Place::Person(sender.id))?;
@@ -799,16 +800,15 @@ impl Context<'_> {
                             .locations
                             .region((sender.id, sender.region), (recipient.id, recipient.region))
                             .is_some()
-                        && proposal
-                            .quantity
+                        && remaining
                             .checked_add(work.reserve)
                             .is_some_and(|needed| from.quantity(proposal.good) >= needed)
-                        && to.capacity.saturating_sub(to.used) >= proposal.quantity)
+                        && to.capacity.saturating_sub(to.used) >= remaining)
                         .then_some((
                             sender.id,
                             recipient.id,
                             proposal.good,
-                            proposal.quantity,
+                            remaining,
                             entry.request,
                         ))
                 })
@@ -912,15 +912,37 @@ impl Context<'_> {
             .enumerate()
             .map(|(i, row)| (base + i as u64, row.0, row.1, row.2))
             .collect();
-        let work_gifts = work_choices
+        let mut work_gifts: Vec<_> = work_choices
             .par_iter()
             .filter_map(|row| {
                 chosen
                     .binary_search(&(row.0, row.1, row.2, row.3))
                     .ok()
-                    .map(|index| (base + index as u64, row.0, row.4))
+                    .map(|index| (base + index as u64, row.0, row.4, row.3))
             })
             .collect();
+        if let Some((sender, recipient, good, quantity)) = self.manual
+            && let Some(entry) = practice_minds
+                .iter()
+                .find(|person| person.person == sender)
+                .and_then(|person| person.work.as_ref())
+                .and_then(|work| work.engagement.as_ref())
+            && entry.proposal.worker == recipient
+            && entry.proposal.good == good
+            && self.work_requests.is_some_and(|requests| {
+                requests.memories.iter().any(|memory| {
+                    memory.observer == sender
+                        && memory.worker == recipient
+                        && memory.recipe == entry.proposal.recipe
+                        && memory
+                            .last_success
+                            .is_some_and(|receipt| receipt.request == entry.request)
+                })
+            })
+            && let Ok(index) = chosen.binary_search(&(sender, recipient, good, quantity))
+        {
+            work_gifts.push((base + index as u64, sender, entry.request, quantity));
+        }
         Ok(Plan {
             actors,
             actions,
@@ -930,7 +952,7 @@ impl Context<'_> {
     }
 }
 impl Plan {
-    pub(crate) fn completed_work_gifts(&self, events: &Events) -> Vec<(u64, u64)> {
+    pub(crate) fn completed_work_gifts(&self, events: &Events) -> Vec<(u64, u64, u64)> {
         let accepted: HashSet<_> = events
             .physical_actions
             .par_iter()
@@ -940,7 +962,7 @@ impl Plan {
         self.work_gifts
             .par_iter()
             .filter(|row| accepted.contains(&row.0))
-            .map(|row| (row.1, row.2))
+            .map(|row| (row.1, row.2, row.3))
             .collect()
     }
     pub(crate) fn practice_gifts(&self, events: &Events) -> Vec<(u64, u64, u32, u64)> {

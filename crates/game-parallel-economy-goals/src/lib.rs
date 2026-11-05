@@ -385,6 +385,7 @@ macro_rules! request_method {
                     Some(game_parallel_practices::work::Engagement {
                         proposal,
                         request: id,
+                        delivered: 0,
                     });
             }
             self.epoch = epoch;

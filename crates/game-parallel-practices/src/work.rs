@@ -63,6 +63,9 @@ pub struct Received {
 pub struct Engagement {
     pub proposal: Proposal,
     pub request: u64,
+    /// Quantity personally attributed to this intention from accepted gifts.
+    #[serde(default)]
+    pub delivered: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -124,6 +127,7 @@ pub fn valid(
                 && valid_proposal(&entry.proposal)
                 && entry.proposal.author == person
                 && entry.proposal.sequence <= mind.sequence
+                && entry.delivered < entry.proposal.quantity
         })
         && mind.inbox.iter().enumerate().all(|(i, r)| {
             valid_proposal(&r.proposal)
