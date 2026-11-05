@@ -492,6 +492,9 @@ macro_rules! world_codec_methods {
 #[macro_export]
 macro_rules! ensure_reference_supported {
     ($world:expr) => {{
+        if $world.institutions.is_some() {
+            return Err("preset institutions are not supported by the parallel simulation");
+        }
         if $world
             .families
             .as_ref()

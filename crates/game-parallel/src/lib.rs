@@ -215,12 +215,6 @@ impl World {
             .map(|lineage| lineage.prepare_invocation(self.tick))
             .transpose()?
             .flatten();
-        let institutions = game_parallel_institutions::prepare_world(
-            self.institutions.as_ref(),
-            &self.regions,
-            &self.travelers,
-            next,
-        );
         let guardians = game_parallel_guardians::prepare_world(
             self.guardians.as_ref(),
             self.lineage.is_some(),
@@ -323,7 +317,6 @@ impl World {
         if let Some(invocation) = invocation {
             self.lineage.as_mut().unwrap().invocation = Some(invocation);
         }
-        game_parallel_institutions::commit_optional(institutions, &mut self.institutions);
         lineage::advance(self, next);
         if let Some(guardians) = guardians {
             self.guardians = Some(guardians);

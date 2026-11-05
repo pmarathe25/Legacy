@@ -73,11 +73,6 @@ impl Engine {
                 });
             guardians.advance(target, &self.template.routes)
         });
-        let institutions = self
-            .template
-            .institutions
-            .as_ref()
-            .map(|institutions| institutions.prepare(&self.people, next));
         let meals = if let Some(cargo) = &self.template.cargo {
             game_parallel_block_food_cargo::prepare_meals(cargo, &self.people, &self.template.rules)
                 .map_err(|_| "invalid personal cargo")?
@@ -366,7 +361,6 @@ impl Engine {
         if let Some(invocation) = invocation {
             self.template.lineage.as_mut().unwrap().invocation = Some(invocation);
         }
-        game_parallel_institutions::commit_optional(institutions, &mut self.template.institutions);
         if let (Some(lineage), Some(families)) =
             (&mut self.template.lineage, &self.template.families)
         {

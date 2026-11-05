@@ -9,6 +9,9 @@ pub struct Compiled {
     pub food: Vec<u32>,
 }
 pub fn compile(mut world: World) -> Result<Compiled, String> {
+    if world.institutions.is_some() {
+        return Err("preset institutions are not supported by the parallel simulation".into());
+    }
     world.validate()?;
     if world
         .families
