@@ -310,11 +310,12 @@ requirements = []
 cells = [{ site = 1, resistance = 6 }]
 escape = [
   { person = 1, willing = false, effort = 4 },
-  { person = 2, willing = true, effort = 2 },
+  { person = 2, willing = true, effort = 5 },
   { person = 99, willing = true, effort = 2 },
   { person = 100, willing = true, effort = 2 },
 ]
 capture_responses = [{ person = 2, yield_willingly = false, pressure_threshold = 3 }]
+capture_policies = [{ person = 2, target = 1, site = 1, willing = true }]
 
 [[regions]]
 id = 1

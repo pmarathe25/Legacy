@@ -2153,6 +2153,25 @@ fn player_can_confine_and_release_a_guardian_using_the_authored_cell() {
 }
 
 #[test]
+fn player_can_be_captured_by_an_individual_and_choose_to_escape() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-confinement.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    Player::new(&mut world).set_capture_yield(false).unwrap();
+    Player::new(&mut world).advance().unwrap();
+    assert!(Player::new(&mut world).view().unwrap().held);
+    assert!(Player::new(&mut world).depart(2).is_err());
+    assert!(!Player::new(&mut world).escape_confinement().unwrap());
+    assert!(Player::new(&mut world).escape_confinement().unwrap());
+    assert!(!Player::new(&mut world).view().unwrap().held);
+    Player::new(&mut world).depart(2).unwrap();
+}
+
+#[test]
 fn ruler_view_excludes_remote_people_stock_and_other_minds() {
     use game_parallel_economy_knowledge::Record;
     use game_parallel_economy_player::Player;

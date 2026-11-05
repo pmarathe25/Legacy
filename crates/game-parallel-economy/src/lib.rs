@@ -13,8 +13,8 @@ pub use game_parallel_economy_building::{
 pub use game_parallel_economy_campaign::{Campaign, ReleaseDecision};
 pub use game_parallel_economy_combat::Combat;
 pub use game_parallel_economy_confinement::{
-    CaptureResponse as ConfinementCaptureResponse, Cell as ConfinementCell, Confinement,
-    EscapePreference, Hold as ConfinementHold,
+    CapturePolicy as ConfinementCapturePolicy, CaptureResponse as ConfinementCaptureResponse,
+    Cell as ConfinementCell, Confinement, EscapePreference, Hold as ConfinementHold,
 };
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
@@ -1716,6 +1716,65 @@ impl Economy {
         }
         let interaction =
             game_parallel_economy_interaction::prepare_world!(self, request, busy, tick);
+        if let Some(owner) = next_confinement
+            .as_mut()
+            .filter(|owner| !owner.capture_policies.is_empty())
+        {
+            let mut autonomous_busy = busy.clone();
+            if let Some(choice) = player_transfer {
+                use game_parallel_economy_interaction::PhysicalChoice;
+                let target = match choice {
+                    PhysicalChoice::Give { recipient, .. } => Some(recipient),
+                    PhysicalChoice::TreatOther { patient, .. } => Some(patient),
+                    PhysicalChoice::AskFood { target, .. }
+                    | PhysicalChoice::Confine { target, .. }
+                    | PhysicalChoice::ReleaseHeld { target, .. } => Some(target),
+                    PhysicalChoice::AskHaul { carrier, .. } => Some(carrier),
+                    _ => None,
+                };
+                autonomous_busy.extend(target);
+            }
+            autonomous_busy.par_sort_unstable();
+            autonomous_busy.dedup();
+            let mut controlled_unavailable = initial_fighters.to_vec();
+            controlled_unavailable.extend(held.iter().copied());
+            controlled_unavailable.extend(resting.iter().copied());
+            controlled_unavailable.extend(meal_candidates.iter().map(|row| row.0));
+            controlled_unavailable.extend(
+                self.physical
+                    .work()
+                    .iter()
+                    .filter(|job| job.phase == game_parallel_lot_runtime::Phase::Working)
+                    .map(|job| job.job.worker),
+            );
+            controlled_unavailable.extend(request.map(|row| row.actor));
+            controlled_unavailable.extend(player_work.map(|row| row.actor()));
+            controlled_unavailable.extend(player_meal.map(|row| row.person));
+            controlled_unavailable.extend(player_transfer.map(|row| row.person()));
+            if let Some((row, _)) = &manual_response {
+                controlled_unavailable.push(row.worker);
+            }
+            controlled_unavailable.par_sort_unstable();
+            controlled_unavailable.dedup();
+            let outcome = game_parallel_economy_confinement::AutonomousContext {
+                owner,
+                people: &self.people,
+                sites: self
+                    .work_sites
+                    .as_ref()
+                    .ok_or("confinement requires physical sites")?,
+                busy: &autonomous_busy,
+                controlled_unavailable: &controlled_unavailable,
+                opinions: self.opinions.as_ref(),
+                seed: self.seed,
+                tick,
+            }
+            .prepare();
+            game_parallel_economy_work::reserve(&mut busy, outcome.participants);
+            held.par_extend(outcome.captured);
+            held.par_sort_unstable();
+            held.dedup();
+        }
         let (guardian_departures, guardian_actors) = campaign_draft.as_mut().map_or_else(
             || (Vec::new(), Vec::new()),
             |draft| draft.prepare_guardians(&self.people, self.travel.as_ref(), &busy),

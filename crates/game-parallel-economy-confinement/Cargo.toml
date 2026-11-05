@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
 game-parallel-economy-person = { path = "../game-parallel-economy-person" }
 game-parallel-work-sites = { path = "../game-parallel-work-sites" }
 rayon.workspace = true

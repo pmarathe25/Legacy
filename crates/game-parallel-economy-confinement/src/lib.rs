@@ -1,4 +1,6 @@
 //! Physical barriers and individually chosen attempts to escape them.
+mod autonomous;
+pub use autonomous::Context as AutonomousContext;
 use game_parallel_economy_person::Person;
 use game_parallel_work_sites::Facilities;
 use rayon::prelude::*;
@@ -6,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
 fn ordered_index<T>(rows: &[T], id: u64, key: impl Fn(&T) -> u64) -> Option<usize> {
+    if id < key(rows.first()?) || id > key(rows.last()?) {
+        return None;
+    }
     rows.first()
         .and_then(|first| id.checked_sub(key(first)))
         .and_then(|offset| usize::try_from(offset).ok())
@@ -46,6 +51,20 @@ pub struct CaptureResponse {
     pub pressure_threshold: Option<u64>,
 }
 
+/// One person's own intention to capture another, optionally motivated by pressure.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CapturePolicy {
+    pub person: u64,
+    pub target: u64,
+    pub site: u64,
+    pub willing: bool,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capture {
     pub actor: u64,
@@ -58,11 +77,13 @@ pub struct Capture {
 pub struct Event {
     pub tick: u64,
     pub person: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor: Option<u64>,
     pub site: u64,
     pub kind: EventKind,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EventKind {
     EscapeAttempt,
@@ -89,6 +110,8 @@ pub struct Confinement {
     #[serde(default)]
     pub capture_responses: Vec<CaptureResponse>,
     #[serde(default)]
+    pub capture_policies: Vec<CapturePolicy>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -98,6 +121,8 @@ impl Confinement {
         self.holds.par_sort_unstable_by_key(|hold| hold.person);
         self.escape.par_sort_unstable_by_key(|rule| rule.person);
         self.capture_responses
+            .par_sort_unstable_by_key(|rule| rule.person);
+        self.capture_policies
             .par_sort_unstable_by_key(|rule| rule.person);
     }
 
@@ -126,6 +151,10 @@ impl Confinement {
                 .capture_responses
                 .par_windows(2)
                 .any(|w| w[0].person >= w[1].person)
+            || self
+                .capture_policies
+                .par_windows(2)
+                .any(|w| w[0].person >= w[1].person)
             || self.cells.par_iter().any(|cell| {
                 sites
                     .sites
@@ -140,6 +169,18 @@ impl Confinement {
             || self.capture_responses.par_iter().any(|rule| {
                 rule.pressure_threshold == Some(0)
                     || people.binary_search_by_key(&rule.person, |p| p.id).is_err()
+            })
+            || self.capture_policies.par_iter().any(|rule| {
+                rule.person == rule.target
+                    || people.binary_search_by_key(&rule.person, |p| p.id).is_err()
+                    || people.binary_search_by_key(&rule.target, |p| p.id).is_err()
+                    || rule.site == 0
+                    || rule.site >= sites.next_id
+                    || rule.pressured_by.is_some() != rule.pressure_threshold.is_some()
+                    || rule.pressure_threshold == Some(0)
+                    || rule.pressured_by.is_some_and(|id| {
+                        id == rule.person || people.binary_search_by_key(&id, |p| p.id).is_err()
+                    })
             })
             || self.holds.par_iter().any(|hold| {
                 let person = people
@@ -168,6 +209,9 @@ impl Confinement {
                     || people
                         .binary_search_by_key(&event.person, |p| p.id)
                         .is_err()
+                    || event
+                        .actor
+                        .is_some_and(|id| people.binary_search_by_key(&id, |p| p.id).is_err())
             })
         {
             return Err("invalid physical confinement".into());
@@ -259,6 +303,7 @@ impl Confinement {
                 self.events.push(Event {
                     tick,
                     person: target,
+                    actor: Some(actor),
                     site: site_id,
                     kind,
                 });
@@ -273,6 +318,7 @@ impl Confinement {
         self.events.push(Event {
             tick,
             person: target,
+            actor: Some(actor),
             site: site_id,
             kind: EventKind::Confined,
         });
@@ -311,6 +357,7 @@ impl Confinement {
         self.events.push(Event {
             tick,
             person: target,
+            actor: Some(actor),
             site: site_id,
             kind: EventKind::Released,
         });
@@ -374,11 +421,13 @@ impl Confinement {
             holds: self.holds.par_iter().cloned().collect(),
             escape: self.escape.par_iter().cloned().collect(),
             capture_responses: self.capture_responses.par_iter().cloned().collect(),
+            capture_policies: self.capture_policies.par_iter().cloned().collect(),
             events: attempts
                 .par_iter()
                 .map(|&(site, person, _)| Event {
                     tick,
                     person,
+                    actor: Some(person),
                     site,
                     kind: EventKind::EscapeAttempt,
                 })
@@ -440,11 +489,39 @@ impl Confinement {
 #[macro_export]
 macro_rules! escape_method {
     () => {
+        /// Change an individual's inclination to carry out their own capture intention.
+        pub fn set_capture_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be capable".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            let owner = self.confinement.as_mut().ok_or("confinement is disabled")?;
+            let index = owner
+                .capture_policies
+                .binary_search_by_key(&person, |row| row.person)
+                .map_err(|_| "person has no capture preference")?;
+            owner.capture_policies[index].willing = willing;
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Change only this person's own inclination to yield to capture.
         pub fn set_capture_yield(&mut self, person: u64, willing: bool) -> Result<(), String> {
-            self.people
+            if self
+                .people
                 .binary_search_by_key(&person, |row| row.id)
-                .map_err(|_| "unknown person")?;
+                .ok()
+                .is_none_or(|index| self.people[index].health == 0)
+            {
+                return Err("person must be capable".into());
+            }
             let epoch = self
                 .epoch
                 .checked_add(1)
@@ -533,111 +610,5 @@ macro_rules! escape_method {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use game_parallel_work_sites::Site;
-
-    fn shared_barrier(count: u64) -> (Confinement, Vec<Person>, Facilities) {
-        let people = (1..=count)
-            .map(|id| Person {
-                id,
-                region: Some(1),
-                health: 100,
-                hunger: 0,
-                immortal: None,
-                willing_to_work: false,
-                seek_meals: false,
-                controlled: false,
-            })
-            .collect();
-        let owner = Confinement {
-            default_effort: 1,
-            cells: vec![Cell {
-                site: 1,
-                resistance: count + 1,
-            }],
-            holds: (1..=count).map(|person| Hold { person, site: 1 }).collect(),
-            escape: (1..=count)
-                .map(|person| EscapePreference {
-                    person,
-                    willing: true,
-                    effort: 1,
-                })
-                .collect(),
-            capture_responses: vec![],
-            events: vec![],
-        };
-        let sites = Facilities {
-            next_id: 2,
-            sites: vec![Site {
-                id: 1,
-                region: 1,
-                kind: "cell".into(),
-                capacity: count,
-            }],
-            requirements: vec![],
-            bindings: vec![],
-        };
-        (owner, people, sites)
-    }
-
-    #[test]
-    fn simultaneous_attempts_reduce_a_shared_barrier_and_release_everyone() {
-        let (initial, people, sites) = shared_barrier(4096);
-        initial.validate(&people, &sites, 0).unwrap();
-        let run = |workers| {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(workers)
-                .build()
-                .unwrap()
-                .install(|| {
-                    let (first, actors) = initial.escape_attempts(&people, &[], 1, None).unwrap();
-                    assert_eq!(actors.len(), 4096);
-                    assert_eq!(first.cells[0].resistance, 1);
-                    assert_eq!(first.holds.len(), 4096);
-                    let (second, _) = first.escape_attempts(&people, &[], 2, None).unwrap();
-                    assert_eq!(second.cells[0].resistance, 0);
-                    assert!(second.holds.is_empty());
-                    second.validate(&people, &sites, 2).unwrap();
-                    second
-                })
-        };
-        assert_eq!(run(1), run(4));
-    }
-
-    #[test]
-    #[ignore = "manual concentrated escape benchmark"]
-    fn concentrated_escape_benchmark() {
-        let workers = std::env::var("LEGACY_WORKERS")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(1);
-        let count = std::env::var("LEGACY_PEOPLE")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(100_000);
-        let (initial, people, _) = shared_barrier(count);
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .unwrap()
-            .install(|| {
-                let mut samples = Vec::new();
-                for round in 0..5 {
-                    let now = std::time::Instant::now();
-                    let (next, actors) = initial.escape_attempts(&people, &[], 1, None).unwrap();
-                    let elapsed = now.elapsed();
-                    assert_eq!(actors.len(), count as usize);
-                    assert_eq!(next.cells[0].resistance, 1);
-                    if round > 0 {
-                        samples.push(elapsed);
-                    }
-                }
-                samples.sort();
-                println!(
-                    "workers={workers} people={count} elapsed_ms={:.3}",
-                    samples[samples.len() / 2].as_secs_f64() * 1000.0
-                );
-            });
-    }
-}
+#[path = "../tests/support/behavior.rs"]
+mod tests;

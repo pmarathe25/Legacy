@@ -3415,6 +3415,8 @@ name = "game-parallel-economy-confinement"
 version = "0.2.0"
 dependencies = [
  "game-parallel-economy-person",
+ "game-parallel-genetics",
+ "game-parallel-opinions",
  "game-parallel-work-sites",
  "rayon",
  "serde",
