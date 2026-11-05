@@ -8598,6 +8598,206 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
 }
 
 #[test]
+fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
+    use game_parallel_autowork::requests::{OfferValue, Preference, Requests};
+    use game_parallel_practices::work::Mind as WorkMind;
+    use game_parallel_social::{Participant, Rules as SocialRules, Social};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.willing_to_work = false;
+    }
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|holder| holder.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(Place::Person(1), 10, vec![]).unwrap();
+    let mut author = practice_mind(1, false);
+    let mut worker = practice_mind(2, false);
+    let work = WorkMind {
+        invent: false,
+        approve: true,
+        willing: false,
+        ask_willing: false,
+        review_interval: 1,
+        proposal_lifetime: 8,
+        reserve: 0,
+        pressure_threshold: None,
+        next_review: 0,
+        sequence: 0,
+        authored: None,
+        engagement: None,
+        inbox: vec![],
+    };
+    author.work = Some(std::sync::Arc::new(work.clone()));
+    worker.work = Some(std::sync::Arc::new(work));
+    initial.giving = Some(Giving {
+        practices: Some(PersonalPractices {
+            minds: vec![author, worker],
+        }),
+        inherit_births: false,
+        acquaintance_asking: vec![],
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        policies: vec![],
+    });
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: Some(Requests {
+            next_id: 1,
+            inherit_births: false,
+            memory_limit: 2,
+            work_links: vec![],
+            memories: vec![],
+            askers: vec![],
+            events: vec![],
+            pending: vec![],
+            preferences: vec![Preference {
+                person: 2,
+                effort: 1,
+                help_value: 0,
+                affinity_weight: 0,
+                trust_weight: 0,
+                offer_value: Some(OfferValue {
+                    good: 1,
+                    value_per_unit: 1,
+                    max_quantity: 1,
+                }),
+                disregard_claims: false,
+            }],
+        }),
+    });
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        disease: None,
+        treatment: vec![],
+        claims: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 1,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: vec![
+                Participant {
+                    person: 1,
+                    willing: true,
+                },
+                Participant {
+                    person: 2,
+                    willing: true,
+                },
+            ],
+            pressures: vec![],
+            relationships: vec![],
+            events: vec![],
+            needs: None,
+        }),
+    });
+    let mut refusal = initial.clone();
+    refusal
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = false;
+    let mut refusal = Economy::compile(refusal).unwrap();
+    assert!(!refusal.propose_work_practice(1, 2, 1, 1, 1, 8).unwrap());
+    assert!(
+        refusal
+            .snapshot()
+            .giving
+            .as_ref()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .minds[1]
+            .work
+            .as_ref()
+            .unwrap()
+            .inbox
+            .is_empty()
+    );
+    assert_eq!(refusal.tick(), 1, "a refused meeting still takes time");
+    let mut world = Economy::compile(initial).unwrap();
+    let before = world.snapshot();
+    assert!(world.propose_work_practice(1, 2, 1, 1, 0, 8).is_err());
+    assert_eq!(world.snapshot(), before);
+    assert!(world.propose_work_practice(1, 2, 1, 1, 1, 8).unwrap());
+    let after_offer = world.snapshot();
+    let minds = &after_offer
+        .giving
+        .as_ref()
+        .unwrap()
+        .practices
+        .as_ref()
+        .unwrap()
+        .minds;
+    assert_eq!(
+        minds[1].work.as_ref().unwrap().inbox[0].decision,
+        PracticeDecision::Pending
+    );
+    world.advance().unwrap();
+    let request = world.ask_work(1, 2, 1, 5).unwrap();
+    let saved = world.snapshot();
+    assert_eq!(
+        saved
+            .giving
+            .as_ref()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .minds[0]
+            .work
+            .as_ref()
+            .unwrap()
+            .engagement
+            .as_ref()
+            .unwrap()
+            .request,
+        request
+    );
+    let mut restored =
+        Economy::compile(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap())
+            .unwrap();
+    assert!(!world.advance().unwrap().started.is_empty());
+    restored.advance().unwrap();
+    assert_eq!(world.snapshot(), restored.snapshot());
+    for _ in 0..3 {
+        world.advance().unwrap();
+    }
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|holder| holder.place == Place::Person(2))
+            .unwrap()
+            .used,
+        0
+    );
+}
+
+#[test]
 fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
     use game_parallel_autowork::requests::{Preference, Request, Requests};
     use game_parallel_practices::work::Mind as WorkMind;

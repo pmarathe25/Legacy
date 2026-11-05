@@ -362,6 +362,31 @@ macro_rules! request_method {
                 &production,
                 tick,
             )?;
+            if let Some(mind) = self
+                .giving
+                .as_mut()
+                .and_then(|giving| giving.practices.as_mut())
+                .and_then(|practices| {
+                    practices
+                        .minds
+                        .iter_mut()
+                        .find(|mind| mind.person == requester)
+                })
+                && let Some(work) = mind.work.as_mut()
+                && work.engagement.is_none()
+                && let Some(proposal) = work.authored.as_ref().filter(|proposal| {
+                    proposal.worker == worker
+                        && proposal.recipe == recipe
+                        && proposal.expires >= tick
+                })
+            {
+                let proposal = proposal.clone();
+                std::sync::Arc::make_mut(work).engagement =
+                    Some(game_parallel_practices::work::Engagement {
+                        proposal,
+                        request: id,
+                    });
+            }
             self.epoch = epoch;
             Ok(id)
         }

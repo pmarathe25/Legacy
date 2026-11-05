@@ -1585,6 +1585,66 @@ fn suspended_control_hides_the_rulers_view_and_rejects_actions() {
 }
 
 #[test]
+fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-work-practices.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut player = Player::new(&mut world);
+    let view = player.view().unwrap();
+    let bread = view.possessions[0].good;
+    let offered = view.possessions[0].quantity + 100;
+    let recipe = player
+        .catalog()
+        .unwrap()
+        .1
+        .into_iter()
+        .find(|recipe| recipe.name == "fixture-tool")
+        .unwrap()
+        .id;
+    assert!(
+        player
+            .propose_work_practice(2, recipe, bread, offered, 12)
+            .unwrap()
+    );
+    let view = player.view().unwrap();
+    assert_eq!(
+        view.practices
+            .as_ref()
+            .unwrap()
+            .work
+            .as_ref()
+            .unwrap()
+            .authored
+            .as_ref()
+            .unwrap()
+            .quantity,
+        offered
+    );
+    player.advance().unwrap();
+    let request = player.ask_work(2, recipe, 8).unwrap();
+    assert_eq!(
+        player
+            .view()
+            .unwrap()
+            .practices
+            .as_ref()
+            .unwrap()
+            .work
+            .as_ref()
+            .unwrap()
+            .engagement
+            .as_ref()
+            .unwrap()
+            .request,
+        request
+    );
+}
+
+#[test]
 fn player_can_make_a_promise_and_later_choose_real_delivery() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

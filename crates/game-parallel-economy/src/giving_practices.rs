@@ -499,6 +499,139 @@ macro_rules! methods {
                 mind.withdraw(author, sequence, now).map_err(str::to_owned)
             })
         }
+        /// Propose personal work terms at a real meeting, without checking the speaker's stock.
+        pub fn propose_work_practice(
+            &mut self,
+            author: u64,
+            worker: u64,
+            recipe: u32,
+            good: u32,
+            quantity: u64,
+            lifetime: u64,
+        ) -> Result<bool, String> {
+            if self.campaign.as_ref().is_some_and(|c| {
+                c.lineage.current == Some(author)
+                    && c.lineage.controlled_person(self.tick()) != Some(author)
+            }) {
+                return Err("player control is suspended".into());
+            }
+            game_parallel_economy_campaign::preflight!(self);
+            if quantity == 0
+                || lifetime == 0
+                || author == worker
+                || !self.physical.recipes().iter().any(|row| row.id == recipe)
+                || !self
+                    .physical
+                    .goods()
+                    .iter()
+                    .any(|row| row.id == good && row.food.is_some())
+            {
+                return Err("invalid personal work terms".into());
+            }
+            let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
+            let practices = self
+                .giving
+                .as_ref()
+                .and_then(|giving| giving.practices.as_ref())
+                .ok_or("personal practices are disabled")?;
+            let own = practices
+                .minds
+                .iter()
+                .find(|mind| mind.person == author)
+                .and_then(|mind| mind.work.as_ref())
+                .ok_or("person has no work practice mind")?;
+            if practices
+                .minds
+                .iter()
+                .find(|mind| mind.person == worker)
+                .and_then(|mind| mind.work.as_ref())
+                .is_none()
+            {
+                return Err("recipient has no work practice mind".into());
+            }
+            let sequence = own
+                .sequence
+                .checked_add(1)
+                .ok_or("work practice sequence overflow")?;
+            let expires = tick
+                .checked_add(lifetime)
+                .ok_or("work practice expiry overflow")?;
+            let next_review = tick
+                .checked_add(own.review_interval)
+                .ok_or("work practice review overflow")?;
+            let reserve = own.reserve;
+            let mut draft = self.prepare_interaction(
+                Some(game_parallel_economy_interaction::Request {
+                    actor: author,
+                    target: worker,
+                }),
+                None,
+                None,
+                None,
+            )?;
+            let met = draft
+                .dynamics
+                .as_ref()
+                .and_then(|d| d.social.as_ref())
+                .is_some_and(|social| {
+                    social
+                        .events
+                        .iter()
+                        .any(|event| event.a == author.min(worker) && event.b == author.max(worker))
+                });
+            let mut delivered = false;
+            if met {
+                let practices = draft
+                    .giving
+                    .as_mut()
+                    .and_then(|giving| giving.practices.as_mut())
+                    .ok_or("personal practices are disabled")?;
+                let recipient = practices
+                    .minds
+                    .iter()
+                    .position(|mind| mind.person == worker)
+                    .ok_or("unknown recipient")?;
+                let has_room = practices.minds[recipient]
+                    .work
+                    .as_ref()
+                    .is_some_and(|work| work.inbox.len() < game_parallel_practices::MAX_PROPOSALS);
+                if has_room {
+                    let proposal = game_parallel_practices::work::Proposal {
+                        author,
+                        sequence,
+                        worker,
+                        recipe,
+                        good,
+                        quantity,
+                        reserve,
+                        created: tick,
+                        expires,
+                    };
+                    let sender = practices
+                        .minds
+                        .iter_mut()
+                        .find(|mind| mind.person == author)
+                        .and_then(|mind| mind.work.as_mut())
+                        .ok_or("person has no work practice mind")?;
+                    let sender = std::sync::Arc::make_mut(sender);
+                    sender.sequence = sequence;
+                    sender.next_review = next_review;
+                    sender.authored = Some(proposal.clone());
+                    let target = std::sync::Arc::make_mut(
+                        practices.minds[recipient].work.as_mut().expect("work mind"),
+                    );
+                    target.inbox.push(game_parallel_practices::work::Received {
+                        proposal,
+                        delivered: tick,
+                        decision: game_parallel_practices::Decision::Pending,
+                        approved: false,
+                    });
+                    delivered = true;
+                }
+            }
+            self.commit(draft)?;
+            Ok(delivered)
+        }
         /// Attempt a real meeting and, if it happens, communicate the chosen claim.
         pub fn report_practice(
             &mut self,

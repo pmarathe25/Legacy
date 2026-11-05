@@ -798,6 +798,20 @@ impl<'a> Player<'a> {
         self.world
             .decide_work_practice(self.current()?, author, sequence, approve)
     }
+    pub fn propose_work_practice(
+        &mut self,
+        worker: u64,
+        recipe: u32,
+        good: u32,
+        quantity: u64,
+        lifetime: u64,
+    ) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&worker) {
+            return Err("person is not present".into());
+        }
+        self.world
+            .propose_work_practice(self.current()?, worker, recipe, good, quantity, lifetime)
+    }
     pub fn set_work_practice_choice(&mut self, choice: &str, enabled: bool) -> Result<(), String> {
         self.world
             .set_work_practice_choice(self.current()?, choice, enabled)
