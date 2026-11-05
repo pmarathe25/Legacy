@@ -37,7 +37,8 @@ pub use game_parallel_economy_work::sites::{
 };
 pub use game_parallel_economy_work::tools::Requirement as WorkTool;
 pub use game_parallel_opinions::{
-    ObligationDevelopment, Opinion, RelationshipCase, Sensitivity as OpinionSensitivity,
+    ObligationDevelopment, Opinion, RelationshipCase, ReportReception,
+    Sensitivity as OpinionSensitivity,
 };
 pub use game_parallel_practices::{
     Belief as PracticeBelief, Case as PracticeCase, Decision as PracticeDecision,
@@ -538,6 +539,36 @@ impl Economy {
         self.opinions = Some(next);
         self.epoch = epoch;
         Ok(())
+    }
+    /// Change the person's report reception without changing their other dispositions.
+    pub fn set_food_report_reception(
+        &mut self,
+        person: u64,
+        reception: Option<ReportReception>,
+    ) -> Result<(), String> {
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        let mut sensitivity = owner
+            .sensitivities
+            .iter()
+            .find(|s| s.person == person)
+            .cloned()
+            .unwrap_or_else(|| OpinionSensitivity {
+                person,
+                ..Default::default()
+            });
+        sensitivity.report_reception = reception;
+        self.set_opinion_sensitivity(sensitivity)
+    }
+    pub fn food_report_reception(&self, person: u64) -> Result<Option<ReportReception>, String> {
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        if !self.people.iter().any(|p| p.id == person) {
+            return Err("unknown person".into());
+        }
+        Ok(owner
+            .sensitivities
+            .iter()
+            .find(|s| s.person == person)
+            .and_then(|s| s.report_reception))
     }
     /// Administrative relationship records; player views filter by observer.
     pub fn opinions(&self) -> &[Opinion] {

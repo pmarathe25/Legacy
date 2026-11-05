@@ -2274,12 +2274,21 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
 
 #[test]
 fn authored_food_misreport_is_personal_and_player_can_change_it() {
+    let authored: game_parallel_opinions::Sensitivity =
+        toml::from_str("person = 1\nreport_reception = { trust_at_least = -3 }").unwrap();
+    assert_eq!(
+        authored.report_reception,
+        Some(game_parallel_economy::ReportReception::TrustAtLeast(-3))
+    );
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = source.replace("\r\n", "\n").replace(
         "[[knowledge.minds]]\nperson = 1",
         "[[knowledge.minds]]\nperson = 1\nmisreport = { target = 2, food_delta = -7 }",
+    );
+    let configured = format!(
+        "{configured}\n[[opinions.sensitivities]]\nperson = 1\nreport_reception = \"never\"\n"
     );
     let path =
         std::env::temp_dir().join(format!("legacy-food-misreport-{}.toml", std::process::id()));
@@ -2293,6 +2302,19 @@ fn authored_food_misreport_is_personal_and_player_can_change_it() {
             target: Some(2),
             food_delta: -7
         })
+    );
+    assert_eq!(
+        player.food_report_reception().unwrap(),
+        Some(game_parallel_economy::ReportReception::Never)
+    );
+    player
+        .set_food_report_reception(Some(game_parallel_economy::ReportReception::TrustAtLeast(
+            -3,
+        )))
+        .unwrap();
+    assert_eq!(
+        player.food_report_reception().unwrap(),
+        Some(game_parallel_economy::ReportReception::TrustAtLeast(-3))
     );
     player.set_food_misreport(None).unwrap();
     assert_eq!(player.food_misreport().unwrap(), None);

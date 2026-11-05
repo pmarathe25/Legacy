@@ -51,6 +51,39 @@ fn directed_distrust_rejects_reports_without_blocking_encounters_or_direct_obser
     );
 }
 #[test]
+fn individual_report_dispositions_override_the_shared_default() {
+    use game_parallel::{OpinionSensitivity as Sensitivity, ReportReception};
+    for (reception, accepts) in [
+        (ReportReception::Always, true),
+        (ReportReception::Never, false),
+        (ReportReception::TrustAtLeast(-5), true),
+        (ReportReception::TrustAtLeast(5), false),
+    ] {
+        let mut state = world();
+        state
+            .opinions
+            .as_mut()
+            .unwrap()
+            .sensitivities
+            .push(Sensitivity {
+                person: 2,
+                report_reception: Some(reception),
+                ..Default::default()
+            });
+        let mut kernel = Kernel::compile(state).unwrap();
+        kernel.step().unwrap();
+        let result = kernel.export();
+        let recipient = result
+            .knowledge
+            .unwrap()
+            .minds
+            .into_iter()
+            .find(|m| m.person == 2)
+            .unwrap();
+        assert_eq!(recipient.records.iter().any(|r| r.region == 2), accepts);
+    }
+}
+#[test]
 fn a_real_default_changes_later_acceptance_of_that_persons_reports() {
     let mut state =
         World::from_toml(include_str!("../../../../content/parallel/agreements.toml")).unwrap();
@@ -114,6 +147,26 @@ fn invalid_threshold_and_unsupported_reference_host_are_rejected() {
     assert!(game_parallel_blocks::Engine::compile(state.clone()).is_err());
     state.opinions.as_mut().unwrap().rules.minimum_report_trust = Some(6);
     assert!(state.validate().is_err());
+
+    let mut individual = world();
+    individual
+        .opinions
+        .as_mut()
+        .unwrap()
+        .rules
+        .minimum_report_trust = None;
+    individual
+        .opinions
+        .as_mut()
+        .unwrap()
+        .sensitivities
+        .push(game_parallel::OpinionSensitivity {
+            person: 2,
+            report_reception: Some(game_parallel::ReportReception::Never),
+            ..Default::default()
+        });
+    assert!(individual.step().is_err());
+    assert!(game_parallel_blocks::Engine::compile(individual).is_err());
 }
 
 #[test]

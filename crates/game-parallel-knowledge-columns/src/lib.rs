@@ -262,17 +262,12 @@ impl<'a> Preparation<'a> {
         encounters: &[Encounter],
         opinions: Option<&game_parallel_opinions::Opinions>,
     ) -> Draft {
-        let Some(owner) = opinions.filter(|owner| owner.rules.minimum_report_trust.is_some())
+        let Some(filter) = opinions.and_then(game_parallel_opinions::Opinions::report_filter)
         else {
             return self.prepare(view, encounters);
         };
-        let threshold = owner
-            .rules
-            .minimum_report_trust
-            .expect("configured threshold");
-        let trust = owner.index();
         self.prepare_with(view, encounters, |receiver, sender| {
-            trust.trust(receiver, sender) >= threshold
+            filter.accepts(receiver, sender)
         })
     }
     /// Filter each directed report independently, while preserving direct observations.

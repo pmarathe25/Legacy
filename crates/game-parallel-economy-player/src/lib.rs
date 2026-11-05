@@ -834,6 +834,18 @@ impl<'a> Player<'a> {
     pub fn food_misreport(&self) -> Result<Option<game_parallel_economy::Misreport>, String> {
         self.world.food_misreport(self.current()?)
     }
+    pub fn set_food_report_reception(
+        &mut self,
+        reception: Option<game_parallel_economy::ReportReception>,
+    ) -> Result<(), String> {
+        self.world
+            .set_food_report_reception(self.current()?, reception)
+    }
+    pub fn food_report_reception(
+        &self,
+    ) -> Result<Option<game_parallel_economy::ReportReception>, String> {
+        self.world.food_report_reception(self.current()?)
+    }
     pub fn set_practice_willingness(&mut self, enabled: bool) -> Result<(), String> {
         self.world
             .set_practice_willingness(self.current()?, enabled)

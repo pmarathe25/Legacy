@@ -94,6 +94,7 @@ pub fn claim_tolerance(
                     < u64::from(settings.confrontation_percent);
             (tolerant || confront).then_some(game_parallel::OpinionSensitivity {
                 person,
+                report_reception: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,

@@ -4,10 +4,13 @@ mod merge;
 pub use merge::{Change, merge};
 
 /// Individual responses to experience; absent values use the authored defaults.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sensitivity {
     pub person: u64,
+    /// This person's policy for accepting reports; absent uses the scenario default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub report_reception: Option<ReportReception>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fear_per_damage: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -53,6 +56,13 @@ pub struct Sensitivity {
     /// Optional, individually configured change in felt-obligation disposition during childhood.
     #[serde(default)]
     pub obligation_development: Option<ObligationDevelopment>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportReception {
+    Always,
+    Never,
+    TrustAtLeast(i32),
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

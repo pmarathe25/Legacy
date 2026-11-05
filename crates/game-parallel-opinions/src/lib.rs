@@ -26,13 +26,47 @@ impl Clone for Opinions {
     }
 }
 pub use game_parallel_opinions_model::{
-    AffinityRules, Confrontation, Event, ObligationDevelopment, Opinion, RelationshipCase, Rules,
-    Sensitivity,
+    AffinityRules, Confrontation, Event, ObligationDevelopment, Opinion, RelationshipCase,
+    ReportReception, Rules, Sensitivity,
 };
 
 pub struct Index<'a> {
     rules: &'a Rules,
     records: Vec<&'a Opinion>,
+}
+/// Independent receiver policies over committed directed trust.
+pub struct ReportFilter<'a> {
+    trust: Index<'a>,
+    policies: Vec<(u64, ReportReception)>,
+    dense_base: Option<u64>,
+}
+impl ReportFilter<'_> {
+    pub fn accepts(&self, receiver: u64, sender: u64) -> bool {
+        let policy = if let Some(first) = self.dense_base {
+            receiver
+                .checked_sub(first)
+                .and_then(|i| usize::try_from(i).ok())
+                .and_then(|i| self.policies.get(i))
+                .map(|p| p.1)
+        } else {
+            self.policies
+                .binary_search_by_key(&receiver, |p| p.0)
+                .ok()
+                .map(|i| self.policies[i].1)
+        };
+        match policy {
+            Some(ReportReception::Always) => true,
+            Some(ReportReception::Never) => false,
+            Some(ReportReception::TrustAtLeast(threshold)) => {
+                self.trust.trust(receiver, sender) >= threshold
+            }
+            None => self
+                .trust
+                .rules
+                .minimum_report_trust
+                .is_none_or(|threshold| self.trust.trust(receiver, sender) >= threshold),
+        }
+    }
 }
 impl Index<'_> {
     pub fn assessment(&self, observer: u64, target: u64) -> (i32, u64) {
@@ -202,6 +236,7 @@ impl Opinions {
             .filter(|id| existing.binary_search(id).is_err())
             .map(|person| Sensitivity {
                 person,
+                report_reception: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,
@@ -419,6 +454,30 @@ impl Opinions {
             rules: &self.rules,
             records,
         }
+    }
+    /// Build only when some receiver filters reports.
+    pub fn report_filter(&self) -> Option<ReportFilter<'_>> {
+        let mut policies: Vec<_> = self
+            .sensitivities
+            .par_iter()
+            .filter_map(|s| s.report_reception.map(|policy| (s.person, policy)))
+            .collect();
+        if policies.is_empty() && self.rules.minimum_report_trust.is_none() {
+            return None;
+        }
+        policies.par_sort_unstable_by_key(|p| p.0);
+        let dense_base = policies
+            .first()
+            .zip(policies.last())
+            .and_then(|(first, last)| {
+                (last.0.checked_sub(first.0) == Some((policies.len() - 1) as u64))
+                    .then_some(first.0)
+            });
+        Some(ReportFilter {
+            trust: self.index(),
+            policies,
+            dense_base,
+        })
     }
     /// The host validates identities and contract/event links on import; all effects
     /// in this boundary are combined before the bounded trust update.

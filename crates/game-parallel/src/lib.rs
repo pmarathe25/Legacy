@@ -79,7 +79,7 @@ pub use game_parallel_nutrition::{
 };
 pub use game_parallel_opinions::{
     Confrontation as ConfrontationPreference, Event as OpinionEvent, Opinion, Opinions,
-    Rules as OpinionRules, Sensitivity as OpinionSensitivity,
+    ReportReception, Rules as OpinionRules, Sensitivity as OpinionSensitivity,
 };
 pub use game_parallel_people::{Person, Region, Rules};
 pub use game_parallel_personality::{Person as PersonalityPerson, Personality};

@@ -37,6 +37,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
         sensitivities: vec![
             Sensitivity {
                 person: 1,
+                report_reception: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -57,6 +58,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
             },
             Sensitivity {
                 person: 3,
+                report_reception: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -90,6 +92,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
         events: vec![],
         sensitivities: vec![Sensitivity {
             person: 1,
+            report_reception: None,
             fear_per_damage: None,
             gratitude_gain: None,
             obligation_relief: Some(2),
@@ -159,6 +162,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
         sensitivities: vec![
             Sensitivity {
                 person: 2,
+                report_reception: None,
                 fear_per_damage: Some(0),
                 gratitude_gain: Some(0),
                 obligation_relief: None,
@@ -179,6 +183,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
             },
             Sensitivity {
                 person: 3,
+                report_reception: None,
                 fear_per_damage: Some(2),
                 gratitude_gain: Some(3),
                 obligation_relief: None,
@@ -514,6 +519,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
     });
     let personal = |person, help, harm, encounter, pressured| Sensitivity {
         person,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: None,
         obligation_relief: None,
@@ -576,6 +582,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
     });
     let sensitivity = Sensitivity {
         person: 1,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -634,6 +641,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
 fn obligation_from_help_depends_on_the_person_and_relationship() {
     let sensitivity = Sensitivity {
         person: 1,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: Some(0),

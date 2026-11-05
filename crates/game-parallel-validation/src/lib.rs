@@ -502,7 +502,7 @@ macro_rules! ensure_reference_supported {
                     || opinions
                         .sensitivities
                         .iter()
-                        .any(|row| row.confrontation.is_some())
+                        .any(|row| row.confrontation.is_some() || row.report_reception.is_some())
             })
             || $world
                 .property

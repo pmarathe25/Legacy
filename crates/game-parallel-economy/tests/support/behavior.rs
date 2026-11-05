@@ -3109,6 +3109,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
     });
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -14233,18 +14234,33 @@ fn false_food_reports_are_personal_statements_not_physical_stock() {
         obligation: 0,
         affinity: 0,
     });
-    let mut world = Economy::compile(initial).unwrap();
-    world
-        .set_food_misreport(
-            2,
-            Some(Misreport {
-                target: None,
-                food_delta: 50,
-            }),
-        )
-        .unwrap();
-    assert!(world.meet(1, 2).unwrap());
-    assert!(world.known_food(1).unwrap().iter().all(|r| r.region != 2));
+    for (policy, accepts) in [
+        (None, false),
+        (Some(ReportReception::Always), true),
+        (Some(ReportReception::Never), false),
+        (Some(ReportReception::TrustAtLeast(-1)), true),
+        (Some(ReportReception::TrustAtLeast(0)), false),
+    ] {
+        let mut world = Economy::compile(initial.clone()).unwrap();
+        world.set_food_report_reception(1, policy).unwrap();
+        world
+            .set_food_misreport(
+                2,
+                Some(Misreport {
+                    target: None,
+                    food_delta: 50,
+                }),
+            )
+            .unwrap();
+        let saved = serde_json::to_string(&world.snapshot()).unwrap();
+        let mut world = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(world.food_report_reception(1).unwrap(), policy);
+        assert!(world.meet(1, 2).unwrap());
+        assert_eq!(
+            world.known_food(1).unwrap().iter().any(|r| r.region == 2),
+            accepts
+        );
+    }
 }
 
 #[test]
@@ -15318,6 +15334,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
     opinions.rules.gratitude_gain = 1;
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15486,6 +15503,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
     opinions.rules.gratitude_gain = 3;
     opinions.sensitivities = vec![game_parallel_opinions::Sensitivity {
         person: 2,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15659,6 +15677,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
     let draft = world.prepare().unwrap();
     let mut sensitivity = OpinionSensitivity {
         person: 2,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15730,6 +15749,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
     });
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15817,6 +15837,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
     });
     let sensitivity = |person, cared_change, unattended_change| OpinionSensitivity {
         person,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(2),
         obligation_relief: None,
@@ -15993,6 +16014,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
     opinions.sensitivities = (3..=count)
         .map(|person| OpinionSensitivity {
             person,
+            report_reception: None,
             fear_per_damage: None,
             gratitude_gain: Some(2),
             obligation_relief: None,
@@ -16225,6 +16247,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
     opinions.records.clear();
     let sensitivity = |person, gain| OpinionSensitivity {
         person,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(gain),
@@ -16375,6 +16398,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
     opinions.records.clear();
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(3),
@@ -16585,6 +16609,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
     opinions.sensitivities = (2..=count)
         .map(|person| OpinionSensitivity {
             person,
+            report_reception: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: Some(1),
@@ -17456,6 +17481,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
         });
         opinions.sensitivities = vec![OpinionSensitivity {
             person: 1,
+            report_reception: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -17949,6 +17975,7 @@ fn concentrated_work_refusals(count: u64) -> State {
     opinions.sensitivities = (1..=half)
         .map(|person| OpinionSensitivity {
             person,
+            report_reception: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -21482,6 +21509,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
     });
     let sensitivity = |person, rate| OpinionSensitivity {
         person,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -21791,6 +21819,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
     });
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 1,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(0),
@@ -23035,6 +23064,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
     });
     let sensitivity = |person, rate| OpinionSensitivity {
         person,
+        report_reception: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -23873,6 +23903,7 @@ fn concentrated_site_salvage_benchmark() {
         opinions.sensitivities = (1..=count)
             .map(|person| OpinionSensitivity {
                 person,
+                report_reception: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,

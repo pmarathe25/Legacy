@@ -97,9 +97,7 @@ pub fn advance(
         })
         .collect::<Result<_, &str>>()
         .map_err(str::to_owned)?;
-    let trust = opinions
-        .filter(|o| o.rules.minimum_report_trust.is_some())
-        .map(|o| (o.index(), o.rules.minimum_report_trust.unwrap()));
+    let trust = opinions.and_then(Opinions::report_filter);
     let events = social.map_or(&[][..], |s| s.events.as_slice());
     owner
         .prepare_validated_with(
@@ -110,7 +108,7 @@ pub fn advance(
             |receiver, sender| {
                 trust
                     .as_ref()
-                    .is_none_or(|(index, threshold)| index.trust(receiver, sender) >= *threshold)
+                    .is_none_or(|filter| filter.accepts(receiver, sender))
             },
         )
         .map(Some)
