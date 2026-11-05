@@ -547,6 +547,7 @@ pub fn food_search(
 #[serde(default, deny_unknown_fields)]
 struct Sensitivity {
     report_reception: Option<game_parallel_opinions::ReportReception>,
+    affinity_report_discrepancy: Option<i32>,
     fear_per_damage: Option<u64>,
     gratitude_gain: Option<u64>,
     promise_obligation_gain: Option<u64>,
@@ -573,6 +574,7 @@ pub fn sensitivities(profiles: &[Profile]) -> Vec<game_parallel_opinions::Sensit
                 game_parallel_opinions::Sensitivity {
                     person: profile.start_id + offset,
                     report_reception: rule.report_reception,
+                    affinity_report_discrepancy: rule.affinity_report_discrepancy,
                     fear_per_damage: rule.fear_per_damage,
                     gratitude_gain: rule.gratitude_gain,
                     promise_obligation_gain: rule.promise_obligation_gain,

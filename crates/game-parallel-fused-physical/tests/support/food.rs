@@ -1979,6 +1979,7 @@ fn a_person_can_confront_a_witnessed_taking_without_the_targets_consent() {
         .push(OpinionSensitivity {
             person: 1,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             obligation_relief: None,
@@ -2073,6 +2074,7 @@ fn confrontation_fixture() -> World {
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 1,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         obligation_relief: None,
@@ -2160,6 +2162,7 @@ fn concentrated_confrontations_select_disjoint_people_deterministically() {
         .map(|person| OpinionSensitivity {
             person,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             obligation_relief: None,

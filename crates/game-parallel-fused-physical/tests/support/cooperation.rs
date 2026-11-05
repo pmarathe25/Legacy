@@ -318,6 +318,7 @@ fn a_direct_gift_creates_a_personal_memory_without_a_market() {
     opinions.sensitivities.push(OpinionSensitivity {
         person: 1,
         report_reception: None,
+        affinity_report_discrepancy: None,
         gratitude_gain: Some(3),
         obligation_relief: None,
         fear_per_damage: None,
@@ -814,6 +815,7 @@ fn harm_changes_directed_fear_even_without_trade() {
     opinions.sensitivities.push(OpinionSensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: Some(2),
         gratitude_gain: None,
         obligation_relief: None,

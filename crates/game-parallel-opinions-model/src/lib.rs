@@ -11,6 +11,9 @@ pub struct Sensitivity {
     /// This person's policy for accepting reports; absent uses the scenario default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub report_reception: Option<ReportReception>,
+    /// Signed personal reaction when an earlier food report differs from direct observation.
+    #[serde(default)]
+    pub affinity_report_discrepancy: Option<i32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fear_per_damage: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -79,10 +82,12 @@ pub struct ObligationDevelopment {
     #[serde(default)]
     pub unattended_promise_change: Option<i64>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RelationshipCase {
     pub target: u64,
+    #[serde(default)]
+    pub report_discrepancy: Option<i32>,
     #[serde(default)]
     pub help: Option<i32>,
     #[serde(default)]

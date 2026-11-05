@@ -136,6 +136,20 @@ impl Opinions {
         harm::tracks_affinity(self, harm::AffinityKind::WorkSuccess)
             || harm::tracks_affinity(self, harm::AffinityKind::WorkRefusal)
     }
+    pub fn tracks_report_discrepancy(&self) -> bool {
+        harm::tracks_affinity(self, harm::AffinityKind::ReportDiscrepancy)
+    }
+    /// Reactions to observed differences, not a judgment that a report was dishonest.
+    pub fn learn_report_discrepancies(&mut self, observations: &[(u64, u64)]) {
+        if observations.is_empty() || !self.tracks_report_discrepancy() {
+            return;
+        }
+        let events: Vec<_> = observations
+            .par_iter()
+            .map(|&(observer, speaker)| (observer, speaker, 1))
+            .collect();
+        harm::affinity(self, &events, harm::AffinityKind::ReportDiscrepancy);
+    }
     /// Interpret only personally witnessed outcomes, without creating obligations.
     pub fn learn_work_affinity(&mut self, events: &[(u64, u64, bool)]) {
         if events.is_empty() || !self.tracks_work_affinity() {
@@ -237,6 +251,7 @@ impl Opinions {
             .map(|person| Sensitivity {
                 person,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,

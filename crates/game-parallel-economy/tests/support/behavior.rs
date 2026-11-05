@@ -3110,6 +3110,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -6484,6 +6485,94 @@ fn concentrated_personal_observations_match_across_workers() {
                 })
         };
     assert_eq!(run(1), run(4));
+}
+
+fn discrepancy_workload(count: u64) -> State {
+    let mut state = knowledge_workload(count);
+    for mind in &mut state.knowledge.as_mut().unwrap().minds {
+        let speaker = if mind.person == 1 { 2 } else { 1 };
+        mind.records.push(game_parallel_economy_knowledge::Record {
+            region: 1,
+            food: 99,
+            observed_at: 0,
+            witness: speaker,
+            learned_from: Some(speaker),
+        });
+    }
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = (1..=count)
+        .map(|person| OpinionSensitivity {
+            person,
+            affinity_report_discrepancy: Some(1),
+            ..Default::default()
+        })
+        .collect();
+    state.opinions = Some(opinions);
+    state
+}
+
+#[test]
+fn concentrated_personal_report_reactions_are_deterministic_and_happen_once() {
+    let initial = discrepancy_workload(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let result = world.snapshot();
+                let opinions = result.opinions.as_ref().unwrap();
+                assert_eq!(opinions.records.len(), 4096);
+                assert!(opinions.records.iter().all(|r| r.affinity == 1));
+                result
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn concentrated_report_discrepancy_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = discrepancy_workload(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(start.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]
@@ -14317,13 +14406,32 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
             target: None,
         }],
     });
-    let run = |workers| {
+    initial.opinions.as_mut().unwrap().rules.affinity =
+        Some(game_parallel_opinions::AffinityRules {
+            limit: 10,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+    let run = |workers, rate| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
-                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut state = initial.clone();
+                state
+                    .opinions
+                    .as_mut()
+                    .unwrap()
+                    .sensitivities
+                    .push(OpinionSensitivity {
+                        person: 2,
+                        affinity_report_discrepancy: Some(rate),
+                        ..Default::default()
+                    });
+                let mut world = Economy::compile(state).unwrap();
                 assert!(world.meet(1, 2).unwrap());
                 assert_eq!(
                     world
@@ -14355,10 +14463,29 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
                         .food,
                     0
                 );
+                assert_eq!(
+                    world
+                        .opinions()
+                        .iter()
+                        .find(|o| o.observer == 2 && o.target == 1)
+                        .map_or(0, |o| o.affinity),
+                    rate
+                );
+                world.advance().unwrap();
+                assert_eq!(
+                    world
+                        .opinions()
+                        .iter()
+                        .find(|o| o.observer == 2 && o.target == 1)
+                        .map_or(0, |o| o.affinity),
+                    rate
+                );
                 world.snapshot()
             })
     };
-    assert_eq!(run(1), run(4));
+    for rate in [-2, 0, 3] {
+        assert_eq!(run(1, rate), run(4, rate));
+    }
 }
 
 #[test]
@@ -15335,6 +15462,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15504,6 +15632,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
     opinions.sensitivities = vec![game_parallel_opinions::Sensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15678,6 +15807,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
     let mut sensitivity = OpinionSensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15699,6 +15829,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
     let before = world.snapshot();
     sensitivity.relationship_cases.push(RelationshipCase {
         target: 999,
+        report_discrepancy: None,
         help: None,
         harm_per_damage: Some(-1),
         encounter: None,
@@ -15750,6 +15881,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -15838,6 +15970,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
     let sensitivity = |person, cared_change, unattended_change| OpinionSensitivity {
         person,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(2),
         obligation_relief: None,
@@ -16015,6 +16148,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
         .map(|person| OpinionSensitivity {
             person,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: Some(2),
             obligation_relief: None,
@@ -16248,6 +16382,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
     let sensitivity = |person, gain| OpinionSensitivity {
         person,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(gain),
@@ -16399,6 +16534,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 2,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(3),
@@ -16610,6 +16746,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
         .map(|person| OpinionSensitivity {
             person,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: Some(1),
@@ -17482,6 +17619,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
         opinions.sensitivities = vec![OpinionSensitivity {
             person: 1,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -17500,6 +17638,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             relationship_cases: if override_case {
                 vec![RelationshipCase {
                     target: 2,
+                    report_discrepancy: None,
                     help: None,
                     harm_per_damage: None,
                     encounter: None,
@@ -17976,6 +18115,7 @@ fn concentrated_work_refusals(count: u64) -> State {
         .map(|person| OpinionSensitivity {
             person,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             promise_obligation_gain: None,
@@ -21510,6 +21650,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
     let sensitivity = |person, rate| OpinionSensitivity {
         person,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -21531,6 +21672,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
     let mut first = sensitivity(1, 4);
     first.relationship_cases.push(RelationshipCase {
         target: 3,
+        report_discrepancy: None,
         help: None,
         harm_per_damage: None,
         encounter: None,
@@ -21820,6 +21962,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
     opinions.sensitivities = vec![OpinionSensitivity {
         person: 1,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         promise_obligation_gain: Some(0),
@@ -23065,6 +23208,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
     let sensitivity = |person, rate| OpinionSensitivity {
         person,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         promise_obligation_gain: None,
@@ -23086,6 +23230,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
     let mut first = sensitivity(1, 4);
     first.relationship_cases.push(RelationshipCase {
         target: 2,
+        report_discrepancy: None,
         help: None,
         harm_per_damage: None,
         encounter: None,
@@ -23904,6 +24049,7 @@ fn concentrated_site_salvage_benchmark() {
             .map(|person| OpinionSensitivity {
                 person,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 promise_obligation_gain: None,

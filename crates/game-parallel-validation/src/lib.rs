@@ -499,10 +499,15 @@ macro_rules! ensure_reference_supported {
             || $world.opinions.as_ref().is_some_and(|opinions| {
                 opinions.rules.minimum_report_trust.is_some()
                     || opinions.rules.fear_decay_per_tick > 0
-                    || opinions
-                        .sensitivities
-                        .iter()
-                        .any(|row| row.confrontation.is_some() || row.report_reception.is_some())
+                    || opinions.sensitivities.iter().any(|row| {
+                        row.confrontation.is_some()
+                            || row.report_reception.is_some()
+                            || row.affinity_report_discrepancy.is_some()
+                            || row
+                                .relationship_cases
+                                .iter()
+                                .any(|case| case.report_discrepancy.is_some())
+                    })
             })
             || $world
                 .property

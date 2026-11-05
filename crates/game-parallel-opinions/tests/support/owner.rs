@@ -30,6 +30,36 @@ fn report_judgments_handle_dense_sparse_and_reordered_people() {
     assert!(state.report_filter().is_none());
 }
 #[test]
+fn each_person_interprets_an_observed_discrepancy_in_their_own_way() {
+    let mut rules = rules();
+    rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let mut state = Opinions {
+        rules,
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![Sensitivity {
+            person: 1,
+            affinity_report_discrepancy: Some(-2),
+            relationship_cases: vec![RelationshipCase {
+                target: 2,
+                report_discrepancy: Some(3),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    };
+    state.learn_report_discrepancies(&[(1, 2), (1, 3), (4, 2)]);
+    assert_eq!(state.index().affinity(1, 2), 3);
+    assert_eq!(state.index().affinity(1, 3), -2);
+    assert_eq!(state.index().affinity(4, 2), 0);
+}
+#[test]
 fn witnessed_takings_are_combined_per_pair_without_losing_other_feelings() {
     let mut state = Opinions {
         rules: rules(),
@@ -68,6 +98,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
             Sensitivity {
                 person: 1,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -89,6 +120,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
             Sensitivity {
                 person: 3,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,
@@ -123,6 +155,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
         sensitivities: vec![Sensitivity {
             person: 1,
             report_reception: None,
+            affinity_report_discrepancy: None,
             fear_per_damage: None,
             gratitude_gain: None,
             obligation_relief: Some(2),
@@ -193,6 +226,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
             Sensitivity {
                 person: 2,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: Some(0),
                 gratitude_gain: Some(0),
                 obligation_relief: None,
@@ -214,6 +248,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
             Sensitivity {
                 person: 3,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: Some(2),
                 gratitude_gain: Some(3),
                 obligation_relief: None,
@@ -550,6 +585,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
     let personal = |person, help, harm, encounter, pressured| Sensitivity {
         person,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: None,
         obligation_relief: None,
@@ -613,6 +649,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
     let sensitivity = Sensitivity {
         person: 1,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: None,
@@ -629,6 +666,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         affinity_work_refusal: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
+            report_discrepancy: None,
             help: Some(-2),
             harm_per_damage: Some(-2),
             encounter: None,
@@ -672,6 +710,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
     let sensitivity = Sensitivity {
         person: 1,
         report_reception: None,
+        affinity_report_discrepancy: None,
         fear_per_damage: None,
         gratitude_gain: Some(0),
         obligation_relief: Some(0),
@@ -688,6 +727,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         affinity_work_refusal: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
+            report_discrepancy: None,
             help: None,
             harm_per_damage: None,
             encounter: None,

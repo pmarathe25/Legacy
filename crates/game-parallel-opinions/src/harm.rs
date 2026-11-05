@@ -209,6 +209,7 @@ pub enum AffinityKind {
     SiteSalvage,
     WorkSuccess,
     WorkRefusal,
+    ReportDiscrepancy,
 }
 impl AffinityKind {
     fn rate(
@@ -253,6 +254,10 @@ impl AffinityKind {
             Self::WorkRefusal => case
                 .and_then(|c| c.work_refusal)
                 .or_else(|| personal.and_then(|p| p.affinity_work_refusal))
+                .unwrap_or(0),
+            Self::ReportDiscrepancy => case
+                .and_then(|c| c.report_discrepancy)
+                .or_else(|| personal.and_then(|p| p.affinity_report_discrepancy))
                 .unwrap_or(0),
         }
     }

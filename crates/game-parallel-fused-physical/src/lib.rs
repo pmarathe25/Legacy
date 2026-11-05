@@ -167,6 +167,9 @@ impl Kernel {
         if let Some(social) = draft.decisions.society.social {
             self.owners.commit_social(social, &mut self.template);
         }
+        if let Some(opinions) = self.template.opinions.as_mut() {
+            opinions.learn_report_discrepancies(&draft.decisions.society.report_discrepancies);
+        }
         if let Some(knowledge) = draft.decisions.society.knowledge {
             self.owners.commit_knowledge(knowledge, &mut self.template);
         }

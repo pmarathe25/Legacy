@@ -129,6 +129,35 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
             records: vec![],
         }));
 }
+/// Compare only each living person's direct local observation with their own earlier report.
+pub fn discrepancies(before: &Knowledge, after: &Knowledge, people: &[Person]) -> Vec<(u64, u64)> {
+    before
+        .minds
+        .par_iter()
+        .zip(&after.minds)
+        .filter_map(|(old, next)| {
+            let person = people
+                .binary_search_by_key(&old.person, |p| p.id)
+                .ok()
+                .map(|i| &people[i])?;
+            if person.health == 0 {
+                return None;
+            }
+            let region = person.region?;
+            let current = next.records.iter().find(|r| {
+                r.region == region && r.learned_from.is_none() && r.witness == person.id
+            })?;
+            game_parallel_knowledge::report_discrepancy(
+                &old.records,
+                Observation {
+                    person: person.id,
+                    health: person.health,
+                    local: Some((region, current.food)),
+                },
+            )
+        })
+        .collect()
+}
 #[macro_export]
 macro_rules! prepare_world {
     ($world:expr, $dynamics:expr) => {{

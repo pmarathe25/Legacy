@@ -57,6 +57,15 @@ pub struct Observation {
     pub health: u32,
     pub local: Option<(u64, u32)>,
 }
+/// A personal observation differs from a remembered report. Stock can change,
+/// so this observation does not establish whether the speaker was dishonest.
+pub fn report_discrepancy(records: &[Record], observation: Observation) -> Option<(u64, u64)> {
+    let (region, food) = observation.local.filter(|_| observation.health > 0)?;
+    let previous = records.iter().find(|record| record.region == region)?;
+    let speaker = previous.learned_from?;
+    (previous.food != food && speaker != observation.person)
+        .then_some((observation.person, speaker))
+}
 
 impl Knowledge {
     pub fn validate(

@@ -1,6 +1,7 @@
 //! Stage social and decision owners from committed person views.
 use game_parallel::World;
 use game_parallel_fused_data::{Block, NONE};
+use game_parallel_knowledge_columns::ObservationView;
 use game_parallel_production_model::PersonSnapshot;
 use rayon::prelude::*;
 /// Whether configured decision owners need the shared compatibility index.
@@ -24,6 +25,7 @@ pub struct Draft {
     pub social: Option<game_parallel_social_edges::Selected>,
     pub knowledge: Option<game_parallel_knowledge_columns::Draft>,
     pub autonomy: Option<game_parallel_fused_autonomy::Draft>,
+    pub report_discrepancies: Vec<(u64, u64)>,
 }
 pub fn prepare(
     world: &World,
@@ -41,6 +43,7 @@ pub fn prepare(
             social: None,
             knowledge: None,
             autonomy: None,
+            report_discrepancies: Vec::new(),
         });
     }
     let mut busy: Vec<_> = blocks
@@ -62,6 +65,25 @@ pub fn prepare(
         .transpose()?;
     let memories = preparation.as_ref().map(|preparation| preparation.read());
     let view = super::knowledge::View::new(blocks, &world.regions, food, knowledge.positions);
+    let report_discrepancies = if world
+        .opinions
+        .as_ref()
+        .is_some_and(|o| o.tracks_report_discrepancy())
+    {
+        memories.map_or_else(Vec::new, |memories| {
+            blocks
+                .par_iter()
+                .flat_map_iter(|block| block.ids.iter().copied())
+                .filter_map(|person| {
+                    memories.records(person).and_then(|records| {
+                        game_parallel_knowledge::report_discrepancy(records, view.read(person))
+                    })
+                })
+                .collect()
+        })
+    } else {
+        Vec::new()
+    };
     let personalities = world
         .personality
         .as_ref()
@@ -119,5 +141,6 @@ pub fn prepare(
         social,
         knowledge: knowledge_draft,
         autonomy,
+        report_discrepancies,
     })
 }

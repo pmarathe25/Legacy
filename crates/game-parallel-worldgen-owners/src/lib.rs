@@ -95,6 +95,7 @@ pub fn claim_tolerance(
             (tolerant || confront).then_some(game_parallel::OpinionSensitivity {
                 person,
                 report_reception: None,
+                affinity_report_discrepancy: None,
                 fear_per_damage: None,
                 gratitude_gain: None,
                 obligation_relief: None,

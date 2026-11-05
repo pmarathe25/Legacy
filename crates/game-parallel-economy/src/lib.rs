@@ -2833,6 +2833,17 @@ impl Economy {
             )?;
         }
         game_parallel_economy_dynamics::learn_social(&mut next_opinions, dynamics.as_ref(), tick);
+        if let Some(opinions) = next_opinions
+            .as_mut()
+            .filter(|o| o.tracks_report_discrepancy())
+            && let Some((before, after)) = self.knowledge.as_ref().zip(knowledge.as_ref())
+        {
+            opinions.learn_report_discrepancies(&game_parallel_economy_knowledge::discrepancies(
+                before,
+                after,
+                &self.people,
+            ));
+        }
         game_parallel_economy_claims::publish_claims!(
             dynamics,
             claim_uses,

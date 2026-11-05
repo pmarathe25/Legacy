@@ -84,6 +84,57 @@ fn individual_report_dispositions_override_the_shared_default() {
     }
 }
 #[test]
+fn directly_seen_report_discrepancies_have_personal_signed_affinity_and_do_not_repeat() {
+    for rate in [-2, 0, 3] {
+        let mut state = world();
+        state
+            .knowledge
+            .as_mut()
+            .unwrap()
+            .minds
+            .iter_mut()
+            .find(|m| m.person == 2)
+            .unwrap()
+            .records
+            .push(game_parallel::KnowledgeRecord {
+                region: 1,
+                food: 99,
+                observed_at: 0,
+                witness: 1,
+                learned_from: Some(1),
+            });
+        let opinions = state.opinions.as_mut().unwrap();
+        opinions.rules.affinity = Some(game_parallel::AffinityRules {
+            limit: 10,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        opinions
+            .sensitivities
+            .push(game_parallel::OpinionSensitivity {
+                person: 2,
+                affinity_report_discrepancy: Some(rate),
+                ..Default::default()
+            });
+        let mut kernel = Kernel::compile(state).unwrap();
+        kernel.step().unwrap();
+        let after = kernel.export();
+        assert_eq!(
+            after.opinions.as_ref().unwrap().index().affinity(2, 1),
+            rate
+        );
+        let saved = serde_json::to_string(&after).unwrap();
+        let mut restored = Kernel::compile(World::from_json(&saved).unwrap()).unwrap();
+        restored.step().unwrap();
+        assert_eq!(
+            restored.export().opinions.unwrap().index().affinity(2, 1),
+            rate
+        );
+    }
+}
+#[test]
 fn a_real_default_changes_later_acceptance_of_that_persons_reports() {
     let mut state =
         World::from_toml(include_str!("../../../../content/parallel/agreements.toml")).unwrap();
