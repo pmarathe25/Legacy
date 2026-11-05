@@ -3766,6 +3766,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-parallel-fauna"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-genetics",
+ "game-parallel-lot-allocation",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-parallel-food-select"
 version = "0.2.0"
 dependencies = [
