@@ -1,7 +1,7 @@
 //! Serializable people, rules and independently owned social state.
 pub use game_parallel_agreements::Agreements;
 use game_parallel_autowork::Autowork;
-pub use game_parallel_economy_person::{Person, Rules};
+pub use game_parallel_economy_person::{Immortal, Person, Rules};
 use game_parallel_goals::Goals;
 use game_parallel_lot_runtime::Snapshot as Physical;
 use game_parallel_market::Market;

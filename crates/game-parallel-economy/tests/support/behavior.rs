@@ -103,6 +103,7 @@ fn fixture() -> State {
                 region: Some(1),
                 health: 100,
                 hunger: if id == 1 { 5 } else { 0 },
+                immortal: None,
                 willing_to_work: id == 2,
                 seek_meals: id == 1,
                 controlled: false,
@@ -8861,6 +8862,175 @@ fn mortal_family_cohort_reserves_ids_for_other_physical_people() {
 }
 
 #[test]
+fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
+    let mut initial = campaign_fixture();
+    initial.family.as_mut().unwrap().next_id = 6;
+    initial.people.push(Person {
+        id: 5,
+        region: None,
+        health: 5,
+        hunger: 0,
+        immortal: Some(Immortal {
+            recovery_per_tick: 1,
+        }),
+        willing_to_work: false,
+        seek_meals: false,
+        controlled: false,
+    });
+    initial.physical.custody.containers.push(
+        Container::new(
+            Place::Person(5),
+            10,
+            vec![Lot {
+                good: 1,
+                quantity: 1,
+                expires_at: Some(10),
+            }],
+        )
+        .unwrap(),
+    );
+    initial.travel.as_mut().unwrap().journeys.push(Journey {
+        person: 5,
+        source: 1,
+        destination: 2,
+        remaining: 2,
+    });
+    let nutrition = initial.nutrition.as_mut().unwrap();
+    nutrition.rules.metabolism = [1; 6];
+    nutrition.people.push(game_parallel_nutrition::Person {
+        person: 5,
+        reserves: [40; 6],
+    });
+    initial.pending_food.push(FoodEffect {
+        person: 5,
+        at: 1,
+        health: -100,
+        nutrients: [0; 6],
+    });
+    let mut invalid = initial.clone();
+    invalid
+        .people
+        .last_mut()
+        .unwrap()
+        .immortal
+        .as_mut()
+        .unwrap()
+        .recovery_per_tick = 0;
+    assert!(Economy::compile(invalid).is_err());
+    let mut invalid = initial.clone();
+    invalid.people.last_mut().unwrap().hunger = 1;
+    assert!(Economy::compile(invalid).is_err());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), state);
+                assert_eq!(state.people.iter().find(|p| p.id == 5).unwrap().health, 0);
+                assert_eq!(
+                    state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .journeys
+                        .iter()
+                        .find(|j| j.person == 5)
+                        .unwrap()
+                        .remaining,
+                    2
+                );
+                assert!(
+                    !state
+                        .family
+                        .as_ref()
+                        .unwrap()
+                        .members
+                        .iter()
+                        .any(|m| m.id == 5)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                let immortal = state.people.iter().find(|p| p.id == 5).unwrap();
+                assert_eq!(
+                    (immortal.health, immortal.hunger, immortal.region),
+                    (1, 0, None)
+                );
+                assert_eq!(
+                    state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .journeys
+                        .iter()
+                        .find(|j| j.person == 5)
+                        .unwrap()
+                        .remaining,
+                    1
+                );
+                assert_eq!(
+                    state
+                        .nutrition
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .find(|p| p.person == 5)
+                        .unwrap()
+                        .reserves,
+                    [40; 6]
+                );
+                assert!(
+                    state
+                        .family
+                        .as_ref()
+                        .unwrap()
+                        .members
+                        .iter()
+                        .any(|m| m.id == 6 && m.born == Some(2))
+                );
+                assert!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(5))
+                        .unwrap()
+                        .used
+                        == 1
+                );
+                assert_eq!(state, restored.snapshot());
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .people
+                        .iter()
+                        .find(|p| p.id == 5)
+                        .unwrap()
+                        .region,
+                    Some(2)
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn invocation_warnings_pause_the_world_and_accepted_loss_releases_control() {
     use game_parallel_economy_campaign::{Invocation, InvocationRules, InvocationWarningKind};
     let mut initial = campaign_fixture();
@@ -15450,6 +15620,92 @@ fn wounded_fighter_can_change_their_mind_and_retreat() {
 }
 
 #[test]
+fn an_immortal_can_be_incapacitated_in_ordinary_combat_and_recover() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.family.as_mut().unwrap().next_id = 6;
+    initial.people.push(Person {
+        id: 5,
+        region: Some(1),
+        health: 2,
+        hunger: 0,
+        immortal: Some(Immortal {
+            recovery_per_tick: 1,
+        }),
+        willing_to_work: false,
+        seek_meals: false,
+        controlled: false,
+    });
+    initial.physical.custody.containers.push(
+        Container::new(
+            Place::Person(5),
+            10,
+            vec![Lot {
+                good: 1,
+                quantity: 1,
+                expires_at: Some(10),
+            }],
+        )
+        .unwrap(),
+    );
+    initial.combat = Some(combat_rules());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.attack(3, 5).unwrap();
+                world.advance().unwrap();
+                let injured = world.snapshot();
+                assert_eq!(injured.people.iter().find(|p| p.id == 5).unwrap().health, 0);
+                assert!(
+                    injured
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .events
+                        .iter()
+                        .any(|event| event.target == 5)
+                );
+                assert!(
+                    !injured
+                        .family
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.kind == "death" && event.people.contains(&5))
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&injured).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.people.iter().find(|p| p.id == 5).unwrap().health, 1);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(5))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn fatal_combat_drives_family_death_and_later_actual_succession() {
     let mut initial = campaign_fixture();
     initial.pending_food.clear();
@@ -16250,6 +16506,7 @@ fn concentrated(count: u64) -> State {
             region: Some(1),
             health: 100,
             hunger: if id <= count / 2 { 5 } else { 0 },
+            immortal: None,
             willing_to_work: id > count / 2,
             seek_meals: id <= count / 2,
             controlled: false,

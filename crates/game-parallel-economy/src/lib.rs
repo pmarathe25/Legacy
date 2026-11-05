@@ -104,7 +104,7 @@ use game_parallel_nutrition::Nutrition;
 use game_parallel_opinions::Opinions;
 use game_parallel_production_model::FoodEffect;
 use rayon::prelude::*;
-pub use state::{Agreements, Person, Rules, State};
+pub use state::{Agreements, Immortal, Person, Rules, State};
 use std::collections::HashSet;
 pub struct Economy {
     physical: Runtime,
@@ -1050,7 +1050,13 @@ impl Economy {
                 .par_windows(2)
                 .any(|rows| rows[0].id == rows[1].id)
             || state.people.par_iter().any(|person| {
-                person.id == 0 || person.region == Some(0) || person.health > state.rules.max_health
+                person.id == 0
+                    || person.region == Some(0)
+                    || person.health > state.rules.max_health
+                    || person
+                        .immortal
+                        .as_ref()
+                        .is_some_and(|kind| kind.recovery_per_tick == 0 || person.hunger != 0)
             })
         {
             return Err("invalid personal economic state".into());
@@ -3193,7 +3199,7 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.sites");
         }
-        let deaths: Vec<_> = person
+        let incapacitated: Vec<_> = person
             .people
             .par_iter()
             .filter_map(|person| {
@@ -3206,7 +3212,8 @@ impl Economy {
                 .then_some(person.id)
             })
             .collect();
-        self.physical.interrupt_workers_in(&mut physical, &deaths)?;
+        self.physical
+            .interrupt_workers_in(&mut physical, &incapacitated)?;
         let mut work_sites = self
             .work_sites
             .as_ref()

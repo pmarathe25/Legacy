@@ -7,7 +7,7 @@ pub mod travel;
 use game_parallel_lot_diet::Effects;
 use game_parallel_nutrition::{Nutrition, Person as NutritionPerson};
 use game_parallel_production_model::FoodEffect;
-pub use model::{Person, Rules};
+pub use model::{Immortal, Person, Rules};
 use rayon::prelude::*;
 
 pub struct Draft {
@@ -39,6 +39,12 @@ pub fn prepare(
         .par_iter()
         .map(|person| {
             let mut person = person.clone();
+            if let Some(immortal) = &person.immortal {
+                person.health = person
+                    .health
+                    .saturating_add(immortal.recovery_per_tick)
+                    .min(rules.max_health);
+            }
             let nutrition_rules = nutrition.map(|owner| &owner.rules);
             let mut values = nutrition_rules.map(|rules| {
                 reserves
@@ -51,7 +57,9 @@ pub fn prepare(
                     .unwrap_or(rules.initial)
             });
             if person.health > 0 {
-                person.hunger = person.hunger.saturating_add(rules.hunger_per_tick);
+                if person.immortal.is_none() {
+                    person.hunger = person.hunger.saturating_add(rules.hunger_per_tick);
+                }
                 if let Ok(index) = food.binary_search_by_key(&person.id, |row| row.0) {
                     person.hunger = person.hunger.saturating_sub(food[index].1);
                 }
@@ -77,10 +85,11 @@ pub fn prepare(
                         }
                     }
                 }
-                if person.hunger >= rules.starvation_threshold {
+                if person.immortal.is_none() && person.hunger >= rules.starvation_threshold {
                     person.health = person.health.saturating_sub(rules.starvation_damage);
                 }
                 if let (Some(values), Some(nutrition_rules)) = (&mut values, nutrition_rules)
+                    && person.immortal.is_none()
                     && tick.is_multiple_of(nutrition_rules.interval)
                 {
                     for (index, value) in values.iter_mut().enumerate() {

@@ -99,6 +99,25 @@ impl Families {
         if excluded.is_empty() {
             return self.validate_committed(inputs, now, max_health);
         }
+        self.validate_committed(&self.cohort_inputs(inputs, excluded)?, now, max_health)
+    }
+    /// Validate staged physical values without treating health as committed life state.
+    pub fn validate_cohort(
+        &self,
+        inputs: &[LifeInput],
+        excluded: &[u64],
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if excluded.is_empty() {
+            return self.validate(inputs, now);
+        }
+        self.validate(&self.cohort_inputs(inputs, excluded)?, now)
+    }
+    fn cohort_inputs(
+        &self,
+        inputs: &[LifeInput],
+        excluded: &[u64],
+    ) -> Result<Vec<LifeInput>, &'static str> {
         let physical = PhysicalIndex::new(inputs)?;
         let excluded_ids: std::collections::HashSet<_> = excluded.iter().copied().collect();
         if excluded_ids.len() != excluded.len()
@@ -117,12 +136,11 @@ impl Families {
         {
             return Err("invalid non-family identities or next person ID");
         }
-        let cohort: Vec<_> = inputs
+        Ok(inputs
             .par_iter()
             .filter(|person| !excluded_ids.contains(&person.id))
             .copied()
-            .collect();
-        self.validate_committed(&cohort, now, max_health)
+            .collect())
     }
     fn validate_with_index<'a>(
         &self,

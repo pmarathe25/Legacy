@@ -63,8 +63,13 @@ pub fn validate(
     tick: u64,
     max_health: u32,
 ) -> Result<(), String> {
+    let excluded: Vec<_> = people
+        .par_iter()
+        .filter(|person| person.immortal.is_some())
+        .map(|person| person.id)
+        .collect();
     family
-        .validate_committed(&inputs(people), tick, max_health)
+        .validate_committed_cohort(&inputs(people), &excluded, tick, max_health)
         .map_err(str::to_owned)
 }
 #[macro_export]
@@ -284,9 +289,15 @@ pub fn advance(
     tick: u64,
     newborns_seek_meals: bool,
 ) -> Result<ResultFrame, String> {
+    let excluded: Vec<_> = people
+        .par_iter()
+        .filter(|person| person.immortal.is_some())
+        .map(|person| person.id)
+        .collect();
     family
-        .validate(
+        .validate_cohort(
             &inputs(people),
+            &excluded,
             tick.checked_sub(1).ok_or("invalid family tick")?,
         )
         .map_err(str::to_owned)?;
@@ -341,6 +352,7 @@ pub fn advance_validated(
             region: birth.region,
             health: birth.health,
             hunger: 0,
+            immortal: None,
             willing_to_work: willingness,
             seek_meals: newborns_seek_meals,
             controlled: false,

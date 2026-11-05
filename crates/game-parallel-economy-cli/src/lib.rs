@@ -482,6 +482,8 @@ struct Resident {
     region: u64,
     health: u32,
     hunger: u32,
+    #[serde(default)]
+    immortal: Option<game_parallel_economy::Immortal>,
     willing_to_work: bool,
     seek_meals: bool,
     #[serde(default)]
@@ -1276,6 +1278,7 @@ pub fn scenario_with_options(
             region: Some(resident.region),
             health: resident.health,
             hunger: resident.hunger,
+            immortal: resident.immortal,
             willing_to_work: resident.willing_to_work,
             seek_meals: resident.seek_meals,
             controlled: resident.controlled,

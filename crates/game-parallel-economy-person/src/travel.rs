@@ -238,14 +238,20 @@ impl Travel {
             .par_iter()
             .map(|j| {
                 let mut j = j.clone();
-                j.remaining -= 1;
+                let incapacitated_immortal = people
+                    .binary_search_by_key(&j.person, |p| p.id)
+                    .ok()
+                    .is_some_and(|i| people[i].health == 0 && people[i].immortal.is_some());
+                if !incapacitated_immortal {
+                    j.remaining -= 1;
+                }
                 j
             })
             .collect();
         journeys.par_sort_unstable_by_key(|j| j.person);
         people.par_iter_mut().for_each(|person| {
             if let Ok(index) = journeys.binary_search_by_key(&person.id, |j| j.person) {
-                if person.health == 0 {
+                if person.health == 0 && person.immortal.is_none() {
                     // Coarse routes have no intermediate location; the source retains the body.
                     person.region = Some(journeys[index].source);
                 } else if journeys[index].remaining == 0 {
@@ -260,7 +266,7 @@ impl Travel {
                     && people
                         .binary_search_by_key(&j.person, |p| p.id)
                         .ok()
-                        .is_some_and(|i| people[i].health > 0)
+                        .is_some_and(|i| people[i].health > 0 || people[i].immortal.is_some())
             })
             .collect();
         Self {
@@ -273,13 +279,13 @@ impl Travel {
         if self.journeys.is_empty()
             || !people
                 .par_iter()
-                .any(|p| p.health == 0 && p.region.is_none())
+                .any(|p| p.health == 0 && p.immortal.is_none() && p.region.is_none())
         {
             return;
         }
         people
             .par_iter_mut()
-            .filter(|p| p.health == 0 && p.region.is_none())
+            .filter(|p| p.health == 0 && p.immortal.is_none() && p.region.is_none())
             .for_each(|p| {
                 if let Ok(i) = self.journeys.binary_search_by_key(&p.id, |j| j.person) {
                     p.region = Some(self.journeys[i].source);
@@ -291,7 +297,7 @@ impl Travel {
                 people
                     .binary_search_by_key(&j.person, |p| p.id)
                     .ok()
-                    .is_some_and(|i| people[i].health > 0)
+                    .is_some_and(|i| people[i].health > 0 || people[i].immortal.is_some())
             })
             .collect();
     }

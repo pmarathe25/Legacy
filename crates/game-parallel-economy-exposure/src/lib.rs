@@ -95,6 +95,7 @@ mod tests {
                 region: Some(1),
                 health: 100,
                 hunger: 0,
+                immortal: None,
                 willing_to_work: true,
                 seek_meals: false,
                 controlled: false,
