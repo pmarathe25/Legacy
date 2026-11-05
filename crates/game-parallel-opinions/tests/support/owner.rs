@@ -59,6 +59,42 @@ fn each_person_interprets_an_observed_discrepancy_in_their_own_way() {
     assert_eq!(state.index().affinity(1, 3), -2);
     assert_eq!(state.index().affinity(4, 2), 0);
 }
+
+#[test]
+fn unordered_sparse_discrepancies_match_ordered_inputs() {
+    let mut rules = rules();
+    rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let mut ordered = Opinions {
+        rules,
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![
+            Sensitivity {
+                person: 10,
+                affinity_report_discrepancy: Some(2),
+                ..Default::default()
+            },
+            Sensitivity {
+                person: 30,
+                affinity_report_discrepancy: Some(-1),
+                ..Default::default()
+            },
+        ],
+    };
+    let mut reordered = ordered.clone();
+    reordered.sensitivities.reverse();
+    ordered.learn_report_discrepancies(&[(10, 20), (10, 20), (30, 20)]);
+    reordered.learn_report_discrepancies(&[(30, 20), (10, 20), (10, 20)]);
+    assert_eq!(ordered.records, reordered.records);
+    assert_eq!(ordered.index().affinity(10, 20), 4);
+    assert_eq!(ordered.index().affinity(30, 20), -1);
+}
 #[test]
 fn witnessed_takings_are_combined_per_pair_without_losing_other_feelings() {
     let mut state = Opinions {

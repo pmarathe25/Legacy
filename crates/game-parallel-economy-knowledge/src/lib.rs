@@ -131,15 +131,23 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
 }
 /// Compare only each living person's direct local observation with their own earlier report.
 pub fn discrepancies(before: &Knowledge, after: &Knowledge, people: &[Person]) -> Vec<(u64, u64)> {
+    let dense = people.first().zip(people.last()).and_then(|(first, last)| {
+        (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
+    });
     before
         .minds
         .par_iter()
         .zip(&after.minds)
         .filter_map(|(old, next)| {
-            let person = people
-                .binary_search_by_key(&old.person, |p| p.id)
-                .ok()
-                .map(|i| &people[i])?;
+            let index = if let Some(first) = dense {
+                old.person
+                    .checked_sub(first)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .filter(|&i| i < people.len())
+            } else {
+                people.binary_search_by_key(&old.person, |p| p.id).ok()
+            }?;
+            let person = &people[index];
             if person.health == 0 {
                 return None;
             }

@@ -286,6 +286,13 @@ pub fn affinity(state: &mut Opinions, events: &[(u64, u64, u64)], kind: Affinity
     {
         sensitivities.par_sort_unstable_by_key(|p| p.person);
     }
+    let dense = sensitivities
+        .first()
+        .zip(sensitivities.last())
+        .and_then(|(first, last)| {
+            (last.person.checked_sub(first.person) == Some((sensitivities.len() - 1) as u64))
+                .then_some(first.person)
+        });
     let mut cases: Vec<_> = state
         .sensitivities
         .par_iter()
@@ -295,21 +302,39 @@ pub fn affinity(state: &mut Opinions, events: &[(u64, u64, u64)], kind: Affinity
                 .map(move |case| (p.person, case))
         })
         .collect();
-    cases.par_sort_unstable_by_key(|row| (row.0, row.1.target));
+    if cases
+        .par_windows(2)
+        .any(|p| (p[0].0, p[0].1.target) > (p[1].0, p[1].1.target))
+    {
+        cases.par_sort_unstable_by_key(|row| (row.0, row.1.target));
+    }
     let mut rows: Vec<_> = events
         .par_iter()
         .copied()
         .filter(|r| r.0 != r.1 && r.2 > 0)
         .collect();
-    rows.par_sort_unstable_by_key(|r| (r.0, r.1));
+    if rows
+        .par_windows(2)
+        .any(|p| (p[0].0, p[0].1) > (p[1].0, p[1].1))
+    {
+        rows.par_sort_unstable_by_key(|r| (r.0, r.1));
+    }
     let rules = state.rules.affinity.as_ref().expect("affinity enabled");
     let updates: Vec<_> = rows
         .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
         .filter_map(|group| {
-            let personal = sensitivities
-                .binary_search_by_key(&group[0].0, |p| p.person)
-                .ok()
-                .map(|i| sensitivities[i]);
+            let index = if let Some(first) = dense {
+                group[0]
+                    .0
+                    .checked_sub(first)
+                    .and_then(|i| usize::try_from(i).ok())
+                    .filter(|&i| i < sensitivities.len())
+            } else {
+                sensitivities
+                    .binary_search_by_key(&group[0].0, |p| p.person)
+                    .ok()
+            };
+            let personal = index.map(|i| sensitivities[i]);
             let case = cases
                 .binary_search_by_key(&(group[0].0, group[0].1), |row| (row.0, row.1.target))
                 .ok()
