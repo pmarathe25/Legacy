@@ -244,10 +244,30 @@ impl Disease {
             let strain = find_strain(case.strain)?;
             (now - case.infected_at < strain.end()?).then_some((case, strain))
         };
-        let mut candidates: Vec<_> = encounters
+        let ordinary_can_transmit = !cases.is_empty()
+            && self
+                .strains
+                .iter()
+                .any(|strain| strain.transmission_per_million > 0);
+        let combat_can_transmit = !cases.is_empty()
+            && self
+                .strains
+                .iter()
+                .any(|strain| strain.combat_transmission_per_million > 0);
+        let transmissible_encounters = if ordinary_can_transmit {
+            encounters
+        } else {
+            &[]
+        };
+        let transmissible_combat = if combat_can_transmit {
+            combat_pairs.as_slice()
+        } else {
+            &[]
+        };
+        let mut candidates: Vec<_> = transmissible_encounters
             .par_iter()
             .map(|encounter| (encounter.a, encounter.b, false))
-            .chain(combat_pairs.into_par_iter().map(|(a, b)| (a, b, true)))
+            .chain(transmissible_combat.par_iter().map(|&(a, b)| (a, b, true)))
             .filter_map(|(a, b, combat)| {
                 let try_infection = |source: u64, target: u64| {
                     let (case, strain) = active(source)?;
@@ -409,6 +429,34 @@ mod tests {
             b,
             pressured: None,
         }
+    }
+    #[test]
+    fn disabled_transmission_still_validates_contacts_and_progresses_illness() {
+        let people = [Person { id: 1, health: 100 }, Person { id: 2, health: 100 }];
+        let mut disease = state();
+        disease.strains[0].incubation = 0;
+        disease.strains[0].transmission_per_million = 0;
+        let draft = disease
+            .prepare_validated_with_combat(&people, &[pair(1, 1, 2)], &[(1, 2)], 7, 0)
+            .unwrap();
+        assert_eq!(draft.state.cases.len(), 1);
+        assert_eq!(
+            draft.damage,
+            [Damage {
+                person: 1,
+                amount: 3
+            }]
+        );
+        assert!(
+            disease
+                .prepare_validated_with_combat(&people, &[pair(1, 1, 2), pair(1, 1, 2)], &[], 7, 0)
+                .is_err()
+        );
+        assert!(
+            disease
+                .prepare_validated_with_combat(&people, &[], &[(1, 2), (1, 2)], 7, 0)
+                .is_err()
+        );
     }
     #[test]
     fn infection_uses_prior_generation_and_respects_incubation_and_immunity() {
