@@ -2228,6 +2228,37 @@ fn ruler_observes_only_local_physical_work_sites() {
 }
 
 #[test]
+fn authored_personal_practices_are_visible_only_to_their_owner() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = format!(
+        "{source}\n[[giving.practices.minds]]\nperson = 1\ninvent = true\napprove = false\nwilling = false\nask_willing = true\nreporting = \"lie\"\nreport_attitude = \"doubt\"\nrequire_believed_ready = true\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n\n[[giving.practices.minds]]\nperson = 2\ninvent = false\napprove = true\nwilling = true\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n"
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-personal-practices-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let mut player = game_parallel_economy_player::Player::new(&mut world);
+    let own = player.view().unwrap().practices.unwrap();
+    assert_eq!(own.person, 1);
+    assert!(!own.approve && !own.willing && own.ask_willing);
+    assert_eq!(own.reporting, game_parallel_economy::PracticeReporting::Lie);
+    assert_eq!(
+        own.report_attitude,
+        game_parallel_economy::PracticeReportAttitude::Doubt
+    );
+    assert!(own.require_believed_ready);
+    player.set_practice_willingness(true).unwrap();
+    assert!(player.view().unwrap().practices.unwrap().willing);
+    assert!(player.decide_practice(2, 1, true).is_err());
+    assert!(world.personal_practice(2).unwrap().willing);
+}
+
+#[test]
 fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =

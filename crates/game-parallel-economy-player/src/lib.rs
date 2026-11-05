@@ -104,6 +104,7 @@ pub struct View {
     pub pending_work_requests: Vec<game_parallel_autowork::requests::Request>,
     pub food_requests: Vec<game_parallel_economy::FoodRequest>,
     pub sharing_learning: Option<game_parallel_economy::SharingLearning>,
+    pub practices: Option<game_parallel_economy::PracticeMind>,
     pub relationships: Vec<game_parallel_economy::Opinion>,
     pub hauling_requests: Vec<game_parallel_economy::HaulingRequest>,
     pub observed_work: Vec<game_parallel_autowork::requests::WorkLink>,
@@ -629,6 +630,9 @@ impl<'a> Player<'a> {
             sharing_learning: current
                 .and_then(|id| self.world.sharing_learning(id))
                 .cloned(),
+            practices: current
+                .and_then(|id| self.world.personal_practice(id))
+                .cloned(),
             relationships: current.map_or_else(Vec::new, |id| {
                 self.world
                     .opinions()
@@ -775,6 +779,57 @@ impl<'a> Player<'a> {
     pub fn set_goal_help_recognition(&mut self, recipe: u32, enabled: bool) -> Result<(), String> {
         self.world
             .set_goal_help_recognition(self.current()?, recipe, enabled)
+    }
+    pub fn decide_practice(
+        &mut self,
+        author: u64,
+        sequence: u64,
+        approve: bool,
+    ) -> Result<(), String> {
+        self.world
+            .decide_practice(self.current()?, author, sequence, approve)
+    }
+    pub fn report_practice(
+        &mut self,
+        listener: u64,
+        sequence: u64,
+        claimed_ready: bool,
+    ) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&listener) {
+            return Err("person is not present".into());
+        }
+        self.world
+            .report_practice(self.current()?, listener, sequence, claimed_ready)
+    }
+    pub fn withdraw_practice(&mut self, author: u64, sequence: u64) -> Result<(), String> {
+        self.world
+            .withdraw_practice(self.current()?, author, sequence)
+    }
+    pub fn assess_practice_report(
+        &mut self,
+        speaker: u64,
+        sequence: u64,
+        belief: game_parallel_economy::PracticeBelief,
+    ) -> Result<(), String> {
+        self.world
+            .assess_practice_report(self.current()?, speaker, sequence, belief)
+    }
+    pub fn set_practice_require_report(&mut self, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_practice_require_report(self.current()?, enabled)
+    }
+    pub fn set_practice_willingness(&mut self, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_practice_willingness(self.current()?, enabled)
+    }
+    pub fn set_practice_asking(&mut self, enabled: bool) -> Result<(), String> {
+        self.world.set_practice_asking(self.current()?, enabled)
+    }
+    pub fn set_practice_invention(&mut self, enabled: bool) -> Result<(), String> {
+        self.world.set_practice_invention(self.current()?, enabled)
+    }
+    pub fn set_practice_approval(&mut self, enabled: bool) -> Result<(), String> {
+        self.world.set_practice_approval(self.current()?, enabled)
     }
     pub fn combat_order(&mut self, order: Order) -> Result<(), String> {
         let actor = self.current()?;

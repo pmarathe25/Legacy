@@ -2435,6 +2435,7 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
         }),
     });
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         policies: vec![],
         learning: vec![],
@@ -2598,6 +2599,7 @@ fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
         }),
     });
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         policies: vec![],
         responses: vec![],
@@ -5910,6 +5912,7 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
         person.seek_meals = false;
     }
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: true,
         policies: vec![],
         responses: vec![FoodResponse {
@@ -7850,6 +7853,598 @@ fn autonomous_request_can_be_fulfilled_from_fear_using_actual_goods() {
     assert_eq!(run(1), run(4));
 }
 
+fn practice_mind(person: u64, invent: bool) -> PracticeMind {
+    PracticeMind {
+        person,
+        invent,
+        approve: true,
+        willing: true,
+        ask_willing: invent,
+        adjust_after_failure: true,
+        pressure_threshold: None,
+        shortage_threshold: 5,
+        minimum_shortages: 2,
+        review_interval: 2,
+        proposal_lifetime: 8,
+        reserve_portions: 1,
+        quantity_weight: 0,
+        reserve_weight: 0,
+        giving_experience_weight: 0,
+        shortage_experience_weight: 0,
+        acceptance_threshold: 0,
+        reporting: Default::default(),
+        report_attitude: Default::default(),
+        require_believed_ready: false,
+        next_review: 0,
+        sequence: 0,
+        cases: vec![].into(),
+        authored: vec![].into(),
+        inbox: vec![].into(),
+        sent_reports: vec![].into(),
+        reports: vec![].into(),
+    }
+}
+
+#[test]
+fn people_invent_and_independently_act_on_a_conditional_food_practice() {
+    use game_parallel_social::{Participant, Rules as SocialRules, Social};
+    let mut initial = fixture();
+    initial.autowork = None;
+    initial.agreements = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.willing_to_work = false;
+    }
+    initial.people[0].seek_meals = true;
+    initial.people[0].hunger = 5;
+    for holder in &mut initial.physical.custody.containers {
+        if holder.place == Place::Person(1) {
+            *holder = Container::new(holder.place, 10, vec![]).unwrap();
+        }
+        if holder.place == Place::Person(2) {
+            *holder = Container::new(
+                holder.place,
+                10,
+                vec![Lot {
+                    good: 1,
+                    quantity: 6,
+                    expires_at: Some(30),
+                }],
+            )
+            .unwrap();
+        }
+    }
+    initial.giving = Some(Giving {
+        practices: Some(PersonalPractices {
+            minds: vec![
+                practice_mind(1, true),
+                practice_mind(2, false),
+                practice_mind(3, false),
+            ],
+        }),
+        inherit_births: false,
+        acquaintance_asking: vec![],
+        learning: vec![],
+        responses: vec![],
+        policies: vec![GivingPolicy {
+            person: 2,
+            recipient: 1,
+            good: 1,
+            quantity: 2,
+            recipient_hunger_at_least: 5,
+            willing: true,
+            requires_request: false,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        asking: vec![],
+        requests: vec![],
+    });
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        treatment: vec![],
+        claims: None,
+        disease: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 1,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: vec![
+                Participant {
+                    person: 1,
+                    willing: true,
+                },
+                Participant {
+                    person: 2,
+                    willing: true,
+                },
+            ],
+            pressures: vec![],
+            relationships: vec![],
+            events: vec![],
+            needs: None,
+        }),
+    });
+    initial.opinions.as_mut().unwrap().rules.fear_decay_per_tick = 0;
+    let run = |workers, pressured: bool, decline: bool, poor: bool, stop: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if poor {
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap();
+                    *holder = Container::new(
+                        holder.place,
+                        10,
+                        vec![Lot {
+                            good: 1,
+                            quantity: 3,
+                            expires_at: Some(30),
+                        }],
+                    )
+                    .unwrap();
+                }
+                let receiver = &mut state
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds[1];
+                receiver.approve = !decline && !pressured;
+                receiver.willing = !pressured;
+                if poor {
+                    receiver.reporting = PracticeReporting::Lie;
+                }
+                if pressured {
+                    receiver.pressure_threshold = Some(3);
+                    state.opinions.as_mut().unwrap().records = vec![Opinion {
+                        observer: 2,
+                        target: 1,
+                        trust: 0,
+                        fear: 3,
+                        obligation: 0,
+                        affinity: 0,
+                    }];
+                }
+                if poor {
+                    let author = &mut state
+                        .giving
+                        .as_mut()
+                        .unwrap()
+                        .practices
+                        .as_mut()
+                        .unwrap()
+                        .minds[0];
+                    author.report_attitude = PracticeReportAttitude::Trust;
+                    author.require_believed_ready = true;
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                world.set_giving_choice(2, false).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                let mut second_delivery = false;
+                let mut reconsidered = false;
+                let mut request_tick = None;
+                for _ in 0..24 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                    assert_eq!(world.snapshot(), restored.snapshot());
+                    let state = world.snapshot();
+                    let practices = state.giving.as_ref().unwrap().practices.as_ref().unwrap();
+                    if poor
+                        && state
+                            .giving
+                            .as_ref()
+                            .unwrap()
+                            .requests
+                            .iter()
+                            .any(|request| request.requester == 1 && request.target == 2)
+                    {
+                        request_tick.get_or_insert(state.physical.custody.tick);
+                    }
+                    if stop
+                        && !reconsidered
+                        && practices.minds[1]
+                            .inbox
+                            .iter()
+                            .any(|item| item.decision == PracticeDecision::Adopted)
+                    {
+                        world.set_practice_willingness(2, false).unwrap();
+                        restored.set_practice_willingness(2, false).unwrap();
+                        reconsidered = true;
+                    }
+                    if practices.minds[0]
+                        .cases
+                        .iter()
+                        .filter(|case| matches!(case, PracticeCase::Received { helper: 2, .. }))
+                        .count()
+                        >= 2
+                    {
+                        second_delivery = true;
+                        break;
+                    }
+                    if poor && request_tick.is_some_and(|tick| state.physical.custody.tick > tick) {
+                        break;
+                    }
+                    if (decline || stop)
+                        && practices.minds[1].inbox.iter().any(|item| {
+                            item.decision != PracticeDecision::Pending
+                                && state.physical.custody.tick >= item.delivered + 2
+                        })
+                    {
+                        break;
+                    }
+                }
+                let state = world.snapshot();
+                let practices = state.giving.as_ref().unwrap().practices.as_ref().unwrap();
+                assert!(
+                    !practices.minds[0].authored.is_empty(),
+                    "{:?}",
+                    practices.minds[0]
+                );
+                assert!(
+                    practices.minds[1]
+                        .cases
+                        .iter()
+                        .any(|case| matches!(case, PracticeCase::Gave { recipient: 1, .. }))
+                );
+                assert!(practices.minds[2].inbox.is_empty());
+                let received = &practices.minds[1].inbox[0];
+                assert_eq!(
+                    received.decision,
+                    if decline {
+                        PracticeDecision::Declined
+                    } else {
+                        PracticeDecision::Adopted
+                    }
+                );
+                assert_eq!(received.approved, !decline && !pressured);
+                assert_eq!(second_delivery, !decline && !poor && !stop);
+                if poor {
+                    assert!(request_tick.is_some());
+                    let report = &practices.minds[0].reports[0];
+                    assert!(report.statement.claimed_ready);
+                    assert_eq!(report.belief, PracticeBelief::Believes);
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap();
+                    assert_eq!(holder.used, 1);
+                    assert!(practices.minds[2].reports.is_empty());
+                }
+                state
+            })
+    };
+    assert_eq!(
+        run(1, false, false, false, false),
+        run(4, false, false, false, false)
+    );
+    assert_eq!(
+        run(1, true, false, false, false),
+        run(4, true, false, false, false)
+    );
+    let declined = run(1, false, true, false, false);
+    assert_eq!(declined, run(4, false, true, false, false));
+    let mut coerced = declined;
+    let mind = &mut coerced
+        .giving
+        .as_mut()
+        .unwrap()
+        .practices
+        .as_mut()
+        .unwrap()
+        .minds[1];
+    mind.willing = false;
+    mind.pressure_threshold = Some(3);
+    coerced.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    }];
+    let mut coerced = Economy::compile(coerced).unwrap();
+    coerced.advance().unwrap();
+    assert!(
+        coerced
+            .personal_practice(1)
+            .unwrap()
+            .cases
+            .iter()
+            .filter(|case| matches!(case, PracticeCase::Received { helper: 2, .. }))
+            .count()
+            >= 2
+    );
+    assert_eq!(
+        coerced.personal_practice(2).unwrap().inbox[0].decision,
+        PracticeDecision::Declined
+    );
+    let poor = run(1, false, false, true, false);
+    assert_eq!(poor, run(4, false, false, true, false));
+    let mut revising = Economy::compile(poor).unwrap();
+    for _ in 0..15 {
+        if revising
+            .personal_practice(1)
+            .unwrap()
+            .authored
+            .iter()
+            .any(|proposal| proposal.sequence == 2)
+        {
+            break;
+        }
+        revising.advance().unwrap();
+    }
+    let author = revising.personal_practice(1).unwrap();
+    assert!(
+        author
+            .cases
+            .iter()
+            .any(|case| matches!(case, PracticeCase::Unanswered { target: 2, .. }))
+    );
+    let revised = author
+        .authored
+        .iter()
+        .find(|proposal| proposal.sequence == 2)
+        .unwrap();
+    assert_eq!((revised.recipient, revised.quantity), (2, 1));
+    assert_eq!(
+        run(1, false, false, false, true),
+        run(4, false, false, false, true)
+    );
+    let mut overflow = initial.clone();
+    overflow.giving.as_mut().unwrap().policies[0].willing = false;
+    let mind = &mut overflow
+        .giving
+        .as_mut()
+        .unwrap()
+        .practices
+        .as_mut()
+        .unwrap()
+        .minds[0];
+    mind.sequence = u64::MAX;
+    mind.cases = vec![
+        PracticeCase::Shortage { tick: 0, hunger: 5 },
+        PracticeCase::Shortage { tick: 0, hunger: 6 },
+        PracticeCase::Received {
+            tick: 0,
+            helper: 2,
+            good: 1,
+            quantity: 1,
+        },
+    ]
+    .into();
+    let mut failing = Economy::compile(overflow).unwrap();
+    let before = failing.snapshot();
+    assert!(failing.advance().is_err());
+    assert_eq!(failing.snapshot(), before);
+    let mut state = initial;
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 3,
+            expires_at: Some(30),
+        }],
+    )
+    .unwrap();
+    state
+        .giving
+        .as_mut()
+        .unwrap()
+        .practices
+        .as_mut()
+        .unwrap()
+        .minds[0]
+        .require_believed_ready = true;
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    world.set_giving_choice(2, false).unwrap();
+    for _ in 0..20 {
+        if world
+            .personal_practice(2)
+            .unwrap()
+            .inbox
+            .iter()
+            .any(|item| item.decision == PracticeDecision::Adopted)
+        {
+            break;
+        }
+        world.advance().unwrap();
+    }
+    let mut state = world.snapshot();
+    state.people[1].controlled = true;
+    let mut world = Economy::compile(state).unwrap();
+    let before = world.snapshot();
+    assert!(world.report_practice(2, 1, 999, true).is_err());
+    assert_eq!(world.snapshot(), before);
+    assert!(world.report_practice(2, 1, 1, true).unwrap());
+    let report = &world.personal_practice(1).unwrap().reports[0];
+    assert!(report.statement.claimed_ready);
+    assert_eq!(report.belief, PracticeBelief::Unassessed);
+    world
+        .assess_practice_report(1, 2, 1, PracticeBelief::Disbelieves)
+        .unwrap();
+    assert_eq!(
+        world.personal_practice(1).unwrap().reports[0].belief,
+        PracticeBelief::Disbelieves
+    );
+    world.withdraw_practice(2, 1, 1).unwrap();
+    assert_eq!(
+        world.personal_practice(2).unwrap().inbox[0].decision,
+        PracticeDecision::Declined
+    );
+    assert!(
+        world.personal_practice(1).unwrap().reports[0]
+            .statement
+            .claimed_ready
+    );
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+}
+
+#[test]
+fn many_people_record_only_their_own_shortages_across_workers() {
+    let initial = concentrated_practice_shortages(20_000);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds
+                        .iter()
+                        .all(|mind| mind.cases.len() == 3
+                            && mind
+                                .cases
+                                .iter()
+                                .all(|case| matches!(case, PracticeCase::Shortage { .. })))
+                );
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn concentrated_practice_shortages(count: u64) -> State {
+    let mut state = field_workload(count);
+    state.autowork = None;
+    state.agriculture = None;
+    state.opinions = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.hunger = 6;
+        person.seek_meals = false;
+    }
+    for holder in &mut state.physical.custody.containers {
+        if matches!(holder.place, Place::Person(_)) {
+            *holder = Container::new(holder.place, 10, vec![]).unwrap();
+        }
+    }
+    state.giving = Some(Giving {
+        practices: Some(PersonalPractices {
+            minds: (1..=count)
+                .map(|person| practice_mind(person, false))
+                .collect(),
+        }),
+        inherit_births: false,
+        policies: vec![],
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![],
+    });
+    state
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn concentrated_practice_shortage_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = concentrated_practice_shortages(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                let elapsed = started.elapsed().as_secs_f64();
+                assert!(
+                    world
+                        .snapshot()
+                        .giving
+                        .unwrap()
+                        .practices
+                        .unwrap()
+                        .minds
+                        .iter()
+                        .all(|mind| mind.cases.len() == 3)
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=3 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
 #[test]
 fn personal_giving_moves_goods_and_fear_can_motivate_help() {
     let mut initial = fixture();
@@ -7871,6 +8466,7 @@ fn personal_giving_moves_goods_and_fear_can_motivate_help() {
         affinity: 0,
     }];
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
@@ -8051,6 +8647,7 @@ fn giving_workload(count: u64) -> State {
         }
     }
     state.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
@@ -8178,6 +8775,7 @@ fn food_request_can_be_refused_then_independently_fulfilled_and_survives_reload(
     }
     initial.people[2].hunger = 5;
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
@@ -8300,6 +8898,7 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
@@ -8379,6 +8978,7 @@ fn food_asking_workload(count: u64) -> State {
         }
     }
     state.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
@@ -8596,6 +9196,7 @@ fn giving_nonfood_does_not_satisfy_a_food_request() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
@@ -13762,6 +14363,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         policies: vec![],
@@ -13942,6 +14544,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
         p.seek_meals = false;
     }
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         policies: vec![],
@@ -14208,6 +14811,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
     )
     .unwrap();
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         policies: vec![],
@@ -14680,6 +15284,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity: 0,
     }];
     initial.giving = Some(Giving {
+        practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],

@@ -39,6 +39,11 @@ pub use game_parallel_economy_work::tools::Requirement as WorkTool;
 pub use game_parallel_opinions::{
     ObligationDevelopment, Opinion, RelationshipCase, Sensitivity as OpinionSensitivity,
 };
+pub use game_parallel_practices::{
+    Belief as PracticeBelief, Case as PracticeCase, Decision as PracticeDecision,
+    Mind as PracticeMind, Practices as PersonalPractices, ReportAttitude as PracticeReportAttitude,
+    Reporting as PracticeReporting,
+};
 mod construction_planning;
 mod development;
 mod environment;
@@ -47,6 +52,7 @@ mod gathering;
 mod giving;
 mod giving_discovery;
 mod giving_inheritance;
+mod giving_practices;
 mod hauling;
 mod medical;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
@@ -159,6 +165,7 @@ impl Draft {
     }
 }
 impl Economy {
+    giving_practices::methods!();
     /// Change this person's willingness to build for their own production goals.
     pub fn set_goal_building_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
@@ -876,7 +883,7 @@ impl Economy {
             search.validate(&ids, state.knowledge.as_ref(), state.travel.as_ref())?;
         }
         if let Some(giving) = &state.giving {
-            giving.validate(&ids, physical.goods())?;
+            giving.validate(&ids, physical.goods(), physical.tick())?;
         }
         if let Some(hauling) = &state.hauling {
             hauling.validate(&ids, &goods, &view, state.travel.as_ref())?;
@@ -1285,13 +1292,18 @@ impl Economy {
                     .collect();
             }
         }
-        let mut next_giving = self.giving.clone();
+        let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
         if let Some(giving) = &mut next_giving {
             let askers = giving.ask(
                 &self.people,
                 self.physical.goods(),
                 &view,
-                &busy,
+                (
+                    &busy,
+                    self.giving
+                        .as_ref()
+                        .and_then(|owner| owner.practices.as_ref()),
+                ),
                 tick,
                 &locations,
             )?;
@@ -2696,6 +2708,35 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.social");
         }
+        if let Some((giving, practices)) = self.giving.as_ref().and_then(|giving| {
+            giving
+                .practices
+                .as_ref()
+                .map(|practices| (giving, practices))
+        }) {
+            let encounters = dynamics
+                .as_ref()
+                .and_then(|d| d.social.as_ref())
+                .map_or(&[][..], |social| social.events.as_slice());
+            let next = giving_practices::advance(
+                practices,
+                giving_practices::Context {
+                    giving,
+                    people: &self.people,
+                    goods: self.physical.goods(),
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    encounters,
+                    gifts: &giving_plan,
+                    events: physical.events(),
+                    tick,
+                },
+            )?;
+            next_giving
+                .as_mut()
+                .expect("giving remains enabled")
+                .practices = Some(next);
+        }
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
         development::enroll(&mut next_opinions, family.as_ref(), tick);
@@ -2931,17 +2972,37 @@ impl Economy {
         self.purpose = draft.purpose;
         self.gathering = draft.gathering;
         self.food_search = draft.food_search;
-        self.giving = draft.giving;
+        let old_giving = std::mem::replace(&mut self.giving, draft.giving);
         self.hauling = draft.hauling;
         self.local_transport = draft.local_transport;
         self.epoch = epoch;
-        if parallel_reclaim {
+        let large_practices = old_giving
+            .as_ref()
+            .and_then(|giving| giving.practices.as_ref())
+            .is_some_and(|practices| practices.minds.len() >= 16_384);
+        if parallel_reclaim && large_practices {
             rayon::join(
                 || drop((old_family, old_knowledge)),
-                || drop((old_dynamics, old_opinions)),
+                || {
+                    rayon::join(
+                        || drop((old_dynamics, old_opinions)),
+                        || giving_practices::reclaim(old_giving),
+                    )
+                },
+            );
+        } else if parallel_reclaim {
+            rayon::join(
+                || drop((old_family, old_knowledge)),
+                || drop((old_dynamics, old_opinions, old_giving)),
             );
         } else {
-            drop((old_family, old_knowledge, old_dynamics, old_opinions));
+            drop((
+                old_family,
+                old_knowledge,
+                old_dynamics,
+                old_opinions,
+                old_giving,
+            ));
         }
         #[cfg(feature = "profile")]
         drop(profile_phase);

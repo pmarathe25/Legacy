@@ -12,7 +12,7 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
     match words.as_slice() {
         [] => {}
         ["help"] => println!(
-            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
+            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON MODE | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["status"] => {
@@ -186,6 +186,85 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
                 "on" => true,
                 "off" => false,
                 _ => return Err("expected on or off".into()),
+            },
+        )?,
+        ["practices", person] => println!(
+            "{:?}",
+            world.personal_practice(person.parse().map_err(|_| "invalid person")?)
+        ),
+        ["practice-choice", person, field, choice] => {
+            let person = person.parse().map_err(|_| "invalid person")?;
+            let enabled = match *choice {
+                "on" => true,
+                "off" => false,
+                _ => return Err("expected on or off".into()),
+            };
+            match *field {
+                "invent" => world.set_practice_invention(person, enabled)?,
+                "approve" => world.set_practice_approval(person, enabled)?,
+                "willing" => world.set_practice_willingness(person, enabled)?,
+                "ask" => world.set_practice_asking(person, enabled)?,
+                "require-report" => world.set_practice_require_report(person, enabled)?,
+                _ => return Err("expected invent, approve, willing, ask, or require-report".into()),
+            }
+        }
+        ["practice-decide", person, author, sequence, choice] => world.decide_practice(
+            person.parse().map_err(|_| "invalid person")?,
+            author.parse().map_err(|_| "invalid author")?,
+            sequence.parse().map_err(|_| "invalid proposal sequence")?,
+            match *choice {
+                "accept" => true,
+                "decline" => false,
+                _ => return Err("expected accept or decline".into()),
+            },
+        )?,
+        ["practice-withdraw", person, author, sequence] => world.withdraw_practice(
+            person.parse().map_err(|_| "invalid person")?,
+            author.parse().map_err(|_| "invalid author")?,
+            sequence.parse().map_err(|_| "invalid proposal sequence")?,
+        )?,
+        ["practice-report", speaker, listener, sequence, claim] => println!(
+            "communicated={}",
+            world.report_practice(
+                speaker.parse().map_err(|_| "invalid speaker")?,
+                listener.parse().map_err(|_| "invalid listener")?,
+                sequence.parse().map_err(|_| "invalid sequence")?,
+                match *claim {
+                    "ready" => true,
+                    "unready" => false,
+                    _ => return Err("expected ready or unready".into()),
+                },
+            )?
+        ),
+        ["practice-belief", person, speaker, sequence, belief] => world.assess_practice_report(
+            person.parse().map_err(|_| "invalid person")?,
+            speaker.parse().map_err(|_| "invalid speaker")?,
+            sequence.parse().map_err(|_| "invalid sequence")?,
+            match *belief {
+                "believe" => game_parallel_economy::PracticeBelief::Believes,
+                "doubt" => game_parallel_economy::PracticeBelief::Disbelieves,
+                "unassessed" => game_parallel_economy::PracticeBelief::Unassessed,
+                _ => return Err("expected believe, doubt, or unassessed".into()),
+            },
+        )?,
+        ["practice-reporting", person, reporting] => world.set_practice_reporting(
+            person.parse().map_err(|_| "invalid person")?,
+            match *reporting {
+                "silent" => game_parallel_economy::PracticeReporting::Silent,
+                "truthful" => game_parallel_economy::PracticeReporting::Truthful,
+                "lie" => game_parallel_economy::PracticeReporting::Lie,
+                "ready" => game_parallel_economy::PracticeReporting::Ready,
+                "unready" => game_parallel_economy::PracticeReporting::Unready,
+                _ => return Err("invalid reporting choice".into()),
+            },
+        )?,
+        ["practice-attitude", person, attitude] => world.set_practice_report_attitude(
+            person.parse().map_err(|_| "invalid person")?,
+            match *attitude {
+                "ignore" => game_parallel_economy::PracticeReportAttitude::Ignore,
+                "trust" => game_parallel_economy::PracticeReportAttitude::Trust,
+                "doubt" => game_parallel_economy::PracticeReportAttitude::Doubt,
+                _ => return Err("invalid report attitude".into()),
             },
         )?,
         ["work-value", person, "off"] => {

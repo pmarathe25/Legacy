@@ -342,6 +342,8 @@ struct ResourceConfig {
 #[serde(deny_unknown_fields)]
 struct GivingConfig {
     #[serde(default)]
+    practices: Option<game_parallel_economy::PersonalPractices>,
+    #[serde(default)]
     inherit_births: bool,
     #[serde(default)]
     policies: Vec<GivingPolicyConfig>,
@@ -925,6 +927,7 @@ pub fn scenario_with_options(
                 })
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(game_parallel_economy::Giving {
+                practices: config.practices,
                 inherit_births: config.inherit_births,
                 policies,
                 responses,

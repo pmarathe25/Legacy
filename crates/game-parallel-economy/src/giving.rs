@@ -27,6 +27,9 @@ pub struct Policy {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Giving {
+    /// Private proposals and experiences; no institution owns or enforces them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub practices: Option<game_parallel_practices::Practices>,
     /// Newborns may acquire general preferences, never another person's experiences.
     #[serde(default)]
     pub inherit_births: bool,
@@ -115,7 +118,15 @@ pub struct Request {
 }
 impl Clone for Giving {
     fn clone(&self) -> Self {
+        let mut copy = self.clone_without_practices();
+        copy.practices = self.practices.clone();
+        copy
+    }
+}
+impl Giving {
+    pub(crate) fn clone_without_practices(&self) -> Self {
         Self {
+            practices: None,
             inherit_births: self.inherit_births,
             policies: self.policies.par_iter().cloned().collect(),
             responses: self.responses.par_iter().cloned().collect(),
@@ -125,9 +136,12 @@ impl Clone for Giving {
             acquaintance_asking: self.acquaintance_asking.par_iter().cloned().collect(),
         }
     }
-}
-impl Giving {
-    pub fn validate(&self, people: &HashSet<u64>, catalog: &[Good]) -> Result<(), String> {
+    pub fn validate(
+        &self,
+        people: &HashSet<u64>,
+        catalog: &[Good],
+        now: u64,
+    ) -> Result<(), String> {
         crate::giving_discovery::validate(&self.acquaintance_asking, people)?;
         let goods: HashSet<_> = catalog.iter().map(|g| g.id).collect();
         let food: HashSet<_> = catalog
@@ -135,6 +149,11 @@ impl Giving {
             .filter(|g| g.food.is_some())
             .map(|g| g.id)
             .collect();
+        if let Some(practices) = &self.practices {
+            practices
+                .validate(people, &food, now)
+                .map_err(str::to_owned)?;
+        }
         let mut ids: Vec<_> = self
             .policies
             .par_iter()
@@ -214,7 +233,7 @@ impl Giving {
         people: &[Person],
         goods: &[Good],
         view: &View,
-        busy: &[u64],
+        (busy, practices): (&[u64], Option<&game_parallel_practices::Practices>),
         tick: u64,
         locations: &Colocation,
     ) -> Result<Vec<u64>, String> {
@@ -386,6 +405,67 @@ impl Giving {
                 asking.next_review = helper_updates[i].2;
             }
         });
+        // An author may independently act on their own communicated proposal.
+        let practice_requests: Vec<_> = practices
+            .map_or(&[][..], |p| p.minds.as_slice())
+            .par_iter()
+            .filter_map(|mind| {
+                if !mind.ask_willing
+                    || explicit.binary_search(&mind.person).is_ok()
+                    || pending.binary_search(&mind.person).is_ok()
+                    || updates.binary_search_by_key(&mind.person, |r| r.0).is_ok()
+                    || helper_updates
+                        .binary_search_by_key(&mind.person, |r| r.0)
+                        .is_ok()
+                    || busy.binary_search(&mind.person).is_ok()
+                {
+                    return None;
+                }
+                let actor = people
+                    .binary_search_by_key(&mind.person, |p| p.id)
+                    .ok()
+                    .map(|i| &people[i])?;
+                let holding = view.container(Place::Person(actor.id))?;
+                if actor.controlled
+                    || actor.health == 0
+                    || holding.goods.iter().any(|g| {
+                        food.iter()
+                            .any(|&(id, portion)| id == g.good && g.quantity >= portion)
+                    })
+                {
+                    return None;
+                }
+                let proposal = mind.authored.iter().rev().find(|proposal| {
+                    proposal.expires >= tick
+                        && actor.hunger >= proposal.ask_hunger
+                        && (!mind.require_believed_ready
+                            || mind.reports.iter().any(|report| {
+                                report.statement.speaker == proposal.recipient
+                                    && report.statement.sequence == proposal.sequence
+                                    && report.statement.claimed_ready
+                                    && report.belief == game_parallel_practices::Belief::Believes
+                            }))
+                        && people
+                            .binary_search_by_key(&proposal.recipient, |p| p.id)
+                            .ok()
+                            .is_some_and(|i| {
+                                let target = &people[i];
+                                target.health > 0
+                                    && locations
+                                        .region(
+                                            (actor.id, actor.region),
+                                            (target.id, target.region),
+                                        )
+                                        .is_some()
+                            })
+                })?;
+                Some(Request {
+                    requester: actor.id,
+                    target: proposal.recipient,
+                    expires_at: proposal.expires,
+                })
+            })
+            .collect();
         self.requests
             .par_extend(helper_updates.par_iter().map(|r| Request {
                 requester: r.0,
@@ -398,10 +478,13 @@ impl Giving {
                 target: r.1,
                 expires_at: r.3,
             }));
+        self.requests
+            .par_extend(practice_requests.par_iter().cloned());
         Ok(updates
             .into_par_iter()
             .map(|r| r.0)
             .chain(helper_updates.into_par_iter().map(|r| r.0))
+            .chain(practice_requests.into_par_iter().map(|r| r.requester))
             .collect())
     }
 }
@@ -563,6 +646,83 @@ impl Context<'_> {
                 .par_chunk_by(|a, b| a.0 == b.0)
                 .map(|group| (group[0].0, group[0].3, group[0].4, group[0].5)),
         );
+        let mut practice_minds: Vec<_> = self
+            .owner
+            .and_then(|o| o.practices.as_ref())
+            .map_or(&[][..], |p| p.minds.as_slice())
+            .par_iter()
+            .collect();
+        if !practice_minds.is_empty() {
+            let mut occupied: Vec<_> = chosen.par_iter().map(|row| row.0).collect();
+            occupied.par_sort_unstable();
+            if practice_minds
+                .par_windows(2)
+                .any(|pair| pair[0].person > pair[1].person)
+            {
+                practice_minds.par_sort_unstable_by_key(|mind| mind.person);
+            }
+            let mut practice_choices: Vec<_> = self
+                .owner
+                .map_or(&[][..], |o| o.requests.as_slice())
+                .par_iter()
+                .filter_map(|request| {
+                    if request.expires_at < self.tick
+                        || occupied.binary_search(&request.target).is_ok()
+                    {
+                        return None;
+                    }
+                    let mind = practice_minds
+                        .binary_search_by_key(&request.target, |m| m.person)
+                        .ok()
+                        .map(|i| practice_minds[i])?;
+                    let sender = find(mind.person)?;
+                    let recipient = find(request.requester)?;
+                    let from = self.view.container(Place::Person(sender.id))?;
+                    let to = self.view.container(Place::Person(recipient.id))?;
+                    let pressured = mind.pressure_threshold.is_some_and(|threshold| {
+                        opinions.as_ref().is_some_and(|index| {
+                            let (fear, obligation) = index.feelings(sender.id, recipient.id);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                    if sender.controlled
+                        || sender.health == 0
+                        || recipient.health == 0
+                        || !(mind.willing || pressured)
+                        || self.busy.binary_search(&sender.id).is_ok()
+                        || self
+                            .locations
+                            .region((sender.id, sender.region), (recipient.id, recipient.region))
+                            .is_none()
+                    {
+                        return None;
+                    }
+                    let item = mind.inbox.iter().rev().find(|item| {
+                        let proposal = &item.proposal;
+                        (item.decision == game_parallel_practices::Decision::Adopted || pressured)
+                            && proposal.author == recipient.id
+                            && proposal.expires >= self.tick
+                            && proposal
+                                .quantity
+                                .checked_add(proposal.reserve)
+                                .is_some_and(|needed| from.quantity(proposal.good) >= needed)
+                            && to.capacity.saturating_sub(to.used) >= proposal.quantity
+                    })?;
+                    Some((
+                        sender.id,
+                        recipient.id,
+                        item.proposal.good,
+                        item.proposal.quantity,
+                    ))
+                })
+                .collect();
+            practice_choices.par_sort_unstable();
+            chosen.par_extend(
+                practice_choices
+                    .par_chunk_by(|a, b| a.0 == b.0)
+                    .map(|group| group[0]),
+            );
+        }
         // A remembered helper can become the target of an unsolicited personal offer.
         // Existing requested help takes priority, so each person still chooses one action.
         let mut already_chosen: Vec<_> = chosen.par_iter().map(|row| row.0).collect();
@@ -662,6 +822,20 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    pub(crate) fn practice_gifts(&self, events: &Events) -> Vec<(u64, u64, u32, u64)> {
+        let accepted: HashSet<_> = events
+            .physical_actions
+            .par_iter()
+            .filter(|event| event.accepted)
+            .map(|event| event.id)
+            .collect();
+        self.records
+            .par_iter()
+            .zip(self.actions.par_iter())
+            .filter(|(record, _)| accepted.contains(&record.0))
+            .map(|(record, action)| (record.1, record.2, record.3, action.movements[0].quantity))
+            .collect()
+    }
     /// Learn only from food that was actually received in this boundary.
     pub fn learn_sharing(&self, giving: &mut Giving, events: &Events, goods: &[Good]) {
         if giving.learning.is_empty() || self.records.is_empty() {

@@ -3263,6 +3263,7 @@ dependencies = [
  "game-parallel-market",
  "game-parallel-nutrition",
  "game-parallel-opinions",
+ "game-parallel-practices",
  "game-parallel-production",
  "game-parallel-production-model",
  "game-parallel-purpose",
@@ -4722,6 +4723,16 @@ dependencies = [
  "game-parallel-people",
  "game-parallel-transport",
  "rayon",
+]
+
+[[package]]
+name = "game-parallel-practices"
+version = "0.2.0"
+dependencies = [
+ "game-diagnostics",
+ "rayon",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

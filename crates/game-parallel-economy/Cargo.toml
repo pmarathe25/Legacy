@@ -8,6 +8,7 @@ license.workspace = true
 profile = ["dep:game-diagnostics", "game-parallel-lot-runtime/profile"]
 
 [dependencies]
+game-parallel-practices = { path = "../game-parallel-practices" }
 game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-parallel-economy-building = { path = "../game-parallel-economy-building" }
 game-parallel-economy-local-transport = { path = "../game-parallel-economy-local-transport" }
