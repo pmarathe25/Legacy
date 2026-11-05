@@ -158,7 +158,7 @@ impl Giving {
             .collect();
         if let Some(practices) = &self.practices {
             practices
-                .validate(people, &food, now)
+                .validate_with_goods(people, &food, &goods, now)
                 .map_err(str::to_owned)?;
             if practices.minds.par_iter().any(|mind| {
                 mind.work.as_ref().is_some_and(|work| {

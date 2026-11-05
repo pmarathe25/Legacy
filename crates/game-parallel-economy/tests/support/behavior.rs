@@ -8633,6 +8633,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
         sequence: 0,
         authored: None,
         engagement: None,
+        gifts: vec![],
         inbox: vec![],
     };
     author.work = Some(std::sync::Arc::new(work.clone()));
@@ -8706,6 +8707,31 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
             needs: None,
         }),
     });
+    let mut material = initial.clone();
+    material
+        .autowork
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .offer_value
+        .as_mut()
+        .unwrap()
+        .good = 2;
+    let mut material = Economy::compile(material).unwrap();
+    assert!(material.propose_work_practice(1, 2, 1, 2, 1, 8).unwrap());
+    let saved = material.snapshot();
+    let mut material =
+        Economy::compile(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap())
+            .unwrap();
+    material.advance().unwrap();
+    material.ask_work(1, 2, 1, 5).unwrap();
+    assert!(
+        !material.advance().unwrap().started.is_empty(),
+        "a worker can value an unbacked non-food offer"
+    );
     let mut refusal = initial.clone();
     refusal
         .dynamics
@@ -8840,6 +8866,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         sequence: 0,
         authored: None,
         engagement: None,
+        gifts: vec![],
         inbox: vec![],
     };
     let mut author = practice_mind(1, false);
@@ -8944,6 +8971,74 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
             needs: None,
         }),
     });
+    let mut material_experience = initial.clone();
+    material_experience.giving.as_mut().unwrap().policies[0].good = 2;
+    let holder = material_experience
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|holder| holder.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run_material = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(material_experience.clone()).unwrap();
+                for _ in 0..8 {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let minds = &state
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds;
+                    if let Some(received) = minds[1].work.as_ref().unwrap().inbox.first() {
+                        assert_eq!(received.proposal.good, 2);
+                        assert!(
+                            minds[0]
+                                .work
+                                .as_ref()
+                                .unwrap()
+                                .gifts
+                                .iter()
+                                .any(|gift| gift.good == 2 && gift.given && gift.other == 3)
+                        );
+                        assert!(
+                            !minds[0]
+                                .cases
+                                .iter()
+                                .any(|case| matches!(case, PracticeCase::Gave { good: 2, .. }))
+                        );
+                        let mut restored = Economy::compile(
+                            serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                        )
+                        .unwrap();
+                        world.advance().unwrap();
+                        restored.advance().unwrap();
+                        assert_eq!(world.snapshot(), restored.snapshot());
+                        return state;
+                    }
+                }
+                panic!("a personally witnessed non-food gift can inspire work terms")
+            })
+    };
+    assert_eq!(run_material(1), run_material(4));
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -9107,12 +9202,59 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                     .unwrap()
                     .minds[0];
                 std::sync::Arc::make_mut(mind.work.as_mut().unwrap()).reserve = 1;
+                let mut material_terms = offered.clone();
+                let minds = &mut material_terms
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds;
+                std::sync::Arc::make_mut(minds[0].work.as_mut().unwrap())
+                    .authored
+                    .as_mut()
+                    .unwrap()
+                    .good = 2;
+                std::sync::Arc::make_mut(minds[1].work.as_mut().unwrap()).inbox[0]
+                    .proposal
+                    .good = 2;
+                material_terms
+                    .autowork
+                    .as_mut()
+                    .unwrap()
+                    .requests
+                    .as_mut()
+                    .unwrap()
+                    .preferences[0]
+                    .offer_value
+                    .as_mut()
+                    .unwrap()
+                    .good = 2;
+                let holder = material_terms
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|holder| holder.place == Place::Person(1))
+                    .unwrap();
+                *holder = Container::new(
+                    Place::Person(1),
+                    10,
+                    vec![Lot {
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
                 let mut observation_world = Economy::compile(offered.clone()).unwrap();
                 let mut willing_world = Economy::compile(offered).unwrap();
                 let mut unwilling_world = Economy::compile(rejected).unwrap();
                 let mut refuses_world = Economy::compile(refuses_gift).unwrap();
                 let mut broke_world = Economy::compile(no_stock).unwrap();
                 let mut reserve_world = Economy::compile(keeps_reserve).unwrap();
+                let mut material_world = Economy::compile(material_terms).unwrap();
                 let mut willing_started = false;
                 let mut unwilling_started = false;
                 let mut broke_started = false;
@@ -9122,6 +9264,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                     refuses_world.advance().unwrap();
                     broke_started |= !broke_world.advance().unwrap().started.is_empty();
                     reserve_world.advance().unwrap();
+                    material_world.advance().unwrap();
                 }
                 assert!(
                     willing_started,
@@ -9161,6 +9304,20 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
                     held(&reserve_world),
                     0,
                     "a personal reserve can prevent the gift"
+                );
+                assert!(
+                    material_world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|holder| holder.place == Place::Person(2))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .any(|lot| lot.good == 2 && lot.quantity == 1),
+                    "a non-food good can be genuinely transferred after the work"
                 );
                 let mut witnessed = None;
                 for _ in 0..5 {

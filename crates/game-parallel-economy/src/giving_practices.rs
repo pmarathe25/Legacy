@@ -270,6 +270,35 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                 }
             });
         }
+        let observed_gifts: Vec<_> = gifts
+            .par_iter()
+            .flat_map_iter(|&(giver, recipient, good, quantity)| {
+                use game_parallel_practices::work::{Gift, GiftObservation};
+                [
+                    GiftObservation {
+                        person: giver,
+                        gift: Gift {
+                            tick: context.tick,
+                            other: recipient,
+                            good,
+                            quantity,
+                            given: true,
+                        },
+                    },
+                    GiftObservation {
+                        person: recipient,
+                        gift: Gift {
+                            tick: context.tick,
+                            other: giver,
+                            good,
+                            quantity,
+                            given: false,
+                        },
+                    },
+                ]
+            })
+            .collect();
+        game_parallel_practices::work::remember_gifts(&mut next, &observed_gifts);
     }
     Ok(next)
 }
@@ -545,11 +574,7 @@ macro_rules! methods {
                 || lifetime == 0
                 || author == worker
                 || !self.physical.recipes().iter().any(|row| row.id == recipe)
-                || !self
-                    .physical
-                    .goods()
-                    .iter()
-                    .any(|row| row.id == good && row.food.is_some())
+                || !self.physical.goods().iter().any(|row| row.id == good)
             {
                 return Err("invalid personal work terms".into());
             }

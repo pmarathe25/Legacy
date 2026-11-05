@@ -489,6 +489,17 @@ impl Practices {
         food: &HashSet<u32>,
         now: u64,
     ) -> Result<(), &'static str> {
+        self.validate_with_goods(people, food, food, now)
+    }
+
+    /// Food practices use food definitions; work terms may refer to any known good.
+    pub fn validate_with_goods(
+        &self,
+        people: &HashSet<u64>,
+        food: &HashSet<u32>,
+        goods: &HashSet<u32>,
+        now: u64,
+    ) -> Result<(), &'static str> {
         let mut ids: Vec<_> = self.minds.par_iter().map(|m| m.person).collect();
         ids.par_sort_unstable();
         if ids.par_windows(2).any(|p| p[0] == p[1])
@@ -497,7 +508,7 @@ impl Practices {
                     || mind
                         .work
                         .as_ref()
-                        .is_some_and(|work| !work::valid(work, mind.person, people, food, now))
+                        .is_some_and(|work| !work::valid(work, mind.person, people, goods, now))
                     || mind
                         .value_learning
                         .as_ref()

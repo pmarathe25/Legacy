@@ -28,6 +28,9 @@ pub struct Mind {
     /// One personally remembered request made using these terms.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub engagement: Option<Engagement>,
+    /// Directly experienced gifts, independent of whether the good is food.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gifts: Vec<Gift>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inbox: Vec<Received>,
 }
@@ -48,11 +51,27 @@ pub struct Engagement {
     pub request: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Gift {
+    pub tick: u64,
+    pub other: u64,
+    pub good: u32,
+    pub quantity: u64,
+    pub given: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GiftObservation {
+    pub person: u64,
+    pub gift: Gift,
+}
+
 pub fn valid(
     mind: &Mind,
     person: u64,
     people: &HashSet<u64>,
-    food: &HashSet<u32>,
+    goods: &HashSet<u32>,
     now: u64,
 ) -> bool {
     let valid_proposal = |p: &Proposal| {
@@ -61,7 +80,7 @@ pub fn valid(
             && people.contains(&p.worker)
             && p.sequence > 0
             && p.recipe > 0
-            && food.contains(&p.good)
+            && goods.contains(&p.good)
             && p.quantity > 0
             && p.created <= now
             && p.expires > p.created
@@ -70,6 +89,18 @@ pub fn valid(
         && mind.proposal_lifetime > 0
         && mind.pressure_threshold != Some(0)
         && mind.inbox.len() <= crate::MAX_PROPOSALS
+        && mind.gifts.len() <= crate::MAX_CASES
+        && mind
+            .gifts
+            .windows(2)
+            .all(|pair| pair[0].tick <= pair[1].tick)
+        && mind.gifts.iter().all(|gift| {
+            gift.tick <= now
+                && gift.other != person
+                && people.contains(&gift.other)
+                && goods.contains(&gift.good)
+                && gift.quantity > 0
+        })
         && mind
             .authored
             .as_ref()
@@ -135,6 +166,41 @@ pub struct Context<'a, C, P> {
     pub tick: u64,
     pub can_decide: C,
     pub pressure: P,
+}
+
+/// Record only direct observations, after current-boundary choices have been made.
+pub fn remember_gifts(next: &mut crate::Practices, observations: &[GiftObservation]) {
+    if observations.is_empty() {
+        return;
+    }
+    let mut sorted = observations.to_vec();
+    sorted.par_sort_unstable_by_key(|row| {
+        (
+            row.person,
+            row.gift.tick,
+            row.gift.other,
+            row.gift.good,
+            row.gift.quantity,
+            row.gift.given,
+        )
+    });
+    next.minds.par_iter_mut().for_each(|person| {
+        let start = sorted.partition_point(|row| row.person < person.person);
+        let end = sorted.partition_point(|row| row.person <= person.person);
+        if start == end || person.work.is_none() {
+            return;
+        }
+        let work = std::sync::Arc::make_mut(person.work.as_mut().expect("work mind"));
+        let first = end.saturating_sub(crate::MAX_CASES).max(start);
+        work.gifts
+            .extend(sorted[first..end].iter().map(|row| row.gift));
+        work.gifts.sort_unstable_by_key(|gift| {
+            (gift.tick, gift.other, gift.good, gift.quantity, gift.given)
+        });
+        if work.gifts.len() > crate::MAX_CASES {
+            work.gifts.drain(..work.gifts.len() - crate::MAX_CASES);
+        }
+    });
 }
 
 /// Deliver constructed proposals only to actual contacts; assessment is later.
@@ -427,6 +493,13 @@ fn propose_for_goals(
             } if observed <= tick && quantity > 0 => Some((observed, good, quantity)),
             _ => None,
         })
+        .chain(
+            mind.work
+                .iter()
+                .flat_map(|work| work.gifts.iter())
+                .filter(|gift| gift.tick <= tick && gift.quantity > 0)
+                .map(|gift| (gift.tick, gift.good, gift.quantity)),
+        )
         .max();
     let Some((worker, (_, good, quantity))) = worker.zip(gift) else {
         return Ok(None);

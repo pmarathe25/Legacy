@@ -59,6 +59,7 @@ fn paired_work_practices(count: u64) -> Workload {
         sequence: 0,
         authored: None,
         engagement: None,
+        gifts: vec![],
         inbox: vec![],
     });
     let mut minds: Vec<_> = (1..=count)
@@ -194,6 +195,61 @@ fn crowded_work_inbox_remains_bounded_and_worker_invariant() {
             .filter(|mind| mind.work.as_ref().unwrap().authored.is_some())
             .count(),
         game_parallel_practices::MAX_PROPOSALS
+    );
+}
+
+#[test]
+fn personal_non_food_gift_memories_are_bounded_and_deterministic() {
+    use game_parallel_practices::work::{Gift, GiftObservation, remember_gifts};
+    use std::collections::HashSet;
+    let (initial, _, _, _) = paired_work_practices(2);
+    let observations: Vec<_> = (1..=40)
+        .rev()
+        .map(|tick| GiftObservation {
+            person: 1,
+            gift: Gift {
+                tick,
+                other: 2,
+                good: 2,
+                quantity: tick,
+                given: true,
+            },
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = initial.clone();
+                remember_gifts(&mut next, &observations);
+                next
+            })
+    };
+    let next = run(1);
+    assert_eq!(next, run(4));
+    let gifts = &next.minds[0].work.as_ref().unwrap().gifts;
+    assert_eq!(gifts.len(), game_parallel_practices::MAX_CASES);
+    assert_eq!(
+        (gifts.first().unwrap().tick, gifts.last().unwrap().tick),
+        (25, 40)
+    );
+    next.validate_with_goods(
+        &HashSet::from([1, 2]),
+        &HashSet::from([4]),
+        &HashSet::from([2, 4]),
+        40,
+    )
+    .unwrap();
+    assert!(
+        next.validate_with_goods(
+            &HashSet::from([1, 2]),
+            &HashSet::from([4]),
+            &HashSet::from([4]),
+            40
+        )
+        .is_err()
     );
 }
 
