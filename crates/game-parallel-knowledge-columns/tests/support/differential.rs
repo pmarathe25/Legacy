@@ -279,43 +279,54 @@ fn targeted_false_reports_match_reference_and_never_rewrite_the_speakers_memory(
 #[test]
 fn dense_encounter_index_matches_sorted_selection_for_duplicate_and_unknown_partners() {
     let (initial, view, regions) = fixture(4, 4, false);
-    for contacts in [
-        vec![
-            Encounter {
-                tick: 1,
-                region: 1,
-                a: 1,
-                b: 3,
-                pressured: None,
-            },
-            Encounter {
-                tick: 1,
-                region: 1,
-                a: 1,
-                b: 2,
-                pressured: None,
-            },
-        ],
-        vec![
-            Encounter {
-                tick: 1,
-                region: 1,
-                a: 1,
-                b: 2,
-                pressured: None,
-            },
-            Encounter {
-                tick: 1,
-                region: 1,
-                a: 0,
-                b: 1,
-                pressured: None,
-            },
-        ],
+    for (contacts, expected_sender) in [
+        (
+            vec![
+                Encounter {
+                    tick: 1,
+                    region: 1,
+                    a: 1,
+                    b: 3,
+                    pressured: None,
+                },
+                Encounter {
+                    tick: 1,
+                    region: 1,
+                    a: 1,
+                    b: 2,
+                    pressured: None,
+                },
+            ],
+            Some(2),
+        ),
+        (
+            vec![
+                Encounter {
+                    tick: 1,
+                    region: 1,
+                    a: 1,
+                    b: 2,
+                    pressured: None,
+                },
+                Encounter {
+                    tick: 1,
+                    region: 1,
+                    a: 0,
+                    b: 1,
+                    pressured: None,
+                },
+            ],
+            None,
+        ),
     ] {
         let expected = initial
             .prepare_validated(&view.0, &regions, &contacts, 0)
             .unwrap();
+        let receiver = expected.minds.iter().find(|m| m.person == 1).unwrap();
+        assert_eq!(
+            receiver.records.iter().find_map(|r| r.learned_from),
+            expected_sender
+        );
         for workers in [1, 4] {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)

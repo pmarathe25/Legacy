@@ -4,6 +4,7 @@ use game_parallel_social::Encounter;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -200,12 +201,55 @@ impl Knowledge {
         {
             return Err("invalid personal record");
         }
-        let mut partners: Vec<_> = encounters
-            .par_iter()
-            .flat_map_iter(|e| [(e.a, e.b), (e.b, e.a)])
-            .filter(|&(receiver, sender)| accept(receiver, sender))
-            .collect();
-        partners.par_sort_unstable();
+        let observation_base = observations.first().and_then(|first| {
+            observations.last().and_then(|last| {
+                (last.person.checked_sub(first.person) == Some((observations.len() - 1) as u64))
+                    .then_some(first.person)
+            })
+        });
+        let dense_partners = observation_base
+            .filter(|_| validated && !encounters.is_empty())
+            .filter(|_| {
+                observations
+                    .last()
+                    .is_some_and(|last| last.person != u64::MAX)
+            })
+            .map(|first| {
+                let slots: Vec<_> = (0..observations.len())
+                    .into_par_iter()
+                    .map(|_| AtomicU64::new(u64::MAX))
+                    .collect();
+                let index = |id: u64| {
+                    id.checked_sub(first)
+                        .and_then(|offset| usize::try_from(offset).ok())
+                        .filter(|&i| i < slots.len())
+                };
+                encounters.par_iter().for_each(|event| {
+                    if let Some(a) = index(event.a)
+                        && accept(event.a, event.b)
+                    {
+                        slots[a].fetch_min(event.b, Ordering::Relaxed);
+                    }
+                    if let Some(b) = index(event.b)
+                        && accept(event.b, event.a)
+                    {
+                        slots[b].fetch_min(event.a, Ordering::Relaxed);
+                    }
+                });
+                slots
+            });
+        let mut partners: Vec<_> = if dense_partners.is_some() {
+            Vec::new()
+        } else {
+            encounters
+                .par_iter()
+                .flat_map_iter(|e| [(e.a, e.b), (e.b, e.a)])
+                .filter(|&(receiver, sender)| accept(receiver, sender))
+                .collect()
+        };
+        if dense_partners.is_none() {
+            partners.par_sort_unstable();
+        }
         if !validated && partners.par_windows(2).any(|p| p[0].0 == p[1].0) {
             return Err("duplicate encounter participant");
         }
@@ -227,12 +271,6 @@ impl Knowledge {
         {
             return Err("invalid encounter for knowledge");
         }
-        let observation_base = observations.first().and_then(|first| {
-            observations.last().and_then(|last| {
-                (last.person.checked_sub(first.person) == Some((observations.len() - 1) as u64))
-                    .then_some(first.person)
-            })
-        });
         let mind_base = minds.first().and_then(|first| {
             minds.last().and_then(|last| {
                 (last.person.checked_sub(first.person) == Some((minds.len() - 1) as u64))
@@ -311,7 +349,13 @@ impl Knowledge {
                         remember(&mut mind.records, record, self.max_records, None, true);
                     }
                 }
-                if let Some(partner) = partner_slots.get(position).copied().flatten()
+                let partner = if let Some(slots) = &dense_partners {
+                    let value = slots[position].load(Ordering::Relaxed);
+                    (value != u64::MAX).then_some(value)
+                } else {
+                    partner_slots.get(position).copied().flatten()
+                };
+                if let Some(partner) = partner
                     && let Some(j) = mind_index(partner)
                 {
                     let local_region = observation.local.map(|(region, _)| region);
