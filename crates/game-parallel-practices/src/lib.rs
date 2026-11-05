@@ -1,4 +1,5 @@
 //! Bounded personal invention of conditional action from experienced events.
+mod contact_index;
 pub mod work;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -812,10 +813,12 @@ impl Practices {
             phase = game_diagnostics::span("practices.reports");
         }
         // A readiness claim is a statement by its speaker, not an inventory fact.
-        let mut reports: Vec<_> = if minds
+        let reporters = minds
             .par_iter()
-            .any(|mind| mind.reporting != Reporting::Silent)
-        {
+            .filter(|mind| mind.reporting != Reporting::Silent)
+            .count();
+        let mut reports: Vec<_> = if reporters != 0 {
+            let contact_index = contact_index::ContactIndex::new(&contacts, reporters);
             minds
                 .par_iter()
                 .filter_map(|mind| {
@@ -826,9 +829,7 @@ impl Practices {
                         let proposal = &item.proposal;
                         item.decision == Decision::Adopted
                             && proposal.expires >= tick
-                            && contacts
-                                .binary_search(&(mind.person, proposal.author))
-                                .is_ok()
+                            && contact_index.contains(mind.person, proposal.author)
                             && !mind.sent_reports.iter().any(|r| {
                                 r.listener == proposal.author && r.sequence == proposal.sequence
                             })
