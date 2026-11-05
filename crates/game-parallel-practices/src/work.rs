@@ -151,6 +151,23 @@ where
     if !prior.minds.par_iter().any(|person| person.work.is_some()) {
         return Ok(());
     }
+    let may_propose = prior.minds.par_iter().any(|person| {
+        person.work.as_ref().is_some_and(|work| {
+            work.invent
+                && context.tick >= work.next_review
+                && work
+                    .authored
+                    .as_ref()
+                    .is_none_or(|p| p.expires < context.tick)
+                && (context.can_decide)(person.person)
+        })
+    });
+    if !may_propose {
+        return next
+            .minds
+            .par_iter_mut()
+            .try_for_each(|person| update_person(person, &[], None, &context));
+    }
     let mut minds: Vec<_> = prior.minds.par_iter().collect();
     if minds
         .par_windows(2)
@@ -174,18 +191,17 @@ where
         .filter_map(|person| {
             let work = person.work.as_ref()?;
             if !work.invent
-                || !(context.can_decide)(person.person)
                 || context.tick < work.next_review
                 || work
                     .authored
                     .as_ref()
                     .is_some_and(|p| p.expires >= context.tick)
+                || !(context.can_decide)(person.person)
             {
                 return None;
             }
             let g0 = goals.partition_point(|row| row.0 < person.person);
             let g1 = goals.partition_point(|row| row.0 <= person.person);
-            let recipes: Vec<_> = goals[g0..g1].iter().map(|row| row.1).collect();
             let w0 = witnesses.partition_point(|row| row.observer < person.person);
             let w1 = witnesses.partition_point(|row| row.observer <= person.person);
             let sequence = match work.sequence.checked_add(1) {
@@ -198,9 +214,13 @@ where
                 reserve: work.reserve,
                 tick: context.tick,
             };
-            match propose(
+            match propose_for_goals(
                 person,
-                &recipes,
+                |recipe| {
+                    goals[g0..g1]
+                        .binary_search(&(person.person, recipe))
+                        .is_ok()
+                },
                 &witnesses[w0..w1],
                 |a, b| {
                     contacts.binary_search(&(a, b)).is_ok()
@@ -241,86 +261,98 @@ where
     let mut by_author: Vec<_> = offers.par_iter().collect();
     by_author.par_sort_unstable_by_key(|p| p.author);
     next.minds.par_iter_mut().try_for_each(|person| {
-        let Some(existing) = person.work.as_ref() else {
-            return Ok(());
-        };
         let start = offers.partition_point(|p| p.worker < person.person);
         let end = offers.partition_point(|p| p.worker <= person.person);
         let authored = by_author
             .binary_search_by_key(&person.person, |p| p.author)
             .ok()
             .map(|i| by_author[i]);
-        let assess = (context.can_decide)(person.person)
-            && existing.inbox.iter().any(|r| {
-                r.decision == Decision::Pending
-                    && r.delivered < context.tick
-                    && r.proposal.expires >= context.tick
-            });
-        let expired = existing
-            .authored
-            .as_ref()
-            .is_some_and(|p| p.expires < context.tick)
-            || existing.engagement.as_ref().is_some_and(|entry| {
-                context.tick.saturating_sub(entry.proposal.expires) > existing.proposal_lifetime
-            })
-            || existing
-                .inbox
-                .iter()
-                .any(|r| r.proposal.expires < context.tick);
-        if !assess && !expired && authored.is_none() && start == end {
-            return Ok(());
-        }
-        let work = std::sync::Arc::make_mut(person.work.as_mut().expect("configured work mind"));
-        if assess {
-            for item in &mut work.inbox {
-                if item.decision != Decision::Pending
-                    || item.delivered >= context.tick
-                    || item.proposal.expires < context.tick
-                {
-                    continue;
-                }
-                item.approved = work.approve;
-                let pressured = work.pressure_threshold.is_some_and(|threshold| {
-                    (context.pressure)(person.person, item.proposal.author) >= threshold
-                });
-                item.decision = if item.approved || pressured {
-                    Decision::Adopted
-                } else {
-                    Decision::Declined
-                };
-            }
-        }
-        if work
-            .authored
-            .as_ref()
-            .is_some_and(|p| p.expires < context.tick)
-        {
-            work.authored = None;
-        }
-        if work.engagement.as_ref().is_some_and(|entry| {
-            context.tick.saturating_sub(entry.proposal.expires) > work.proposal_lifetime
-        }) {
-            work.engagement = None;
-        }
-        work.inbox.retain(|r| r.proposal.expires >= context.tick);
-        if let Some(proposal) = authored {
-            work.sequence = proposal.sequence;
-            work.next_review = context
-                .tick
-                .checked_add(work.review_interval)
-                .ok_or("work practice review overflow")?;
-            work.authored = Some(proposal.clone());
-        }
-        for proposal in &offers[start..end] {
-            work.inbox.push(Received {
-                proposal: proposal.clone(),
-                delivered: context.tick,
-                decision: Decision::Pending,
-                approved: false,
-            });
-        }
-        Ok(())
+        update_person(person, &offers[start..end], authored, &context)
     })
+}
+
+fn update_person<C, P>(
+    person: &mut PersonalMind,
+    offers: &[Proposal],
+    authored: Option<&Proposal>,
+    context: &Context<'_, C, P>,
+) -> Result<(), &'static str>
+where
+    C: Fn(u64) -> bool + Sync,
+    P: Fn(u64, u64) -> u64 + Sync,
+{
+    let Some(existing) = person.work.as_ref() else {
+        return Ok(());
+    };
+    let assess = existing.inbox.iter().any(|r| {
+        r.decision == Decision::Pending
+            && r.delivered < context.tick
+            && r.proposal.expires >= context.tick
+    }) && (context.can_decide)(person.person);
+    let expired = existing
+        .authored
+        .as_ref()
+        .is_some_and(|p| p.expires < context.tick)
+        || existing.engagement.as_ref().is_some_and(|entry| {
+            context.tick.saturating_sub(entry.proposal.expires) > existing.proposal_lifetime
+        })
+        || existing
+            .inbox
+            .iter()
+            .any(|r| r.proposal.expires < context.tick);
+    if !assess && !expired && authored.is_none() && offers.is_empty() {
+        return Ok(());
+    }
+    let work = std::sync::Arc::make_mut(person.work.as_mut().expect("configured work mind"));
+    if assess {
+        for item in &mut work.inbox {
+            if item.decision != Decision::Pending
+                || item.delivered >= context.tick
+                || item.proposal.expires < context.tick
+            {
+                continue;
+            }
+            item.approved = work.approve;
+            let pressured = work.pressure_threshold.is_some_and(|threshold| {
+                (context.pressure)(person.person, item.proposal.author) >= threshold
+            });
+            item.decision = if item.approved || pressured {
+                Decision::Adopted
+            } else {
+                Decision::Declined
+            };
+        }
+    }
+    if work
+        .authored
+        .as_ref()
+        .is_some_and(|p| p.expires < context.tick)
+    {
+        work.authored = None;
+    }
+    if work.engagement.as_ref().is_some_and(|entry| {
+        context.tick.saturating_sub(entry.proposal.expires) > work.proposal_lifetime
+    }) {
+        work.engagement = None;
+    }
+    work.inbox.retain(|r| r.proposal.expires >= context.tick);
+    if let Some(proposal) = authored {
+        work.sequence = proposal.sequence;
+        work.next_review = context
+            .tick
+            .checked_add(work.review_interval)
+            .ok_or("work practice review overflow")?;
+        work.authored = Some(proposal.clone());
+    }
+    for proposal in offers {
+        work.inbox.push(Received {
+            proposal: proposal.clone(),
+            delivered: context.tick,
+            decision: Decision::Pending,
+            approved: false,
+        });
+    }
+    Ok(())
 }
 
 /// Construct one candidate from this person's own goal, witnessed work, and
@@ -328,6 +360,22 @@ where
 pub fn propose(
     mind: &PersonalMind,
     goals: &[u32],
+    witnesses: &[Witness],
+    contact: impl Fn(u64, u64) -> bool,
+    schedule: Schedule,
+) -> Result<Option<Proposal>, &'static str> {
+    propose_for_goals(
+        mind,
+        |recipe| goals.contains(&recipe),
+        witnesses,
+        contact,
+        schedule,
+    )
+}
+
+fn propose_for_goals(
+    mind: &PersonalMind,
+    has_goal: impl Fn(u32) -> bool,
     witnesses: &[Witness],
     contact: impl Fn(u64, u64) -> bool,
     schedule: Schedule,
@@ -349,7 +397,7 @@ pub fn propose(
                 && w.request > 0
                 && w.job > 0
                 && w.tick <= tick
-                && goals.contains(&w.recipe)
+                && has_goal(w.recipe)
                 && contact(mind.person, w.worker)
         })
         .max_by_key(|w| {

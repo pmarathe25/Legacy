@@ -145,29 +145,54 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
         )
         .map_err(str::to_owned)?;
     if owner.minds.par_iter().any(|mind| mind.work.is_some()) {
-        let goals: Vec<_> = context
-            .goals
-            .map_or(&[][..], |owner| owner.people.as_slice())
-            .par_iter()
-            .filter(|goal| goal.enabled && goal.progress < goal.target)
-            .map(|goal| (goal.person, goal.recipe))
-            .collect();
-        let witnesses: Vec<_> = context
-            .requests
-            .map_or(&[][..], |owner| owner.memories.as_slice())
-            .par_iter()
-            .filter_map(|memory| {
-                let receipt = memory.last_success?;
-                Some(game_parallel_practices::work::Witness {
-                    observer: memory.observer,
-                    worker: memory.worker,
-                    recipe: memory.recipe,
-                    request: receipt.request,
-                    job: receipt.job,
-                    tick: memory.last_success_at?,
-                })
+        let may_invent = owner.minds.par_iter().any(|mind| {
+            mind.work.as_ref().is_some_and(|work| {
+                work.invent
+                    && context.tick >= work.next_review
+                    && work
+                        .authored
+                        .as_ref()
+                        .is_none_or(|p| p.expires < context.tick)
+                    && context
+                        .people
+                        .binary_search_by_key(&mind.person, |p| p.id)
+                        .ok()
+                        .is_some_and(|i| {
+                            context.people[i].health > 0 && !context.people[i].controlled
+                        })
             })
-            .collect();
+        });
+        let goals: Vec<_> = if may_invent {
+            context
+                .goals
+                .map_or(&[][..], |owner| owner.people.as_slice())
+                .par_iter()
+                .filter(|goal| goal.enabled && goal.progress < goal.target)
+                .map(|goal| (goal.person, goal.recipe))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let witnesses: Vec<_> = if may_invent {
+            context
+                .requests
+                .map_or(&[][..], |owner| owner.memories.as_slice())
+                .par_iter()
+                .filter_map(|memory| {
+                    let receipt = memory.last_success?;
+                    Some(game_parallel_practices::work::Witness {
+                        observer: memory.observer,
+                        worker: memory.worker,
+                        recipe: memory.recipe,
+                        request: receipt.request,
+                        job: receipt.job,
+                        tick: memory.last_success_at?,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         game_parallel_practices::work::advance(
             owner,
             &mut next,
