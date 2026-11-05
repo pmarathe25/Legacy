@@ -130,6 +130,13 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
     patch.available = 0;
     patch.regrowth = 0;
     initial.fauna.as_mut().unwrap().animals[0].hunger = 4;
+    initial.fauna.as_mut().unwrap().animals[0].social_response =
+        Some(game_parallel_fauna::SocialResponse {
+            feed_affinity: -2,
+            minimum: -10,
+            maximum: 10,
+            capacity: 4,
+        });
     let grain = initial.fauna.as_ref().unwrap().species[0].food_good;
     let bread = initial
         .physical
@@ -151,10 +158,18 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
                 assert_eq!(world.snapshot(), before);
                 assert!(Player::new(&mut world).feed_animal(1, bread, 1).unwrap());
                 assert_eq!(
+                    world.snapshot().fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
+                    -2
+                );
+                assert_eq!(
                     world.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
                     5
                 );
                 assert!(!Player::new(&mut world).feed_animal(1, grain, 2).unwrap());
+                assert_eq!(
+                    world.snapshot().fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
+                    -2
+                );
                 assert_eq!(
                     world.snapshot().fauna.as_ref().unwrap().animals[0].hunger,
                     6
@@ -174,6 +189,10 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
                 assert!(Player::new(&mut restored).feed_animal(1, grain, 2).unwrap());
                 let state = world.snapshot();
                 assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state.fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
+                    -4
+                );
                 assert_eq!(state.fauna.as_ref().unwrap().animals[0].hunger, hunger - 1);
                 assert!(
                     !Player::new(&mut world)

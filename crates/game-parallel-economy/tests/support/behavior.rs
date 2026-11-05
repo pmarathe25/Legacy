@@ -272,6 +272,13 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             },
             pregnancy: None,
             parents: None,
+            social_response: Some(game_parallel_fauna::SocialResponse {
+                feed_affinity: 2,
+                minimum: -10,
+                maximum: 10,
+                capacity: 4,
+            }),
+            opinions: vec![],
         }],
     });
     initial.animal_care = Some(AnimalCare {
@@ -298,6 +305,14 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             },
         ],
     });
+    let mut invalid = initial.clone();
+    invalid.fauna.as_mut().unwrap().animals[0]
+        .opinions
+        .push(game_parallel_fauna::AnimalOpinion {
+            person: 99,
+            affinity: 1,
+        });
+    assert!(Economy::compile(invalid).is_err());
     let mut changing = Economy::compile(initial.clone()).unwrap();
     let stale = changing.prepare().unwrap();
     changing.set_animal_care_choice(1, false).unwrap();
@@ -328,6 +343,14 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
     let pressured = run(initial.clone(), 1);
     assert_eq!(pressured, run(initial.clone(), 4));
     assert_eq!(pressured.fauna.as_ref().unwrap().animals[0].hunger, 3);
+    assert_eq!(
+        pressured.fauna.as_ref().unwrap().animals[0]
+            .opinions
+            .iter()
+            .map(|row| (row.person, row.affinity))
+            .collect::<Vec<_>>(),
+        vec![(1, 2), (4, 2)]
+    );
     for id in [1, 4] {
         assert_eq!(
             pressured
@@ -346,6 +369,10 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
     let unwilling = run(unwilling, 4);
     assert_eq!(unwilling.fauna.as_ref().unwrap().animals[0].hunger, 4);
     assert_eq!(
+        unwilling.fauna.as_ref().unwrap().animals[0].opinions.len(),
+        1
+    );
+    assert_eq!(
         unwilling
             .physical
             .custody
@@ -360,6 +387,10 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
     mistaken.fauna.as_mut().unwrap().species[0].food_good = 2;
     let mistaken = run(mistaken, 4);
     assert_eq!(mistaken.fauna.as_ref().unwrap().animals[0].hunger, 5);
+    assert_eq!(
+        mistaken.fauna.as_ref().unwrap().animals[0].opinions.len(),
+        2
+    );
     for id in [1, 4] {
         assert_eq!(
             mistaken
@@ -14665,6 +14696,7 @@ fn concentrated_animal_care_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
+    let social = std::env::var_os("LEGACY_ANIMAL_RESPONSE").is_some();
     let mut initial = concentrated(count);
     initial.autowork = None;
     initial.nutrition = None;
@@ -14709,6 +14741,13 @@ fn concentrated_animal_care_benchmark() {
             },
             pregnancy: None,
             parents: None,
+            social_response: social.then_some(game_parallel_fauna::SocialResponse {
+                feed_affinity: 1,
+                minimum: -10,
+                maximum: 10,
+                capacity: 64,
+            }),
+            opinions: vec![],
         }],
     });
     initial.animal_care = Some(AnimalCare {
@@ -14737,17 +14776,19 @@ fn concentrated_animal_care_benchmark() {
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 let state = world.snapshot();
+                let fauna = state.fauna.unwrap();
                 assert_eq!(
-                    state.fauna.unwrap().animals[0].hunger,
+                    fauna.animals[0].hunger,
                     u32::try_from(count - count / 2 + 1).unwrap()
                 );
+                assert_eq!(fauna.animals[0].opinions.len(), if social { (count / 2).min(64) as usize } else { 0 });
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} concentrated_animal_care_seconds={:.6}",
+                "workers={workers} people={count} social={social} concentrated_animal_care_seconds={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]
@@ -14894,6 +14935,8 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
                 },
                 pregnancy: None,
                 parents: None,
+                social_response: None,
+                opinions: vec![],
             })
             .collect(),
     });

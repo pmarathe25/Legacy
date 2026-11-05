@@ -178,6 +178,7 @@ impl Context<'_> {
                     actor.id,
                     Feeding {
                         animal: p.animal,
+                        person: Some(actor.id),
                         good: p.good,
                         quantity: p.quantity,
                     },

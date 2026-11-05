@@ -72,6 +72,27 @@ pub struct Animal {
     pub pregnancy: Option<Pregnancy>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parents: Option<[u64; 2]>,
+    /// Private, individual response to receiving an offering.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub social_response: Option<SocialResponse>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub opinions: Vec<AnimalOpinion>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SocialResponse {
+    pub feed_affinity: i32,
+    pub minimum: i32,
+    pub maximum: i32,
+    pub capacity: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnimalOpinion {
+    pub person: u64,
+    pub affinity: i32,
 }
 
 /// A physical resource snapshot supplied by its owner, not a copy of stock to create.
@@ -87,6 +108,7 @@ pub struct Patch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Feeding {
     pub animal: u64,
+    pub person: Option<u64>,
     pub good: u32,
     pub quantity: u64,
 }
@@ -125,7 +147,7 @@ impl Fauna {
             .iter()
             .find(|a| a.id == feeding.animal && a.health > 0)
             .ok_or("unknown living animal")?;
-        if feeding.quantity == 0 {
+        if feeding.quantity == 0 || feeding.person == Some(0) {
             return Err("invalid animal food");
         }
         Ok(animal.region)
@@ -195,6 +217,22 @@ impl Fauna {
                     !regions.contains(&a.region)
                         || a.health > s.max_health
                         || a.genome.alleles.iter().flatten().any(|value| *value > 1000)
+                        || a.social_response
+                            .as_ref()
+                            .map_or(!a.opinions.is_empty(), |response| {
+                                response.capacity > 64
+                                    || response.minimum > 0
+                                    || response.maximum < 0
+                                    || a.opinions.len() > response.capacity
+                                    || a.opinions
+                                        .windows(2)
+                                        .any(|pair| pair[0].person >= pair[1].person)
+                                    || a.opinions.iter().any(|opinion| {
+                                        opinion.person == 0
+                                            || opinion.affinity < response.minimum
+                                            || opinion.affinity > response.maximum
+                                    })
+                            })
                         || a.parents.is_some_and(|parents| {
                             parents[0] == parents[1]
                                 || parents.iter().any(|parent| *parent == 0 || *parent >= a.id)
@@ -302,7 +340,7 @@ impl Fauna {
                     .filter(|a| a.health > 0)
                     .ok_or("unknown living animal")?;
                 let species = lookup(animal.species).ok_or("unknown animal species")?;
-                if food.quantity == 0 {
+                if food.quantity == 0 || food.person == Some(0) {
                     return Err("invalid animal food");
                 }
                 Ok((food.good == species.food_good).then_some((food.animal, food.quantity)))
@@ -406,6 +444,25 @@ impl Fauna {
             .map(|group| (group[0].0, group.par_iter().map(|row| row.2).sum()))
             .collect();
         consumed.par_sort_unstable_by_key(|row| row.0);
+        let mut meetings: Vec<_> = if self
+            .animals
+            .par_iter()
+            .any(|animal| animal.social_response.is_some())
+        {
+            feeding
+                .par_iter()
+                .filter_map(|food| food.person.map(|person| (food.animal, person)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if meetings.par_windows(2).any(|p| p[0] > p[1]) {
+            meetings.par_sort_unstable();
+        }
+        let meetings: Vec<_> = meetings
+            .par_chunk_by(|a, b| a == b)
+            .map(|group| (group[0].0, group[0].1, group.len() as u64))
+            .collect();
         let mut animals: Vec<_> = self
             .animals
             .par_iter()
@@ -413,6 +470,42 @@ impl Fauna {
                 let mut next = a.clone();
                 if a.health == 0 {
                     return Ok(next);
+                }
+                if let Some(response) = &a.social_response {
+                    let start = meetings.partition_point(|row| row.0 < a.id);
+                    let end = meetings.partition_point(|row| row.0 <= a.id);
+                    let local = &meetings[start..end];
+                    let adjust = |value: i32, count: u64| {
+                        (i128::from(value) + i128::from(response.feed_affinity) * i128::from(count))
+                            .clamp(i128::from(response.minimum), i128::from(response.maximum))
+                            as i32
+                    };
+                    for opinion in &mut next.opinions {
+                        if let Ok(i) = local.binary_search_by_key(&opinion.person, |row| row.1) {
+                            opinion.affinity = adjust(opinion.affinity, local[i].2);
+                        }
+                    }
+                    if response.feed_affinity != 0 {
+                        for &(_, person, count) in local
+                            .iter()
+                            .take(response.capacity.saturating_add(a.opinions.len()))
+                        {
+                            if next.opinions.len() == response.capacity {
+                                break;
+                            }
+                            if next
+                                .opinions
+                                .binary_search_by_key(&person, |opinion| opinion.person)
+                                .is_err()
+                            {
+                                next.opinions.push(AnimalOpinion {
+                                    person,
+                                    affinity: adjust(0, count),
+                                });
+                                next.opinions.sort_unstable_by_key(|opinion| opinion.person);
+                            }
+                        }
+                    }
                 }
                 let s = lookup(a.species).ok_or("unknown animal species")?;
                 next.age = a.age.checked_add(1).ok_or("animal age overflow")?;
@@ -499,6 +592,8 @@ impl Fauna {
                     ),
                     pregnancy: None,
                     parents: Some([mother.id, pregnancy.father]),
+                    social_response: None,
+                    opinions: Vec::new(),
                 })
             })
             .collect::<Result<_, _>>()?;

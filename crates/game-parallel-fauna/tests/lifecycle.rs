@@ -1,4 +1,7 @@
-use game_parallel_fauna::{Animal, Climate, Exposure, Fauna, Feeding, Patch, Pregnancy, Species};
+use game_parallel_fauna::{
+    Animal, AnimalOpinion, Climate, Exposure, Fauna, Feeding, Patch, Pregnancy, SocialResponse,
+    Species,
+};
 use game_parallel_genetics::{Genome, Sex};
 use std::collections::HashSet;
 
@@ -42,6 +45,8 @@ fn animal(id: u64, sex: Sex, allele: u16) -> Animal {
         genome: genome(sex, allele),
         pregnancy: None,
         parents: None,
+        social_response: None,
+        opinions: vec![],
     }
 }
 fn initial() -> Fauna {
@@ -129,6 +134,97 @@ fn inherited_hardiness_changes_individual_response_to_local_exposure() {
 }
 
 #[test]
+fn animal_affinity_changes_are_individual_signed_and_bounded() {
+    let mut state = initial();
+    state.animals[0].social_response = Some(SocialResponse {
+        feed_affinity: -3,
+        minimum: -5,
+        maximum: 5,
+        capacity: 2,
+    });
+    state.animals[1].social_response = Some(SocialResponse {
+        feed_affinity: 2,
+        minimum: -5,
+        maximum: 5,
+        capacity: 2,
+    });
+    state.animals[0].opinions.push(AnimalOpinion {
+        person: 3,
+        affinity: 1,
+    });
+    let feeds = [
+        Feeding {
+            animal: 1,
+            person: Some(3),
+            good: 99,
+            quantity: 1,
+        },
+        Feeding {
+            animal: 1,
+            person: Some(3),
+            good: 1,
+            quantity: 1,
+        },
+        Feeding {
+            animal: 1,
+            person: Some(2),
+            good: 1,
+            quantity: 1,
+        },
+        Feeding {
+            animal: 1,
+            person: Some(1),
+            good: 1,
+            quantity: 1,
+        },
+        Feeding {
+            animal: 2,
+            person: Some(3),
+            good: 99,
+            quantity: 1,
+        },
+    ];
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut input = feeds.to_vec();
+                if reverse {
+                    input.reverse();
+                }
+                let draft = state.advance_with_feeding(&[], &input, 7, 1).unwrap();
+                assert_eq!(
+                    draft.fauna.animals[0].opinions,
+                    vec![
+                        AnimalOpinion {
+                            person: 1,
+                            affinity: -3
+                        },
+                        AnimalOpinion {
+                            person: 3,
+                            affinity: -5
+                        }
+                    ]
+                );
+                assert_eq!(
+                    draft.fauna.animals[1].opinions,
+                    vec![AnimalOpinion {
+                        person: 3,
+                        affinity: 2
+                    }]
+                );
+                let saved: Fauna =
+                    serde_json::from_str(&serde_json::to_string(&draft.fauna).unwrap()).unwrap();
+                assert_eq!(saved, draft.fauna);
+                saved
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+}
+
+#[test]
 fn grazers_consume_actual_food_and_inherit_from_local_parents() {
     let initial = initial();
     initial
@@ -181,6 +277,7 @@ fn physically_fed_animals_need_less_food_from_the_patch() {
     };
     let feed = Feeding {
         animal: 1,
+        person: None,
         good: 1,
         quantity: 2,
     };

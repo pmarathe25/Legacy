@@ -1035,6 +1035,14 @@ impl Economy {
             fauna
                 .validate(&regions, &goods, physical.tick())
                 .map_err(str::to_owned)?;
+            if fauna.animals.par_iter().any(|animal| {
+                animal
+                    .opinions
+                    .iter()
+                    .any(|opinion| !ids.contains(&opinion.person))
+            }) {
+                return Err("animal opinion references an unknown person".into());
+            }
         }
         if let Some(care) = &state.animal_care {
             care.validate(&ids, &goods, state.fauna.as_ref())?;
@@ -2470,6 +2478,7 @@ impl Economy {
                     .ok_or("unknown person")?;
                 let food = game_parallel_fauna::Feeding {
                     animal,
+                    person: Some(person),
                     good,
                     quantity,
                 };
