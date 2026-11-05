@@ -359,6 +359,50 @@ pub fn prepare(
     let groups: Vec<_> = claims
         .par_chunk_by(|a, b| (a.source, a.movement.good) == (b.source, b.movement.good))
         .map(|group| {
+            // Most independent transactions consume from a source once. Resolve
+            // that case directly, without allocating prefix arrays per source.
+            if let [claim] = group {
+                if !accepted[claim.sorted].load(Ordering::Relaxed) {
+                    return (claim.source, claim.movement.good, 0, Vec::new());
+                }
+                if claim.compact {
+                    return (
+                        claim.source,
+                        claim.movement.good,
+                        claim.movement.quantity,
+                        vec![(claim.original, None, Vec::new())],
+                    );
+                }
+                let stock = &containers[claim.source].lots;
+                let first = stock.partition_point(|lot| lot.good < claim.movement.good);
+                let last = stock.partition_point(|lot| lot.good <= claim.movement.good);
+                let mut remaining = claim.movement.quantity;
+                let mut parts = Vec::new();
+                for lot in &stock[first..last] {
+                    if !live(lot, next) {
+                        continue;
+                    }
+                    let quantity = remaining.min(lot.quantity);
+                    if quantity != 0 {
+                        parts.push(Lot {
+                            good: lot.good,
+                            quantity,
+                            expires_at: lot.expires_at,
+                        });
+                        remaining -= quantity;
+                    }
+                    if remaining == 0 {
+                        break;
+                    }
+                }
+                debug_assert_eq!(remaining, 0);
+                return (
+                    claim.source,
+                    claim.movement.good,
+                    claim.movement.quantity,
+                    vec![(claim.original, claim.destination, parts)],
+                );
+            }
             let chosen: Vec<_> = group
                 .par_iter()
                 .filter(|row| accepted[row.sorted].load(Ordering::Relaxed))

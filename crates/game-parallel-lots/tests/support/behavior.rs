@@ -123,6 +123,67 @@ fn late_empty_holders_do_not_shift_planned_physical_changes() {
 }
 
 #[test]
+fn single_source_move_preserves_expiry_order_and_rejects_an_overfull_destination() {
+    let source = Place::Inventory(1);
+    let target = Place::Person(1);
+    let initial = vec![
+        container(
+            source,
+            20,
+            vec![lot(1, 3, Some(1)), lot(1, 2, Some(3)), lot(1, 4, Some(5))],
+        ),
+        container(target, 4, vec![]),
+    ];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut store = store(initial.clone());
+                let draft = store
+                    .prepare(
+                        42,
+                        &[Movement {
+                            id: 1,
+                            from: source,
+                            to: Some(target),
+                            good: 1,
+                            quantity: 4,
+                        }],
+                    )
+                    .unwrap();
+                let (outcomes, spoiled) = store.commit(draft).unwrap();
+                assert!(outcomes[0].accepted);
+                assert_eq!(spoiled.iter().map(|row| row.quantity).sum::<u64>(), 3);
+                let state = store.export();
+                assert_eq!(quantity(&state, target, 1, Some(3)), 2);
+                assert_eq!(quantity(&state, target, 1, Some(5)), 2);
+                assert_eq!(quantity(&state, source, 1, Some(5)), 2);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut store = store(initial);
+    let draft = store
+        .prepare(
+            42,
+            &[Movement {
+                id: 1,
+                from: source,
+                to: Some(target),
+                good: 1,
+                quantity: 5,
+            }],
+        )
+        .unwrap();
+    let (outcomes, _) = store.commit(draft).unwrap();
+    assert!(!outcomes[0].accepted);
+    assert_eq!(quantity(&store.export(), target, 1, Some(3)), 0);
+    assert_eq!(quantity(&store.export(), source, 1, Some(3)), 2);
+}
+
+#[test]
 fn earliest_food_moves_first_and_expires_in_its_new_custody() {
     let source = Place::Inventory(1);
     let a = Place::Person(1);
