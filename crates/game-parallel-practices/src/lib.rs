@@ -55,6 +55,9 @@ pub struct Mind {
     pub giving_experience_weight: i64,
     #[serde(default)]
     pub shortage_experience_weight: i64,
+    /// Signed personal weight for the recipient's affinity toward the author.
+    #[serde(default)]
+    pub proposal_affinity_weight: i64,
     #[serde(default)]
     pub acceptance_threshold: i64,
     /// Optional personal attachment to conditional aid, learned from relevant experience.
@@ -645,7 +648,7 @@ impl Practices {
             ready,
         )
     }
-    /// Pressure and directed trust are independently supplied by the person's social view.
+    /// Supply pressure and trust; affinity defaults to zero in this convenience form.
     pub fn prepare_with_judgments<F, G, H, J>(
         &self,
         contacts: &[(u64, u64)],
@@ -662,6 +665,33 @@ impl Practices {
         J: Fn(u64, u64) -> i32 + Sync,
     {
         let (pressure, trust) = impressions;
+        self.prepare_with_relationships(
+            contacts,
+            observations,
+            tick,
+            (pressure, trust, |_, _| 0),
+            can_decide,
+            ready,
+        )
+    }
+    /// Supply directed pressure, trust, and affinity from the person's own relationships.
+    pub fn prepare_with_relationships<F, G, H, J, K>(
+        &self,
+        contacts: &[(u64, u64)],
+        observations: &[Observation],
+        tick: u64,
+        impressions: (F, J, K),
+        can_decide: G,
+        ready: H,
+    ) -> Result<Self, &'static str>
+    where
+        F: Fn(u64, u64) -> u64 + Sync,
+        G: Fn(u64) -> bool + Sync,
+        H: Fn(u64, u32, u64) -> bool + Sync,
+        J: Fn(u64, u64) -> i32 + Sync,
+        K: Fn(u64, u64) -> i32 + Sync,
+    {
+        let (pressure, trust, affinity) = impressions;
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("practices.setup");
         let mut contacts: Vec<_> = contacts
@@ -896,10 +926,14 @@ impl Practices {
                         if item.decision != Decision::Pending || item.delivered >= tick || item.proposal.expires < tick { continue; }
                         let given = mind.cases.iter().filter(|case| matches!(case, Case::Gave { recipient, .. } if *recipient == item.proposal.author)).count() as i128;
                         let shortages = mind.cases.iter().filter(|case| matches!(case, Case::Shortage { .. })).count() as i128;
+                        let affinity_score = if mind.proposal_affinity_weight == 0 { 0 } else {
+                            i128::from(mind.proposal_affinity_weight).saturating_mul(i128::from(affinity(mind.person, item.proposal.author)))
+                        };
                         let score = i128::from(mind.quantity_weight).saturating_mul(i128::from(item.proposal.quantity))
                             .saturating_add(i128::from(mind.reserve_weight).saturating_mul(i128::from(item.proposal.reserve)))
                             .saturating_add(i128::from(mind.giving_experience_weight).saturating_mul(given))
                             .saturating_add(i128::from(mind.shortage_experience_weight).saturating_mul(shortages))
+                            .saturating_add(affinity_score)
                             .saturating_add(i128::from(mind.value_learning.as_ref().map_or(0, |v| v.value)))
                             .saturating_add(i128::from(mind.precedent.as_ref().map_or(0, |p| p.judgment(&mind.cases, &item.proposal))));
                         item.approved = mind.approve && score >= i128::from(mind.acceptance_threshold);

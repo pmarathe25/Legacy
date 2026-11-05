@@ -8577,6 +8577,7 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
         reserve_weight: 0,
         giving_experience_weight: 0,
         shortage_experience_weight: 0,
+        proposal_affinity_weight: 0,
         acceptance_threshold: 0,
         value_learning: None,
         precedent: None,
@@ -8741,6 +8742,21 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                     .minds[1];
                 receiver.approve = !decline && !pressured;
                 receiver.willing = !pressured;
+                if !decline && !pressured {
+                    receiver.proposal_affinity_weight = 1;
+                    receiver.acceptance_threshold = 2;
+                    state.opinions.as_mut().unwrap().records.insert(
+                        0,
+                        Opinion {
+                            observer: 2,
+                            target: 1,
+                            trust: 0,
+                            fear: 0,
+                            obligation: 0,
+                            affinity: 3,
+                        },
+                    );
+                }
                 if poor {
                     receiver.reporting = PracticeReporting::Lie;
                 }

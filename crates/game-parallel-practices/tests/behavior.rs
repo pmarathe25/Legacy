@@ -2,6 +2,7 @@ use game_parallel_practices::{
     Case, Decision, Mind, Observation, Practices, PrecedentReasoning, Proposal, Received,
     ValueLearning,
 };
+use rayon::prelude::*;
 use std::collections::HashSet;
 
 fn mind(person: u64) -> Mind {
@@ -22,6 +23,7 @@ fn mind(person: u64) -> Mind {
         reserve_weight: 0,
         giving_experience_weight: 0,
         shortage_experience_weight: 0,
+        proposal_affinity_weight: 0,
         acceptance_threshold: 0,
         value_learning: None,
         precedent: None,
@@ -574,6 +576,50 @@ fn private_disapproval_can_coexist_with_outward_adoption_under_pressure() {
     assert_eq!(pressured.minds[1].inbox[0].decision, Decision::Adopted);
     assert!(!pressured.minds[1].inbox[0].approved);
     assert_eq!(pressured.minds[0].authored, declined.minds[0].authored);
+    let mut biased = state.clone();
+    biased.minds[1].approve = true;
+    biased.minds[1].pressure_threshold = None;
+    biased.minds[1].acceptance_threshold = 1;
+    biased.minds[1].proposal_affinity_weight = 2;
+    let saved: Practices = serde_json::from_str(&serde_json::to_string(&biased).unwrap()).unwrap();
+    let judge = |workers, state: &Practices, pressure| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                state
+                    .prepare_with_relationships(
+                        &[],
+                        &[],
+                        3,
+                        (
+                            move |_, _| pressure,
+                            |_, _| 0,
+                            |observer, author| {
+                                if (observer, author) == (2, 1) {
+                                    2
+                                } else {
+                                    -100
+                                }
+                            },
+                        ),
+                        |_| true,
+                        |_, _, _| false,
+                    )
+                    .unwrap()
+            })
+    };
+    let favorable = judge(1, &saved, 0);
+    assert_eq!(favorable, judge(4, &saved, 0));
+    assert_eq!(favorable.minds[1].inbox[0].decision, Decision::Adopted);
+    biased.minds[1].proposal_affinity_weight = -2;
+    let unfavorable = judge(4, &biased, 0);
+    assert_eq!(unfavorable.minds[1].inbox[0].decision, Decision::Declined);
+    biased.minds[1].pressure_threshold = Some(3);
+    let outward = judge(4, &biased, 3);
+    assert_eq!(outward.minds[1].inbox[0].decision, Decision::Adopted);
+    assert!(!outward.minds[1].inbox[0].approved);
     let mut controlled = state
         .prepare_with_agency(&[], &[], 3, |_, _| 0, |person| person != 2)
         .unwrap();
@@ -679,6 +725,97 @@ fn complete_invention(initial: &Practices, contacts: &[(u64, u64)]) -> Practices
             .unwrap();
     }
     state
+}
+
+fn affinity_invention(initial: &Practices, contacts: &[(u64, u64)]) -> Practices {
+    let mut state = initial.clone();
+    state
+        .minds
+        .par_iter_mut()
+        .filter(|mind| !mind.invent)
+        .for_each(|mind| mind.proposal_affinity_weight = 1);
+    for tick in 2..=5 {
+        state = state
+            .prepare_with_relationships(
+                contacts,
+                &[],
+                tick,
+                (
+                    |_, _| 0,
+                    |_, _| 0,
+                    |person, author| i32::from(person == author + 1),
+                ),
+                |_| true,
+                |_, _, _| false,
+            )
+            .unwrap();
+    }
+    state
+}
+
+#[test]
+fn independent_affinity_based_proposal_decisions_match_across_workers() {
+    let (initial, contacts) = paired_invention(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| affinity_invention(&initial, &contacts))
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    assert_eq!(
+        result
+            .minds
+            .iter()
+            .flat_map(|m| m.inbox.iter())
+            .filter(|item| item.approved)
+            .count(),
+        2048
+    );
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn affinity_invention_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let (initial, contacts) = paired_invention(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let started = std::time::Instant::now();
+                let result = affinity_invention(&initial, &contacts);
+                if round > 0 {
+                    samples.push(started.elapsed().as_secs_f64());
+                }
+                assert_eq!(
+                    result
+                        .minds
+                        .iter()
+                        .flat_map(|m| m.inbox.iter())
+                        .filter(|item| item.approved)
+                        .count(),
+                    count as usize / 2
+                );
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} boundaries=4 elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 fn paired_value_learning(count: u64) -> (Practices, Vec<Observation>) {

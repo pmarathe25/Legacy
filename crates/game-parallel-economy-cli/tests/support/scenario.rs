@@ -2276,6 +2276,11 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
         "report_attitude = { trust_at_least = 3 }",
     );
     let configured = configured.replacen(
+        "reporting = \"lie\"",
+        "reporting = \"lie\"\nproposal_affinity_weight = -3",
+        1,
+    );
+    let configured = configured.replacen(
         "[[medical.policies]]",
         "[[medical.acquaintances]]\nperson = 1\nmedicine = \"medicine\"\nquantity = 1\npatient_health_at_most = 75\nwilling = false\npressure_threshold = 3\nurgency_weight = 2\naffinity_weight = -1\n\n[[medical.policies]]\npatient_health_at_most = 70",
         1,
@@ -2326,6 +2331,7 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     assert_eq!(own.person, 1);
     assert!(!own.approve && !own.willing && own.ask_willing);
     assert_eq!(own.reporting, game_parallel_economy::PracticeReporting::Lie);
+    assert_eq!(own.proposal_affinity_weight, -3);
     assert_eq!(
         own.report_attitude,
         game_parallel_economy::PracticeReportAttitude::TrustAtLeast(3)

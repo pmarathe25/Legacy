@@ -103,7 +103,7 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
         .collect();
     let opinions = context.opinions.map(Opinions::index);
     owner
-        .prepare_with_judgments(
+        .prepare_with_relationships(
             &contacts,
             &observations,
             context.tick,
@@ -118,6 +118,11 @@ pub fn advance(owner: &Practices, context: Context<'_>) -> Result<Practices, Str
                     opinions
                         .as_ref()
                         .map_or(0, |index| index.trust(person, other))
+                },
+                |person, other| {
+                    opinions
+                        .as_ref()
+                        .map_or(0, |index| index.affinity(person, other))
                 },
             ),
             |person| {
