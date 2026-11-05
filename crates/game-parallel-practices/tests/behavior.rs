@@ -606,6 +606,87 @@ fn personal_precedents_generalize_to_new_combinations_using_individual_weights()
 }
 
 #[test]
+fn crowded_readiness_reports_use_bounded_listener_memory_across_workers() {
+    use game_parallel_practices::{Belief, ReadinessReport, ReceivedReport, Reporting};
+    let count = 4096u64;
+    let mut listener = mind(1);
+    listener.invent = false;
+    listener.reports = (10000..10008)
+        .map(|sequence| ReceivedReport {
+            statement: ReadinessReport {
+                speaker: 2,
+                listener: 1,
+                sequence,
+                claimed_ready: false,
+                tick: 1,
+            },
+            belief: Belief::Unassessed,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let mut people = vec![listener];
+    people.extend((2..=count).map(|person| {
+        let mut individual = mind(person);
+        individual.invent = false;
+        individual.reporting = Reporting::Ready;
+        individual.inbox = vec![Received {
+            proposal: Proposal {
+                author: 1,
+                recipient: person,
+                sequence: person,
+                good: 4,
+                quantity: 1,
+                reserve: 0,
+                ask_hunger: 0,
+                created: 1,
+                expires: 8,
+            },
+            delivered: 1,
+            decision: Decision::Adopted,
+            approved: true,
+        }]
+        .into();
+        individual
+    }));
+    let initial = Practices { minds: people };
+    let contacts: Vec<_> = (2..=count).map(|person| (1, person)).collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                initial
+                    .prepare_with_evidence(&contacts, &[], 2, |_, _| 0, |_| true, |_, _, _| false)
+                    .unwrap()
+            })
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    assert_eq!(
+        result.minds[0].reports.len(),
+        game_parallel_practices::MAX_PROPOSALS
+    );
+    assert!(
+        result.minds[0]
+            .reports
+            .iter()
+            .all(|report| report.statement.claimed_ready)
+    );
+    assert_eq!(
+        result
+            .minds
+            .iter()
+            .filter(|person| !person.sent_reports.is_empty())
+            .count(),
+        game_parallel_practices::MAX_PROPOSALS
+    );
+    result
+        .validate(&(1..=count).collect(), &HashSet::from([4]), 2)
+        .unwrap();
+}
+
+#[test]
 fn actual_experience_and_contact_construct_a_personal_proposal() {
     let initial = Practices {
         minds: vec![mind(1), mind(2), mind(3)],
@@ -692,6 +773,144 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
     let mut liar = next.clone();
     liar.minds[1].reporting = game_parallel_practices::Reporting::Lie;
     liar.minds[0].report_attitude = game_parallel_practices::ReportAttitude::Trust;
+    let mut privately_forgotten = liar.clone();
+    std::sync::Arc::make_mut(&mut privately_forgotten.minds[0].authored).clear();
+    privately_forgotten.minds[0].invent = false;
+    let report_after_forgetting = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                privately_forgotten
+                    .prepare_with_evidence(&[(1, 2)], &[], 6, |_, _| 0, |_| true, |_, _, _| false)
+                    .unwrap()
+            })
+    };
+    let reported = report_after_forgetting(1);
+    assert_eq!(reported, report_after_forgetting(4));
+    assert!(reported.minds[1].sent_reports[0].claimed_ready);
+    assert!(reported.minds[0].reports[0].statement.claimed_ready);
+    assert!(
+        reported.minds[0].authored.is_empty(),
+        "the speaker cannot see the listener's private state"
+    );
+    let mut manual = privately_forgotten.clone();
+    manual.speak(2, 1, 1, true, 6).unwrap();
+    assert!(manual.minds[0].reports[0].statement.claimed_ready);
+    let mut unmodeled_listener = privately_forgotten.clone();
+    unmodeled_listener.minds.retain(|mind| mind.person != 1);
+    let automatic_unmodeled = unmodeled_listener
+        .prepare_with_evidence(&[(1, 2)], &[], 6, |_, _| 0, |_| true, |_, _, _| false)
+        .unwrap();
+    assert!(
+        automatic_unmodeled
+            .minds
+            .iter()
+            .find(|mind| mind.person == 2)
+            .unwrap()
+            .sent_reports[0]
+            .claimed_ready
+    );
+    unmodeled_listener.speak(2, 1, 1, true, 6).unwrap();
+    assert!(
+        unmodeled_listener
+            .minds
+            .iter()
+            .find(|mind| mind.person == 2)
+            .unwrap()
+            .sent_reports[0]
+            .claimed_ready
+    );
+    let mut crowded = privately_forgotten.clone();
+    let original = liar.minds[0].authored[0].clone();
+    crowded.minds[0].sequence = 107;
+    crowded.minds[0].authored = (100..108)
+        .map(|sequence| Proposal {
+            sequence,
+            ..original.clone()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    crowded.minds[0].reports = (100..108)
+        .map(|sequence| game_parallel_practices::ReceivedReport {
+            statement: game_parallel_practices::ReadinessReport {
+                speaker: 2,
+                listener: 1,
+                sequence,
+                claimed_ready: false,
+                tick: 5,
+            },
+            belief: game_parallel_practices::Belief::Unassessed,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let mut manual_crowded = crowded.clone();
+    manual_crowded.speak(2, 1, 1, true, 6).unwrap();
+    assert_eq!(
+        manual_crowded.minds[0].reports.len(),
+        game_parallel_practices::MAX_PROPOSALS
+    );
+    assert!(
+        manual_crowded.minds[0]
+            .reports
+            .iter()
+            .any(|report| report.statement.sequence == 1)
+    );
+    std::sync::Arc::make_mut(&mut manual_crowded.minds[1].sent_reports).clear();
+    manual_crowded.speak(2, 1, 1, false, 6).unwrap();
+    assert_eq!(
+        manual_crowded.minds[0]
+            .reports
+            .iter()
+            .filter(|report| report.statement.sequence == 1)
+            .count(),
+        1
+    );
+    assert!(
+        !manual_crowded.minds[0]
+            .reports
+            .iter()
+            .find(|report| report.statement.sequence == 1)
+            .unwrap()
+            .statement
+            .claimed_ready
+    );
+    manual_crowded
+        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 6)
+        .unwrap();
+    let automatic = crowded
+        .prepare_with_evidence(&[(1, 2)], &[], 6, |_, _| 0, |_| true, |_, _, _| false)
+        .unwrap();
+    assert_eq!(
+        automatic.minds[0].reports.len(),
+        game_parallel_practices::MAX_PROPOSALS
+    );
+    assert!(
+        automatic.minds[0]
+            .reports
+            .iter()
+            .any(|report| report.statement.sequence == 1)
+    );
+    automatic
+        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 6)
+        .unwrap();
+    let mut forgot_speaking = automatic.clone();
+    std::sync::Arc::make_mut(&mut forgot_speaking.minds[1].sent_reports).clear();
+    let repeated = forgot_speaking
+        .prepare_with_evidence(&[(1, 2)], &[], 7, |_, _| 0, |_| true, |_, _, _| false)
+        .unwrap();
+    assert_eq!(
+        repeated.minds[0]
+            .reports
+            .iter()
+            .filter(|report| report.statement.sequence == 1)
+            .count(),
+        1
+    );
+    repeated
+        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 7)
+        .unwrap();
     let no_contact = liar
         .prepare_with_evidence(&[], &[], 6, |_, _| 0, |_| true, |_, _, _| false)
         .unwrap();

@@ -361,35 +361,26 @@ impl Practices {
         listener: u64,
         sequence: u64,
         tick: u64,
-    ) -> Result<(usize, usize), &'static str> {
+    ) -> Result<(usize, Option<usize>), &'static str> {
         let source = self
             .minds
             .iter()
             .position(|mind| mind.person == speaker)
             .ok_or("unknown speaker")?;
-        let target = self
-            .minds
-            .iter()
-            .position(|mind| mind.person == listener)
-            .ok_or("unknown listener")?;
-        if source == target {
+        let target = self.minds.iter().position(|mind| mind.person == listener);
+        if speaker == listener {
             return Err("invalid personal report");
         }
         let speaker_mind = &self.minds[source];
-        let listener_mind = &self.minds[target];
         if !speaker_mind.inbox.iter().any(|item| {
             item.decision == Decision::Adopted
                 && item.proposal.author == listener
                 && item.proposal.sequence == sequence
                 && item.proposal.expires >= tick
-        }) || !listener_mind
-            .authored
+        }) || speaker_mind
+            .sent_reports
             .iter()
-            .any(|p| p.recipient == speaker && p.sequence == sequence && p.expires >= tick)
-            || speaker_mind
-                .sent_reports
-                .iter()
-                .any(|r| r.listener == listener && r.sequence == sequence)
+            .any(|r| r.listener == listener && r.sequence == sequence)
             || speaker_mind
                 .sent_reports
                 .iter()
@@ -398,18 +389,6 @@ impl Practices {
                         item.proposal.author == report.listener
                             && item.proposal.sequence == report.sequence
                             && item.proposal.expires >= tick
-                    })
-                })
-                .count()
-                >= MAX_PROPOSALS
-            || listener_mind
-                .reports
-                .iter()
-                .filter(|report| {
-                    listener_mind.authored.iter().any(|proposal| {
-                        proposal.recipient == report.statement.speaker
-                            && proposal.sequence == report.statement.sequence
-                            && proposal.expires >= tick
                     })
                 })
                 .count()
@@ -458,29 +437,35 @@ impl Practices {
                             && item.proposal.expires >= tick
                     })
                 })
-                .expect("speech capacity checked");
-            reports.remove(obsolete);
-        }
-        if self.minds[target].reports.len() == MAX_PROPOSALS {
-            let authored = Arc::clone(&self.minds[target].authored);
-            let reports = Arc::make_mut(&mut self.minds[target].reports);
-            let obsolete = reports
-                .iter()
-                .position(|report| {
-                    !authored.iter().any(|proposal| {
-                        proposal.recipient == report.statement.speaker
-                            && proposal.sequence == report.statement.sequence
-                            && proposal.expires >= tick
-                    })
-                })
-                .expect("speech capacity checked");
+                .unwrap_or(0);
             reports.remove(obsolete);
         }
         Arc::make_mut(&mut self.minds[source].sent_reports).push(report.clone());
-        Arc::make_mut(&mut self.minds[target].reports).push(ReceivedReport {
-            statement: report,
-            belief: Belief::Unassessed,
-        });
+        if let Some(target) = target {
+            let authored = Arc::clone(&self.minds[target].authored);
+            let reports = Arc::make_mut(&mut self.minds[target].reports);
+            if let Some(index) = reports.iter().position(|old| {
+                old.statement.speaker == speaker && old.statement.sequence == sequence
+            }) {
+                reports.remove(index);
+            } else if reports.len() == MAX_PROPOSALS {
+                let obsolete = reports
+                    .iter()
+                    .position(|old| {
+                        !authored.iter().any(|proposal| {
+                            proposal.recipient == old.statement.speaker
+                                && proposal.sequence == old.statement.sequence
+                                && proposal.expires >= tick
+                        })
+                    })
+                    .unwrap_or(0);
+                reports.remove(obsolete);
+            }
+            reports.push(ReceivedReport {
+                statement: report,
+                belief: Belief::Unassessed,
+            });
+        }
         Ok(())
     }
     pub fn validate(
@@ -847,16 +832,6 @@ impl Practices {
                             && !mind.sent_reports.iter().any(|r| {
                                 r.listener == proposal.author && r.sequence == proposal.sequence
                             })
-                            && minds
-                                .binary_search_by_key(&proposal.author, |other| other.person)
-                                .ok()
-                                .is_some_and(|i| {
-                                    minds[i].authored.iter().any(|p| {
-                                        p.sequence == proposal.sequence
-                                            && p.recipient == mind.person
-                                            && p.expires >= tick
-                                    })
-                                })
                     })?;
                     let proposal = &item.proposal;
                     let actual = proposal
@@ -890,26 +865,7 @@ impl Practices {
         }
         let reports: Vec<_> = reports
             .par_chunk_by(|a, b| a.listener == b.listener)
-            .flat_map_iter(|group| {
-                let listener = minds[minds
-                    .binary_search_by_key(&group[0].listener, |mind| mind.person)
-                    .expect("known listener")];
-                let retained = listener
-                    .reports
-                    .iter()
-                    .filter(|r| {
-                        listener.authored.iter().any(|p| {
-                            p.sequence == r.statement.sequence
-                                && p.recipient == r.statement.speaker
-                                && p.expires >= tick
-                        })
-                    })
-                    .count();
-                group
-                    .iter()
-                    .take(MAX_PROPOSALS.saturating_sub(retained))
-                    .cloned()
-            })
+            .flat_map_iter(|group| group.iter().take(MAX_PROPOSALS).cloned())
             .collect();
         let mut reports_by_speaker: Vec<_> = reports.par_iter().collect();
         if reports_by_speaker
@@ -1000,8 +956,10 @@ impl Practices {
                     let authored = &mind.authored;
                     let inbox = Arc::make_mut(&mut mind.reports);
                     for report in &reports[report_rows] {
-                        if inbox.len() == MAX_PROPOSALS {
-                            let Some(obsolete) = inbox.iter().position(|r| !authored.iter().any(|p| p.sequence == r.statement.sequence && p.recipient == r.statement.speaker)) else { break; };
+                        if let Some(index) = inbox.iter().position(|old| old.statement.speaker == report.speaker && old.statement.sequence == report.sequence) {
+                            inbox.remove(index);
+                        } else if inbox.len() == MAX_PROPOSALS {
+                            let obsolete = inbox.iter().position(|r| !authored.iter().any(|p| p.sequence == r.statement.sequence && p.recipient == r.statement.speaker)).unwrap_or(0);
                             inbox.remove(obsolete);
                         }
                         inbox.push(ReceivedReport { statement: report.clone(), belief: Belief::Unassessed });

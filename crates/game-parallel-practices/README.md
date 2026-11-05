@@ -4,6 +4,8 @@ This owner stores bounded individual experiences and individually held proposals
 
 Readiness reports record only a speaker's claim, not privileged inventory truth. A recipient may separately believe, doubt, or leave the statement unassessed. Reports require contact and never make physical goods available.
 
+The speaker acts on the proposal in their own memory, even if its author has privately forgotten or withdrawn it. A listener's bounded report memory can replace an older report when full; that private capacity does not determine whether the speaker is allowed to communicate.
+
 A recipient may also choose a personal trust threshold for readiness reports. At assessment, they compare their own directed trust in that speaker with the threshold and believe or disbelieve accordingly; other people's trust and the actual stock do not decide their belief. The economy supplies existing personal trust, including its configured initial value for an unfamiliar speaker. `practice-attitude PERSON min THRESHOLD` sets this choice in the economy CLI.
 
 An optional `value_learning` on a personal mind holds a bounded attachment to conditional food aid. Its signed `received`, `gave`, and `unanswered` changes describe that person's own interpretations; absent learning leaves the prior behavior unchanged. A received gift or unanswered request is associated with an active proposal the person authored to that counterpart; a gift the person gives is associated with a known proposal from that recipient. Matching gifts also use the proposal's good. This is the person's modeled association, not proof of another person's motive or dishonesty. Giving under pressure can still change the giver's own value, without implying approval.

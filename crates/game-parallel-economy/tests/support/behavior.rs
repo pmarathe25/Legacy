@@ -10465,6 +10465,64 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
     }
     let mut state = world.snapshot();
     state.people[1].controlled = true;
+    let mut forgotten = state.clone();
+    let author = &mut forgotten
+        .giving
+        .as_mut()
+        .unwrap()
+        .practices
+        .as_mut()
+        .unwrap()
+        .minds[0];
+    std::sync::Arc::make_mut(&mut author.authored).clear();
+    author.invent = false;
+    let holder = forgotten
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|holder| holder.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(Place::Person(2), holder.capacity, vec![]).unwrap();
+    let report_after_forgetting = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(forgotten.clone()).unwrap();
+                assert!(world.report_practice(2, 1, 1, true).unwrap());
+                assert!(
+                    world.personal_practice(1).unwrap().reports[0]
+                        .statement
+                        .claimed_ready
+                );
+                assert!(world.personal_practice(1).unwrap().authored.is_empty());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|holder| holder.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let saved = world.snapshot();
+                assert_eq!(
+                    saved,
+                    Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot()
+                );
+                saved
+            })
+    };
+    assert_eq!(report_after_forgetting(1), report_after_forgetting(4));
     let mut world = Economy::compile(state).unwrap();
     let before = world.snapshot();
     assert!(world.report_practice(2, 1, 999, true).is_err());
