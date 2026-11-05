@@ -520,14 +520,14 @@ fn hunting_fixture() -> State {
         policies: vec![
             HuntingPolicy {
                 person: 1,
-                animal: 1,
+                animal: Some(1),
                 willing: true,
                 pressured_by: None,
                 pressure_threshold: None,
             },
             HuntingPolicy {
                 person: 4,
-                animal: 1,
+                animal: Some(1),
                 willing: false,
                 pressured_by: Some(1),
                 pressure_threshold: Some(3),
@@ -680,7 +680,7 @@ fn hunting_needs_capacity_and_yields_to_animal_feeding() {
 fn independent_hunters_can_hunt_distinct_animals_together() {
     let mut state = hunting_fixture();
     let policy = &mut state.hunting.as_mut().unwrap().policies[1];
-    policy.animal = 2;
+    policy.animal = Some(2);
     policy.willing = true;
     let mut world = Economy::compile(state).unwrap();
     world.advance().unwrap();
@@ -707,6 +707,74 @@ fn independent_hunters_can_hunt_distinct_animals_together() {
                 .any(|lot| lot.good == 2 && lot.quantity == 2)
         );
     }
+}
+
+#[test]
+fn hunters_can_select_another_local_animal_and_change_their_mind() {
+    let mut initial = hunting_fixture();
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.hunting.as_mut().unwrap().policies.truncate(1);
+    initial.hunting.as_mut().unwrap().policies[0].animal = None;
+    let mut invalid = initial.clone();
+    invalid.fauna = None;
+    assert!(Economy::compile(invalid).is_err());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                world.set_hunting_choice(1, false).unwrap();
+                assert!(world.commit(stale).is_err());
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .all(|a| a.health > 0)
+                );
+                world.set_hunting_choice(1, true).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .filter(|a| a.health == 0)
+                        .count(),
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .all(|a| a.health == 0)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
@@ -766,6 +834,8 @@ fn concentrated_hunting_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
+    let flexible = std::env::var_os("LEGACY_FLEXIBLE_PREY").is_some();
+    assert!(count >= 128);
     let mut state = concentrated(count);
     state.autowork = None;
     state.nutrition = None;
@@ -778,7 +848,7 @@ fn concentrated_hunting_benchmark() {
         policies: (1..=count)
             .map(|person| HuntingPolicy {
                 person,
-                animal: 1,
+                animal: (!flexible).then_some(1),
                 willing: true,
                 pressured_by: None,
                 pressure_threshold: None,
@@ -808,14 +878,14 @@ fn concentrated_hunting_benchmark() {
                     .filter(|lot| lot.good == 2)
                     .map(|lot| lot.quantity)
                     .sum();
-                assert_eq!(yield_count, 2);
+            assert_eq!(yield_count, if flexible { 4 } else { 2 });
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} concentrated_hunting_seconds={:.6}",
+            "workers={workers} people={count} flexible={flexible} concentrated_hunting_seconds={:.6}",
                 samples[1]
             );
         });

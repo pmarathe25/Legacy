@@ -12,7 +12,9 @@ use std::collections::HashSet;
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub person: u64,
-    pub animal: u64,
+    /// Absent selects an observed living animal in the person's current region.
+    #[serde(default)]
+    pub animal: Option<u64>,
     pub willing: bool,
     #[serde(default)]
     pub pressured_by: Option<u64>,
@@ -34,10 +36,11 @@ impl Hunting {
             .collect();
         let mut actors: Vec<_> = self.policies.par_iter().map(|p| p.person).collect();
         actors.par_sort_unstable();
-        if actors.par_windows(2).any(|p| p[0] == p[1])
+        if (fauna.is_none() && !self.policies.is_empty())
+            || actors.par_windows(2).any(|p| p[0] == p[1])
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
-                    || !animals.contains(&p.animal)
+                    || p.animal.is_some_and(|id| !animals.contains(&id))
                     || p.pressure_threshold == Some(0)
                     || p.pressured_by.is_some() != p.pressure_threshold.is_some()
                     || p.pressured_by
@@ -90,6 +93,17 @@ impl Context<'_> {
                 .ok()
                 .map(|i| animals[i])
         };
+        let mut visible: Vec<_> = if policies.par_iter().any(|policy| policy.animal.is_none()) {
+            fauna
+                .animals
+                .par_iter()
+                .filter(|a| a.health > 0)
+                .map(|a| (a.region, a.id))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        visible.par_sort_unstable();
         let mut species_index: Vec<_> = fauna.species.par_iter().collect();
         if species_index
             .par_windows(2)
@@ -114,7 +128,21 @@ impl Context<'_> {
             .par_iter()
             .filter_map(|policy| {
                 let actor = person(policy.person)?;
-                let target = animal(policy.animal)?;
+                let target_id = policy.animal.or_else(|| {
+                    let region = actor.region?;
+                    let start = visible.partition_point(|row| row.0 < region);
+                    let end = visible.partition_point(|row| row.0 <= region);
+                    if start == end {
+                        return None;
+                    }
+                    let offset = (game_parallel_genetics::random(
+                        self.seed ^ 0x70726579,
+                        actor.id,
+                        self.tick,
+                    ) % (end - start) as u64) as usize;
+                    Some(visible[start + offset].1)
+                })?;
+                let target = animal(target_id)?;
                 let yield_ = species(target.species)?.hunting.as_ref();
                 let pressured = policy
                     .pressured_by

@@ -70,6 +70,24 @@ fn animal_care_content_resolves_named_goods() {
 }
 
 #[test]
+fn hunting_preferences_accept_optional_individual_targets() {
+    let hunting: game_parallel_economy::Hunting = toml::from_str(
+        r#"
+        [[policies]]
+        person = 1
+        willing = true
+        [[policies]]
+        person = 2
+        animal = 9
+        willing = false
+    "#,
+    )
+    .unwrap();
+    assert_eq!(hunting.policies[0].animal, None);
+    assert_eq!(hunting.policies[1].animal, Some(9));
+}
+
+#[test]
 fn wildlife_climate_settings_are_loaded_from_content() {
     let text = r#"
         next_id = 1

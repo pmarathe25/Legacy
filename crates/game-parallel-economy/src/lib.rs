@@ -702,6 +702,31 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Change a person's own inclination to hunt without creating a duty.
+    pub fn set_hunting_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self.hunting.clone().ok_or("hunting is disabled")?;
+        let policy = next
+            .policies
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no hunting preference")?;
+        policy.willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.hunting = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Change a person's own inclination to provide their configured care.
     pub fn set_medical_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
         if self
