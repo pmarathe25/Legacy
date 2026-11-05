@@ -93,14 +93,14 @@ impl Families {
             return Err("family phase must advance one tick");
         }
         let rules = &self.rules;
-        let chunks: Vec<Result<_, &'static str>> = self
-            .members
-            .par_chunks(1024)
+        // Clone directly into the staged generation, avoiding per-chunk member
+        // buffers and a second population-sized flattening pass.
+        let mut members: Vec<_> = self.members.par_iter().cloned().collect();
+        let chunks: Vec<Result<_, &'static str>> = members
+            .par_chunks_mut(1024)
             .map(|chunk| {
-                let mut members = Vec::with_capacity(chunk.len());
                 let mut events = Vec::new();
-                for old in chunk {
-                    let mut m = old.clone();
+                for m in chunk {
                     if m.alive {
                         if let Some((person, amount)) = penalty
                             && m.id == person
@@ -132,17 +132,11 @@ impl Families {
                             events.push(event(tick, "adulthood", vec![m.id], person.region));
                         }
                     }
-                    members.push(m);
                 }
-                Ok((members, events))
+                Ok(events)
             })
             .collect();
-        let (member_chunks, event_chunks): (Vec<_>, Vec<_>) = chunks
-            .into_iter()
-            .collect::<Result<Vec<_>, _>>()?
-            .into_iter()
-            .unzip();
-        let mut members: Vec<_> = member_chunks.into_par_iter().flatten().collect();
+        let event_chunks = chunks.into_iter().collect::<Result<Vec<_>, _>>()?;
         let mut events: Vec<_> = event_chunks.into_par_iter().flatten().collect();
         if members.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             members.par_sort_unstable_by_key(|m| m.id);
