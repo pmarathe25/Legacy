@@ -64,7 +64,7 @@ fn individual_report_dispositions_override_the_shared_default() {
             .opinions
             .as_mut()
             .unwrap()
-            .sensitivities
+            .sensitivities_mut()
             .push(Sensitivity {
                 person: 2,
                 report_reception: Some(reception),
@@ -112,7 +112,7 @@ fn directly_seen_report_discrepancies_have_personal_signed_affinity_and_do_not_r
             harm_change_per_damage: 0,
         });
         opinions
-            .sensitivities
+            .sensitivities_mut()
             .push(game_parallel::OpinionSensitivity {
                 person: 2,
                 affinity_report_discrepancy: Some(rate),
@@ -215,7 +215,7 @@ fn invalid_threshold_and_unsupported_reference_host_are_rejected() {
         .opinions
         .as_mut()
         .unwrap()
-        .sensitivities
+        .sensitivities_mut()
         .push(game_parallel::OpinionSensitivity {
             person: 2,
             report_reception: Some(game_parallel::ReportReception::Never),

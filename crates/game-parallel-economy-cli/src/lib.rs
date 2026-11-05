@@ -665,7 +665,9 @@ pub fn scenario_with_options(
             .map(|row| row.person)
             .collect();
         dispositions.retain(|row| !individually_authored.contains(&row.person));
-        opinions.sensitivities.extend(dispositions);
+        if !dispositions.is_empty() {
+            opinions.sensitivities_mut().extend(dispositions);
+        }
     }
     let mut production = Production {
         max_work_hunger: scenario.rules.max_work_hunger,

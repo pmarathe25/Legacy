@@ -352,7 +352,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
             affinity: None,
             newborn_obligation_development: None,
         },
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         records: vec![Opinion {
             observer: 2,
             target: 1,

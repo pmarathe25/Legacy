@@ -1975,7 +1975,7 @@ fn a_person_can_confront_a_witnessed_taking_without_the_targets_consent() {
         .opinions
         .as_mut()
         .unwrap()
-        .sensitivities
+        .sensitivities_mut()
         .push(OpinionSensitivity {
             person: 1,
             report_reception: None,
@@ -2099,7 +2099,8 @@ fn confrontation_fixture() -> World {
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
-    }];
+    }]
+    .into();
     world.cargo = None;
     world
 }
@@ -2189,7 +2190,8 @@ fn concentrated_confrontations_select_disjoint_people_deterministically() {
             obligation_development: None,
             promise_obligation_gain: None,
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)

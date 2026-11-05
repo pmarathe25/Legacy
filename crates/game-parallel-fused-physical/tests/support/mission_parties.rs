@@ -339,7 +339,7 @@ fn fear_can_motivate_travel_without_private_approval_or_binding_the_traveler() {
             affinity: None,
             newborn_obligation_development: None,
         },
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         events: vec![],
         records: vec![Opinion {
             observer: 2,

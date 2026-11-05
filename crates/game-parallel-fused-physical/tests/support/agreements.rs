@@ -935,7 +935,7 @@ fn default_changes_only_the_creditors_trust_and_influences_later_choices() {
     use game_parallel::{AgreementPolicy, OpinionRules, Opinions};
     let mut state = world();
     state.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,
@@ -1092,7 +1092,7 @@ fn late_lifecycle_failure_does_not_publish_default_or_trust_changes() {
         status: AgreementStatus::Active,
     }];
     state.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,

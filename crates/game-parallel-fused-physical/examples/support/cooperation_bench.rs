@@ -105,7 +105,7 @@ pub fn run(
             .collect();
     }
     world.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,

@@ -162,7 +162,7 @@ fn fixture() -> State {
                 affinity: None,
                 newborn_obligation_development: None,
             },
-            sensitivities: vec![],
+            sensitivities: vec![].into(),
             records: vec![Opinion {
                 observer: 4,
                 target: 1,
@@ -3129,7 +3129,8 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
-    }];
+    }]
+    .into();
     let mut world = Economy::compile(wrong).unwrap();
     assert!(!world.treat_other(1, 2, 3, 1).unwrap());
     let state = world.snapshot();
@@ -6515,7 +6516,8 @@ fn discrepancy_workload(count: u64) -> State {
             affinity_report_discrepancy: Some(1),
             ..Default::default()
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     state.opinions = Some(opinions);
     state
 }
@@ -6523,7 +6525,7 @@ fn discrepancy_workload(count: u64) -> State {
 #[test]
 fn concentrated_personal_report_reactions_are_deterministic_and_happen_once() {
     let mut initial = discrepancy_workload(20_000);
-    for sensitivity in &mut initial.opinions.as_mut().unwrap().sensitivities {
+    for sensitivity in initial.opinions.as_mut().unwrap().sensitivities_mut() {
         sensitivity.trust_report_discrepancy = Some(1);
     }
     let run = |workers| {
@@ -6559,7 +6561,7 @@ fn concentrated_report_discrepancy_benchmark() {
         .unwrap_or(100_000u64);
     let mut initial = discrepancy_workload(count);
     if std::env::var_os("LEGACY_REPORT_TRUST").is_some() {
-        for sensitivity in &mut initial.opinions.as_mut().unwrap().sensitivities {
+        for sensitivity in initial.opinions.as_mut().unwrap().sensitivities_mut() {
             sensitivity.trust_report_discrepancy = Some(1);
         }
     }
@@ -14541,7 +14543,7 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
                     .opinions
                     .as_mut()
                     .unwrap()
-                    .sensitivities
+                    .sensitivities_mut()
                     .push(OpinionSensitivity {
                         person: 2,
                         affinity_report_discrepancy: Some(rate),
@@ -14643,7 +14645,7 @@ fn stale_draft_does_not_publish_a_report_discrepancy_reaction() {
         .opinions
         .as_mut()
         .unwrap()
-        .sensitivities
+        .sensitivities_mut()
         .push(OpinionSensitivity {
             person: 2,
             trust_report_discrepancy: Some(-2),
@@ -15677,7 +15679,8 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
-    }];
+    }]
+    .into();
     opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
         limit: 10,
         encounter_change: 0,
@@ -15848,7 +15851,8 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
-    }];
+    }]
+    .into();
     opinions.records = vec![Opinion {
         observer: 2,
         target: 1,
@@ -16051,7 +16055,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
     let saved = world.snapshot();
     assert_eq!(
         saved.opinions.as_ref().unwrap().sensitivities,
-        vec![sensitivity]
+        std::sync::Arc::new(vec![sensitivity])
     );
     let restored =
         Economy::compile(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap())
@@ -16100,7 +16104,8 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
-    }];
+    }]
+    .into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -16200,7 +16205,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         promise_obligation_gain: None,
     };
     initial.opinions.as_mut().unwrap().sensitivities =
-        vec![sensitivity(3, -1, 2), sensitivity(4, 1, -2)];
+        vec![sensitivity(3, -1, 2), sensitivity(4, 1, -2)].into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -16378,7 +16383,8 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             }),
             promise_obligation_gain: None,
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     state.opinions = Some(opinions);
     state
 }
@@ -16466,7 +16472,12 @@ fn concentrated_upbringing_without_learning_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let mut initial = concentrated_upbringing_workload(count);
-    initial.opinions.as_mut().unwrap().sensitivities.clear();
+    initial
+        .opinions
+        .as_mut()
+        .unwrap()
+        .sensitivities_mut()
+        .clear();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -16605,7 +16616,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         relationship_cases: vec![],
         obligation_development: None,
     };
-    opinions.sensitivities = vec![sensitivity(2, 0), sensitivity(4, 3)];
+    opinions.sensitivities = vec![sensitivity(2, 0), sensitivity(4, 3)].into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -16757,7 +16768,8 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
-    }];
+    }]
+    .into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -16971,7 +16983,8 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             relationship_cases: vec![],
             obligation_development: None,
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     state.opinions = Some(opinions);
     state
 }
@@ -17864,7 +17877,8 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                 vec![]
             },
             obligation_development: None,
-        }];
+        }]
+        .into();
         state.autowork = Some(Autowork {
             next_id: 1,
             policies: vec![],
@@ -18343,7 +18357,8 @@ fn concentrated_work_refusals(count: u64) -> State {
             relationship_cases: vec![],
             obligation_development: None,
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
     state.opinions = Some(opinions);
     state
 }
@@ -21897,7 +21912,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         promise_obligation_gain: None,
         obligation_relief: None,
     });
-    opinions.sensitivities = vec![first, sensitivity(4, -3)];
+    opinions.sensitivities = vec![first, sensitivity(4, -3)].into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -22192,7 +22207,8 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_work_refusal: None,
         relationship_cases: vec![],
         obligation_development: None,
-    }];
+    }]
+    .into();
     let mut world = Economy::compile(initial).unwrap();
     world.claim_site(1, 7).unwrap();
     world.advance().unwrap();
@@ -23458,7 +23474,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         promise_obligation_gain: None,
         obligation_relief: None,
     });
-    opinions.sensitivities = vec![first, sensitivity(3, -3)];
+    opinions.sensitivities = vec![first, sensitivity(3, -3)].into();
     let run =
         |workers| {
             rayon::ThreadPoolBuilder::new()
@@ -24283,7 +24299,8 @@ fn concentrated_site_salvage_benchmark() {
                 relationship_cases: vec![],
                 obligation_development: None,
             })
-            .collect();
+            .collect::<Vec<_>>()
+            .into();
         initial.opinions = Some(opinions);
     }
     rayon::ThreadPoolBuilder::new()

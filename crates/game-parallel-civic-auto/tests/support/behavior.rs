@@ -76,7 +76,7 @@ fn people_cast_preferences_without_overwriting_votes_or_busy_actors() {
 fn directed_distrust_affects_only_the_observers_election_vote() {
     let (owner, institutions, people) = fixture(Action::Elect { candidate: 1 });
     let opinions = Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: Rules {
             minimum: -5,
             maximum: 5,

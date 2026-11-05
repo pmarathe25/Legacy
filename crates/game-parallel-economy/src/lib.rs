@@ -523,13 +523,13 @@ impl Economy {
         }
         let mut next = self.opinions.clone().ok_or("opinions are disabled")?;
         if let Some(existing) = next
-            .sensitivities
+            .sensitivities_mut()
             .iter_mut()
             .find(|p| p.person == sensitivity.person)
         {
             *existing = sensitivity;
         } else {
-            next.sensitivities.push(sensitivity);
+            next.sensitivities_mut().push(sensitivity);
         }
         let people: std::collections::HashSet<_> = self.people.par_iter().map(|p| p.id).collect();
         next.validate(&people, self.tick()).map_err(str::to_owned)?;

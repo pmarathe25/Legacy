@@ -204,7 +204,7 @@ fn witnessed_theft_can_make_a_debtor_withhold_one_promise_but_honor_another() {
         .unwrap()
         .property;
     world.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,
@@ -298,7 +298,7 @@ fn witnessed_unpermitted_work_can_change_a_later_promise_decision() {
             affinity: None,
             newborn_obligation_development: None,
         },
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         records: vec![],
         events: vec![],
     });
@@ -363,7 +363,7 @@ fn fear_of_actual_harm_can_motivate_fulfillment_despite_distrust() {
     policy.minimum_honor_trust = Some(0);
     policy.fear_honor_threshold = Some(4);
     world.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,
@@ -520,7 +520,7 @@ fn a_person_can_withhold_a_later_promise_after_fear_subsides() {
             affinity: None,
             newborn_obligation_development: None,
         },
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         events: vec![],
         records: vec![Opinion {
             observer: 1,

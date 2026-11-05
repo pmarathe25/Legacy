@@ -39,7 +39,8 @@ fn main() {
                 report_reception: Some(ReportReception::TrustAtLeast(0)),
                 ..Default::default()
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         records: vec![],
         events: vec![],
     });

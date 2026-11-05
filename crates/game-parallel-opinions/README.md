@@ -19,6 +19,8 @@ Optional `fear_decay_per_tick` reduces existing fear in parallel at each committ
 
 Optional `[[opinions.sensitivities]]` rows override `fear_per_damage`, `gratitude_gain`, `obligation_relief`, or `theft_loss` for an individual, including zero. People can therefore react differently to the same experience instead of receiving a universal response.
 
+Unchanged sensitivity generations are shared between snapshots. Call `Opinions::sensitivities_mut()` to change them; it detaches a shared generation in parallel before writing. Serialization remains a normal list of personal rows. Development and newborn enrollment avoid detaching when no row actually changes.
+
 When affinity is enabled, `affinity_site_use` and `affinity_site_destruction` are optional signed personal reactions to locally witnessed use or destruction of a claimed site. A `relationship_cases` entry can override either reaction for a particular actor using `site_use` or `site_destruction`. Absent reactions default to zero; either event can increase or decrease liking, and neither creates obligation.
 
 `affinity_site_salvage` independently controls a person's reaction to witnessing someone recover material from their claimed site's debris. A `relationship_cases` entry can override it for a particular actor with `site_salvage`; an absent setting has no effect. Failed recovery and actions outside the claimant's location are not observed.

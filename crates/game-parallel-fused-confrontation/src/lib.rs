@@ -223,7 +223,7 @@ macro_rules! methods {
                 .as_mut()
                 .and_then(|owner| {
                     owner
-                        .sensitivities
+                        .sensitivities_mut()
                         .iter_mut()
                         .find(|row| row.person == person)
                 })

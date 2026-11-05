@@ -121,7 +121,8 @@ pub fn claim_tolerance(
                 promise_obligation_gain: None,
             })
         })
-        .collect();
+        .collect::<Vec<_>>()
+        .into();
 }
 
 /// Seed independent dispositions, leaving every response to the individual.

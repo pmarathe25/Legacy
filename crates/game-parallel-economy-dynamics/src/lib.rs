@@ -57,9 +57,10 @@ pub fn next_opinions(
 /// Personal sensitivity records may each own private relationship cases.
 pub fn reclaim_opinions(owner: Option<game_parallel_opinions::Opinions>) {
     if let Some(mut owner) = owner {
-        std::mem::take(&mut owner.sensitivities)
-            .into_par_iter()
-            .for_each(drop);
+        let sensitivities = std::mem::take(&mut owner.sensitivities);
+        if let Ok(rows) = std::sync::Arc::try_unwrap(sensitivities) {
+            rows.into_par_iter().for_each(drop);
+        }
         drop(owner);
     }
 }

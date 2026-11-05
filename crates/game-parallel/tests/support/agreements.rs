@@ -174,7 +174,7 @@ fn manual_fulfillment_updates_trust_once_and_failed_delivery_does_not() {
     use game_parallel::{OpinionRules, Opinions};
     let mut state = world();
     state.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,

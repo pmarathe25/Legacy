@@ -439,7 +439,7 @@ fn fear_can_motivate_work_without_trust_or_a_contract() {
         .preferences[0]
         .help_value = 0;
     state.opinions = Some(Opinions {
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,
@@ -508,7 +508,7 @@ fn a_person_can_stop_complying_after_fear_fades() {
             affinity: None,
             newborn_obligation_development: None,
         },
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         events: vec![],
         records: vec![Opinion {
             observer: 2,

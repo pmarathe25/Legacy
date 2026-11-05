@@ -1,9 +1,65 @@
 use super::*;
 #[test]
+fn personal_dispositions_share_until_a_real_change_then_detach() {
+    use std::sync::Arc;
+    let development = ObligationDevelopment {
+        until_age: 3,
+        minimum: 0,
+        maximum: 10,
+        cared_change: 0,
+        unattended_change: 0,
+        cared_promise_change: Some(0),
+        unattended_promise_change: None,
+    };
+    let mut configured = rules();
+    configured.newborn_obligation_development = Some(development.clone());
+    let mut state = Opinions {
+        rules: configured,
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![Sensitivity {
+            person: 1,
+            obligation_development: Some(development),
+            relationship_cases: vec![RelationshipCase {
+                target: 2,
+                help: Some(1),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }]
+        .into(),
+    };
+    let original = state.clone();
+    assert!(Arc::ptr_eq(&state.sensitivities, &original.sensitivities));
+    state.develop_obligation(&[(1, 3, true), (9, 0, true)]);
+    state.enroll_newborn_development(&[1]);
+    assert!(Arc::ptr_eq(&state.sensitivities, &original.sensitivities));
+    state.develop_obligation(&[(1, 1, true)]);
+    assert!(!Arc::ptr_eq(&state.sensitivities, &original.sensitivities));
+    assert_eq!(original.sensitivities[0].gratitude_gain, None);
+    assert_eq!(state.sensitivities[0].gratitude_gain, Some(0));
+    assert_eq!(state.sensitivities[0].promise_obligation_gain, Some(0));
+    let unchanged = state.clone();
+    state.develop_obligation(&[(1, 1, true)]);
+    assert!(Arc::ptr_eq(&state.sensitivities, &unchanged.sensitivities));
+    state.sensitivities_mut()[0].relationship_cases[0].help = Some(-2);
+    assert_eq!(
+        unchanged.sensitivities[0].relationship_cases[0].help,
+        Some(1)
+    );
+    state.enroll_newborn_development(&[3]);
+    assert!(state.sensitivities.iter().any(|s| s.person == 3));
+    assert!(unchanged.sensitivities.iter().all(|s| s.person != 3));
+    let before_reset = state.clone();
+    state.reset_for_generation();
+    assert!(state.sensitivities.is_empty());
+    assert!(before_reset.sensitivities.iter().any(|s| s.person == 3));
+}
+#[test]
 fn report_judgments_handle_dense_sparse_and_reordered_people() {
     let mut state = Opinions {
         rules: rules(),
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         records: vec![],
         events: vec![],
     };
@@ -18,14 +74,15 @@ fn report_judgments_handle_dense_sparse_and_reordered_people() {
             policy(people[0], ReportReception::Never),
             policy(people[1], ReportReception::Always),
             policy(people[2], ReportReception::TrustAtLeast(0)),
-        ];
+        ]
+        .into();
         let filter = state.report_filter().unwrap();
         assert!(!filter.accepts(people[0], 99));
         assert!(filter.accepts(people[1], 99));
         assert!(filter.accepts(people[2], 99));
         assert!(!filter.accepts(100, 99));
     }
-    state.sensitivities.clear();
+    state.sensitivities_mut().clear();
     state.rules.minimum_report_trust = None;
     assert!(state.report_filter().is_none());
 }
@@ -52,7 +109,8 @@ fn each_person_interprets_an_observed_discrepancy_in_their_own_way() {
                 ..Default::default()
             }],
             ..Default::default()
-        }],
+        }]
+        .into(),
     };
     state.learn_report_discrepancies(&[(1, 2), (1, 3), (4, 2)], 1);
     assert_eq!(state.index().affinity(1, 2), 3);
@@ -81,7 +139,8 @@ fn report_discrepancies_change_only_the_listeners_chosen_trust() {
                 },
             ],
             ..Default::default()
-        }],
+        }]
+        .into(),
     };
     assert!(state.tracks_report_discrepancy());
     state.learn_report_discrepancies(&[(1, 2), (1, 3), (1, 4), (4, 2)], 7);
@@ -111,7 +170,8 @@ fn report_trust_merge_handles_sparse_unordered_existing_relationships_across_chu
                 trust_report_discrepancy: Some(if person % 2 == 0 { 3 } else { -2 }),
                 ..Default::default()
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         records: (1..=count)
             .rev()
             .filter(|person| person % 2 == 0)
@@ -175,10 +235,11 @@ fn unordered_sparse_discrepancies_match_ordered_inputs() {
                 affinity_report_discrepancy: Some(-1),
                 ..Default::default()
             },
-        ],
+        ]
+        .into(),
     };
     let mut reordered = ordered.clone();
-    reordered.sensitivities.reverse();
+    reordered.sensitivities_mut().reverse();
     ordered.learn_report_discrepancies(&[(10, 20), (10, 20), (30, 20)], 1);
     reordered.learn_report_discrepancies(&[(30, 20), (10, 20), (10, 20)], 1);
     assert_eq!(ordered.records, reordered.records);
@@ -189,7 +250,7 @@ fn unordered_sparse_discrepancies_match_ordered_inputs() {
 fn witnessed_takings_are_combined_per_pair_without_losing_other_feelings() {
     let mut state = Opinions {
         rules: rules(),
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         events: vec![],
         records: vec![Opinion {
             observer: 1,
@@ -267,7 +328,8 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 obligation_development: None,
                 promise_obligation_gain: None,
             },
-        ],
+        ]
+        .into(),
     };
     state.witness_thefts(&[(1, 2), (3, 2)], 1);
     assert_eq!(state.index().trust(1, 2), 0);
@@ -302,7 +364,8 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             relationship_cases: vec![],
             obligation_development: None,
             promise_obligation_gain: None,
-        }],
+        }]
+        .into(),
         records: vec![Opinion {
             observer: 1,
             target: 2,
@@ -330,7 +393,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
 fn simultaneous_gifts_do_not_relieve_obligation_created_in_the_same_batch() {
     let mut state = Opinions {
         rules: rules(),
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         events: vec![],
         records: vec![Opinion {
             observer: 1,
@@ -398,7 +461,8 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 obligation_development: None,
                 promise_obligation_gain: None,
             },
-        ],
+        ]
+        .into(),
         records: vec![],
         events: vec![],
     };
@@ -413,7 +477,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
 #[test]
 fn directly_suffered_harm_and_later_trust_updates_preserve_separate_feelings() {
     let mut state = Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: rules(),
         records: vec![Opinion {
             observer: 2,
@@ -481,7 +545,7 @@ fn rules() -> Rules {
 #[test]
 fn experienced_outcomes_update_only_the_creditors_directed_trust() {
     let mut state = Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: rules(),
         records: vec![Opinion {
             observer: 1,
@@ -542,7 +606,7 @@ fn multiple_experiences_are_combined_and_clamped_deterministically() {
             .unwrap()
             .install(|| {
                 let mut state = Opinions {
-                    sensitivities: Vec::new(),
+                    sensitivities: Vec::new().into(),
                     rules: rules(),
                     records: vec![],
                     events: vec![],
@@ -560,7 +624,7 @@ fn multiple_experiences_are_combined_and_clamped_deterministically() {
 #[test]
 fn shuffled_contracts_and_multiple_outcomes_merge_against_prior_personal_trust() {
     let mut state = Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: rules(),
         records: vec![
             Opinion {
@@ -639,7 +703,7 @@ fn concentrated_experiences_reduce_without_losing_events_or_exceeding_bounds() {
             .unwrap()
             .install(|| {
                 let mut state = Opinions {
-                    sensitivities: Vec::new(),
+                    sensitivities: Vec::new().into(),
                     rules: rules(),
                     records: vec![],
                     events: vec![],
@@ -669,7 +733,7 @@ fn affinity_is_directed_and_reflects_help_harm_and_unpressured_encounters() {
     });
     let mut state = Opinions {
         rules,
-        sensitivities: vec![],
+        sensitivities: vec![].into(),
         records: vec![],
         events: vec![],
     };
@@ -740,7 +804,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         rules,
         records: vec![],
         events: vec![],
-        sensitivities: vec![personal(1, -2, 3, -1, 2), personal(3, 2, -2, 0, -3)],
+        sensitivities: vec![personal(1, -2, 3, -1, 2), personal(3, 2, -2, 0, -3)].into(),
     };
     state.learn_help(&[(1, 2), (3, 2)]);
     state.learn_harm(&[(1, 2, 2), (3, 2, 2)]);
@@ -819,7 +883,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
     };
     let mut state = Opinions {
         rules,
-        sensitivities: vec![sensitivity],
+        sensitivities: vec![sensitivity].into(),
         records: vec![],
         events: vec![],
     };
@@ -831,7 +895,9 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
     assert_eq!(state.index().obligation(1, 4), 0);
     let mut invalid = state.clone();
     let duplicate = invalid.sensitivities[0].relationship_cases[0].clone();
-    invalid.sensitivities[0].relationship_cases.push(duplicate);
+    invalid.sensitivities_mut()[0]
+        .relationship_cases
+        .push(duplicate);
     assert!(
         invalid
             .validate(&[1, 2, 4].into_iter().collect(), 0)
@@ -882,7 +948,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
     };
     let mut state = Opinions {
         rules: rules(),
-        sensitivities: vec![sensitivity],
+        sensitivities: vec![sensitivity].into(),
         records: vec![],
         events: vec![],
     };

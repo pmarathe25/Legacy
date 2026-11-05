@@ -3,6 +3,7 @@ use game_parallel_agreements::{Contract, Event as AgreementEvent, EventKind};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 mod harm;
 mod report_trust;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -10,7 +11,7 @@ mod report_trust;
 pub struct Opinions {
     pub rules: Rules,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub sensitivities: Vec<Sensitivity>,
+    pub sensitivities: Arc<Vec<Sensitivity>>,
     #[serde(default)]
     pub records: Vec<Opinion>,
     #[serde(default)]
@@ -20,7 +21,7 @@ impl Clone for Opinions {
     fn clone(&self) -> Self {
         Self {
             rules: self.rules.clone(),
-            sensitivities: self.sensitivities.par_iter().cloned().collect(),
+            sensitivities: Arc::clone(&self.sensitivities),
             records: self.records.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
         }
@@ -106,6 +107,14 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    /// Detach a personal disposition generation only when it is actually changed.
+    /// Parallel indexed cloning preserves canonical order for large populations.
+    pub fn sensitivities_mut(&mut self) -> &mut Vec<Sensitivity> {
+        if Arc::get_mut(&mut self.sensitivities).is_none() {
+            self.sensitivities = Arc::new(self.sensitivities.par_iter().cloned().collect());
+        }
+        Arc::get_mut(&mut self.sensitivities).expect("exclusive sensitivity generation")
+    }
     /// Time updates each person's existing fear independently of trust and obligations.
     pub fn decay_fear(&mut self) {
         let decay = self.rules.fear_decay_per_tick;
@@ -275,7 +284,9 @@ impl Opinions {
                 obligation_development: Some(rule.clone()),
             })
             .collect();
-        self.sensitivities.par_extend(added);
+        if !added.is_empty() {
+            self.sensitivities_mut().par_extend(added);
+        }
     }
     pub fn tracks_obligation_development(&self) -> bool {
         self.sensitivities
@@ -302,25 +313,61 @@ impl Opinions {
                 .then_some(first.0)
             });
         let default = self.rules.gratitude_gain;
-        self.sensitivities.par_iter_mut().for_each(|person| {
-            let Some(rule) = &person.obligation_development else {
-                return;
-            };
-            let Some(index) = dense
-                .and_then(|first| person.person.checked_sub(first))
+        let find_experience = |person: u64| {
+            dense
+                .and_then(|first| person.checked_sub(first))
                 .and_then(|offset| usize::try_from(offset).ok())
                 .filter(|&i| i < experiences.len())
                 .or_else(|| {
                     dense
                         .is_none()
-                        .then(|| {
-                            experiences
-                                .binary_search_by_key(&person.person, |e| e.0)
-                                .ok()
-                        })
+                        .then(|| experiences.binary_search_by_key(&person, |e| e.0).ok())
                         .flatten()
                 })
-            else {
+        };
+        let changes = self.sensitivities.par_iter().any(|person| {
+            let Some(rule) = &person.obligation_development else {
+                return false;
+            };
+            let Some(index) = find_experience(person.person) else {
+                return false;
+            };
+            let (_, age, cared) = experiences[index];
+            if age >= rule.until_age {
+                return false;
+            }
+            let delta = if cared {
+                rule.cared_change
+            } else {
+                rule.unattended_change
+            };
+            let next = (i128::from(person.gratitude_gain.unwrap_or(default)) + i128::from(delta))
+                .clamp(i128::from(rule.minimum), i128::from(rule.maximum))
+                as u64;
+            if person.gratitude_gain != Some(next) {
+                return true;
+            }
+            let promise_delta = if cared {
+                rule.cared_promise_change
+            } else {
+                rule.unattended_promise_change
+            };
+            promise_delta.is_some_and(|delta| {
+                let next = (i128::from(person.promise_obligation_gain.unwrap_or(0))
+                    + i128::from(delta))
+                .clamp(i128::from(rule.minimum), i128::from(rule.maximum))
+                    as u64;
+                person.promise_obligation_gain != Some(next)
+            })
+        });
+        if !changes {
+            return;
+        }
+        self.sensitivities_mut().par_iter_mut().for_each(|person| {
+            let Some(rule) = &person.obligation_development else {
+                return;
+            };
+            let Some(index) = find_experience(person.person) else {
                 return;
             };
             let (_, age, cared) = experiences[index];
@@ -356,7 +403,10 @@ impl Opinions {
     pub fn reset_for_generation(&mut self) {
         self.records.clear();
         self.events.clear();
-        self.sensitivities.clear();
+        let old = std::mem::take(&mut self.sensitivities);
+        if let Ok(rows) = Arc::try_unwrap(old) {
+            rows.into_par_iter().for_each(drop);
+        }
     }
     pub fn learn_harm(&mut self, harm: &[(u64, u64, u32)]) {
         harm::apply(self, harm);

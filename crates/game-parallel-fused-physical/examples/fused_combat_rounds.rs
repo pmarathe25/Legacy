@@ -288,7 +288,7 @@ fn agreement_benchmark(
     world.market = None;
     if trust {
         world.opinions = Some(game_parallel::Opinions {
-            sensitivities: Vec::new(),
+            sensitivities: Vec::new().into(),
             rules: game_parallel::OpinionRules {
                 minimum: -5,
                 maximum: 5,

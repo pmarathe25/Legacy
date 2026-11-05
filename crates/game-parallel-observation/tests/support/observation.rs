@@ -225,7 +225,7 @@ fn view_exposes_only_the_rulers_directed_opinions() {
     use game_parallel::{Opinion, OpinionRules, Opinions};
     let mut state = world();
     state.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,

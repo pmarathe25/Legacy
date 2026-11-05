@@ -2,7 +2,7 @@ use game_parallel::{Amount, GoodsHolding, TradeInfluence, TradeProposal, World};
 use game_parallel_fused_physical::Kernel;
 fn fear_opinions() -> game_parallel::Opinions {
     game_parallel::Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: game_parallel::OpinionRules {
             minimum: -5,
             maximum: 5,
@@ -129,7 +129,7 @@ fn authored_pressure_does_not_imply_trust_or_create_missing_goods() {
     ))
     .unwrap();
     world.opinions = Some(Opinions {
-        sensitivities: Vec::new(),
+        sensitivities: Vec::new().into(),
         rules: OpinionRules {
             minimum: -5,
             maximum: 5,
@@ -315,7 +315,7 @@ fn a_direct_gift_creates_a_personal_memory_without_a_market() {
     world.market = None;
     let mut opinions = fear_opinions();
     opinions.rules.gratitude_gain = 0;
-    opinions.sensitivities.push(OpinionSensitivity {
+    opinions.sensitivities_mut().push(OpinionSensitivity {
         person: 1,
         report_reception: None,
         affinity_report_discrepancy: None,
@@ -813,7 +813,7 @@ fn harm_changes_directed_fear_even_without_trade() {
     world.market = None;
     let mut opinions = fear_opinions();
     opinions.rules.fear_per_damage = 0;
-    opinions.sensitivities.push(OpinionSensitivity {
+    opinions.sensitivities_mut().push(OpinionSensitivity {
         person: 2,
         report_reception: None,
         affinity_report_discrepancy: None,
