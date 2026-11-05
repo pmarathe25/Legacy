@@ -166,14 +166,20 @@ fn ancestors(metadata: &[Metadata], row: &Metadata) -> Result<([u64; 7], usize),
 impl Store {
     pub fn compile(members: &[Member]) -> Result<Self, &'static str> {
         if members
-            .iter()
+            .par_iter()
             .any(|member| member.id == 0 || ![0, 2].contains(&member.parents.len()))
         {
             return Err("invalid family metadata");
         }
-        let mut members: Vec<_> = members.iter().collect();
-        let original_order = Some(members.iter().map(|member| member.id).collect());
-        members.par_sort_unstable_by_key(|member| member.id);
+        let mut members: Vec<_> = members.par_iter().collect();
+        let reordered = members.par_windows(2).any(|pair| pair[0].id > pair[1].id);
+        let original_order = if reordered {
+            let order = members.par_iter().map(|member| member.id).collect();
+            members.par_sort_unstable_by_key(|member| member.id);
+            Some(order)
+        } else {
+            None
+        };
         if members.par_windows(2).any(|pair| pair[0].id == pair[1].id) {
             return Err("duplicate family identity");
         }

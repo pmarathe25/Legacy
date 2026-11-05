@@ -1,10 +1,11 @@
 //! Parent-owned attention for dependent children, resolved without shared mutation.
 mod inheritance;
-use game_parallel_family_columns::Store;
+mod view;
 use game_parallel_production_model::{PersonSnapshot, person_index};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+pub use view::{CareFamily, CareMember, FamilyView};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rules {
@@ -91,7 +92,7 @@ impl DependentCare {
     /// Reserve at most one child per motivated parent, using two deterministic proposal rounds.
     pub fn prepare(
         &self,
-        family: &Store,
+        family: &impl CareFamily,
         adult_age: u64,
         people: &[PersonSnapshot],
         busy: &[u64],
@@ -123,22 +124,20 @@ impl DependentCare {
         if busy.par_windows(2).any(|pair| pair[0] > pair[1]) {
             busy.par_sort_unstable();
         }
-        let children: Vec<_> = family
-            .metadata
-            .par_iter()
-            .enumerate()
-            .filter_map(|(slot, member)| {
-                let child = family.state(slot, false);
+        let children: Vec<_> = (0..family.len())
+            .into_par_iter()
+            .filter_map(|slot| {
+                let child = family.member(slot);
                 if !child.alive || child.age >= self.rules.dependent_until {
                     return None;
                 }
-                let index = person_index(people, member.id)?;
+                let index = person_index(people, child.id)?;
                 let (_, _, health, _) = people[index];
                 if health == 0 {
                     return None;
                 }
                 let mut candidates = [None, None];
-                for (i, &parent) in member.parents[..member.parent_count].iter().enumerate() {
+                for (i, &parent) in child.parents[..child.parent_count].iter().enumerate() {
                     let Some(p) = person_index(people, parent) else {
                         continue;
                     };
@@ -149,27 +148,27 @@ impl DependentCare {
                     if colocated(index, p)
                         && health > 0
                         && hunger <= self.rules.max_caregiver_hunger
-                        && family.state(f, false).age >= adult_age
+                        && family.member(f).age >= adult_age
                         && (dense_willing.map_or_else(
                             || willing.binary_search(&parent).is_ok(),
                             |first| parent >= first && parent - first < willing.len() as u64,
                         ) || self
                             .rules
                             .pressure_threshold
-                            .is_some_and(|threshold| pressure(parent, member.id) >= threshold))
+                            .is_some_and(|threshold| pressure(parent, child.id) >= threshold))
                         && busy.binary_search(&parent).is_err()
                     {
                         candidates[i] = Some(p);
                     }
                 }
-                if tick.wrapping_add(member.id) & 1 != 0 {
+                if tick.wrapping_add(child.id) & 1 != 0 {
                     candidates.swap(0, 1);
                 }
                 Some(Child {
-                    id: member.id,
+                    id: child.id,
                     rank: (
-                        game_parallel_genetics::random(seed, member.id, tick),
-                        member.id,
+                        game_parallel_genetics::random(seed, child.id, tick),
+                        child.id,
                     ),
                     first: candidates[0],
                     second: candidates[1],
@@ -354,6 +353,7 @@ fn minima(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use game_parallel_family_columns::Store;
     #[test]
     fn hot_and_sparse_caregivers_choose_the_lowest_rank_across_workers() {
         let children: Vec<_> = (0..30_000)
@@ -433,13 +433,13 @@ mod tests {
             reproduction_allowed: false,
             reconsider_partnership: false,
         };
-        let family = Store::compile(&[
+        let members = [
             member(1, 20, vec![]),
             member(2, 20, vec![]),
             member(3, 1, vec![1, 2]),
             member(4, 2, vec![1, 2]),
-        ])
-        .unwrap();
+        ];
+        let family = Store::compile(&members).unwrap();
         let people = vec![
             (1, Some(1), 100, 0),
             (2, Some(1), 100, 0),
@@ -469,6 +469,11 @@ mod tests {
             events: vec![],
         };
         let both = care.prepare(&family, 12, &people, &[], (42, 1), (|_, _| true, |_, _| 0));
+        let reversed: Vec<_> = members.iter().rev().cloned().collect();
+        let view = FamilyView::compile(&reversed).unwrap();
+        let borrowed = care.prepare(&view, 12, &people, &[], (42, 1), (|_, _| true, |_, _| 0));
+        assert_eq!(both.events, borrowed.events);
+        assert_eq!(both.actors, borrowed.actors);
         let parallel = rayon::ThreadPoolBuilder::new()
             .num_threads(4)
             .build()

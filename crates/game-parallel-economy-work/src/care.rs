@@ -1,11 +1,11 @@
 //! Individual dependent care and physical meal delivery.
 pub use game_parallel_dependent_care::DependentCare;
+use game_parallel_dependent_care::FamilyView;
 use game_parallel_economy_person::{
     Person, Rules,
     travel::{Colocation, Travel},
 };
 use game_parallel_families::Families;
-use game_parallel_family_columns::Store;
 use game_parallel_lots::{Movement, Place, Transaction, View};
 use game_parallel_opinions::Opinions;
 use game_parallel_production_model::{Good, PersonSnapshot};
@@ -72,7 +72,7 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
-        let family = Store::compile(&self.family.members).map_err(str::to_owned)?;
+        let family = FamilyView::compile(&self.family.members).map_err(str::to_owned)?;
         let opinions = self.opinions.map(Opinions::index);
         let locations = Colocation::new(self.travel);
         let colocated = |a: usize, b: usize| {

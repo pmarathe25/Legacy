@@ -2,6 +2,8 @@
 
 Available local parents may spend an action caring for young children according to their own preferences and feelings. Sharded arbitration assigns at most one child per parent per tick; children try either parent and rotating deterministic priorities distribute contention over time. Unattended local children suffer data-defined neglect damage. Parents and children can also share care while traveling on the same journey. The owner exposes events and actor reservations; the fused host applies effects only after the full tick validates.
 
+The economy host uses a validated, read-only family view for care, borrowing already ordered family rows and indexing unordered rows. It does not rebuild lifecycle columns or ancestry just to select caregivers. The full family store remains usable as a care input.
+
 Run `cargo run --release -p game-parallel-dependent-care --example benchmark -- 1 100000 spread 4`, varying worker count and using `hot` to concentrate demand on two parents. Import is outside the timed interval.
 
 The runnable [`caregiving.toml`](../../content/parallel/caregiving.toml) fixture supplies two willing parents and a dependent child.
