@@ -10553,15 +10553,24 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                     0
                 );
                 let saved = world.snapshot();
-                assert_eq!(
-                    saved,
-                    Economy::compile(
-                        serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap()
-                    )
-                    .unwrap()
-                    .snapshot()
-                );
-                saved
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world
+                    .assess_practice_report(1, 2, 1, PracticeBelief::Believes)
+                    .unwrap();
+                restored
+                    .assess_practice_report(1, 2, 1, PracticeBelief::Believes)
+                    .unwrap();
+                assert!(world.report_practice(2, 1, 1, false).unwrap());
+                assert!(restored.report_practice(2, 1, 1, false).unwrap());
+                let report = &world.personal_practice(1).unwrap().reports[0];
+                assert!(!report.statement.claimed_ready);
+                assert_eq!(report.belief, PracticeBelief::Unassessed);
+                assert_eq!(world.personal_practice(2).unwrap().sent_reports.len(), 1);
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
             })
     };
     assert_eq!(report_after_forgetting(1), report_after_forgetting(4));

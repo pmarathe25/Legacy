@@ -795,6 +795,41 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
         reported.minds[0].authored.is_empty(),
         "the speaker cannot see the listener's private state"
     );
+    let unchanged = reported
+        .prepare_with_evidence(&[(1, 2)], &[], 7, |_, _| 0, |_| true, |_, _, _| false)
+        .unwrap();
+    assert_eq!(
+        unchanged.minds[1].sent_reports[0].tick, 6,
+        "unchanged statements are not repeated"
+    );
+    let no_contact = reported
+        .prepare_with_evidence(&[], &[], 7, |_, _| 0, |_| true, |_, _, _| true)
+        .unwrap();
+    assert!(no_contact.minds[1].sent_reports[0].claimed_ready);
+    let revise = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                reported
+                    .prepare_with_evidence(&[(1, 2)], &[], 7, |_, _| 0, |_| true, |_, _, _| true)
+                    .unwrap()
+            })
+    };
+    let revised = revise(1);
+    assert_eq!(revised, revise(4));
+    assert_eq!(revised.minds[1].sent_reports.len(), 1);
+    assert!(!revised.minds[1].sent_reports[0].claimed_ready);
+    assert_eq!(revised.minds[0].reports.len(), 1);
+    assert!(!revised.minds[0].reports[0].statement.claimed_ready);
+    assert_eq!(
+        revised.minds[0].reports[0].belief,
+        game_parallel_practices::Belief::Unassessed
+    );
+    revised
+        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 7)
+        .unwrap();
     let mut manual = privately_forgotten.clone();
     manual.speak(2, 1, 1, true, 6).unwrap();
     assert!(manual.minds[0].reports[0].statement.claimed_ready);
@@ -857,8 +892,13 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
             .iter()
             .any(|report| report.statement.sequence == 1)
     );
-    std::sync::Arc::make_mut(&mut manual_crowded.minds[1].sent_reports).clear();
-    manual_crowded.speak(2, 1, 1, false, 6).unwrap();
+    let saved: Practices =
+        serde_json::from_str(&serde_json::to_string(&manual_crowded).unwrap()).unwrap();
+    manual_crowded.speak(2, 1, 1, false, 7).unwrap();
+    let mut restored = saved;
+    restored.speak(2, 1, 1, false, 7).unwrap();
+    assert_eq!(manual_crowded, restored);
+    assert_eq!(manual_crowded.minds[1].sent_reports.len(), 1);
     assert_eq!(
         manual_crowded.minds[0]
             .reports
@@ -877,7 +917,7 @@ fn actual_experience_and_contact_construct_a_personal_proposal() {
             .claimed_ready
     );
     manual_crowded
-        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 6)
+        .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 7)
         .unwrap();
     let automatic = crowded
         .prepare_with_evidence(&[(1, 2)], &[], 6, |_, _| 0, |_| true, |_, _, _| false)

@@ -373,16 +373,17 @@ impl Practices {
             return Err("invalid personal report");
         }
         let speaker_mind = &self.minds[source];
+        let prior = speaker_mind
+            .sent_reports
+            .iter()
+            .any(|report| report.listener == listener && report.sequence == sequence);
         if !speaker_mind.inbox.iter().any(|item| {
             item.decision == Decision::Adopted
                 && item.proposal.author == listener
                 && item.proposal.sequence == sequence
                 && item.proposal.expires >= tick
-        }) || speaker_mind
-            .sent_reports
-            .iter()
-            .any(|r| r.listener == listener && r.sequence == sequence)
-            || speaker_mind
+        }) || (!prior
+            && speaker_mind
                 .sent_reports
                 .iter()
                 .filter(|report| {
@@ -393,7 +394,7 @@ impl Practices {
                     })
                 })
                 .count()
-                >= MAX_PROPOSALS
+                >= MAX_PROPOSALS)
         {
             return Err("cannot communicate this report");
         }
@@ -426,7 +427,13 @@ impl Practices {
             claimed_ready,
             tick,
         };
-        if self.minds[source].sent_reports.len() == MAX_PROPOSALS {
+        let previous = self.minds[source]
+            .sent_reports
+            .iter()
+            .position(|old| old.listener == listener && old.sequence == sequence);
+        if let Some(index) = previous {
+            Arc::make_mut(&mut self.minds[source].sent_reports).remove(index);
+        } else if self.minds[source].sent_reports.len() == MAX_PROPOSALS {
             let inbox = Arc::clone(&self.minds[source].inbox);
             let reports = Arc::make_mut(&mut self.minds[source].sent_reports);
             let obsolete = reports
@@ -825,33 +832,39 @@ impl Practices {
                     if !can_decide(mind.person) || mind.reporting == Reporting::Silent {
                         return None;
                     }
-                    let item = mind.inbox.iter().find(|item| {
+                    mind.inbox.iter().find_map(|item| {
                         let proposal = &item.proposal;
-                        item.decision == Decision::Adopted
-                            && proposal.expires >= tick
-                            && contact_index.contains(mind.person, proposal.author)
-                            && !mind.sent_reports.iter().any(|r| {
-                                r.listener == proposal.author && r.sequence == proposal.sequence
-                            })
-                    })?;
-                    let proposal = &item.proposal;
-                    let actual = proposal
-                        .quantity
-                        .checked_add(proposal.reserve)
-                        .is_some_and(|amount| ready(mind.person, proposal.good, amount));
-                    let claimed_ready = match mind.reporting {
-                        Reporting::Silent => return None,
-                        Reporting::Truthful => actual,
-                        Reporting::Lie => !actual,
-                        Reporting::Ready => true,
-                        Reporting::Unready => false,
-                    };
-                    Some(ReadinessReport {
-                        speaker: mind.person,
-                        listener: proposal.author,
-                        sequence: proposal.sequence,
-                        claimed_ready,
-                        tick,
+                        if item.decision != Decision::Adopted
+                            || proposal.expires < tick
+                            || !contact_index.contains(mind.person, proposal.author)
+                        {
+                            return None;
+                        }
+                        let actual = proposal
+                            .quantity
+                            .checked_add(proposal.reserve)
+                            .is_some_and(|amount| ready(mind.person, proposal.good, amount));
+                        let claimed_ready = match mind.reporting {
+                            Reporting::Silent => return None,
+                            Reporting::Truthful => actual,
+                            Reporting::Lie => !actual,
+                            Reporting::Ready => true,
+                            Reporting::Unready => false,
+                        };
+                        if mind.sent_reports.iter().any(|report| {
+                            report.listener == proposal.author
+                                && report.sequence == proposal.sequence
+                                && report.claimed_ready == claimed_ready
+                        }) {
+                            return None;
+                        }
+                        Some(ReadinessReport {
+                            speaker: mind.person,
+                            listener: proposal.author,
+                            sequence: proposal.sequence,
+                            claimed_ready,
+                            tick,
+                        })
                     })
                 })
                 .collect()
@@ -946,7 +959,9 @@ impl Practices {
                 {
                     let inbox = &mind.inbox;
                     let sent = Arc::make_mut(&mut mind.sent_reports);
-                    if sent.len() == MAX_PROPOSALS
+                    if let Some(previous) = sent.iter().position(|old| old.listener == reports_by_speaker[i].listener && old.sequence == reports_by_speaker[i].sequence) {
+                        sent.remove(previous);
+                    } else if sent.len() == MAX_PROPOSALS
                         && let Some(obsolete) = sent.iter().position(|r| !inbox.iter().any(|item| item.proposal.author == r.listener && item.proposal.sequence == r.sequence)) {
                         sent.remove(obsolete);
                     }
