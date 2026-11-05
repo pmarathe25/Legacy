@@ -285,10 +285,11 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
         }],
     });
     initial.animal_care = Some(AnimalCare {
+        inherit_births: false,
         policies: vec![
             AnimalCarePolicy {
                 person: 1,
-                animal: 1,
+                animal: Some(1),
                 good: 1,
                 quantity: 1,
                 willing: true,
@@ -300,7 +301,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             },
             AnimalCarePolicy {
                 person: 4,
-                animal: 1,
+                animal: Some(1),
                 good: 1,
                 quantity: 1,
                 willing: false,
@@ -449,10 +450,11 @@ fn people_interpret_their_own_animal_experiences_individually() {
     initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
     initial.hunting = None;
     initial.animal_care = Some(AnimalCare {
+        inherit_births: false,
         policies: vec![
             AnimalCarePolicy {
                 person: 1,
-                animal: 1,
+                animal: Some(1),
                 good: 1,
                 quantity: 1,
                 willing: true,
@@ -464,7 +466,7 @@ fn people_interpret_their_own_animal_experiences_individually() {
             },
             AnimalCarePolicy {
                 person: 4,
-                animal: 1,
+                animal: Some(1),
                 good: 1,
                 quantity: 1,
                 willing: true,
@@ -582,9 +584,10 @@ fn personal_animal_memories_are_bounded_and_do_not_invent_other_feelings() {
     state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
     state.hunting = None;
     state.animal_care = Some(AnimalCare {
+        inherit_births: false,
         policies: vec![AnimalCarePolicy {
             person: 1,
-            animal: 2,
+            animal: Some(2),
             good: 1,
             quantity: 1,
             willing: true,
@@ -622,6 +625,93 @@ fn personal_animal_memories_are_bounded_and_do_not_invent_other_feelings() {
     );
     assert_eq!(world.animal_affinity(1, 2), Some(0));
     assert_eq!(world.animal_affinity(2, 2), None);
+}
+
+#[test]
+fn flexible_caregivers_choose_only_local_living_animals() {
+    let mut state = hunting_fixture();
+    state.hunting = None;
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.fauna.as_mut().unwrap().animals[1].region = 2;
+    state
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Stock { region: 2, good: 1 }, 10, vec![]).unwrap());
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state.animal_care = Some(AnimalCare {
+        inherit_births: false,
+        policies: vec![AnimalCarePolicy {
+            person: 1,
+            animal: None,
+            good: 1,
+            quantity: 1,
+            willing: true,
+            health_at_most: 10,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let mut invalid = state.clone();
+    invalid.fauna = None;
+    assert!(Economy::compile(invalid).is_err());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                world.advance().unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                let animals = &state.fauna.as_ref().unwrap().animals;
+                assert_eq!((animals[0].hunger, animals[1].hunger), (1, 3));
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 fn hunting_fixture() -> State {
@@ -835,9 +925,10 @@ fn hunting_needs_capacity_and_yields_to_animal_feeding() {
     assert!(world.snapshot().fauna.unwrap().animals[0].health > 0);
     let mut feeding = hunting_fixture();
     feeding.animal_care = Some(AnimalCare {
+        inherit_births: false,
         policies: vec![AnimalCarePolicy {
             person: 1,
-            animal: 1,
+            animal: Some(1),
             good: 1,
             quantity: 1,
             willing: true,
@@ -7592,6 +7683,88 @@ fn newborn_hunting_inclinations_do_not_inherit_targets_or_pressure() {
                             .iter()
                             .all(|record| record.observer != 5)
                     );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn newborn_animal_care_inclinations_do_not_inherit_targets_or_pressure() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.controlled = false;
+    }
+    initial.fauna = hunting_fixture().fauna;
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.animal_care = Some(AnimalCare {
+        inherit_births: true,
+        policies: vec![AnimalCarePolicy {
+            person: 1,
+            animal: Some(1),
+            good: 1,
+            quantity: 1,
+            willing: false,
+            health_at_most: 7,
+            affinity_at_least: Some(-2),
+            affinity_at_most: Some(3),
+            pressured_by: Some(2),
+            pressure_threshold: Some(3),
+        }],
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.animal_care.as_mut().unwrap().inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let policy = state
+                    .animal_care
+                    .as_ref()
+                    .unwrap()
+                    .policies
+                    .iter()
+                    .find(|p| p.person == 5);
+                assert_eq!(policy.is_some(), inherit);
+                if let Some(policy) = policy {
+                    assert!(!policy.willing);
+                    assert_eq!(
+                        (
+                            policy.animal,
+                            policy.pressured_by,
+                            policy.pressure_threshold
+                        ),
+                        (None, None, None)
+                    );
+                    assert_eq!(
+                        (policy.good, policy.quantity, policy.health_at_most),
+                        (1, 1, 7)
+                    );
+                    assert_eq!(
+                        (policy.affinity_at_least, policy.affinity_at_most),
+                        (Some(-2), Some(3))
+                    );
+                    assert!(state.animal_feelings.is_none());
                 }
                 state
             })
@@ -15552,6 +15725,7 @@ fn concentrated_animal_care_benchmark() {
         .unwrap_or(100_000u64);
     let social = std::env::var_os("LEGACY_ANIMAL_RESPONSE").is_some();
     let human_social = std::env::var_os("LEGACY_HUMAN_ANIMAL_FEELINGS").is_some();
+    let flexible = std::env::var_os("LEGACY_FLEXIBLE_ANIMAL_CARE").is_some();
     let mut initial = concentrated(count);
     initial.autowork = None;
     initial.nutrition = None;
@@ -15607,10 +15781,11 @@ fn concentrated_animal_care_benchmark() {
         }],
     });
     initial.animal_care = Some(AnimalCare {
+        inherit_births: false,
         policies: (1..=count)
             .map(|person| AnimalCarePolicy {
                 person,
-                animal: 1,
+                animal: (!flexible).then_some(1),
                 good: 1,
                 quantity: 1,
                 willing: true,
@@ -15666,7 +15841,7 @@ fn concentrated_animal_care_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} social={social} human_social={human_social} concentrated_animal_care_seconds={:.6}",
+                "workers={workers} people={count} social={social} human_social={human_social} flexible={flexible} concentrated_animal_care_seconds={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]

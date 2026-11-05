@@ -61,12 +61,20 @@ fn animal_care_content_resolves_named_goods() {
         health_at_most = 8
         pressured_by = 1
         pressure_threshold = 3
+        [[policies]]
+        person = 5
+        good = "grain"
+        quantity = 1
+        willing = true
+        health_at_most = 8
     "#,
     )
     .unwrap();
     let care = config.build(|name| (name == "grain").then_some(7)).unwrap();
     assert_eq!(care.policies[0].good, 7);
     assert_eq!(care.policies[0].pressure_threshold, Some(3));
+    assert_eq!(care.policies[0].animal, Some(1));
+    assert_eq!(care.policies[1].animal, None);
 }
 
 #[test]

@@ -183,6 +183,7 @@ pub struct Draft {
     fed_animal: Option<bool>,
     hunted: Option<bool>,
     hunting_births: Vec<HuntingPolicy>,
+    animal_care_births: Vec<AnimalCarePolicy>,
     animal_feelings_update: Option<AnimalFeelings>,
 }
 impl Draft {
@@ -1839,6 +1840,8 @@ impl Economy {
             view: &view,
             busy: &busy,
             max_hunger: self.rules.max_work_hunger,
+            seed: self.seed,
+            tick,
         }
         .prepare(action_base)?;
         action_base = action_base
@@ -3174,6 +3177,8 @@ impl Economy {
         giving_inheritance::enroll(next_giving.as_mut(), family.as_ref(), tick);
         gathering::enroll(gathering.as_mut(), family.as_ref(), tick);
         let hunting_births = hunting::enroll(self.hunting.as_ref(), family.as_ref(), tick);
+        let animal_care_births =
+            animal_care::enroll(self.animal_care.as_ref(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         #[cfg(feature = "profile")]
         {
@@ -3669,6 +3674,7 @@ impl Economy {
             fed_animal,
             hunted,
             hunting_births,
+            animal_care_births,
             animal_feelings_update,
         })
     }
@@ -3725,6 +3731,13 @@ impl Economy {
                 .expect("new hunting preferences have an owner")
                 .policies
                 .par_extend(draft.hunting_births);
+        }
+        if !draft.animal_care_births.is_empty() {
+            self.animal_care
+                .as_mut()
+                .expect("new animal care preferences have an owner")
+                .policies
+                .par_extend(draft.animal_care_births);
         }
         self.food_search = draft.food_search;
         let old_giving = std::mem::replace(&mut self.giving, draft.giving);

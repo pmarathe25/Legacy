@@ -1,4 +1,4 @@
-//! Personal preferences for offering carried goods to particular animals.
+//! Personal preferences for offering carried goods to locally observed animals.
 use game_parallel_economy_person::Person;
 use game_parallel_fauna::{Fauna, Feeding};
 use game_parallel_lot_runtime::Events;
@@ -12,7 +12,8 @@ use std::collections::HashSet;
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub person: u64,
-    pub animal: u64,
+    #[serde(default)]
+    pub animal: Option<u64>,
     pub good: u32,
     pub quantity: u64,
     pub willing: bool,
@@ -30,12 +31,16 @@ pub struct Policy {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AnimalCare {
+    #[serde(default)]
+    pub inherit_births: bool,
     pub policies: Vec<Policy>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
+    #[serde(default)]
+    pub inherit_births: bool,
     pub policies: Vec<PolicyConfig>,
 }
 
@@ -43,7 +48,8 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct PolicyConfig {
     person: u64,
-    animal: u64,
+    #[serde(default)]
+    animal: Option<u64>,
     good: String,
     quantity: u64,
     willing: bool,
@@ -79,8 +85,66 @@ impl Config {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
-        Ok(AnimalCare { policies })
+        Ok(AnimalCare {
+            inherit_births: self.inherit_births,
+            policies,
+        })
     }
+}
+
+/// A newborn may acquire a general inclination, without inheriting a target or pressure.
+pub fn enroll(
+    owner: Option<&AnimalCare>,
+    family: Option<&crate::Families>,
+    tick: u64,
+) -> Vec<Policy> {
+    let Some((owner, family)) = owner
+        .zip(family)
+        .filter(|(owner, family)| owner.inherit_births && family.rules.enroll_births)
+    else {
+        return Vec::new();
+    };
+    let newborns: Vec<_> = family
+        .members
+        .par_iter()
+        .filter(|member| member.born == Some(tick))
+        .collect();
+    if newborns.is_empty() {
+        return Vec::new();
+    }
+    let mut policies: Vec<_> = owner.policies.par_iter().collect();
+    if policies.par_windows(2).any(|p| p[0].person > p[1].person) {
+        policies.par_sort_unstable_by_key(|p| p.person);
+    }
+    newborns
+        .par_iter()
+        .filter_map(|member| {
+            if policies
+                .binary_search_by_key(&member.id, |p| p.person)
+                .is_ok()
+            {
+                return None;
+            }
+            let parent = member.parents.iter().find_map(|id| {
+                policies
+                    .binary_search_by_key(id, |p| p.person)
+                    .ok()
+                    .map(|i| policies[i])
+            })?;
+            Some(Policy {
+                person: member.id,
+                animal: None,
+                good: parent.good,
+                quantity: parent.quantity,
+                willing: parent.willing,
+                health_at_most: parent.health_at_most,
+                affinity_at_least: parent.affinity_at_least,
+                affinity_at_most: parent.affinity_at_most,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+        })
+        .collect()
 }
 
 impl AnimalCare {
@@ -96,10 +160,11 @@ impl AnimalCare {
             .collect();
         let mut actors: Vec<_> = self.policies.par_iter().map(|p| p.person).collect();
         actors.par_sort_unstable();
-        if actors.par_windows(2).any(|p| p[0] == p[1])
+        if (fauna.is_none() && !self.policies.is_empty())
+            || actors.par_windows(2).any(|p| p[0] == p[1])
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
-                    || !animals.contains(&p.animal)
+                    || p.animal.is_some_and(|id| !animals.contains(&id))
                     || !goods.contains(&p.good)
                     || p.quantity == 0
                     || p.affinity_at_least
@@ -132,6 +197,8 @@ pub struct Context<'a> {
     pub view: &'a View,
     pub busy: &'a [u64],
     pub max_hunger: u32,
+    pub seed: u64,
+    pub tick: u64,
 }
 
 impl Context<'_> {
@@ -154,6 +221,16 @@ impl Context<'_> {
             .flat_map(|f| f.animals.par_iter().collect::<Vec<_>>())
             .collect();
         animals.par_sort_unstable_by_key(|a| a.id);
+        let mut visible: Vec<_> = if policies.par_iter().any(|p| p.animal.is_none()) {
+            animals
+                .par_iter()
+                .filter(|a| a.health > 0)
+                .map(|a| (a.region, a.id))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        visible.par_sort_unstable();
         let opinions = self.opinions.map(Opinions::index);
         let mut choices: Vec<_> = policies
             .par_iter()
@@ -163,8 +240,22 @@ impl Context<'_> {
                     .binary_search_by_key(&p.person, |a| a.id)
                     .ok()
                     .map(|i| &self.people[i])?;
+                let target = p.animal.or_else(|| {
+                    let region = actor.region?;
+                    let start = visible.partition_point(|row| row.0 < region);
+                    let end = visible.partition_point(|row| row.0 <= region);
+                    if start == end {
+                        return None;
+                    }
+                    let offset = (game_parallel_genetics::random(
+                        self.seed ^ 0x63617265,
+                        actor.id,
+                        self.tick,
+                    ) % (end - start) as u64) as usize;
+                    Some(visible[start + offset].1)
+                })?;
                 let animal = animals
-                    .binary_search_by_key(&p.animal, |a| a.id)
+                    .binary_search_by_key(&target, |a| a.id)
                     .ok()
                     .map(|i| animals[i])?;
                 let pressured =
@@ -199,7 +290,7 @@ impl Context<'_> {
                 .then_some((
                     actor.id,
                     Feeding {
-                        animal: p.animal,
+                        animal: animal.id,
                         person: Some(actor.id),
                         good: p.good,
                         quantity: p.quantity,
