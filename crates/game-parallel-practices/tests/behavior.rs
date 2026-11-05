@@ -1,4 +1,6 @@
-use game_parallel_practices::{Case, Decision, Mind, Observation, Practices};
+use game_parallel_practices::{
+    Case, Decision, Mind, Observation, Practices, Proposal, Received, ValueLearning,
+};
 use std::collections::HashSet;
 
 fn mind(person: u64) -> Mind {
@@ -20,6 +22,7 @@ fn mind(person: u64) -> Mind {
         giving_experience_weight: 0,
         shortage_experience_weight: 0,
         acceptance_threshold: 0,
+        value_learning: None,
         reporting: Default::default(),
         report_attitude: Default::default(),
         unanswered_report_belief: None,
@@ -32,6 +35,182 @@ fn mind(person: u64) -> Mind {
         sent_reports: vec![].into(),
         reports: vec![].into(),
     }
+}
+
+#[test]
+fn personally_interpreted_experience_changes_later_practice_judgment() {
+    let existing = Proposal {
+        author: 1,
+        sequence: 1,
+        recipient: 2,
+        good: 4,
+        quantity: 1,
+        reserve: 0,
+        ask_hunger: 5,
+        created: 1,
+        expires: 10,
+    };
+    let offered = Proposal {
+        author: 3,
+        sequence: 1,
+        recipient: 1,
+        good: 4,
+        quantity: 1,
+        reserve: 0,
+        ask_hunger: 5,
+        created: 1,
+        expires: 10,
+    };
+    let mut person = mind(1);
+    person.invent = false;
+    person.sequence = 1;
+    person.authored = vec![existing].into();
+    person.inbox = vec![Received {
+        proposal: offered,
+        decision: Decision::Pending,
+        approved: false,
+        delivered: 2,
+    }]
+    .into();
+    person.acceptance_threshold = 2;
+    let experiences = vec![
+        Observation {
+            person: 1,
+            case: Case::Received {
+                tick: 2,
+                helper: 2,
+                good: 4,
+                quantity: 1,
+            },
+        },
+        Observation {
+            person: 1,
+            case: Case::Received {
+                tick: 2,
+                helper: 3,
+                good: 4,
+                quantity: 1,
+            },
+        },
+    ];
+    let run = |workers, rate| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut learner = person.clone();
+                learner.value_learning = Some(std::sync::Arc::new(ValueLearning {
+                    value: 0,
+                    minimum: -4,
+                    maximum: 4,
+                    received: rate,
+                    gave: 0,
+                    unanswered: 0,
+                }));
+                let initial = Practices {
+                    minds: vec![learner, mind(2), mind(3)],
+                };
+                let after = initial.prepare(&[], &experiences, 2, |_, _| 0).unwrap();
+                assert_eq!(after.minds[0].value_learning.as_ref().unwrap().value, rate);
+                assert_eq!(initial.minds[0].value_learning.as_ref().unwrap().value, 0);
+                assert_eq!(after.minds[0].inbox[0].decision, Decision::Pending);
+                after
+                    .validate(&HashSet::from([1, 2, 3]), &HashSet::from([4]), 2)
+                    .unwrap();
+                let restored: Practices =
+                    serde_json::from_str(&serde_json::to_string(&after).unwrap()).unwrap();
+                let next = after.prepare(&[], &[], 3, |_, _| 0).unwrap();
+                assert_eq!(next, restored.prepare(&[], &[], 3, |_, _| 0).unwrap());
+                next
+            })
+    };
+    let positive = run(1, 3);
+    assert_eq!(positive, run(4, 3));
+    assert_eq!(positive.minds[0].inbox[0].decision, Decision::Adopted);
+    let negative = run(1, -3);
+    assert_eq!(negative, run(4, -3));
+    assert_eq!(negative.minds[0].inbox[0].decision, Decision::Declined);
+}
+
+#[test]
+fn learned_value_is_bounded_and_can_change_after_unanswered_or_pressured_help() {
+    let proposal = Proposal {
+        author: 1,
+        sequence: 1,
+        recipient: 2,
+        good: 4,
+        quantity: 1,
+        reserve: 0,
+        ask_hunger: 5,
+        created: 1,
+        expires: 10,
+    };
+    let mut author = mind(1);
+    author.invent = false;
+    author.sequence = 1;
+    author.authored = vec![proposal.clone()].into();
+    author.value_learning = Some(std::sync::Arc::new(ValueLearning {
+        value: 0,
+        minimum: -4,
+        maximum: 4,
+        received: 0,
+        gave: 0,
+        unanswered: 3,
+    }));
+    let mut helper = mind(2);
+    helper.invent = false;
+    helper.inbox = vec![Received {
+        proposal,
+        decision: Decision::Declined,
+        approved: false,
+        delivered: 1,
+    }]
+    .into();
+    helper.value_learning = Some(std::sync::Arc::new(ValueLearning {
+        value: 0,
+        minimum: -4,
+        maximum: 4,
+        received: 0,
+        gave: -2,
+        unanswered: 0,
+    }));
+    let state = Practices {
+        minds: vec![author, helper, mind(3)],
+    };
+    let observations = vec![
+        Observation {
+            person: 1,
+            case: Case::Unanswered { tick: 2, target: 2 },
+        },
+        Observation {
+            person: 1,
+            case: Case::Unanswered { tick: 2, target: 2 },
+        },
+        Observation {
+            person: 1,
+            case: Case::Unanswered { tick: 2, target: 3 },
+        },
+        Observation {
+            person: 2,
+            case: Case::Gave {
+                tick: 2,
+                recipient: 1,
+                good: 4,
+                quantity: 1,
+            },
+        },
+    ];
+    let next = state.prepare(&[], &observations, 2, |_, _| 0).unwrap();
+    assert_eq!(next.minds[0].value_learning.as_ref().unwrap().value, 4);
+    assert_eq!(next.minds[1].value_learning.as_ref().unwrap().value, -2);
+    assert_eq!(next.minds[1].inbox[0].decision, Decision::Declined);
+    let later = next.prepare(&[], &[], 3, |_, _| 0).unwrap();
+    assert_eq!(later.minds[0].value_learning.as_ref().unwrap().value, 4);
+    assert_eq!(later.minds[1].value_learning.as_ref().unwrap().value, -2);
+    let mut invalid = state;
+    std::sync::Arc::make_mut(invalid.minds[0].value_learning.as_mut().unwrap()).minimum = 5;
+    assert!(invalid.prepare(&[], &observations, 2, |_, _| 0).is_err());
 }
 
 #[test]
@@ -371,6 +550,114 @@ fn complete_invention(initial: &Practices, contacts: &[(u64, u64)]) -> Practices
             .unwrap();
     }
     state
+}
+
+fn paired_value_learning(count: u64) -> (Practices, Vec<Observation>) {
+    let (initial, contacts) = paired_invention(count);
+    let mut state = complete_invention(&initial, &contacts);
+    for mind in &mut state.minds {
+        mind.value_learning = Some(std::sync::Arc::new(ValueLearning {
+            value: 0,
+            minimum: -10,
+            maximum: 10,
+            received: 1,
+            gave: 1,
+            unanswered: 0,
+        }));
+    }
+    let observations = (1..count)
+        .step_by(2)
+        .flat_map(|author| {
+            [
+                Observation {
+                    person: author,
+                    case: Case::Received {
+                        tick: 6,
+                        helper: author + 1,
+                        good: 4,
+                        quantity: 1,
+                    },
+                },
+                Observation {
+                    person: author + 1,
+                    case: Case::Gave {
+                        tick: 6,
+                        recipient: author,
+                        good: 4,
+                        quantity: 1,
+                    },
+                },
+            ]
+        })
+        .collect();
+    (state, observations)
+}
+
+#[test]
+fn independent_learned_values_are_deterministic_across_workers() {
+    let (initial, observations) = paired_value_learning(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| initial.prepare(&[], &observations, 6, |_, _| 0).unwrap())
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    assert!(
+        result
+            .minds
+            .iter()
+            .all(|m| m.value_learning.as_ref().unwrap().value == 1)
+    );
+    assert!(
+        initial
+            .minds
+            .iter()
+            .all(|m| m.value_learning.as_ref().unwrap().value == 0)
+    );
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn paired_value_learning_benchmark() {
+    use rayon::prelude::*;
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let (initial, observations) = paired_value_learning(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let start = std::time::Instant::now();
+                let result = initial.prepare(&[], &observations, 6, |_, _| 0).unwrap();
+                assert!(
+                    result
+                        .minds
+                        .par_iter()
+                        .all(|m| m.value_learning.as_ref().unwrap().value == 1)
+                );
+                result.minds.into_par_iter().for_each(drop);
+                if round > 0 {
+                    samples.push(start.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} boundaries=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

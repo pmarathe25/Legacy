@@ -7963,6 +7963,7 @@ fn practice_mind(person: u64, invent: bool) -> PracticeMind {
         giving_experience_weight: 0,
         shortage_experience_weight: 0,
         acceptance_threshold: 0,
+        value_learning: None,
         reporting: Default::default(),
         report_attitude: Default::default(),
         unanswered_report_belief: None,
@@ -8071,6 +8072,30 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
             .unwrap()
             .install(|| {
                 let mut state = initial.clone();
+                let minds = &mut state
+                    .giving
+                    .as_mut()
+                    .unwrap()
+                    .practices
+                    .as_mut()
+                    .unwrap()
+                    .minds;
+                minds[0].value_learning = Some(std::sync::Arc::new(PracticeValueLearning {
+                    value: 0,
+                    minimum: -10,
+                    maximum: 10,
+                    received: 2,
+                    gave: 0,
+                    unanswered: 0,
+                }));
+                minds[1].value_learning = Some(std::sync::Arc::new(PracticeValueLearning {
+                    value: 0,
+                    minimum: -10,
+                    maximum: 10,
+                    received: 0,
+                    gave: -1,
+                    unanswered: 0,
+                }));
                 if poor {
                     let holder = state
                         .physical
@@ -8213,6 +8238,14 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
                 );
                 assert_eq!(received.approved, !decline && !pressured);
                 assert_eq!(second_delivery, !decline && !poor && !stop);
+                assert_eq!(
+                    practices.minds[0].value_learning.as_ref().unwrap().value,
+                    if second_delivery { 2 } else { 0 }
+                );
+                assert_eq!(
+                    practices.minds[1].value_learning.as_ref().unwrap().value,
+                    if second_delivery { -1 } else { 0 }
+                );
                 if poor {
                     assert!(request_tick.is_some());
                     let report = &practices.minds[0].reports[0];
@@ -8275,6 +8308,26 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
     assert_eq!(
         coerced.personal_practice(2).unwrap().inbox[0].decision,
         PracticeDecision::Declined
+    );
+    assert_eq!(
+        coerced
+            .personal_practice(1)
+            .unwrap()
+            .value_learning
+            .as_ref()
+            .unwrap()
+            .value,
+        2
+    );
+    assert_eq!(
+        coerced
+            .personal_practice(2)
+            .unwrap()
+            .value_learning
+            .as_ref()
+            .unwrap()
+            .value,
+        -1
     );
     let poor = run(1, false, false, true, false);
     assert_eq!(poor, run(4, false, false, true, false));

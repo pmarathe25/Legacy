@@ -2233,7 +2233,7 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = format!(
-        "{source}\n[[giving.practices.minds]]\nperson = 1\ninvent = true\napprove = false\nwilling = false\nask_willing = true\nreporting = \"lie\"\nreport_attitude = \"doubt\"\nunanswered_report_belief = \"believes\"\nrequire_believed_ready = true\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n\n[[giving.practices.minds]]\nperson = 2\ninvent = false\napprove = true\nwilling = true\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n"
+        "{source}\n[[giving.practices.minds]]\nperson = 1\ninvent = true\napprove = false\nwilling = false\nask_willing = true\nreporting = \"lie\"\nreport_attitude = \"doubt\"\nunanswered_report_belief = \"believes\"\nrequire_believed_ready = true\nvalue_learning = {{ value = 1, minimum = -4, maximum = 4, received = 2, gave = -1, unanswered = 1 }}\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n\n[[giving.practices.minds]]\nperson = 2\ninvent = false\napprove = true\nwilling = true\nshortage_threshold = 5\nminimum_shortages = 2\nreview_interval = 3\nproposal_lifetime = 8\n"
     );
     let path = std::env::temp_dir().join(format!(
         "legacy-personal-practices-{}.toml",
@@ -2252,6 +2252,27 @@ fn authored_personal_practices_are_visible_only_to_their_owner() {
         game_parallel_economy::PracticeReportAttitude::Doubt
     );
     assert!(own.require_believed_ready);
+    assert_eq!(own.value_learning.as_ref().unwrap().value, 1);
+    let invalid = game_parallel_economy::PracticeValueLearning {
+        value: 1,
+        minimum: 2,
+        maximum: 0,
+        received: 0,
+        gave: 0,
+        unanswered: 0,
+    };
+    assert!(player.set_practice_value_learning(Some(invalid)).is_err());
+    assert_eq!(
+        player
+            .view()
+            .unwrap()
+            .practices
+            .unwrap()
+            .value_learning
+            .unwrap()
+            .value,
+        1
+    );
     assert_eq!(
         own.unanswered_report_belief,
         Some(game_parallel_economy::PracticeBelief::Believes)

@@ -251,6 +251,19 @@ macro_rules! methods {
                 Ok(())
             })
         }
+        pub fn set_practice_value_learning(
+            &mut self,
+            person: u64,
+            value: Option<game_parallel_practices::ValueLearning>,
+        ) -> Result<(), String> {
+            if value.is_some_and(|v| v.value < v.minimum || v.value > v.maximum) {
+                return Err("invalid personal practice value".into());
+            }
+            self.edit_practice(person, |mind| {
+                mind.value_learning = value.map(std::sync::Arc::new);
+                Ok(())
+            })
+        }
         pub fn assess_practice_report(
             &mut self,
             person: u64,

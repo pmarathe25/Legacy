@@ -57,6 +57,9 @@ pub struct Mind {
     pub shortage_experience_weight: i64,
     #[serde(default)]
     pub acceptance_threshold: i64,
+    /// Optional personal attachment to conditional aid, learned from relevant experience.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_learning: Option<Arc<ValueLearning>>,
     /// How this person chooses to describe their own current ability to deliver.
     #[serde(default)]
     pub reporting: Reporting,
@@ -83,6 +86,24 @@ pub struct Mind {
     pub sent_reports: Arc<Vec<ReadinessReport>>,
     #[serde(default)]
     pub reports: Arc<Vec<ReceivedReport>>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ValueLearning {
+    pub value: i64,
+    pub minimum: i64,
+    pub maximum: i64,
+    #[serde(default)]
+    pub received: i64,
+    #[serde(default)]
+    pub gave: i64,
+    #[serde(default)]
+    pub unanswered: i64,
+}
+impl ValueLearning {
+    fn valid(self) -> bool {
+        self.minimum <= self.value && self.value <= self.maximum
+    }
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -408,6 +429,10 @@ impl Practices {
         if ids.par_windows(2).any(|p| p[0] == p[1])
             || self.minds.par_iter().any(|mind| {
                 !people.contains(&mind.person)
+                    || mind
+                        .value_learning
+                        .as_ref()
+                        .is_some_and(|value| !value.valid())
                     || mind.minimum_shortages == 0
                     || mind.minimum_shortages as usize > MAX_CASES
                     || mind.review_interval == 0
@@ -776,6 +801,9 @@ impl Practices {
             .par_iter()
             .map(|old| -> Result<Mind, &'static str> {
                 let mut mind = (*old).clone();
+                if mind.value_learning.as_ref().is_some_and(|value| !value.valid()) {
+                    return Err("invalid personal practice value");
+                }
                 let can_act = can_decide(mind.person);
                 if can_act && mind.inbox.iter().any(|item| item.decision == Decision::Pending && item.delivered < tick && item.proposal.expires >= tick) {
                     for item in Arc::make_mut(&mut mind.inbox) {
@@ -785,7 +813,8 @@ impl Practices {
                         let score = i128::from(mind.quantity_weight).saturating_mul(i128::from(item.proposal.quantity))
                             .saturating_add(i128::from(mind.reserve_weight).saturating_mul(i128::from(item.proposal.reserve)))
                             .saturating_add(i128::from(mind.giving_experience_weight).saturating_mul(given))
-                            .saturating_add(i128::from(mind.shortage_experience_weight).saturating_mul(shortages));
+                            .saturating_add(i128::from(mind.shortage_experience_weight).saturating_mul(shortages))
+                            .saturating_add(i128::from(mind.value_learning.as_ref().map_or(0, |v| v.value)));
                         item.approved = mind.approve && score >= i128::from(mind.acceptance_threshold);
                         let pressured = mind.pressure_threshold.is_some_and(|threshold| {
                             pressure(mind.person, item.proposal.author) >= threshold
@@ -858,6 +887,22 @@ impl Practices {
                 }
                 let observation_rows = observed.partition_point(|o| o.person < mind.person)..observed.partition_point(|o| o.person <= mind.person);
                 if !observation_rows.is_empty() {
+                    if let Some(value) = mind.value_learning.as_ref() {
+                        let change = observed[observation_rows.clone()].iter().fold(0i128, |total, observation| {
+                            let rate = match &observation.case {
+                                Case::Received { tick, helper, good, .. } if old.authored.iter().any(|p| p.recipient == *helper && p.good == *good && p.created <= *tick && p.expires >= *tick) => value.received,
+                                Case::Gave { tick, recipient, good, .. } if old.inbox.iter().any(|r| r.proposal.author == *recipient && r.proposal.good == *good && r.proposal.created <= *tick && r.proposal.expires >= *tick) => value.gave,
+                                Case::Unanswered { tick, target } if old.authored.iter().any(|p| p.recipient == *target && p.created <= *tick && p.expires >= *tick) => value.unanswered,
+                                _ => 0,
+                            };
+                            total.saturating_add(i128::from(rate))
+                        });
+                        if change != 0 {
+                            let value = Arc::make_mut(mind.value_learning.as_mut().expect("configured value"));
+                            value.value = i128::from(value.value).saturating_add(change)
+                                .clamp(i128::from(value.minimum), i128::from(value.maximum)) as i64;
+                        }
+                    }
                     if let Some(reassessment) = mind.unanswered_report_belief.filter(|_| can_act)
                         && mind.reports.iter().any(|report| report.statement.claimed_ready && observed[observation_rows.clone()].iter().any(|observation| matches!(observation.case, Case::Unanswered { target, .. } if target == report.statement.speaker))) {
                         for report in Arc::make_mut(&mut mind.reports) {

@@ -825,6 +825,13 @@ impl<'a> Player<'a> {
         self.world
             .set_practice_unanswered_belief(self.current()?, belief)
     }
+    pub fn set_practice_value_learning(
+        &mut self,
+        value: Option<game_parallel_economy::PracticeValueLearning>,
+    ) -> Result<(), String> {
+        self.world
+            .set_practice_value_learning(self.current()?, value)
+    }
     pub fn set_food_misreport(
         &mut self,
         choice: Option<game_parallel_economy::Misreport>,

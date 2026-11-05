@@ -43,7 +43,7 @@ pub use game_parallel_opinions::{
 pub use game_parallel_practices::{
     Belief as PracticeBelief, Case as PracticeCase, Decision as PracticeDecision,
     Mind as PracticeMind, Practices as PersonalPractices, ReportAttitude as PracticeReportAttitude,
-    Reporting as PracticeReporting,
+    Reporting as PracticeReporting, ValueLearning as PracticeValueLearning,
 };
 mod construction_planning;
 mod development;
