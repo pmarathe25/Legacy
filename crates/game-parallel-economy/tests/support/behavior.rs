@@ -12937,6 +12937,157 @@ fn simultaneous_confrontations_choose_disjoint_people_and_reserve_their_time() {
 }
 
 #[test]
+fn confrontation_uses_sparse_people_and_multiple_personal_opinions() {
+    use game_parallel_opinions::{Confrontation, Sensitivity};
+    let mut initial = fixture();
+    initial.people[3].id = 10;
+    initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(4))
+        .unwrap()
+        .place = Place::Person(10);
+    initial.autowork = None;
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.dynamics = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.combat = Some(combat_rules());
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.records = [(1, 2, -1), (3, 2, -1), (1, 10, -3)]
+        .into_iter()
+        .map(|(observer, target, trust)| Opinion {
+            observer,
+            target,
+            trust,
+            fear: 0,
+            obligation: 0,
+            affinity: 0,
+        })
+        .collect();
+    opinions.sensitivities = vec![Sensitivity {
+        person: 1,
+        confrontation: Some(Confrontation {
+            trust_at_most: -1,
+            fear_at_most: 0,
+            interval: 1,
+            enabled: true,
+        }),
+        ..Default::default()
+    }]
+    .into();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let fights = &state.combat.as_ref().unwrap().conflict.encounters;
+                assert_eq!(fights.len(), 1);
+                assert_eq!(
+                    fights[0]
+                        .fighters
+                        .iter()
+                        .map(|fighter| fighter.person)
+                        .collect::<Vec<_>>(),
+                    vec![1, 10]
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let opinions = initial.opinions.as_mut().unwrap();
+    for row in &mut opinions.records {
+        if row.observer == 1 {
+            row.trust = if row.target == 2 { -3 } else { -1 };
+        }
+    }
+    opinions.sensitivities_mut()[0].person = 2;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .combat
+            .unwrap()
+            .conflict
+            .encounters
+            .is_empty(),
+        "a gap in observer IDs must not expose another person's opinions"
+    );
+}
+
+#[test]
+fn many_hostile_people_cannot_assign_one_target_to_multiple_fights() {
+    use game_parallel_opinions::{Confrontation, Sensitivity};
+    let count = 4096;
+    let mut initial = concentrated(count);
+    initial.autowork = None;
+    initial.nutrition = None;
+    initial.dynamics = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    initial.combat = Some(combat_rules());
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records = (1..count)
+        .map(|observer| Opinion {
+            observer,
+            target: count,
+            trust: -3,
+            fear: 0,
+            obligation: 0,
+            affinity: 0,
+        })
+        .collect();
+    opinions.sensitivities = (1..count)
+        .map(|person| Sensitivity {
+            person,
+            confrontation: Some(Confrontation {
+                trust_at_most: -2,
+                fear_at_most: 0,
+                interval: 1,
+                enabled: true,
+            }),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    initial.opinions = Some(opinions);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let fights = &state.combat.as_ref().unwrap().conflict.encounters;
+                assert_eq!(fights.len(), 1);
+                assert_eq!(
+                    fights[0]
+                        .fighters
+                        .iter()
+                        .map(|fighter| fighter.person)
+                        .collect::<Vec<_>>(),
+                    vec![1, count]
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn concentrated_tactical_confrontation_benchmark() {
     use game_parallel_opinions::{Confrontation, Sensitivity};
@@ -12948,6 +13099,7 @@ fn concentrated_tactical_confrontation_benchmark() {
         .unwrap_or_else(|_| "1".into())
         .parse()
         .unwrap();
+    let hot_target = std::env::var_os("LEGACY_HOT_TARGET").is_some();
     assert!(count >= 4 && count.is_multiple_of(2));
     let mut initial = concentrated(count);
     initial.autowork = None;
@@ -12959,19 +13111,23 @@ fn concentrated_tactical_confrontation_benchmark() {
     }
     initial.combat = Some(combat_rules());
     let mut opinions = fixture().opinions.unwrap();
-    opinions.records = (1..=count)
-        .step_by(2)
+    let initiators: Vec<_> = (1..count)
+        .filter(|person| hot_target || person % 2 == 1)
+        .collect();
+    opinions.records = initiators
+        .iter()
+        .copied()
         .map(|person| Opinion {
             observer: person,
-            target: person + 1,
+            target: if hot_target { count } else { person + 1 },
             trust: -3,
             fear: 0,
             obligation: 0,
             affinity: 0,
         })
         .collect();
-    opinions.sensitivities = (1..=count)
-        .step_by(2)
+    opinions.sensitivities = initiators
+        .into_iter()
         .map(|person| Sensitivity {
             person,
             confrontation: Some(Confrontation {
@@ -12996,18 +13152,28 @@ fn concentrated_tactical_confrontation_benchmark() {
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
+                let fights = world.snapshot().combat.unwrap().conflict.encounters;
                 assert_eq!(
-                    world.snapshot().combat.unwrap().conflict.encounters.len(),
-                    count as usize / 2
+                    fights.len(),
+                    if hot_target { 1 } else { count as usize / 2 }
                 );
+                if hot_target {
+                    assert_eq!(
+                        fights[0]
+                            .fighters
+                            .iter()
+                            .map(|f| f.person)
+                            .collect::<Vec<_>>(),
+                        vec![1, count]
+                    );
+                }
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} fights={} tick_seconds={:.6}",
-                count / 2,
+                "workers={workers} people={count} hot_target={hot_target} tick_seconds={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]

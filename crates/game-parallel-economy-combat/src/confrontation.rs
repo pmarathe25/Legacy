@@ -35,7 +35,19 @@ pub fn select(
         })
     })?;
     let mut known: Vec<_> = opinions.records.par_iter().collect();
-    known.par_sort_unstable_by_key(|row| (row.observer, row.trust, row.target));
+    if known.par_windows(2).any(|pair| {
+        (pair[0].observer, pair[0].trust, pair[0].target)
+            > (pair[1].observer, pair[1].trust, pair[1].target)
+    }) {
+        known.par_sort_unstable_by_key(|row| (row.observer, row.trust, row.target));
+    }
+    let dense_known = known.first().zip(known.last()).and_then(|(first, last)| {
+        (last.observer.checked_sub(first.observer) == Some((known.len() - 1) as u64)
+            && known
+                .par_windows(2)
+                .all(|pair| pair[0].observer < pair[1].observer))
+        .then_some(first.observer)
+    });
     let mut starts: Vec<_> = runtime
         .state
         .tactics
@@ -58,11 +70,18 @@ pub fn select(
         })
         .collect();
     starts.par_sort_unstable_by_key(|row| row.0);
-    let find = |id| {
-        people
-            .binary_search_by_key(&id, |p| p.id)
-            .ok()
-            .map(|i| &people[i])
+    let dense_people = people.first().zip(people.last()).and_then(|(first, last)| {
+        (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
+    });
+    let find = |id: u64| {
+        let index = if let Some(first) = dense_people {
+            id.checked_sub(first)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .filter(|&index| index < people.len())
+        } else {
+            people.binary_search_by_key(&id, |p| p.id).ok()
+        }?;
+        Some(&people[index])
     };
     let mut choices: Vec<_> = opinions
         .sensitivities
@@ -83,8 +102,19 @@ pub fn select(
             if starts.binary_search_by_key(&region, |row| row.0).is_err() {
                 return None;
             }
-            let start = known.partition_point(|row| row.observer < actor.id);
-            let end = known.partition_point(|row| row.observer <= actor.id);
+            let (start, end) = if let Some(first) = dense_known {
+                let i = actor
+                    .id
+                    .checked_sub(first)
+                    .and_then(|offset| usize::try_from(offset).ok())
+                    .filter(|&index| index < known.len())?;
+                (i, i + 1)
+            } else {
+                (
+                    known.partition_point(|row| row.observer < actor.id),
+                    known.partition_point(|row| row.observer <= actor.id),
+                )
+            };
             known[start..end].iter().take(32).find_map(|opinion| {
                 if opinion.trust > policy.trust_at_most
                     || opinion.fear > policy.fear_at_most
@@ -244,5 +274,125 @@ impl Draft {
             Some(self.state.conflict.actors()),
         ));
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_parallel_opinions::{Confrontation, Opinion, Rules, Sensitivity};
+
+    #[test]
+    #[ignore = "performance measurement"]
+    fn confrontation_selection_benchmark() {
+        let count: u64 = std::env::var("LEGACY_COUNT")
+            .unwrap_or_else(|_| "100000".into())
+            .parse()
+            .unwrap();
+        let workers: usize = std::env::var("LEGACY_WORKERS")
+            .unwrap_or_else(|_| "1".into())
+            .parse()
+            .unwrap();
+        let hot = std::env::var_os("LEGACY_HOT_TARGET").is_some();
+        let people: Vec<_> = (1..=count)
+            .map(|id| Person {
+                id,
+                region: Some(1),
+                health: 100,
+                hunger: 0,
+                willing_to_work: false,
+                seek_meals: false,
+                controlled: false,
+            })
+            .collect();
+        let initiators: Vec<_> = (1..count).filter(|id| hot || id % 2 == 1).collect();
+        let opinions = Opinions {
+            rules: Rules {
+                minimum: -10,
+                maximum: 10,
+                initial: 0,
+                fulfilled_gain: 0,
+                default_loss: 0,
+                theft_loss: 0,
+                encounter_gain: 0,
+                fear_per_damage: 0,
+                fear_decay_per_tick: 0,
+                gratitude_gain: 0,
+                obligation_relief: 0,
+                minimum_report_trust: None,
+                affinity: None,
+                newborn_obligation_development: None,
+            },
+            sensitivities: initiators
+                .iter()
+                .map(|&person| Sensitivity {
+                    person,
+                    confrontation: Some(Confrontation {
+                        trust_at_most: -2,
+                        fear_at_most: 0,
+                        interval: 1,
+                        enabled: true,
+                    }),
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>()
+                .into(),
+            records: initiators
+                .iter()
+                .map(|&person| Opinion {
+                    observer: person,
+                    target: if hot { count } else { person + 1 },
+                    trust: -3,
+                    fear: 0,
+                    obligation: 0,
+                    affinity: 0,
+                })
+                .collect(),
+            events: vec![],
+        };
+        let state = super::super::initial(
+            &[1],
+            1,
+            1,
+            super::super::Rules {
+                width: 10,
+                height: 10,
+                obstacle_count: 0,
+                max_obstacle_size: 1,
+                movement: 1,
+                attack_range: 1,
+            },
+            vec![],
+        )
+        .unwrap();
+        let runtime = Runtime {
+            plan: Plan::compile(&state.conflict).unwrap(),
+            index: state.tactics.index().unwrap(),
+            actors: vec![],
+            goods: Default::default(),
+            state,
+        };
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut samples = Vec::new();
+                for _ in 0..5 {
+                    let now = std::time::Instant::now();
+                    let selected =
+                        select(Some(&runtime), Some(&opinions), &people, &[], &[], 1).unwrap();
+                    samples.push(now.elapsed().as_secs_f64());
+                    assert_eq!(
+                        selected.choices.len(),
+                        if hot { 1 } else { (count / 2) as usize }
+                    );
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} people={count} hot_target={hot} select_seconds={:.6}",
+                    samples[2]
+                );
+            });
     }
 }
