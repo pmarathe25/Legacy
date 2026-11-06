@@ -21226,6 +21226,113 @@ fn a_person_may_enjoy_or_dislike_the_same_observed_taking() {
 }
 
 #[test]
+fn nearby_witnesses_interpret_a_taking_independently() {
+    use game_parallel_economy_taking::Witness;
+    use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let interpretation = |affinity| TakingInterpretation {
+        transferred: Some(SubjectiveReaction {
+            affinity,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    initial.taking = Some(Taking {
+        witnesses: vec![
+            Witness {
+                person: 2,
+                actor: 1,
+                target: Some(4),
+                notices: true,
+                toward_actor: interpretation(3),
+                toward_target: interpretation(-2),
+            },
+            Witness {
+                person: 3,
+                actor: 1,
+                target: None,
+                notices: true,
+                toward_actor: interpretation(-4),
+                toward_target: TakingInterpretation::default(),
+            },
+        ]
+        .into(),
+        ..Default::default()
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let preference = world.taking_witness(2, 1).unwrap().clone();
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .set_taking_witness(3, 1, Some(preference.clone()))
+                        .is_err()
+                );
+                assert_eq!(world.snapshot(), before);
+                world.set_taking_witness(2, 1, None).unwrap();
+                assert!(world.taking_witness(2, 1).is_none());
+                world.set_taking_witness(2, 1, Some(preference)).unwrap();
+                assert_eq!(
+                    world.take_possessions(1, 4, 1, 1, false).unwrap(),
+                    TakingOutcome::Transferred
+                );
+                let state = world.snapshot();
+                let index = state.opinions.as_ref().unwrap().index();
+                assert_eq!(index.affinity(2, 1), 3);
+                assert_eq!(index.affinity(2, 4), -2);
+                assert_eq!(index.affinity(3, 1), -4);
+                assert_eq!(index.affinity(3, 4), 0);
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), state);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut distant = initial;
+    distant.people[1].region = Some(2);
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Stock { region: 2, good: 1 }, 10, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|c| c.place);
+    let mut world = Economy::compile(distant).unwrap();
+    assert_eq!(
+        world.take_possessions(1, 4, 1, 1, false).unwrap(),
+        TakingOutcome::Transferred
+    );
+    let state = world.snapshot();
+    let index = state.opinions.as_ref().unwrap().index();
+    assert_eq!(index.affinity(2, 1), 0);
+    assert_eq!(index.affinity(2, 4), 0);
+    assert_eq!(index.affinity(3, 1), -4);
+}
+
+#[test]
 fn missing_goods_do_not_trigger_an_interpretation_of_a_successful_taking() {
     use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
     let mut initial = hunting_fixture();

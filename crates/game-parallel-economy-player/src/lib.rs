@@ -1312,6 +1312,31 @@ impl<'a> Player<'a> {
         self.world
             .set_taking_response(self.current()?, notices, resist)
     }
+    pub fn set_taking_witness(
+        &mut self,
+        actor: u64,
+        rule: Option<game_parallel_economy::TakingWitness>,
+    ) -> Result<(), String> {
+        self.world.set_taking_witness(self.current()?, actor, rule)
+    }
+    pub fn taking_witness(
+        &self,
+        actor: u64,
+    ) -> Result<Option<&game_parallel_economy::TakingWitness>, String> {
+        Ok(self.world.taking_witness(self.current()?, actor))
+    }
+    pub fn set_taking_attention(&mut self, actor: u64, notices: bool) -> Result<(), String> {
+        let person = self.current()?;
+        let mut rule = self.world.taking_witness(person, actor).cloned().unwrap_or(
+            game_parallel_economy::TakingWitness {
+                person,
+                actor,
+                ..Default::default()
+            },
+        );
+        rule.notices = notices;
+        self.world.set_taking_witness(person, actor, Some(rule))
+    }
     pub fn gather(&mut self, node: u64) -> Result<bool, String> {
         if !self
             .view()?

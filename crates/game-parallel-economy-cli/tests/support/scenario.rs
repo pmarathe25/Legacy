@@ -7,7 +7,7 @@ fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = format!(
-        "{source}\n[[taking.policies]]\nperson = 2\ntarget = 1\ngood = \"bread\"\nquantity = 1\nwilling = false\npressured_by = 1\npressure_threshold = 2\n\n[[taking.responses]]\nperson = 1\nnotices = true\nresist = false\n\n[[taking.reactions]]\nperson = 1\nother = 2\n[taking.reactions.as_target]\ntransferred = {{ affinity = 3 }}\n"
+        "{source}\n[[taking.policies]]\nperson = 2\ntarget = 1\ngood = \"bread\"\nquantity = 1\nwilling = false\npressured_by = 1\npressure_threshold = 2\n\n[[taking.responses]]\nperson = 1\nnotices = true\nresist = false\n\n[[taking.reactions]]\nperson = 1\nother = 2\n[taking.reactions.as_target]\ntransferred = {{ affinity = 3 }}\n\n[[taking.witnesses]]\nperson = 99\nactor = 1\ntarget = 2\nnotices = true\n[taking.witnesses.toward_actor]\ntransferred = {{ affinity = -2 }}\n"
     );
     let path = std::env::temp_dir().join(format!("legacy-taking-{}.toml", std::process::id()));
     std::fs::write(&path, configured).unwrap();
@@ -32,6 +32,20 @@ fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
         taking.reactions[0].as_target.transferred.unwrap().affinity,
         3
     );
+    assert_eq!(
+        taking.witnesses[0]
+            .toward_actor
+            .transferred
+            .unwrap()
+            .affinity,
+        -2
+    );
+    game_parallel_economy_cli_commands::player::handle(&mut world, &["taking-watch", "2", "on"])
+        .unwrap();
+    assert!(world.taking_witness(1, 2).unwrap().notices);
+    game_parallel_economy_cli_commands::player::handle(&mut world, &["taking-watch", "2", "off"])
+        .unwrap();
+    assert!(!world.taking_witness(1, 2).unwrap().notices);
     game_parallel_economy_cli_commands::player::handle(
         &mut world,
         &["taking-response", "notice", "resist"],

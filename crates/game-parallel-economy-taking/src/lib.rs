@@ -7,7 +7,7 @@ use game_parallel_lot_runtime::Events;
 use game_parallel_lots::{Movement, Place, Transaction};
 use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
-pub use reactions::{Interpretation, Reaction};
+pub use reactions::{Interpretation, Reaction, Witness};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 
@@ -81,6 +81,8 @@ pub struct Taking {
     #[serde(default)]
     pub reactions: Arc<Vec<Reaction>>,
     #[serde(default)]
+    pub witnesses: Arc<Vec<Witness>>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -101,6 +103,9 @@ impl Taking {
     pub fn reactions_mut(&mut self) -> &mut Vec<Reaction> {
         detach(&mut self.reactions)
     }
+    pub fn witnesses_mut(&mut self) -> &mut Vec<Witness> {
+        detach(&mut self.witnesses)
+    }
 
     /// Check content and save data before an owner participates in the world.
     pub fn validate(
@@ -119,9 +124,24 @@ impl Taking {
             .map(|p| (p.person, p.other))
             .collect();
         reactions.par_sort_unstable();
+        let mut witnesses: Vec<_> = self
+            .witnesses
+            .par_iter()
+            .map(|w| (w.person, w.actor))
+            .collect();
+        witnesses.par_sort_unstable();
         if actors.par_windows(2).any(|p| p[0] == p[1])
             || responders.par_windows(2).any(|p| p[0] == p[1])
             || reactions.par_windows(2).any(|p| p[0] == p[1])
+            || witnesses.par_windows(2).any(|p| p[0] == p[1])
+            || self.witnesses.par_iter().any(|w| {
+                !people.contains(&w.person)
+                    || !people.contains(&w.actor)
+                    || w.person == w.actor
+                    || w.target.is_some_and(|target| {
+                        target == w.person || target == w.actor || !people.contains(&target)
+                    })
+            })
             || self.reactions.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || p.other

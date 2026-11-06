@@ -1,5 +1,5 @@
 //! Authored names are resolved before the physical simulation starts.
-use crate::{Policy, Reaction, Response, Taking};
+use crate::{Policy, Reaction, Response, Taking, Witness};
 use serde::Deserialize;
 
 fn one() -> u64 {
@@ -15,6 +15,8 @@ pub struct Config {
     pub responses: Vec<Response>,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub witnesses: Vec<Witness>,
 }
 
 #[derive(Deserialize)]
@@ -65,6 +67,7 @@ impl Config {
             policies: policies.into(),
             responses: self.responses.into(),
             reactions: self.reactions.into(),
+            witnesses: self.witnesses.into(),
             events: vec![],
         })
     }

@@ -39,7 +39,7 @@ pub use game_parallel_economy_skills::Skills;
 pub use game_parallel_economy_taking::{
     Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
     Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
-    Response as TakingResponse, Taking,
+    Response as TakingResponse, Taking, Witness as TakingWitness,
 };
 pub use game_parallel_economy_work::care::DependentCare;
 pub use game_parallel_economy_work::sites::{
@@ -1160,6 +1160,54 @@ impl Economy {
         self.taking = Some(owner);
         self.epoch = epoch;
         Ok(())
+    }
+    /// Change one person's attention and subjective interpretations of an actor.
+    pub fn set_taking_witness(
+        &mut self,
+        person: u64,
+        actor: u64,
+        rule: Option<TakingWitness>,
+    ) -> Result<(), String> {
+        let exists = |id| self.people.binary_search_by_key(&id, |p| p.id).is_ok();
+        if person == actor
+            || !exists(actor)
+            || self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            || rule.as_ref().is_some_and(|r| {
+                r.person != person
+                    || r.actor != actor
+                    || r.target.is_some_and(|target| {
+                        target == person || target == actor || !exists(target)
+                    })
+            })
+        {
+            return Err("invalid personal witnessing preference".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let mut owner = self.taking.clone().unwrap_or_default();
+        let witnesses = owner.witnesses_mut();
+        witnesses.retain(|row| (row.person, row.actor) != (person, actor));
+        if let Some(rule) = rule {
+            witnesses.push(rule);
+        }
+        witnesses.par_sort_unstable_by_key(|row| (row.person, row.actor));
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Read only this person's preference for a particular actor.
+    pub fn taking_witness(&self, person: u64, actor: u64) -> Option<&TakingWitness> {
+        self.taking
+            .as_ref()?
+            .witnesses
+            .iter()
+            .find(|row| row.person == person && row.actor == actor)
     }
     /// Change a person's voluntary inclination without removing personal pressure.
     pub fn set_taking_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
@@ -5088,7 +5136,38 @@ impl Economy {
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
         if let (Some(opinions), Some(owner)) = (&mut next_opinions, &next_taking) {
-            let changes = owner.personal_changes(&owner.events);
+            let mut changes = owner.personal_changes(&owner.events);
+            if !owner.witnesses.is_empty() && !owner.events.is_empty() {
+                let locations = Colocation::new(self.travel.as_ref());
+                let can_observe = |observer, actor| {
+                    let find = |id| {
+                        self.people
+                            .binary_search_by_key(&id, |p| p.id)
+                            .ok()
+                            .map(|index| &self.people[index])
+                    };
+                    find(observer)
+                        .zip(find(actor))
+                        .is_some_and(|(observer, actor)| {
+                            observer.health > 0
+                                && actor.health > 0
+                                && locations
+                                    .region(
+                                        (observer.id, observer.region),
+                                        (actor.id, actor.region),
+                                    )
+                                    .is_some()
+                                && self
+                                    .confinement
+                                    .as_ref()
+                                    .is_none_or(|c| c.can_touch(observer.id, actor.id))
+                                && next_confinement
+                                    .as_ref()
+                                    .is_none_or(|c| c.can_touch(observer.id, actor.id))
+                        })
+                };
+                changes.par_extend(owner.witness_changes(&owner.events, &can_observe));
+            }
             opinions.apply_personal_changes(&changes, tick);
             if opinions.tracks_opposed_action_reactions() {
                 use game_parallel_opinions::{

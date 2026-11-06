@@ -445,6 +445,133 @@ fn fear_can_motivate_an_unwilling_actor_and_the_target_uses_their_own_affinity()
 }
 
 #[test]
+fn witnesses_require_attention_and_visibility_and_choose_their_own_reaction() {
+    use game_parallel_economy_taking::{Event, Interpretation, Witness};
+    use game_parallel_opinions::SubjectiveReaction;
+    use std::collections::HashSet;
+    let witness = Witness {
+        person: 3,
+        actor: 1,
+        target: Some(2),
+        notices: true,
+        toward_actor: Interpretation {
+            transferred: Some(SubjectiveReaction {
+                affinity: 4,
+                obligation: 0,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+        toward_target: Interpretation {
+            transferred: Some(SubjectiveReaction {
+                affinity: -3,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    };
+    let mut owner = Taking {
+        witnesses: vec![witness.clone()].into(),
+        ..Default::default()
+    };
+    let event = Event {
+        tick: 1,
+        actor: 1,
+        target: 2,
+        good: 1,
+        quantity: 1,
+        noticed: false,
+        outcome: Outcome::Transferred,
+    };
+    assert!(
+        owner
+            .validate(&HashSet::from([1, 2, 3]), &HashSet::from([1]), 1)
+            .is_ok()
+    );
+    assert!(
+        owner
+            .witness_changes(std::slice::from_ref(&event), &|_, _| false)
+            .is_empty()
+    );
+    let changes = owner.witness_changes(std::slice::from_ref(&event), &|_, _| true);
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        (
+            changes[0].observer,
+            changes[0].target,
+            changes[0].affinity,
+            changes[0].obligation
+        ),
+        (3, 1, 4, 0)
+    );
+    assert_eq!(
+        (changes[1].observer, changes[1].target, changes[1].affinity),
+        (3, 2, -3)
+    );
+    owner.witnesses_mut()[0].notices = false;
+    assert!(
+        owner
+            .witness_changes(std::slice::from_ref(&event), &|_, _| true)
+            .is_empty()
+    );
+    owner.witnesses_mut().push(witness);
+    assert!(
+        owner
+            .validate(&HashSet::from([1, 2, 3]), &HashSet::from([1]), 1)
+            .is_err()
+    );
+}
+
+#[test]
+fn many_witnesses_independently_interpret_one_event_across_workers() {
+    use game_parallel_economy_taking::{Event, Interpretation, Witness};
+    use game_parallel_opinions::SubjectiveReaction;
+    let owner = Taking {
+        witnesses: (3..=4098)
+            .map(|person| Witness {
+                person,
+                actor: 1,
+                target: Some(2),
+                notices: true,
+                toward_actor: Interpretation {
+                    transferred: Some(SubjectiveReaction {
+                        affinity: if person % 2 == 0 { 1 } else { -1 },
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    };
+    let event = Event {
+        tick: 1,
+        actor: 1,
+        target: 2,
+        good: 1,
+        quantity: 1,
+        noticed: false,
+        outcome: Outcome::Transferred,
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let changes = owner.witness_changes(std::slice::from_ref(&event), &|_, _| true);
+                assert_eq!(changes.len(), 4096);
+                assert!(changes.iter().all(|change| change.target == 1
+                    && change.affinity == if change.observer % 2 == 0 { 1 } else { -1 }));
+                changes
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 #[ignore = "manual contested taking benchmark"]
 fn taking_selection_benchmark() {
     let count = std::env::var("LEGACY_PEOPLE")
