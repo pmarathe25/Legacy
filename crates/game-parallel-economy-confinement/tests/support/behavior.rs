@@ -1,4 +1,3 @@
-
 use super::*;
 use game_parallel_work_sites::Site;
 
@@ -16,6 +15,7 @@ fn shared_barrier(count: u64) -> (Confinement, Vec<Person>, Facilities) {
         })
         .collect();
     let owner = Confinement {
+        cell_kinds: vec![],
         default_effort: 1,
         cells: vec![Cell {
             site: 1,

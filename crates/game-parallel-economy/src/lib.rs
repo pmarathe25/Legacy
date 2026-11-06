@@ -14,7 +14,8 @@ pub use game_parallel_economy_campaign::{Campaign, ReleaseDecision};
 pub use game_parallel_economy_combat::Combat;
 pub use game_parallel_economy_confinement::{
     CapturePolicy as ConfinementCapturePolicy, CaptureResponse as ConfinementCaptureResponse,
-    Cell as ConfinementCell, Confinement, EscapePreference, Hold as ConfinementHold,
+    Cell as ConfinementCell, CellKind as ConfinementCellKind, Confinement, EscapePreference,
+    Hold as ConfinementHold,
 };
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
@@ -3514,6 +3515,13 @@ impl Economy {
             }
         }
         if let (Some(confinement), Some(sites)) = (&mut next_confinement, &work_sites) {
+            let built: Vec<_> = construction
+                .as_ref()
+                .map_or(&[][..], |owner| owner.events.as_slice())
+                .par_iter()
+                .filter_map(|event| event.site)
+                .collect();
+            confinement.enroll_sites(&built, sites);
             confinement.retain_sites(sites);
         }
         if let Some(owner) = &mut construction {

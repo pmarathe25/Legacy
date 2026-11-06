@@ -26,6 +26,14 @@ pub struct Cell {
     pub resistance: u64,
 }
 
+/// Physical resistance assigned to newly built sites of this kind.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CellKind {
+    pub kind: String,
+    pub resistance: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hold {
@@ -104,6 +112,8 @@ pub struct Confinement {
     pub default_effort: u64,
     pub cells: Vec<Cell>,
     #[serde(default)]
+    pub cell_kinds: Vec<CellKind>,
+    #[serde(default)]
     pub holds: Vec<Hold>,
     #[serde(default)]
     pub escape: Vec<EscapePreference>,
@@ -118,6 +128,8 @@ pub struct Confinement {
 impl Confinement {
     pub fn normalize(&mut self) {
         self.cells.par_sort_unstable_by_key(|cell| cell.site);
+        self.cell_kinds
+            .par_sort_unstable_by(|a, b| a.kind.cmp(&b.kind));
         self.holds.par_sort_unstable_by_key(|hold| hold.person);
         self.escape.par_sort_unstable_by_key(|rule| rule.person);
         self.capture_responses
@@ -139,6 +151,15 @@ impl Confinement {
             .collect();
         if self.default_effort == 0
             || self.cells.par_windows(2).any(|w| w[0].site >= w[1].site)
+            || self
+                .cell_kinds
+                .par_windows(2)
+                .any(|w| w[0].kind >= w[1].kind)
+            || self.cell_kinds.par_iter().any(|rule| {
+                rule.kind.is_empty()
+                    || rule.resistance == 0
+                    || production_kinds.contains(rule.kind.as_str())
+            })
             || self
                 .holds
                 .par_windows(2)
@@ -234,6 +255,43 @@ impl Confinement {
         self.holds
             .binary_search_by_key(&person, |hold| hold.person)
             .is_ok()
+    }
+
+    /// Attach barriers only to sites whose construction was physically accepted.
+    pub fn enroll_sites(&mut self, built: &[u64], sites: &Facilities) {
+        if built.is_empty() || self.cell_kinds.is_empty() {
+            return;
+        }
+        let additions: Vec<_> = built
+            .par_iter()
+            .filter_map(|id| {
+                if self
+                    .cells
+                    .binary_search_by_key(id, |cell| cell.site)
+                    .is_ok()
+                {
+                    return None;
+                }
+                let site =
+                    &sites.sites[sites.sites.binary_search_by_key(id, |site| site.id).ok()?];
+                let rule = &self.cell_kinds[self
+                    .cell_kinds
+                    .binary_search_by(|rule| rule.kind.cmp(&site.kind))
+                    .ok()?];
+                Some(Cell {
+                    site: site.id,
+                    resistance: rule.resistance,
+                })
+            })
+            .collect();
+        self.cells.par_extend(additions);
+        if self
+            .cells
+            .par_windows(2)
+            .any(|pair| pair[0].site > pair[1].site)
+        {
+            self.cells.par_sort_unstable_by_key(|cell| cell.site);
+        }
     }
 
     /// Attempt a physical capture; a conscious person can yield, resist, or be overpowered.
@@ -418,6 +476,7 @@ impl Confinement {
         let mut next = Self {
             default_effort: self.default_effort,
             cells: self.cells.par_iter().cloned().collect(),
+            cell_kinds: self.cell_kinds.par_iter().cloned().collect(),
             holds: self.holds.par_iter().cloned().collect(),
             escape: self.escape.par_iter().cloned().collect(),
             capture_responses: self.capture_responses.par_iter().cloned().collect(),

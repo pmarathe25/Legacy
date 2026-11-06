@@ -9058,6 +9058,7 @@ fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
         capture_policies: vec![],
         capture_responses: vec![],
         default_effort: 1,
@@ -9150,6 +9151,7 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
         capture_policies: vec![],
         capture_responses: vec![],
         default_effort: 1,
@@ -9230,6 +9232,7 @@ fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
         capture_policies: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
@@ -9341,6 +9344,7 @@ fn autonomous_person_can_capture_an_idle_ruler_who_resists_or_yields() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
             site: 1,
@@ -9474,6 +9478,7 @@ fn autonomous_capture_resolves_shared_capacity_and_target_contention() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
             site: 1,
@@ -9557,6 +9562,7 @@ fn controlled_person_can_choose_repeated_physical_escape_attempts() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
         capture_policies: vec![],
         capture_responses: vec![],
         default_effort: 2,

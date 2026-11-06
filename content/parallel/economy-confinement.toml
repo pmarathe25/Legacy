@@ -306,8 +306,19 @@ max_work_hunger = 20
 sites = [{ id = 1, region = 1, kind = "cell", capacity = 2 }]
 requirements = []
 
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "reed cell"
+kind = "cell"
+capacity = 1
+kit = "reed-shelter-kit"
+quantity = 1
+salvage = 1
+
 [confinement]
 cells = [{ site = 1, resistance = 6 }]
+cell_kinds = [{ kind = "cell", resistance = 6 }]
 escape = [
   { person = 1, willing = false, effort = 4 },
   { person = 2, willing = true, effort = 5 },

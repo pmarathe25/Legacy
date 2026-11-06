@@ -2153,6 +2153,75 @@ fn player_can_confine_and_release_a_guardian_using_the_authored_cell() {
 }
 
 #[test]
+fn a_real_construction_can_create_a_new_physical_barrier() {
+    use game_parallel_economy_player::Player;
+    use game_parallel_lots::{Container, Place};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let initial = scenario(
+        &root.join("content/parallel/economy-confinement.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let kit = initial
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "reed-shelter-kit")
+        .unwrap()
+        .id;
+    let mut missing = initial.clone();
+    let stock = missing
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| {
+            c.place
+                == Place::Stock {
+                    region: 1,
+                    good: kit,
+                }
+        })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    let mut world = game_parallel_economy::Economy::compile(missing).unwrap();
+    let before = world.snapshot();
+    assert!(Player::new(&mut world).build_site(1).is_err());
+    assert_eq!(world.snapshot(), before);
+    let mut world = game_parallel_economy::Economy::compile(initial).unwrap();
+    assert!(Player::new(&mut world).build_site(1).unwrap());
+    let state = world.snapshot();
+    assert!(
+        state
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .sites
+            .iter()
+            .any(|site| site.id == 2 && site.kind == "cell")
+    );
+    assert!(
+        state
+            .confinement
+            .as_ref()
+            .unwrap()
+            .cells
+            .iter()
+            .any(|cell| cell.site == 2 && cell.resistance == 6)
+    );
+    assert!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .any(|container| container.place == Place::Site(2) && container.used == 1)
+    );
+    game_parallel_economy::Economy::compile(state).unwrap();
+}
+
+#[test]
 fn player_can_be_captured_by_an_individual_and_choose_to_escape() {
     use game_parallel_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
