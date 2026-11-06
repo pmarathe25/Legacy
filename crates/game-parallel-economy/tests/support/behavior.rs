@@ -929,6 +929,65 @@ fn animals_graze_only_the_actual_seasonal_renewal() {
     assert_eq!(state.gathering.unwrap().nodes[0].available, 0);
 }
 
+#[test]
+fn grazing_and_patch_stock_commit_together_and_resume_after_reload() {
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.gathering = Some(Gathering {
+        max_hunger: 20,
+        inherit_births: false,
+        policies: vec![],
+        nodes: vec![ResourceNode {
+            id: 1,
+            region: 1,
+            good: 1,
+            available: 2,
+            capacity: 2,
+            regrowth: 0,
+            seasonal: false,
+            yield_per_action: 1,
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                let stale = world.prepare().unwrap();
+                assert_eq!(world.snapshot(), before);
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                assert_eq!(saved.gathering.as_ref().unwrap().nodes[0].available, 0);
+                assert_eq!(
+                    saved
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .map(|a| 2 - a.hunger)
+                        .sum::<u32>(),
+                    2
+                );
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), saved);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 fn hunting_fixture() -> State {
     use game_parallel_genetics::{Genome, Sex};
     let mut state = fixture();

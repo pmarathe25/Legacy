@@ -4163,16 +4163,37 @@ impl Economy {
                     severity: season.map_or(hazard.damage, |season| season.exposure(hazard.damage)),
                 })
                 .collect();
-            // Gathering owns and validates patch identity; empty patches cannot
-            // create grazing claims, so they need no animal-side allocation.
-            let quiet = if patches.par_iter().all(|patch| patch.available == 0) {
-                fauna
-                    .prepare_without_grazing(&feedings, &exposure, &hunted_animals, self.seed, tick)
-                    .map_err(str::to_owned)?
-            } else {
-                None
+            let quiet = fauna
+                .prepare_compact(
+                    &patches,
+                    &feedings,
+                    &exposure,
+                    &hunted_animals,
+                    self.seed,
+                    tick,
+                )
+                .map_err(str::to_owned)?;
+            let mut deduct_grazing = |consumed: &[(u64, u64)]| -> Result<(), String> {
+                if let Some(gathering) = &mut gathering {
+                    gathering
+                        .nodes
+                        .par_iter_mut()
+                        .try_for_each(|node| -> Result<(), String> {
+                            if let Ok(i) = consumed.binary_search_by_key(&node.id, |row| row.0) {
+                                node.available = node
+                                    .available
+                                    .checked_sub(consumed[i].1)
+                                    .ok_or("animal grazing exceeds physical resource")?;
+                            }
+                            Ok(())
+                        })?;
+                } else if !consumed.is_empty() {
+                    return Err("animal grazing requires physical resources".into());
+                }
+                Ok(())
             };
             if let Some(quiet) = quiet {
+                deduct_grazing(quiet.consumed())?;
                 Some(FaunaDraft::Quiet {
                     lifecycle: quiet,
                     handling: handling_plan.events,
@@ -4194,24 +4215,7 @@ impl Economy {
                     &mut draft.fauna,
                     &restraint_plan.reactions,
                 );
-                if let Some(gathering) = &mut gathering {
-                    gathering
-                        .nodes
-                        .par_iter_mut()
-                        .try_for_each(|node| -> Result<(), String> {
-                            if let Ok(i) =
-                                draft.consumed.binary_search_by_key(&node.id, |row| row.0)
-                            {
-                                node.available = node
-                                    .available
-                                    .checked_sub(draft.consumed[i].1)
-                                    .ok_or("animal grazing exceeds physical resource")?;
-                            }
-                            Ok(())
-                        })?;
-                } else if !draft.consumed.is_empty() {
-                    return Err("animal grazing requires physical resources".into());
-                }
+                deduct_grazing(&draft.consumed)?;
                 Some(FaunaDraft::Complete(draft.fauna))
             }
         } else {

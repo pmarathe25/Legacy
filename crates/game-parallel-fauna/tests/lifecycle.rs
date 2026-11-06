@@ -348,6 +348,92 @@ fn staged_feeding_handles_sparse_animal_ids_and_unsorted_receipts() {
 }
 
 #[test]
+fn staged_grazing_matches_complete_lifecycle_and_conserves_each_patch() {
+    let mut state = initial();
+    for id in 3..=2048 {
+        state
+            .animals
+            .push(animal(id, Sex::Male, (id % 1000) as u16));
+    }
+    state.next_id = 2049;
+    state.animals[0].social_response = Some(SocialResponse {
+        feed_affinity: 2,
+        minimum: -5,
+        maximum: 5,
+        capacity: 3,
+    });
+    let patches = [
+        Patch {
+            id: 8,
+            region: 1,
+            good: 1,
+            available: 500,
+        },
+        Patch {
+            id: 2,
+            region: 1,
+            good: 1,
+            available: 0,
+        },
+        Patch {
+            id: 3,
+            region: 1,
+            good: 1,
+            available: 777,
+        },
+        Patch {
+            id: 4,
+            region: 1,
+            good: 2,
+            available: 200,
+        },
+    ];
+    let food = [Feeding {
+        animal: 1,
+        person: Some(10),
+        good: 1,
+        quantity: 1,
+    }];
+    let hunted = [2];
+    for seed in [7, 123] {
+        let expected = state
+            .advance_with_hunts(&patches, &food, &[], &hunted, seed, 1)
+            .unwrap();
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut next = state.clone();
+                    let draft = next
+                        .prepare_compact(&patches, &food, &[], &hunted, seed, 1)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(draft.consumed(), expected.consumed);
+                    assert_eq!(draft.deaths(), expected.deaths);
+                    next.validate_quiet(&draft).unwrap();
+                    next.publish_quiet_validated(draft);
+                    assert_eq!(next, expected.fauna);
+                    next
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+    let invalid = [patches[0], patches[0]];
+    assert!(
+        state
+            .prepare_compact(&invalid, &food, &[], &hunted, 7, 1)
+            .is_err()
+    );
+    assert!(
+        state
+            .advance_with_hunts(&invalid, &food, &[], &hunted, 7, 1)
+            .is_err()
+    );
+}
+
+#[test]
 fn large_birth_growth_moves_animals_without_losing_individual_state() {
     let mut state = initial();
     state.animals = (1..=16_384)
@@ -1001,6 +1087,7 @@ fn concentrated_grazing_benchmark() {
         .unwrap_or_else(|_| "1".into())
         .parse()
         .unwrap();
+    let staged = std::env::var_os("LEGACY_STAGED").is_some();
     let mut state = initial();
     state.species[0].conception_one_in = u64::MAX;
     state.animals = (1..=count).map(|id| animal(id, Sex::Male, 100)).collect();
@@ -1021,14 +1108,25 @@ fn concentrated_grazing_benchmark() {
         .install(|| {
             let mut samples = Vec::new();
             for _ in 0..4 {
+                let mut next = staged.then(|| state.clone());
                 let started = std::time::Instant::now();
-                let draft = state.advance_validated(&[patch], 7, 1).unwrap();
+                if let Some(next) = &mut next {
+                    let draft = next
+                        .prepare_compact(&[patch], &[], &[], &[], 7, 1)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(draft.consumed(), &[(1, count)]);
+                    next.validate_quiet(&draft).unwrap();
+                    next.publish_quiet_validated(draft);
+                } else {
+                    let draft = state.advance_validated(&[patch], 7, 1).unwrap();
+                    assert_eq!(draft.consumed, vec![(1, count)]);
+                }
                 samples.push(started.elapsed().as_secs_f64());
-                assert_eq!(draft.consumed, vec![(1, count)]);
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} animals={count} grazing_seconds={:.6}",
+                "workers={workers} animals={count} staged={staged} grazing_seconds={:.6}",
                 samples[2]
             );
         });

@@ -164,6 +164,7 @@ pub struct QuietDraft {
     births: Vec<Animal>,
     next_id: u64,
     feed_meetings: Vec<(usize, u64, u64)>,
+    consumed: Vec<(u64, u64)>,
 }
 
 #[derive(Clone, Copy)]
@@ -179,6 +180,9 @@ impl QuietDraft {
     pub fn deaths(&self) -> &[u64] {
         &self.deaths
     }
+    pub fn consumed(&self) -> &[(u64, u64)] {
+        &self.consumed
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -188,6 +192,83 @@ struct Claim {
     priority: u64,
     amount: u64,
     available: u64,
+}
+
+struct GrazingAllocation {
+    eaten: Vec<(u64, u64)>,
+    consumed: Vec<(u64, u64)>,
+}
+
+fn allocate_grazing<'a>(
+    animals: &[Animal],
+    patches: &[Patch],
+    hunted: &[u64],
+    lookup: impl Fn(u32) -> Option<&'a Species> + Sync,
+    before_grazing: impl Fn(&Animal, &Species) -> u32 + Sync,
+    entropy: (u64, u64),
+) -> GrazingAllocation {
+    let (seed, tick) = entropy;
+    let mut claims: Vec<_> = if patches.par_iter().any(|patch| patch.available > 0) {
+        animals
+            .par_iter()
+            .filter_map(|a| {
+                if a.health == 0 || hunted.binary_search(&a.id).is_ok() {
+                    return None;
+                }
+                let s = lookup(a.species)?;
+                let hunger = before_grazing(a, s);
+                if hunger == 0 {
+                    return None;
+                }
+                let start =
+                    patches.partition_point(|p| (p.region, p.good) < (a.region, s.food_good));
+                let end =
+                    patches.partition_point(|p| (p.region, p.good) <= (a.region, s.food_good));
+                if start == end {
+                    return None;
+                }
+                let offset =
+                    (random(seed ^ 0x6772617a65, a.id, tick) % (end - start) as u64) as usize;
+                let patch = patches[start + offset];
+                Some(Claim {
+                    patch: patch.id,
+                    animal: a.id,
+                    priority: random(seed ^ 0x666f72616765, a.id, tick),
+                    amount: s
+                        .intake
+                        .min(u64::from(hunger).div_ceil(u64::from(s.relief_per_unit))),
+                    available: patch.available,
+                })
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    claims.par_sort_unstable_by_key(|c| (c.patch, c.priority, c.animal));
+    let mut granted: Vec<_> = claims
+        .par_chunk_by(|a, b| a.patch == b.patch)
+        .flat_map(|group| {
+            let amounts: Vec<_> = group.par_iter().map(|c| c.amount).collect();
+            let prefixes = game_parallel_lot_allocation::prefixes(&amounts);
+            prefixes
+                .into_par_iter()
+                .zip(group.par_iter())
+                .filter_map(|(before, claim)| {
+                    let remaining = u128::from(claim.available).saturating_sub(before);
+                    let eaten = remaining.min(u128::from(claim.amount)) as u64;
+                    (eaten > 0).then_some((claim.patch, claim.animal, eaten))
+                })
+        })
+        .collect();
+    granted.par_sort_unstable_by_key(|row| (row.0, row.1));
+    let mut eaten: Vec<_> = granted.par_iter().map(|row| (row.1, row.2)).collect();
+    eaten.par_sort_unstable_by_key(|row| row.0);
+    let mut consumed: Vec<_> = granted
+        .par_chunk_by(|a, b| a.0 == b.0)
+        .map(|group| (group[0].0, group.par_iter().map(|row| row.2).sum()))
+        .collect();
+    consumed.par_sort_unstable_by_key(|row| row.0);
+    GrazingAllocation { eaten, consumed }
 }
 
 fn apply_feeding_meetings<K: Copy>(animal: &mut Animal, local: &[(K, u64, u64)]) {
@@ -252,6 +333,20 @@ impl Fauna {
         seed: u64,
         tick: u64,
     ) -> Result<Option<QuietDraft>, &'static str> {
+        self.prepare_compact(&[], feeding, exposure, hunted, seed, tick)
+    }
+
+    /// Stage the complete lifecycle and grazing against validated world data.
+    /// The host must also stage the returned physical patch deductions.
+    pub fn prepare_compact(
+        &self,
+        patches: &[Patch],
+        feeding: &[Feeding],
+        exposure: &[Exposure],
+        hunted: &[u64],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Option<QuietDraft>, &'static str> {
         if self.last_tick.checked_add(1) != Some(tick) {
             return Err("fauna phase must advance one tick");
         }
@@ -267,6 +362,13 @@ impl Fauna {
         }
         let mut species: Vec<_> = self.species.par_iter().collect();
         species.par_sort_unstable_by_key(|s| s.id);
+        let mut patches = patches.to_vec();
+        patches.par_sort_unstable_by_key(|p| (p.region, p.good, p.id));
+        let mut patch_ids: Vec<_> = patches.par_iter().map(|p| p.id).collect();
+        patch_ids.par_sort_unstable();
+        if patch_ids.first() == Some(&0) || patch_ids.par_windows(2).any(|p| p[0] == p[1]) {
+            return Err("invalid fauna food patches");
+        }
         let lookup = |id| {
             species
                 .binary_search_by_key(&id, |s| s.id)
@@ -360,6 +462,36 @@ impl Fauna {
             .par_chunk_by(|a, b| a == b)
             .map(|group| (group[0].0, group[0].1, group.len() as u64))
             .collect();
+        let before_grazing = |a: &Animal, s: &Species| {
+            let index = animal_index(a.id).expect("indexed animal");
+            let amount = dense_supply.map_or_else(
+                || {
+                    supplied
+                        .binary_search_by_key(&index, |row| row.0)
+                        .ok()
+                        .map_or(0, |i| supplied[i].1)
+                },
+                |first| {
+                    index
+                        .checked_sub(first)
+                        .and_then(|i| supplied.get(i))
+                        .map_or(0, |row| row.1)
+                },
+            );
+            let relief = (u128::from(amount) * u128::from(s.relief_per_unit))
+                .min(u128::from(u32::MAX)) as u32;
+            a.hunger
+                .saturating_sub(relief)
+                .saturating_add(s.hunger_per_tick)
+        };
+        let GrazingAllocation { eaten, consumed } = allocate_grazing(
+            &self.animals,
+            &patches,
+            &hunted,
+            lookup,
+            before_grazing,
+            (seed, tick),
+        );
         let updates: Vec<_> = self
             .animals
             .par_iter()
@@ -402,6 +534,13 @@ impl Fauna {
                     .hunger
                     .saturating_sub(relief)
                     .saturating_add(s.hunger_per_tick);
+                let food = eaten
+                    .binary_search_by_key(&a.id, |row| row.0)
+                    .ok()
+                    .map_or(0, |i| eaten[i].1);
+                let grazing_relief = (u128::from(food) * u128::from(s.relief_per_unit))
+                    .min(u128::from(u32::MAX)) as u32;
+                next.hunger = next.hunger.saturating_sub(grazing_relief);
                 if next.age >= s.lifespan {
                     next.health = 0;
                 } else if next.hunger >= s.starvation_threshold {
@@ -568,6 +707,7 @@ impl Fauna {
             births,
             next_id,
             feed_meetings,
+            consumed,
         }))
     }
 
@@ -947,66 +1087,14 @@ impl Fauna {
                 .saturating_sub(relief)
                 .saturating_add(species.hunger_per_tick)
         };
-        let mut claims: Vec<_> = if patches.par_iter().any(|patch| patch.available > 0) {
-            self.animals
-                .par_iter()
-                .filter_map(|a| {
-                    if a.health == 0 || hunted.binary_search(&a.id).is_ok() {
-                        return None;
-                    }
-                    let s = lookup(a.species)?;
-                    let hunger = before_grazing(a, s);
-                    if hunger == 0 {
-                        return None;
-                    }
-                    let start =
-                        patches.partition_point(|p| (p.region, p.good) < (a.region, s.food_good));
-                    let end =
-                        patches.partition_point(|p| (p.region, p.good) <= (a.region, s.food_good));
-                    if start == end {
-                        return None;
-                    }
-                    let offset =
-                        (random(seed ^ 0x6772617a65, a.id, tick) % (end - start) as u64) as usize;
-                    let patch = patches[start + offset];
-                    Some(Claim {
-                        patch: patch.id,
-                        animal: a.id,
-                        priority: random(seed ^ 0x666f72616765, a.id, tick),
-                        amount: s
-                            .intake
-                            .min(u64::from(hunger).div_ceil(u64::from(s.relief_per_unit))),
-                        available: patch.available,
-                    })
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        claims.par_sort_unstable_by_key(|c| (c.patch, c.priority, c.animal));
-        let mut granted: Vec<_> = claims
-            .par_chunk_by(|a, b| a.patch == b.patch)
-            .flat_map(|group| {
-                let amounts: Vec<_> = group.par_iter().map(|c| c.amount).collect();
-                let prefixes = game_parallel_lot_allocation::prefixes(&amounts);
-                prefixes
-                    .into_par_iter()
-                    .zip(group.par_iter())
-                    .filter_map(|(before, claim)| {
-                        let remaining = u128::from(claim.available).saturating_sub(before);
-                        let eaten = remaining.min(u128::from(claim.amount)) as u64;
-                        (eaten > 0).then_some((claim.patch, claim.animal, eaten))
-                    })
-            })
-            .collect();
-        granted.par_sort_unstable_by_key(|row| (row.0, row.1));
-        let mut eaten: Vec<_> = granted.par_iter().map(|row| (row.1, row.2)).collect();
-        eaten.par_sort_unstable_by_key(|row| row.0);
-        let mut consumed: Vec<_> = granted
-            .par_chunk_by(|a, b| a.0 == b.0)
-            .map(|group| (group[0].0, group.par_iter().map(|row| row.2).sum()))
-            .collect();
-        consumed.par_sort_unstable_by_key(|row| row.0);
+        let GrazingAllocation { eaten, consumed } = allocate_grazing(
+            &self.animals,
+            &patches,
+            &hunted,
+            lookup,
+            before_grazing,
+            (seed, tick),
+        );
         let mut meetings: Vec<_> = if self
             .animals
             .par_iter()
