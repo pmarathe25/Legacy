@@ -529,6 +529,8 @@ pub struct Context<'a> {
     pub goods: &'a [Good],
     pub view: &'a View,
     pub busy: &'a [u64],
+    /// Captives behind barriers without an opening for supplies.
+    pub blocked_receivers: &'a [u64],
     pub manual: Option<(u64, u64, u32, u64)>,
     pub tick: u64,
     pub seed: u64,
@@ -898,6 +900,12 @@ impl Context<'_> {
                 );
             }
             chosen.push((sender, recipient, good, quantity));
+        }
+        if !self.blocked_receivers.is_empty() {
+            chosen = chosen
+                .into_par_iter()
+                .filter(|row| self.blocked_receivers.binary_search(&row.1).is_err())
+                .collect();
         }
         chosen.par_sort_unstable();
         base.checked_add(chosen.len() as u64)

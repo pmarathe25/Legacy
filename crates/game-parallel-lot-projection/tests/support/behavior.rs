@@ -327,6 +327,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         people: &people,
         locations: None,
         busy: &[],
+        blocked_receivers: &[],
         tick: 1,
     }
     .plan(100)
@@ -369,6 +370,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         people: &people,
         locations: None,
         busy: &[],
+        blocked_receivers: &[],
         tick: 1,
     }
     .plan(100)
@@ -471,6 +473,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
                     people: &people,
                     locations: None,
                     busy: &[1],
+                    blocked_receivers: &[],
                     tick: 1,
                 }
                 .plan(1)
@@ -587,6 +590,7 @@ fn concentrated_promise_delivery_benchmark() {
                     people: &people,
                     locations: None,
                     busy: &[],
+                    blocked_receivers: &[],
                     tick: 1,
                 }
                 .plan(1)

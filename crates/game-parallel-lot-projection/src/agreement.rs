@@ -21,6 +21,11 @@ pub struct Plan {
     chosen: Vec<(u64, Contract)>,
     tick: u64,
 }
+pub struct ManualDelivery {
+    pub actor: u64,
+    pub contract: u64,
+    pub action_base: u64,
+}
 pub fn decay(opinions: Option<&mut Opinions>) {
     if let Some(opinions) = opinions {
         opinions.decay_fear();
@@ -107,10 +112,14 @@ impl Plan {
         agreements: &Agreements,
         people: &[PersonSnapshot],
         locations: Option<&Colocation>,
-        actor: u64,
-        contract: u64,
-        action_base: u64,
+        choice: ManualDelivery,
+        blocked_receivers: &[u64],
     ) -> Result<(), String> {
+        let ManualDelivery {
+            actor,
+            contract,
+            action_base,
+        } = choice;
         let row = agreements
             .contracts
             .iter()
@@ -121,6 +130,7 @@ impl Plan {
         if row.status != Status::Active
             || row.due < self.tick
             || row.quantity <= row.delivered
+            || blocked_receivers.binary_search(&row.creditor).is_ok()
             || !a.zip(b).is_some_and(|(a, b)| together(a, b, locations))
         {
             return Err("promise is not deliverable here".into());
@@ -217,6 +227,8 @@ pub struct Context<'a> {
     pub people: &'a [PersonSnapshot],
     pub locations: Option<&'a Colocation>,
     pub busy: &'a [u64],
+    /// Sorted people physically unreachable for a delivery.
+    pub blocked_receivers: &'a [u64],
     pub tick: u64,
 }
 impl Context<'_> {
@@ -243,6 +255,10 @@ impl Context<'_> {
                     || contract.due < self.tick
                     || contract.quantity <= contract.delivered
                     || contract.debtor == contract.creditor
+                    || self
+                        .blocked_receivers
+                        .binary_search(&contract.creditor)
+                        .is_ok()
                 {
                     return false;
                 }

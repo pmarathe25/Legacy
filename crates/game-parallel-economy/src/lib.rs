@@ -1465,7 +1465,7 @@ impl Economy {
                     } => owner.held(deceased),
                     game_parallel_economy_interaction::PhysicalChoice::Give {
                         recipient, ..
-                    } => owner.held(recipient),
+                    } => !owner.can_receive_supplies(recipient),
                     game_parallel_economy_interaction::PhysicalChoice::TreatOther {
                         patient,
                         ..
@@ -1956,7 +1956,8 @@ impl Economy {
             busy,
             meal_candidates,
             action_base,
-            tick
+            tick,
+            held
         );
         let (pickup, mut claim_uses, transfer) =
             family::prepare_provisioning!(self, view, busy, action_base, claims, player_transfer);
@@ -1991,6 +1992,18 @@ impl Economy {
         let locations = person::travel::Colocation::new(
             needs_locations.then_some(self.travel.as_ref()).flatten(),
         );
+        let blocked_receivers: Vec<_> = held
+            .par_iter()
+            .copied()
+            .filter(|person| {
+                self.confinement
+                    .as_ref()
+                    .is_some_and(|owner| !owner.can_receive_supplies(*person))
+                    || next_confinement
+                        .as_ref()
+                        .is_some_and(|owner| !owner.can_receive_supplies(*person))
+            })
+            .collect();
         let promises = game_parallel_economy_promises::plan_world!(
             self,
             people,
@@ -1998,7 +2011,8 @@ impl Economy {
             busy,
             tick,
             action_base,
-            player_transfer
+            player_transfer,
+            &blocked_receivers
         );
         let proposals = exchange.proposals(&mut busy)?;
         action_base = action_base
@@ -2156,6 +2170,7 @@ impl Economy {
             goods: self.physical.goods(),
             view: &view,
             busy: &busy,
+            blocked_receivers: &blocked_receivers,
             manual: manual_give,
             tick,
             seed: self.seed,
@@ -2197,6 +2212,7 @@ impl Economy {
             .copied()
             .chain(fighters.par_iter().copied())
             .chain(meal_candidates.par_iter().map(|row| row.0))
+            .chain(held.par_iter().copied())
             .collect();
         medical_blocked.extend(request.map(|choice| choice.actor));
         medical_blocked.extend(player_work.map(|choice| choice.actor()));

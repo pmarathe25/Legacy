@@ -20,6 +20,7 @@ fn shared_barrier(count: u64) -> (Confinement, Vec<Person>, Facilities) {
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![Cell {
+            allow_supplies: false,
             site: 1,
             resistance: count + 1,
         }],

@@ -66,6 +66,8 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub busy: &'a [u64],
+    /// People separated by confinement barriers cannot receive in-person care.
+    pub confined: &'a [u64],
     pub eating: &'a [(u64, u32)],
     pub seed: u64,
     pub tick: u64,
@@ -76,6 +78,11 @@ impl Context<'_> {
         let opinions = self.opinions.map(Opinions::index);
         let locations = Colocation::new(self.travel);
         let colocated = |a: usize, b: usize| {
+            if self.confined.binary_search(&self.people[a].0).is_ok()
+                || self.confined.binary_search(&self.people[b].0).is_ok()
+            {
+                return false;
+            }
             locations
                 .region(
                     (self.people[a].0, self.people[a].1),

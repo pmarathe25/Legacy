@@ -2213,7 +2213,7 @@ fn a_real_construction_can_create_a_new_physical_barrier() {
             .unwrap()
             .cells
             .iter()
-            .any(|cell| cell.site == 2 && cell.resistance == 6)
+            .any(|cell| cell.site == 2 && cell.resistance == 6 && cell.allow_supplies)
     );
     assert!(
         state

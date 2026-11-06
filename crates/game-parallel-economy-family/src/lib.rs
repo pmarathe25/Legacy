@@ -99,7 +99,7 @@ macro_rules! validate_care {
 }
 #[macro_export]
 macro_rules! prepare_care {
-    ($world:expr, $people:expr, $view:expr, $claims:expr, $busy:expr, $meals:expr, $base:expr, $tick:expr) => {{
+    ($world:expr, $people:expr, $view:expr, $claims:expr, $busy:expr, $meals:expr, $base:expr, $tick:expr, $held:expr) => {{
         let care = $world
             .care
             .as_ref()
@@ -116,6 +116,7 @@ macro_rules! prepare_care {
                     opinions: $world.opinions.as_ref(),
                     claims: $claims.as_ref(),
                     busy: &$busy,
+                    confined: &$held,
                     eating: &$meals,
                     seed: $world.seed,
                     tick: $tick,

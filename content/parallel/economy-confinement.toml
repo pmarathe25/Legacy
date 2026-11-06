@@ -318,8 +318,8 @@ quantity = 1
 salvage = 1
 
 [confinement]
-cells = [{ site = 1, resistance = 6 }]
-cell_kinds = [{ kind = "cell", resistance = 6 }]
+cells = [{ site = 1, resistance = 6, allow_supplies = true }]
+cell_kinds = [{ kind = "cell", resistance = 6, allow_supplies = true }]
 escape = [
   { person = 1, willing = false, effort = 4 },
   { person = 2, willing = true, effort = 5 },

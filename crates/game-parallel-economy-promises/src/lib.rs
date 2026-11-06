@@ -18,23 +18,23 @@ pub struct Plans {
 }
 #[macro_export]
 macro_rules! plan_world {
-    ($world:expr, $people:expr, $locations:expr, $busy:expr, $tick:expr, $base:expr, $choice:expr) => {{
+    ($world:expr, $people:expr, $locations:expr, $busy:expr, $tick:expr, $base:expr, $choice:expr, $blocked:expr) => {{
         let mut plans = $crate::plan(
             $world.agreements.as_ref(),
             &$people,
             $world.opinions.as_ref(),
             &$locations,
-            &mut $busy,
+            (&mut $busy, $blocked),
             $tick,
             $base,
         )?;
-        $crate::manual_delivery!($world, $choice, plans, $people, $locations, $base);
+        $crate::manual_delivery!($world, $choice, plans, $people, $locations, $base, $blocked);
         plans
     }};
 }
 #[macro_export]
 macro_rules! manual_delivery {
-    ($world:expr, $choice:expr, $plans:expr, $people:expr, $locations:expr, $base:expr) => {
+    ($world:expr, $choice:expr, $plans:expr, $people:expr, $locations:expr, $base:expr, $blocked:expr) => {
         if let Some(game_parallel_economy_interaction::PhysicalChoice::Promise {
             person,
             contract,
@@ -56,9 +56,12 @@ macro_rules! manual_delivery {
                     $world.agreements.as_ref().expect("enabled promises"),
                     &$people,
                     Some(&$locations),
-                    person,
-                    contract,
-                    $base,
+                    game_parallel_lot_projection::agreement::ManualDelivery {
+                        actor: person,
+                        contract,
+                        action_base: $base,
+                    },
+                    $blocked,
                 )?;
         }
     };
@@ -75,7 +78,7 @@ pub fn plan(
     people: &[PersonSnapshot],
     opinions: Option<&Opinions>,
     locations: &Colocation,
-    busy: &mut Vec<u64>,
+    (busy, blocked_receivers): (&mut Vec<u64>, &[u64]),
     tick: u64,
     action_base: u64,
 ) -> Result<Plans, String> {
@@ -91,6 +94,7 @@ pub fn plan(
         people,
         locations: Some(locations),
         busy,
+        blocked_receivers,
         tick,
     }
     .plan(action_base)?;

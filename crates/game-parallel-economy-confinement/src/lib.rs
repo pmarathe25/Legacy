@@ -28,6 +28,9 @@ pub struct Cell {
     pub site: u64,
     /// Remaining physical resistance; zero is a broken barrier.
     pub resistance: u64,
+    /// A physical opening allows possessions to pass to a captive.
+    #[serde(default)]
+    pub allow_supplies: bool,
 }
 
 /// Physical resistance assigned to newly built sites of this kind.
@@ -36,6 +39,8 @@ pub struct Cell {
 pub struct CellKind {
     pub kind: String,
     pub resistance: u64,
+    #[serde(default)]
+    pub allow_supplies: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -322,6 +327,17 @@ impl Confinement {
         ordered_index(&self.holds, person, |hold| hold.person).is_some()
     }
 
+    /// A cell's physical opening, not a social permission, determines access.
+    pub fn can_receive_supplies(&self, person: u64) -> bool {
+        ordered_index(&self.holds, person, |hold| hold.person).is_none_or(|i| {
+            let site = self.holds[i].site;
+            self.cells
+                .binary_search_by_key(&site, |cell| cell.site)
+                .ok()
+                .is_some_and(|index| self.cells[index].allow_supplies)
+        })
+    }
+
     /// Attach barriers only to sites whose construction was physically accepted.
     pub fn enroll_sites(&mut self, built: &[u64], sites: &Facilities) {
         if built.is_empty() || self.cell_kinds.is_empty() {
@@ -346,6 +362,7 @@ impl Confinement {
                 Some(Cell {
                     site: site.id,
                     resistance: rule.resistance,
+                    allow_supplies: rule.allow_supplies,
                 })
             })
             .collect();

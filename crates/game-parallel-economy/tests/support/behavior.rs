@@ -9066,6 +9066,7 @@ fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
         capture_responses: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 5,
         }],
@@ -9161,6 +9162,7 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
         capture_responses: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 5,
         }],
@@ -9222,6 +9224,381 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
 }
 
 #[test]
+fn a_barrier_prevents_in_person_dependent_care() {
+    use game_parallel_dependent_care::{Policy as CarePolicy, Rules as CareRules};
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.nutrition = None;
+    initial.dynamics = None;
+    initial.people[0].seek_meals = false;
+    initial.people[0].hunger = 0;
+    initial.people[2].hunger = 5;
+    initial.people[2].seek_meals = true;
+    let family = initial.family.as_mut().unwrap();
+    for member in &mut family.members {
+        member.pregnancy = None;
+        member.reproduction_allowed = false;
+    }
+    family.members[2].age = 1;
+    family.members[2].parents = vec![1, 2].into();
+    initial.care = Some(DependentCare {
+        rules: CareRules {
+            dependent_until: 5,
+            max_caregiver_hunger: 100,
+            neglect_damage: 0,
+            feed_from_cargo: true,
+            fetch_local_food: false,
+            pressure_threshold: None,
+        },
+        inherit_births: false,
+        policies: vec![CarePolicy {
+            person: 1,
+            willing: true,
+        }],
+        events: vec![],
+    });
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: true,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                world.snapshot()
+            })
+    };
+    let held = run(initial.clone(), 1);
+    assert_eq!(held, run(initial.clone(), 4));
+    assert!(
+        held.care
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.child != 3 || event.caregiver.is_none())
+    );
+    assert_eq!(
+        held.physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(3))
+            .unwrap()
+            .used,
+        0
+    );
+    initial.confinement.as_mut().unwrap().holds.clear();
+    let free = run(initial, 1);
+    assert!(
+        free.care
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.child == 3 && event.caregiver == Some(1))
+    );
+    assert_eq!(
+        free.physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(3))
+            .unwrap()
+            .used,
+        1
+    );
+}
+
+#[test]
+fn a_supply_opening_does_not_make_a_captive_accessible_for_medical_contact() {
+    let mut initial = medical_workload(4);
+    initial.people[0].controlled = true;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .strains[0]
+        .transmission_per_million = 0;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: true,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold { person: 1, site: 1 }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                world.snapshot()
+            })
+    };
+    let held = run(initial.clone(), 1);
+    assert_eq!(held, run(initial.clone(), 4));
+    assert!(
+        held.dynamics
+            .as_ref()
+            .unwrap()
+            .disease
+            .as_ref()
+            .unwrap()
+            .cases
+            .iter()
+            .any(|case| case.person == 1)
+    );
+    let mut free = initial;
+    free.confinement.as_mut().unwrap().holds.clear();
+    assert!(
+        !run(free, 1)
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .any(|case| case.person == 1)
+    );
+}
+
+#[test]
+fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold { person: 2, site: 1 }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![GivingPolicy {
+            person: 1,
+            recipient: 2,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 0,
+            willing: true,
+            requires_request: false,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    let quantity = |state: &State, person| {
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|container| container.place == Place::Person(person))
+            .unwrap()
+            .lots
+            .iter()
+            .filter(|lot| lot.good == 1)
+            .map(|lot| lot.quantity)
+            .sum::<u64>()
+    };
+    let closed = run(initial.clone(), 1);
+    assert_eq!((quantity(&closed, 1), quantity(&closed, 2)), (1, 0));
+    let mut open = initial.clone();
+    open.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let delivered = run(open.clone(), 1);
+    assert_eq!(delivered, run(open.clone(), 4));
+    assert_eq!((quantity(&delivered, 1), quantity(&delivered, 2)), (0, 1));
+    assert!(delivered.confinement.unwrap().held(2));
+    let mut promised = initial.clone();
+    promised.giving = None;
+    promised.agreements = Some(Agreements {
+        offering: vec![],
+        work_offering: vec![],
+        next_id: 2,
+        bulk_debtors: vec![],
+        policies: vec![AgreementPolicy {
+            person: 1,
+            honor: true,
+            accept: false,
+            minimum_trust: None,
+            minimum_honor_trust: None,
+            fear_honor_threshold: None,
+            obligation_honor_threshold: None,
+            accept_pressure_threshold: None,
+        }],
+        contracts: vec![Contract {
+            id: 1,
+            debtor: 1,
+            creditor: 2,
+            good: 1,
+            quantity: 1,
+            delivered: 0,
+            due: 3,
+            status: Status::Active,
+        }],
+        events: vec![],
+    });
+    let blocked = run(promised.clone(), 1);
+    assert_eq!(blocked.agreements.unwrap().contracts[0].delivered, 0);
+    promised.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let fulfilled = run(promised.clone(), 1);
+    assert_eq!(fulfilled, run(promised, 4));
+    assert_eq!(
+        fulfilled.agreements.unwrap().contracts[0].status,
+        Status::Fulfilled
+    );
+    let mut manual = open;
+    manual.giving = None;
+    let actor = manual
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(3))
+        .unwrap();
+    *actor = Container::new(
+        Place::Person(3),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(manual.clone()).unwrap();
+    assert!(world.give(3, 2, 1, 1).unwrap());
+    assert_eq!(quantity(&world.snapshot(), 2), 1);
+    manual.agreements = Some(Agreements {
+        offering: vec![],
+        work_offering: vec![],
+        next_id: 2,
+        policies: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![Contract {
+            id: 1,
+            debtor: 3,
+            creditor: 2,
+            good: 1,
+            quantity: 1,
+            delivered: 0,
+            due: 3,
+            status: Status::Active,
+        }],
+        events: vec![],
+    });
+    let mut world = Economy::compile(manual.clone()).unwrap();
+    assert!(world.fulfill_promise(3, 1).unwrap());
+    manual.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    let mut world = Economy::compile(manual).unwrap();
+    assert!(world.give(3, 2, 1, 1).is_err());
+    assert!(world.fulfill_promise(3, 1).is_err());
+    assert_eq!(world.tick(), 0);
+}
+
+#[test]
 fn individuals_can_release_a_captive_by_choice_or_personal_pressure() {
     let mut initial = campaign_fixture();
     initial.pending_food.clear();
@@ -9239,6 +9616,7 @@ fn individuals_can_release_a_captive_by_choice_or_personal_pressure() {
     initial.confinement = Some(Confinement {
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 10,
         }],
@@ -9346,6 +9724,7 @@ fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
         capture_policies: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 10,
         }],
@@ -9459,6 +9838,7 @@ fn autonomous_person_can_capture_an_idle_ruler_who_resists_or_yields() {
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 5,
         }],
@@ -9595,6 +9975,7 @@ fn autonomous_capture_resolves_shared_capacity_and_target_contention() {
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 10,
         }],
@@ -9690,6 +10071,7 @@ fn an_individual_guard_spends_time_and_can_stop_or_be_motivated_by_fear() {
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 3,
         }],
@@ -9799,6 +10181,7 @@ fn people_interpret_capture_and_release_in_their_own_way() {
         default_effort: 1,
         cell_kinds: vec![],
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 10,
         }],
@@ -9978,6 +10361,7 @@ fn controlled_person_can_choose_repeated_physical_escape_attempts() {
         capture_responses: vec![],
         default_effort: 2,
         cells: vec![ConfinementCell {
+            allow_supplies: false,
             site: 1,
             resistance: 3,
         }],
