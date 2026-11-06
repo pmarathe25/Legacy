@@ -1057,6 +1057,7 @@ fn animal_restraint_fixture() -> State {
     let mut state = handling_fixture();
     state.people[0].controlled = true;
     state.animal_restraints = Some(AnimalRestraints {
+        inherit_births: false,
         default_effort: 3,
         capacity_per_handler: 1,
         policies: vec![],
@@ -1918,6 +1919,7 @@ fn animal_capture_workload(count: u64, shared: bool) -> State {
         });
     }
     state.animal_restraints = Some(AnimalRestraints {
+        inherit_births: false,
         default_effort: 1,
         capacity_per_handler: 1,
         release_policies: vec![],
@@ -9509,6 +9511,112 @@ fn newborn_animal_care_inclinations_do_not_inherit_targets_or_pressure() {
                     assert_eq!(
                         (policy.affinity_at_least, policy.affinity_at_most),
                         (Some(-2), Some(3))
+                    );
+                    assert!(state.animal_feelings.is_none());
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn newborn_animal_restraint_inclinations_do_not_inherit_targets_or_pressure() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.controlled = false;
+    }
+    initial.opinions.as_mut().unwrap().records.clear();
+    initial.fauna = hunting_fixture().fauna;
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.animal_restraints = Some(AnimalRestraints {
+        inherit_births: true,
+        default_effort: 2,
+        capacity_per_handler: 1,
+        policies: vec![AnimalCapturePolicy {
+            person: 1,
+            animal: Some(1),
+            willing: false,
+            affinity_at_least: Some(-3),
+            affinity_at_most: Some(4),
+            effort: 9,
+            pressured_by: Some(2),
+            pressure_threshold: Some(3),
+        }],
+        release_policies: vec![AnimalReleasePolicy {
+            person: 1,
+            animal: Some(1),
+            willing: false,
+            affinity_at_least: Some(-2),
+            affinity_at_most: Some(5),
+            pressured_by: Some(2),
+            pressure_threshold: Some(3),
+        }],
+        holds: vec![],
+        events: vec![],
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.animal_restraints.as_mut().unwrap().inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let owner = state.animal_restraints.as_ref().unwrap();
+                let capture = owner.policies.iter().find(|policy| policy.person == 5);
+                let release = owner
+                    .release_policies
+                    .iter()
+                    .find(|policy| policy.person == 5);
+                assert_eq!(capture.is_some(), inherit);
+                assert_eq!(release.is_some(), inherit);
+                if let (Some(capture), Some(release)) = (capture, release) {
+                    assert!(!capture.willing && !release.willing);
+                    assert_eq!(
+                        (
+                            capture.animal,
+                            capture.pressured_by,
+                            capture.pressure_threshold
+                        ),
+                        (None, None, None)
+                    );
+                    assert_eq!(
+                        (
+                            release.animal,
+                            release.pressured_by,
+                            release.pressure_threshold
+                        ),
+                        (None, None, None)
+                    );
+                    assert_eq!(
+                        (
+                            capture.affinity_at_least,
+                            capture.affinity_at_most,
+                            capture.effort
+                        ),
+                        (Some(-3), Some(4), 2)
+                    );
+                    assert_eq!(
+                        (release.affinity_at_least, release.affinity_at_most),
+                        (Some(-2), Some(5))
                     );
                     assert!(state.animal_feelings.is_none());
                 }

@@ -85,6 +85,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
             .collect(),
     };
     let owner = Restraints {
+        inherit_births: false,
         default_effort: 2,
         capacity_per_handler: 1,
         release_policies: vec![],

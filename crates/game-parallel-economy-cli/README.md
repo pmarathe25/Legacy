@@ -14,6 +14,8 @@ An animal's `on_yielded`, `on_forced`, `on_resisted`, and `on_released` settings
 
 `animal_restraints.release_policies` contains independent personal choices to release held animals, including someone else's hold. A policy can target one animal or choose a local held animal, condition willingness on the person's own affinity, or describe fear or obligation toward another person. Release does not require the handler's consent; resistance by the handler is not yet modeled.
 
+With `animal_restraints.inherit_births` and family birth enrollment enabled, newborns may acquire a parent's general capture and release inclinations. Specific animals, relationships, and pressure are not copied; capture effort starts at `default_effort`.
+
 A `[[gathering.nodes]]` patch may set `seasonal = true` to scale its renewal by the current season's food-growth factor. Fractional rates are distributed deterministically over ticks. Unmarked patches retain their configured constant renewal; humans and wildlife consume the same finite remaining patch.
 
 Optional `[[animal_care.policies]]` records define individual preferences using `person`, an optional `animal`, a named `good`, `quantity`, `willing`, and `health_at_most`. Without a fixed animal, a person selects a living animal in their own region. Optional `pressured_by` and `pressure_threshold` let fear or felt obligation toward another person motivate an unwilling caregiver. A caregiver must be available, local, and possess the goods; the preference does not grant knowledge of an animal's diet or enforce a role. With `animal_care.inherit_births` and family birth enrollment enabled, a newborn may acquire a parent's general preference without inheriting a particular target, pressure, or feelings.

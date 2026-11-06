@@ -81,6 +81,8 @@ pub struct Event {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Restraints {
+    #[serde(default)]
+    pub inherit_births: bool,
     #[serde(default = "one")]
     pub default_effort: u64,
     #[serde(default = "one")]
@@ -98,6 +100,7 @@ pub struct Restraints {
 impl Default for Restraints {
     fn default() -> Self {
         Self {
+            inherit_births: false,
             default_effort: 1,
             capacity_per_handler: 1,
             policies: Vec::new(),
@@ -339,6 +342,7 @@ impl Context<'_> {
         }) {
             return Ok(Plan {
                 state: Some(Restraints {
+                    inherit_births: owner.inherit_births,
                     default_effort: owner.default_effort,
                     capacity_per_handler: owner.capacity_per_handler,
                     policies: Vec::new(),
@@ -394,6 +398,7 @@ impl Context<'_> {
         let mut next = self
             .owner
             .map_or_else(Restraints::default, |owner| Restraints {
+                inherit_births: owner.inherit_births,
                 default_effort: owner.default_effort,
                 capacity_per_handler: owner.capacity_per_handler,
                 policies: owner.policies.par_iter().cloned().collect(),

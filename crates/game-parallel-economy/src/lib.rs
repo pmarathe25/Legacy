@@ -60,6 +60,7 @@ pub use game_parallel_practices::{
 mod animal_care;
 mod animal_feelings;
 mod animal_handling;
+mod animal_restraint_inheritance;
 mod construction_planning;
 pub use animal_care::{AnimalCare, Config as AnimalCareConfig, Policy as AnimalCarePolicy};
 pub use animal_feelings::{
@@ -4385,6 +4386,11 @@ impl Economy {
             animal_care::enroll(self.animal_care.as_ref(), family.as_ref(), tick);
         let animal_handling_births =
             animal_handling::enroll(self.animal_handling.as_ref(), family.as_ref(), tick);
+        animal_restraint_inheritance::enroll(
+            next_animal_restraints.as_mut(),
+            family.as_ref(),
+            tick,
+        );
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         #[cfg(feature = "profile")]
         {

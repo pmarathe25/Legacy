@@ -461,6 +461,7 @@ inherit_births = true
 policies = [{ person = 2, animal = 3, willing = false }]
 
 [animal_restraints]
+inherit_births = true
 default_effort = 2
 capacity_per_handler = 1
 policies = [{ person = 2, animal = 3, willing = false, effort = 2 }]
