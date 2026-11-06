@@ -10313,8 +10313,7 @@ fn social_cell_workload(count: u64, held: u64) -> State {
 
 #[test]
 fn cellmates_can_meet_but_cannot_meet_through_a_wall() {
-    let mut initial = social_cell_workload(4, 2);
-    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let initial = social_cell_workload(4, 2);
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -10450,6 +10449,371 @@ fn controlled_person_can_meet_a_cellmate_but_not_an_escaping_one() {
     let mut world = Economy::compile(initial).unwrap();
     assert!(world.meet(1, 3).is_err());
     assert_eq!(world.tick(), 0);
+}
+
+#[test]
+fn controlled_people_can_talk_through_an_opening_without_direct_contact() {
+    let mut initial = disease_workload(4);
+    confine_medical_workload(&mut initial, 1);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    initial.people[0].controlled = true;
+    let dynamics = initial.dynamics.as_mut().unwrap();
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .retain(|p| p.person <= 2);
+    let disease = dynamics.disease.as_mut().unwrap();
+    disease.cases.truncate(1);
+    disease.strains[0].transmission_per_million = 1_000_000;
+    let run = |state: State, actor, target, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                assert!(world.meet(actor, target).unwrap());
+                let snapshot = world.snapshot();
+                let dynamics = snapshot.dynamics.as_ref().unwrap();
+                assert!(
+                    dynamics
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .relationships
+                        .iter()
+                        .any(|r| (r.a, r.b) == (1, 2))
+                );
+                assert!(
+                    dynamics
+                        .disease
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .iter()
+                        .all(|case| case.person != 2)
+                );
+                assert_eq!(
+                    Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap()
+                    )
+                    .unwrap()
+                    .snapshot(),
+                    snapshot
+                );
+                snapshot
+            })
+    };
+    assert_eq!(run(initial.clone(), 1, 2, 1), run(initial.clone(), 1, 2, 4));
+    let mut reverse = initial.clone();
+    reverse.people[0].controlled = false;
+    reverse.people[1].controlled = true;
+    run(reverse, 2, 1, 1);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.meet(1, 2).is_err());
+    assert_eq!(world.tick(), 0);
+}
+
+#[test]
+fn a_person_can_talk_through_an_opening_due_to_fear() {
+    use game_parallel_social::PressurePolicy;
+    let mut initial = social_cell_workload(4, 1);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    initial.people[0].controlled = true;
+    let social = initial.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+    social.participants[1].willing = false;
+    social.pressures.push(PressurePolicy {
+        person: 2,
+        fear_at_least: Some(3),
+        obligation_at_least: None,
+        enabled: true,
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.push(Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        affinity: 0,
+        fear: 3,
+        obligation: 0,
+    });
+    initial.opinions = Some(opinions);
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.meet(1, 2).unwrap());
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| (e.a, e.b, e.pressured) == (1, 2, Some(2)))
+    );
+}
+
+#[test]
+fn acquainted_people_can_choose_to_talk_through_an_opening() {
+    let mut initial = disease_workload(4);
+    confine_medical_workload(&mut initial, 1);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let dynamics = initial.dynamics.as_mut().unwrap();
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .retain(|p| p.person <= 2);
+    let disease = dynamics.disease.as_mut().unwrap();
+    disease.cases.truncate(1);
+    disease.strains[0].transmission_per_million = 1_000_000;
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 10,
+        encounter_change: 1,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.records.push(Opinion {
+        observer: 1,
+        target: 2,
+        trust: 0,
+        affinity: 5,
+        fear: 0,
+        obligation: 0,
+    });
+    initial.opinions = Some(opinions);
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                world.snapshot()
+            })
+    };
+    let state = run(initial.clone(), 1);
+    assert_eq!(state, run(initial.clone(), 4));
+    let dynamics = state.dynamics.unwrap();
+    assert!(
+        dynamics
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| (e.a, e.b, e.region) == (1, 2, 1))
+    );
+    assert!(
+        dynamics
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .all(|case| case.person != 2)
+    );
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    assert!(
+        run(initial, 1)
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+fn autonomous_opening_conversations_can_be_motivated_by_fear() {
+    use game_parallel_social::PressurePolicy;
+    let mut initial = social_cell_workload(4, 1);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let social = initial.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+    social.participants.retain(|p| p.person <= 2);
+    social.participants[1].willing = false;
+    social.pressures.push(PressurePolicy {
+        person: 2,
+        fear_at_least: Some(3),
+        obligation_at_least: None,
+        enabled: true,
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.push(Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        affinity: 0,
+        fear: 3,
+        obligation: 0,
+    });
+    initial.opinions = Some(opinions);
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| (e.a, e.b, e.pressured) == (1, 2, Some(2)))
+    );
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
+fn strangers_can_independently_meet_through_openings_without_direct_contact() {
+    let mut initial = disease_workload(4);
+    confine_medical_workload(&mut initial, 2);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let disease = initial.dynamics.as_mut().unwrap().disease.as_mut().unwrap();
+    disease.cases.truncate(1);
+    disease.strains[0].transmission_per_million = 1_000_000;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let dynamics = state.dynamics.as_ref().unwrap();
+                let events = &dynamics.social.as_ref().unwrap().events;
+                assert_eq!(events.len(), 2);
+                assert!(
+                    events
+                        .iter()
+                        .all(|e| (e.a <= 2) != (e.b <= 2) && e.region == 1)
+                );
+                assert_eq!(dynamics.disease.as_ref().unwrap().cases.len(), 1);
+                let mut resumed = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                resumed.advance().unwrap();
+                assert_eq!(world.snapshot(), resumed.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn unwilling_strangers_can_decline_an_opening_conversation() {
+    let mut initial = social_cell_workload(4, 2);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = false;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let events = world.snapshot().dynamics.unwrap().social.unwrap().events;
+    assert_eq!(events.len(), 1);
+    assert!(events.iter().all(|event| event.a != 2 && event.b != 2));
+}
+
+fn opening_social_workload(count: u64) -> State {
+    let mut initial = disease_workload(count);
+    confine_medical_workload(&mut initial, count / 2);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    initial.dynamics.as_mut().unwrap().disease = None;
+    initial
+}
+
+#[test]
+fn many_people_converse_through_one_opening_across_workers() {
+    let count = 4096;
+    let initial = opening_social_workload(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), count as usize / 2);
+                assert!(
+                    events
+                        .iter()
+                        .all(|e| (e.a <= count / 2) != (e.b <= count / 2))
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "manual concentrated opening social benchmark"]
+fn concentrated_opening_social_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = opening_social_workload(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let now = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(now.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

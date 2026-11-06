@@ -4,15 +4,22 @@ use game_parallel_personality::Personality;
 use game_parallel_social::{Contact, Encounter, Social};
 use rayon::prelude::*;
 
+pub struct Access<'a> {
+    pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
+    pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
+}
+
 pub fn prepare(
     social: &Social,
     contacts: &[Contact],
     opinions: Option<&Opinions>,
     personality: Option<&Personality>,
-    seed: u64,
-    tick: u64,
+    clock: (u64, u64),
     requested: Option<&Encounter>,
+    access: Access<'_>,
 ) -> Result<Social, &'static str> {
+    let (seed, tick) = clock;
+    let can_speak = access.speak;
     let personality = personality.map(Personality::index);
     let needs = social
         .needs
@@ -77,7 +84,11 @@ pub fn prepare(
                 let a = contact(requester)?;
                 let b = contact(target)?;
                 let region = a.region?;
-                if !eligible(a) || !eligible(b) || b.region != Some(region) {
+                if !eligible(a)
+                    || !eligible(b)
+                    || (b.region != Some(region)
+                        && !can_speak.is_some_and(|access| access(requester, target)))
+                {
                     return None;
                 }
                 Some((
@@ -130,9 +141,25 @@ pub fn prepare(
         occupied: &already_occupied,
         seed,
         tick,
+        can_speak,
     }
     .prepare(&voluntary);
     pressured.par_extend(friends);
+    if let Some(location) = access.opening {
+        let mut occupied: Vec<_> = pressured.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
+        occupied.par_sort_unstable();
+        let conversations = crate::openings::Context {
+            social,
+            contacts,
+            needs: &needs,
+            occupied: &occupied,
+            seed,
+            tick,
+            location,
+        }
+        .prepare(&voluntary);
+        pressured.par_extend(conversations);
+    }
     if pressured.is_empty() {
         let selection = social.select_validated(contacts, seed, tick, voluntary)?;
         return social.prepare_selection_validated(selection, tick);

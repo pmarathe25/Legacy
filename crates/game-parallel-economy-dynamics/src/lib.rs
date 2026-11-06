@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod friendship;
+mod openings;
 mod pressure;
 mod travel_social;
 pub use game_parallel_economy_claims as claims;
@@ -145,7 +146,7 @@ macro_rules! social_choice_method {
 }
 #[macro_export]
 macro_rules! prepare_dynamics {
-    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr, $partition:expr) => {{
+    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr, $partition:expr, $contact:expr, $speak:expr, $opening:expr) => {{
         let exposure = $world
             .dynamics
             .as_ref()
@@ -202,6 +203,9 @@ macro_rules! prepare_dynamics {
                         tick: $tick,
                         travel: $world.travel.as_ref(),
                         partition: $partition,
+                        contact: $contact,
+                        speak: $speak,
+                        opening: $opening,
                     },
                 )
             })
@@ -233,6 +237,9 @@ pub struct Clock<'a> {
     pub tick: u64,
     pub travel: Option<&'a game_parallel_economy_person::travel::Travel>,
     pub partition: Option<&'a (dyn Fn(u64) -> (u64, u64) + Sync)>,
+    pub contact: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
+    pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
+    pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
 }
 impl Dynamics {
     pub fn validate(
@@ -283,6 +290,9 @@ impl Dynamics {
             tick,
             travel,
             partition,
+            contact,
+            speak,
+            opening,
         } = clock;
         let (exposure, requested, combat) = encounters;
         let mut occupied: Vec<_> = exposure.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
@@ -325,9 +335,9 @@ impl Dynamics {
                     &contacts,
                     opinions,
                     self.personality.as_ref(),
-                    seed,
-                    tick,
+                    (seed, tick),
                     requested.as_ref(),
+                    pressure::Access { speak, opening },
                 )
             })
             .transpose()
@@ -365,6 +375,22 @@ impl Dynamics {
                 let meetings = social
                     .as_ref()
                     .map_or(&[][..], |social| social.events.as_slice());
+                // Talking through a barrier is social contact, not the direct
+                // physical exposure represented by this disease route.
+                let filtered = contact
+                    .filter(|can_touch| {
+                        meetings
+                            .par_iter()
+                            .any(|event| !can_touch(event.a, event.b))
+                    })
+                    .map(|can_touch| {
+                        meetings
+                            .par_iter()
+                            .filter(|event| can_touch(event.a, event.b))
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    });
+                let meetings = filtered.as_deref().unwrap_or(meetings);
                 let combined: Option<Vec<_>> = (!exposure.is_empty()).then(|| {
                     meetings
                         .par_iter()
@@ -491,6 +517,9 @@ mod tests {
                         tick: 1,
                         travel: None,
                         partition: None,
+                        contact: None,
+                        speak: None,
+                        opening: None,
                     },
                 )
                 .unwrap();

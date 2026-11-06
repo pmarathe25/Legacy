@@ -11,6 +11,7 @@ pub struct Context<'a> {
     pub occupied: &'a [u64],
     pub seed: u64,
     pub tick: u64,
+    pub can_speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
 }
 impl Context<'_> {
     pub fn prepare(&self, voluntary: &(impl Fn(u64, u32) -> bool + Sync)) -> Vec<Encounter> {
@@ -62,7 +63,9 @@ impl Context<'_> {
                 let left = eligible(a)?;
                 let right = eligible(b)?;
                 let region = left.region?;
-                if right.region != Some(region) {
+                if right.region != Some(region)
+                    && !self.can_speak.is_some_and(|access| access(a, b))
+                {
                     return None;
                 }
                 let forward = index.affinity(a, b);

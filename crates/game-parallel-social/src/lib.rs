@@ -1,4 +1,4 @@
-//! Local, consenting encounters and persistent, undirected familiarity.
+//! Personal encounters and persistent, undirected familiarity.
 pub mod adapter;
 pub mod wellbeing;
 use game_parallel_social_pressure::priority;

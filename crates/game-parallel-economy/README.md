@@ -14,7 +14,7 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 People held in the same cell can provide direct medical care using medicine they carry, provided they are available and the caregiver chooses to act. A barrier blocks treatment across it even when an opening permits supplies to pass. Escape, self-treatment, requests, and giving compete with medical care for the person's action.
 
-Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. A controlled person can also ask to meet a cellmate. Physical contact does not cross a cell wall, even when a supply opening allows communication.
+Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. People can also choose to converse through a supply opening, including with strangers, acquaintances, or someone they fear. Talking through the opening is a social encounter but does not count as direct contact for the ordinary contact-based disease route; physical treatment still cannot cross the wall.
 
 The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.
 

@@ -1448,7 +1448,7 @@ impl Economy {
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
         if let Some(owner) = &self.confinement {
-            let restricted = request.is_some_and(|row| !owner.can_touch(row.actor, row.target))
+            let restricted = request.is_some_and(|row| !owner.can_communicate(row.actor, row.target))
                 || player_work.is_some_and(|row| owner.held(row.actor()))
                 || player_transfer.is_some_and(|row| {
                     owner.held(row.person())
@@ -1945,7 +1945,7 @@ impl Economy {
                     .as_ref()
                     .is_some_and(|owner| owner.held(row.target))
                     && next_confinement.as_ref().is_some_and(|owner| {
-                        owner.held(row.target) && owner.can_touch(row.actor, row.target)
+                        owner.held(row.target) && owner.can_communicate(row.actor, row.target)
                     })
                     && busy_before_confinement.binary_search(&row.target).is_err()
                     && escape_actors.binary_search(&row.target).is_err()
@@ -3768,6 +3768,48 @@ impl Economy {
         let social_partition = |person| communication.partition(person);
         let social_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
             (social_enabled && !held.is_empty()).then_some(&social_partition);
+        let social_speak = |a, b| {
+            let a = self
+                .people
+                .binary_search_by_key(&a, |person| person.id)
+                .ok()
+                .map(|index| &self.people[index]);
+            let b = self
+                .people
+                .binary_search_by_key(&b, |person| person.id)
+                .ok()
+                .map(|index| &self.people[index]);
+            a.zip(b).is_some_and(|(a, b)| {
+                a.region.is_some() && a.region == b.region && communication.allows(a.id, b.id)
+            })
+        };
+        let social_opening = |id| {
+            let person = &self.people[self
+                .people
+                .binary_search_by_key(&id, |person| person.id)
+                .ok()?];
+            let region = person.region?;
+            let (before, after) = communication.partition(id);
+            if before == 0 && after == 0 {
+                Some((region, false))
+            } else if before != 0
+                && before == after
+                && communication
+                    .before
+                    .is_some_and(|owner| owner.can_receive_supplies(id))
+                && communication
+                    .after
+                    .is_some_and(|owner| owner.can_receive_supplies(id))
+            {
+                Some((region, true))
+            } else {
+                None
+            }
+        };
+        let open_conversations = social_access.is_some()
+            && communication
+                .before
+                .is_some_and(|owner| owner.cells.iter().any(|cell| cell.allow_supplies));
         let mut dynamics = game_parallel_economy_dynamics::prepare_dynamics!(
             self,
             person,
@@ -3779,7 +3821,11 @@ impl Economy {
             interaction,
             medical_plan,
             combat,
-            social_access
+            social_access,
+            social_access.map(|_| &care_contact as &(dyn Fn(u64, u64) -> bool + Sync)),
+            social_access.map(|_| &social_speak as &(dyn Fn(u64, u64) -> bool + Sync)),
+            open_conversations
+                .then_some(&social_opening as &(dyn Fn(u64) -> Option<(u64, bool)> + Sync))
         );
         medical_plan.apply(
             dynamics.as_mut().and_then(|d| d.disease.as_mut()),
