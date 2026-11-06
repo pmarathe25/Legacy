@@ -48,6 +48,16 @@ pub struct CellKind {
 pub struct Hold {
     pub person: u64,
     pub site: u64,
+    /// A birth can physically overcrowd a cell without a new admission.
+    #[serde(default)]
+    pub born_inside: bool,
+}
+
+/// An actual newborn and the person who gave birth to them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Birth {
+    pub child: u64,
+    pub mother: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -334,14 +344,18 @@ impl Confinement {
         {
             return Err("invalid physical confinement".into());
         }
-        let mut counts: Vec<_> = self.holds.par_iter().map(|hold| hold.site).collect();
-        counts.par_sort_unstable();
-        if counts.par_chunk_by(|a, b| a == b).any(|group| {
+        let mut counts: Vec<_> = self
+            .holds
+            .par_iter()
+            .map(|hold| (hold.site, hold.born_inside))
+            .collect();
+        counts.par_sort_unstable_by_key(|row| row.0);
+        if counts.par_chunk_by(|a, b| a.0 == b.0).any(|group| {
             let site = &sites.sites[sites
                 .sites
-                .binary_search_by_key(&group[0], |site| site.id)
+                .binary_search_by_key(&group[0].0, |site| site.id)
                 .expect("validated site")];
-            group.len() as u128 > u128::from(site.capacity)
+            group.par_iter().filter(|row| !row.1).count() as u128 > u128::from(site.capacity)
         }) {
             return Err("confinement exceeds physical capacity".into());
         }
@@ -350,6 +364,48 @@ impl Confinement {
 
     pub fn held(&self, person: u64) -> bool {
         ordered_index(&self.holds, person, |hold| hold.person).is_some()
+    }
+
+    /// Actual births remain behind the mother's barrier, even if the cell is full.
+    pub fn enroll_births(&mut self, births: &[Birth]) {
+        if births.is_empty() || self.holds.is_empty() {
+            return;
+        }
+        let additions: Vec<_> = births
+            .par_iter()
+            .filter_map(|birth| {
+                let mother =
+                    &self.holds[ordered_index(&self.holds, birth.mother, |hold| hold.person)?];
+                (!self.held(birth.child)).then_some(Hold {
+                    person: birth.child,
+                    site: mother.site,
+                    born_inside: true,
+                })
+            })
+            .collect();
+        let append_in_order =
+            additions
+                .first()
+                .zip(self.holds.last())
+                .is_some_and(|(first, last)| {
+                    last.person < first.person
+                        && additions
+                            .par_windows(2)
+                            .all(|pair| pair[0].person < pair[1].person)
+                });
+        if append_in_order && additions.len() >= 4096 {
+            let previous = std::mem::take(&mut self.holds);
+            self.holds = previous.into_par_iter().chain(additions).collect();
+        } else {
+            self.holds.par_extend(additions);
+        }
+        if self
+            .holds
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            self.holds.par_sort_unstable_by_key(|hold| hold.person);
+        }
     }
 
     /// A cell's physical opening, not a social permission, determines access.
@@ -502,6 +558,7 @@ impl Confinement {
         self.holds.push(Hold {
             person: target,
             site: site_id,
+            born_inside: false,
         });
         self.holds.par_sort_unstable_by_key(|hold| hold.person);
         self.events.push(Event {

@@ -9038,6 +9038,111 @@ fn embodied_guardian_pursues_the_actual_successor_and_resets_mentorship() {
 }
 
 #[test]
+fn newborns_remain_inside_a_full_cell_with_their_mother() {
+    use game_parallel_dependent_care::{Policy as CarePolicy, Rules as CareRules};
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.care = Some(DependentCare {
+        rules: CareRules {
+            dependent_until: 5,
+            max_caregiver_hunger: 100,
+            neglect_damage: 0,
+            feed_from_cargo: true,
+            fetch_local_food: true,
+            pressure_threshold: None,
+        },
+        inherit_births: false,
+        policies: vec![CarePolicy {
+            person: 1,
+            willing: true,
+        }],
+        events: vec![],
+    });
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold {
+            person: 1,
+            site: 1,
+            born_inside: false,
+        }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let birth = world.snapshot();
+                let cell = birth.confinement.as_ref().unwrap();
+                assert!(cell.held(1));
+                assert!(
+                    cell.holds
+                        .iter()
+                        .any(|hold| hold.person == 5 && hold.site == 1 && hold.born_inside)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&birth).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.confine_person(3, 2, 1).is_err());
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let cared = world.snapshot();
+                assert_eq!(cared, restored.snapshot());
+                assert!(
+                    cared
+                        .care
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.child == 5 && event.caregiver == Some(1))
+                );
+                assert!(world.release_held_person(3, 1).unwrap());
+                assert!(restored.release_held_person(3, 1).unwrap());
+                let after = world.snapshot();
+                assert_eq!(after, restored.snapshot());
+                assert!(!after.confinement.as_ref().unwrap().held(1));
+                assert!(after.confinement.as_ref().unwrap().held(5));
+                after
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut released = Economy::compile(initial).unwrap();
+    released.advance().unwrap();
+    assert!(released.release_held_person(3, 1).unwrap());
+    let state = released.snapshot();
+    assert!(state.people.iter().any(|person| person.id == 5));
+    assert!(!state.confinement.unwrap().held(5));
+}
+
+#[test]
 fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
     let mut initial = embodied_guardian_fixture();
     initial.pending_food.clear();
@@ -9070,7 +9175,11 @@ fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
             site: 1,
             resistance: 5,
         }],
-        holds: vec![ConfinementHold { person: 5, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 5,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![EscapePreference {
             person: 5,
             willing: true,
@@ -9250,7 +9359,11 @@ fn captives_can_request_food_through_a_physical_opening() {
             allow_supplies: true,
         }],
         cell_kinds: vec![],
-        holds: vec![ConfinementHold { person: 2, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 2,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![],
         capture_responses: vec![],
         capture_policies: vec![],
@@ -9439,7 +9552,11 @@ fn captives_can_request_food_through_a_physical_opening() {
     same_cell.work_sites.as_mut().unwrap().sites[0].capacity = 2;
     let owner = same_cell.confinement.as_mut().unwrap();
     owner.cells[0].allow_supplies = false;
-    owner.holds.push(ConfinementHold { person: 3, site: 1 });
+    owner.holds.push(ConfinementHold {
+        person: 3,
+        site: 1,
+        born_inside: false,
+    });
     same_cell.giving.as_mut().unwrap().asking[0].target = 3;
     let first = run(same_cell.clone(), 1).0;
     assert!(
@@ -9498,9 +9615,14 @@ fn captives_can_request_food_through_a_physical_opening() {
     mutual.work_sites.as_mut().unwrap().sites[0].capacity = 2;
     let owner = mutual.confinement.as_mut().unwrap();
     owner.cells[0].allow_supplies = false;
-    owner
-        .holds
-        .insert(0, ConfinementHold { person: 1, site: 1 });
+    owner.holds.insert(
+        0,
+        ConfinementHold {
+            person: 1,
+            site: 1,
+            born_inside: false,
+        },
+    );
     let (first, second) = run(mutual.clone(), 1);
     assert_eq!((first.clone(), second.clone()), run(mutual, 4));
     assert!(
@@ -9608,7 +9730,11 @@ fn a_barrier_prevents_in_person_dependent_care() {
             allow_supplies: true,
         }],
         cell_kinds: vec![],
-        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 3,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![],
         capture_responses: vec![],
         capture_policies: vec![],
@@ -9651,9 +9777,14 @@ fn a_barrier_prevents_in_person_dependent_care() {
     together.work_sites.as_mut().unwrap().sites[0].capacity = 2;
     let owner = together.confinement.as_mut().unwrap();
     owner.cells[0].allow_supplies = false;
-    owner
-        .holds
-        .insert(0, ConfinementHold { person: 1, site: 1 });
+    owner.holds.insert(
+        0,
+        ConfinementHold {
+            person: 1,
+            site: 1,
+            born_inside: false,
+        },
+    );
     let cared = run(together.clone(), 1);
     assert_eq!(cared, run(together.clone(), 4));
     assert!(
@@ -9812,7 +9943,11 @@ fn a_supply_opening_does_not_make_a_captive_accessible_for_medical_contact() {
             allow_supplies: true,
         }],
         cell_kinds: vec![],
-        holds: vec![ConfinementHold { person: 1, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 1,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![],
         capture_responses: vec![],
         capture_policies: vec![],
@@ -9886,7 +10021,11 @@ fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
             allow_supplies: false,
         }],
         cell_kinds: vec![],
-        holds: vec![ConfinementHold { person: 2, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 2,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![],
         capture_responses: vec![],
         capture_policies: vec![],
@@ -10064,7 +10203,11 @@ fn individuals_can_release_a_captive_by_choice_or_personal_pressure() {
             resistance: 10,
         }],
         cell_kinds: vec![],
-        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 3,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![],
         capture_responses: vec![],
         capture_policies: vec![],
@@ -10518,7 +10661,11 @@ fn an_individual_guard_spends_time_and_can_stop_or_be_motivated_by_fear() {
             site: 1,
             resistance: 3,
         }],
-        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 3,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![
             EscapePreference {
                 person: 2,
@@ -10808,7 +10955,11 @@ fn controlled_person_can_choose_repeated_physical_escape_attempts() {
             site: 1,
             resistance: 3,
         }],
-        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        holds: vec![ConfinementHold {
+            person: 3,
+            site: 1,
+            born_inside: false,
+        }],
         escape: vec![],
         events: vec![],
     });
@@ -15019,7 +15170,11 @@ fn confined_giving_workload(count: u64) -> State {
         }],
         cell_kinds: vec![],
         holds: (1..=count)
-            .map(|person| ConfinementHold { person, site: 1 })
+            .map(|person| ConfinementHold {
+                person,
+                site: 1,
+                born_inside: false,
+            })
             .collect(),
         escape: vec![],
         capture_responses: vec![],
@@ -20325,7 +20480,11 @@ fn concentrated_family_care_benchmark() {
             }],
             cell_kinds: vec![],
             holds: (1..=count)
-                .map(|person| ConfinementHold { person, site: 1 })
+                .map(|person| ConfinementHold {
+                    person,
+                    site: 1,
+                    born_inside: false,
+                })
                 .collect(),
             escape: vec![],
             capture_responses: vec![],

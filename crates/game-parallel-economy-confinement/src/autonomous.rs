@@ -242,6 +242,7 @@ impl Context<'_> {
             .par_extend(approved.par_iter().map(|choice| Hold {
                 person: choice.target,
                 site: choice.site,
+                born_inside: false,
             }));
         if self
             .owner

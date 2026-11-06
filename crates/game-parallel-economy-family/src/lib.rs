@@ -140,6 +140,7 @@ macro_rules! prepare_care {
 macro_rules! advance_world {
     ($world:expr, $person:expr, $travel:expr, $care:expr, $physical:expr, $dynamics:expr, $campaign:expr, $tick:expr, $skills:expr, $knowledge:expr) => {{
         game_parallel_economy_campaign::apply_strain($campaign.as_ref(), &mut $person.people);
+        let mut births = Vec::new();
         let cost_family = game_parallel_economy_campaign::family_with_cost(
             $campaign.as_ref(),
             $world.family.as_ref(),
@@ -177,6 +178,7 @@ macro_rules! advance_world {
                     .map(|&id| (id, $world.rules.carrying_capacity))
                     .collect::<Vec<_>>();
                 $world.physical.add_people_in(&mut $physical, &holders)?;
+                births = next.births;
                 Ok::<_, String>(next.family)
             })
             .transpose()?;
@@ -186,12 +188,13 @@ macro_rules! advance_world {
             &mut $person.people,
             $tick,
         );
-        (family, campaign)
+        (family, campaign, births)
     }};
 }
 pub struct ResultFrame {
     pub family: Families,
     pub newborns: Vec<u64>,
+    pub births: Vec<game_parallel_families::Birth>,
 }
 /// New people inherit only a personal inclination, never another person's relationships.
 pub fn enroll_dynamics(
@@ -336,7 +339,7 @@ pub fn advance_validated(
         }
     });
     let newborns: Vec<_> = next.births.par_iter().map(|birth| birth.id).collect();
-    for birth in next.births {
+    for birth in &next.births {
         let willingness = people
             .binary_search_by_key(&birth.mother, |p| p.id)
             .ok()
@@ -376,6 +379,7 @@ pub fn advance_validated(
     Ok(ResultFrame {
         family: next.families,
         newborns,
+        births: next.births,
     })
 }
 

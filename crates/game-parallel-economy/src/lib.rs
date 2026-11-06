@@ -3697,7 +3697,7 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.family");
         }
-        let (family, campaign) = family::advance_world!(
+        let (family, campaign, births) = family::advance_world!(
             self,
             person,
             travel,
@@ -3709,6 +3709,18 @@ impl Economy {
             skills,
             knowledge
         );
+        if let Some(confinement) = &mut next_confinement
+            && !births.is_empty()
+        {
+            let placements: Vec<_> = births
+                .par_iter()
+                .map(|birth| game_parallel_economy_confinement::Birth {
+                    child: birth.id,
+                    mother: birth.mother,
+                })
+                .collect();
+            confinement.enroll_births(&placements);
+        }
         if let Some(travel) = &mut travel {
             travel.settle_deaths(&mut person.people);
         }

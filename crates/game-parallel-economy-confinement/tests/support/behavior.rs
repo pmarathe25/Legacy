@@ -24,7 +24,13 @@ fn shared_barrier(count: u64) -> (Confinement, Vec<Person>, Facilities) {
             site: 1,
             resistance: count + 1,
         }],
-        holds: (1..=count).map(|person| Hold { person, site: 1 }).collect(),
+        holds: (1..=count)
+            .map(|person| Hold {
+                person,
+                site: 1,
+                born_inside: false,
+            })
+            .collect(),
         escape: (1..=count)
             .map(|person| EscapePreference {
                 person,
@@ -123,7 +129,11 @@ fn shared_guarding(count: u64) -> (Confinement, Vec<Person>, Facilities) {
     owner.capture_responses.clear();
     owner.capture_policies.clear();
     owner.holds = (count + 1..=count * 2)
-        .map(|person| Hold { person, site: 1 })
+        .map(|person| Hold {
+            person,
+            site: 1,
+            born_inside: false,
+        })
         .collect();
     owner.escape = (count + 1..=count * 2)
         .map(|person| EscapePreference {
@@ -177,6 +187,94 @@ fn communication_respects_both_sides_of_staged_barriers() {
     closed.cells[0].allow_supplies = true;
     assert!(!closed.can_communicate(3, 4));
     assert!(!closed.can_touch(3, 4));
+}
+
+#[test]
+fn simultaneous_births_can_overcrowd_cells_without_new_admissions() {
+    let count = 4096;
+    let (initial, mut people, sites) = shared_barrier(count);
+    let prototype = people[0].clone();
+    people.extend((count + 1..=count * 2).map(|id| Person {
+        id,
+        ..prototype.clone()
+    }));
+    let births: Vec<_> = (1..=count)
+        .map(|mother| Birth {
+            mother,
+            child: mother + count,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut owner = initial.clone();
+                owner.enroll_births(&births);
+                assert_eq!(owner.holds.len(), count as usize * 2);
+                assert!(
+                    owner.holds[count as usize..]
+                        .iter()
+                        .all(|hold| hold.born_inside)
+                );
+                assert!(owner.events.is_empty());
+                owner.validate(&people, &sites, 0).unwrap();
+                let mut invalid = owner.clone();
+                invalid.holds[count as usize].born_inside = false;
+                assert!(invalid.validate(&people, &sites, 0).is_err());
+                owner
+            })
+    };
+    let expected = run(1);
+    assert_eq!(expected, run(4));
+    let mut reversed = births.clone();
+    reversed.reverse();
+    let mut owner = initial.clone();
+    owner.enroll_births(&reversed);
+    assert_eq!(owner, expected);
+}
+
+#[test]
+#[ignore = "manual concentrated birth placement benchmark"]
+fn concentrated_birth_placement_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000u64);
+    let (initial, _, _) = shared_barrier(count);
+    let births: Vec<_> = (1..=count)
+        .map(|mother| Birth {
+            mother,
+            child: mother + count,
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let mut owner = initial.clone();
+                let now = std::time::Instant::now();
+                owner.enroll_births(&births);
+                let elapsed = now.elapsed();
+                assert_eq!(owner.holds.len(), count as usize * 2);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort();
+            println!(
+                "workers={workers} births={count} elapsed_ms={:.3}",
+                samples[samples.len() / 2].as_secs_f64() * 1000.0
+            );
+        });
 }
 
 #[test]
