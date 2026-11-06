@@ -53,12 +53,19 @@ pub struct Birth {
     pub health: u32,
 }
 
+/// Matching people must share both sides of a staged physical partition.
+pub type ContactPartition = (u64, u64);
+
 /// Committed or staged physical reads keyed by stable identity.
 pub trait PhysicalView: Sync {
     fn read(&self, id: u64) -> LifeInput;
     /// A player-controlled person does not make this autonomous decision.
     fn controlled(&self, _id: u64) -> bool {
         false
+    }
+    /// Zero denotes the unpartitioned region; distinct values cannot touch.
+    fn contact_partition(&self, _id: u64) -> ContactPartition {
+        (0, 0)
     }
 }
 

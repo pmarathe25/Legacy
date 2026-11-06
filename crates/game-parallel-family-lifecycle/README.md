@@ -10,3 +10,5 @@ remain valid after later preparation, publication, and runtime destruction.
 Fused lineage reads committed ruler survival and the first canonical newborn ID;
 newborn enrollment consumes identities directly. Neither consumer reconstructs
 family members or heap-bearing event receipts each tick.
+
+`cargo run --release -p game-parallel-family-lifecycle --example family_compare -- 6 100000 1 family 2` compares the reference and columnar engines with 100,000 people in physical partitions of two. The final argument is the partition size; zero selects one open region. The example checks exported state equality before reporting timings.

@@ -2,7 +2,7 @@
 use game_parallel_economy_person::{Person, travel::Travel};
 pub use game_parallel_families::Families;
 use game_parallel_families::LifeInput;
-use game_parallel_family_model::PhysicalView;
+use game_parallel_family_model::{ContactPartition, PhysicalView};
 use rayon::prelude::*;
 
 #[macro_export]
@@ -138,7 +138,7 @@ macro_rules! prepare_care {
 }
 #[macro_export]
 macro_rules! advance_world {
-    ($world:expr, $person:expr, $travel:expr, $care:expr, $physical:expr, $dynamics:expr, $campaign:expr, $tick:expr, $skills:expr, $knowledge:expr) => {{
+    ($world:expr, $person:expr, $travel:expr, $care:expr, $physical:expr, $dynamics:expr, $campaign:expr, $tick:expr, $skills:expr, $knowledge:expr, $partition:expr) => {{
         game_parallel_economy_campaign::apply_strain($campaign.as_ref(), &mut $person.people);
         let mut births = Vec::new();
         let cost_family = game_parallel_economy_campaign::family_with_cost(
@@ -149,13 +149,14 @@ macro_rules! advance_world {
             .as_ref()
             .or($world.family.as_ref())
             .map(|family| {
-                let next = $crate::advance_validated(
+                let next = $crate::advance_validated_with_partition(
                     family,
                     &mut $person.people,
                     &mut $travel,
                     $world.seed,
                     $tick,
                     $care.is_some(),
+                    $partition,
                 )?;
                 if let Some(care) = &mut $care {
                     game_parallel_economy_work::care::inherit(care, &next.family, &next.newborns);
@@ -258,12 +259,17 @@ pub fn enroll_dynamics(
 struct View<'a> {
     people: &'a [Person],
     suffix: Option<game_parallel_family_index::DenseSuffix>,
+    partition: Option<&'a (dyn Fn(u64) -> ContactPartition + Sync)>,
 }
 impl<'a> View<'a> {
-    fn new(people: &'a [Person]) -> Self {
+    fn new(
+        people: &'a [Person],
+        partition: Option<&'a (dyn Fn(u64) -> ContactPartition + Sync)>,
+    ) -> Self {
         Self {
             people,
             suffix: game_parallel_family_index::DenseSuffix::new(people.len(), |i| people[i].id),
+            partition,
         }
     }
     fn index(&self, id: u64) -> Option<usize> {
@@ -285,6 +291,9 @@ impl PhysicalView for View<'_> {
     }
     fn controlled(&self, id: u64) -> bool {
         self.index(id).is_some_and(|i| self.people[i].controlled)
+    }
+    fn contact_partition(&self, id: u64) -> ContactPartition {
+        self.partition.map_or((0, 0), |partition| partition(id))
     }
 }
 /// Newborn custody is staged separately by the physical owner before commit.
@@ -319,8 +328,29 @@ pub fn advance_validated(
     tick: u64,
     newborns_seek_meals: bool,
 ) -> Result<ResultFrame, String> {
+    advance_validated_with_partition(
+        family,
+        people,
+        travel,
+        seed,
+        tick,
+        newborns_seek_meals,
+        None,
+    )
+}
+
+/// Prepare family changes with physical contact partitions supplied by the host.
+pub fn advance_validated_with_partition(
+    family: &Families,
+    people: &mut Vec<Person>,
+    travel: &mut Option<Travel>,
+    seed: u64,
+    tick: u64,
+    newborns_seek_meals: bool,
+    partition: Option<&(dyn Fn(u64) -> ContactPartition + Sync)>,
+) -> Result<ResultFrame, String> {
     let next = family
-        .advance_validated(&View::new(people), seed, tick)
+        .advance_validated(&View::new(people, partition), seed, tick)
         .map_err(str::to_owned)?;
     let mut grown: Vec<_> = next
         .families

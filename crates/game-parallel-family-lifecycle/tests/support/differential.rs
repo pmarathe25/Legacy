@@ -68,6 +68,44 @@ fn fixture(count: u64, sparse: bool) -> (Families, View) {
     };
     (families, view)
 }
+
+#[test]
+fn matching_and_conception_use_the_same_contact_partitions_in_both_engines() {
+    struct Partitioned {
+        base: View,
+        same_cell: bool,
+    }
+    impl PhysicalView for Partitioned {
+        fn read(&self, id: u64) -> LifeInput {
+            self.base.read(id)
+        }
+        fn contact_partition(&self, id: u64) -> (u64, u64) {
+            let site = if self.same_cell {
+                (id - 1) / 2 + 1
+            } else {
+                id % 2 + 1
+            };
+            (site, site)
+        }
+    }
+    for same_cell in [false, true] {
+        let (families, base) = fixture(64, false);
+        let physical = Partitioned { base, same_cell };
+        let reference = families.advance_validated(&physical, 42, 1).unwrap();
+        let mut runtime = Runtime::compile_validated(&families).unwrap();
+        let draft = runtime.prepare(&physical, 42, 1, None).unwrap();
+        runtime.commit(draft).unwrap();
+        assert_eq!(runtime.export(), reference.families);
+        assert_eq!(
+            reference.families.totals.partnerships,
+            if same_cell { 32 } else { 0 }
+        );
+        assert_eq!(
+            reference.families.totals.conceptions,
+            if same_cell { 32 } else { 0 }
+        );
+    }
+}
 fn run(workers: usize, sparse: bool) -> Families {
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)

@@ -3697,6 +3697,9 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.family");
         }
+        let family_partition = |person| communication.partition(person);
+        let family_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
+            (!held.is_empty()).then_some(&family_partition);
         let (family, campaign, births) = family::advance_world!(
             self,
             person,
@@ -3707,7 +3710,8 @@ impl Economy {
             campaign_draft,
             tick,
             skills,
-            knowledge
+            knowledge,
+            family_access
         );
         if let Some(confinement) = &mut next_confinement
             && !births.is_empty()

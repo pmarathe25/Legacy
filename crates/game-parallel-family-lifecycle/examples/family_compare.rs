@@ -1,14 +1,22 @@
-//! Args: workers population ticks family|unmatched|partnered. Export/equality outside timing.
+//! Args: workers population ticks family|unmatched|partnered [partition size].
+//! Export/equality is outside timing; zero partition size means an open region.
 use game_parallel_families::{Families, FamilyRules, FamilyTotals, Genome, Member, Sex};
 use game_parallel_family_lifecycle::Runtime;
 use game_parallel_family_model::{Birth, LifeInput, PhysicalView};
 use std::time::Instant;
 struct View {
     rows: Vec<LifeInput>,
+    partition_size: u64,
 }
 impl PhysicalView for View {
     fn read(&self, id: u64) -> LifeInput {
         self.rows[id as usize - 1]
+    }
+    fn contact_partition(&self, id: u64) -> (u64, u64) {
+        let group = (id - 1)
+            .checked_div(self.partition_size)
+            .map_or(0, |value| value + 1);
+        (group, group)
     }
 }
 impl View {
@@ -32,6 +40,7 @@ fn main() {
     let count: u64 = args.get(1).map_or(100000, |v| v.parse().unwrap());
     let ticks: u64 = args.get(2).map_or(8, |v| v.parse().unwrap());
     let mode = args.get(3).map_or("family", String::as_str);
+    let partition_size: u64 = args.get(4).map_or(0, |v| v.parse().unwrap());
     assert!(count.is_multiple_of(2) && count > 0);
     let members = (0..count)
         .map(|i| Member {
@@ -85,7 +94,7 @@ fn main() {
         .unwrap();
     pool.install(|| {
         let mut expected = families.clone();
-        let mut physical = View { rows: (1..=count).map(|id| LifeInput { id, region: Some(1), health: 100, hunger: 0 }).collect() };
+        let mut physical = View { rows: (1..=count).map(|id| LifeInput { id, region: Some(1), health: 100, hunger: 0 }).collect(), partition_size };
         let start = Instant::now();
         for tick in 1..=ticks {
             let draft = expected.advance_validated(&physical, 42, tick).unwrap();
@@ -96,7 +105,7 @@ fn main() {
         let start = Instant::now();
         let mut runtime = Runtime::compile_validated(&families).unwrap();
         let import_ms = start.elapsed().as_secs_f64() * 1000.;
-        let mut physical = View { rows: (1..=count).map(|id| LifeInput { id, region: Some(1), health: 100, hunger: 0 }).collect() };
+        let mut physical = View { rows: (1..=count).map(|id| LifeInput { id, region: Some(1), health: 100, hunger: 0 }).collect(), partition_size };
         let start = Instant::now();
         let mut prepare_ms = 0.;
         let mut publish_ms = 0.;
@@ -111,6 +120,10 @@ fn main() {
         }
         let column_ms = start.elapsed().as_secs_f64() * 1000.;
         assert_eq!(runtime.export(), expected);
-        println!("workers={workers} people={count} ticks={ticks} mode={mode} reference_ms={reference_ms:.3} column_ms={column_ms:.3} prepare_ms={prepare_ms:.3} publish_ms={publish_ms:.3} import_ms={import_ms:.3} births={}", expected.totals.births);
+        if partition_size == 2 && mode == "family" && ticks == 1 {
+            assert_eq!(expected.totals.partnerships, count / 2);
+            assert_eq!(expected.totals.conceptions, count / 2);
+        }
+        println!("workers={workers} people={count} ticks={ticks} mode={mode} partition_size={partition_size} reference_ms={reference_ms:.3} column_ms={column_ms:.3} prepare_ms={prepare_ms:.3} publish_ms={publish_ms:.3} import_ms={import_ms:.3} partnerships={} conceptions={} births={}", expected.totals.partnerships, expected.totals.conceptions, expected.totals.births);
     });
 }

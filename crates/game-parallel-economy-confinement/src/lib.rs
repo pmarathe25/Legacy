@@ -198,6 +198,18 @@ impl Communication<'_> {
         self.before.is_some_and(|owner| owner.held(person))
             || self.after.is_some_and(|owner| owner.held(person))
     }
+
+    /// Location partitions at the start and end of this boundary.
+    pub fn partition(&self, person: u64) -> (u64, u64) {
+        (
+            self.before
+                .and_then(|owner| owner.site_of(person))
+                .unwrap_or(0),
+            self.after
+                .and_then(|owner| owner.site_of(person))
+                .unwrap_or(0),
+        )
+    }
 }
 
 impl Confinement {
@@ -364,6 +376,10 @@ impl Confinement {
 
     pub fn held(&self, person: u64) -> bool {
         ordered_index(&self.holds, person, |hold| hold.person).is_some()
+    }
+
+    pub fn site_of(&self, person: u64) -> Option<u64> {
+        ordered_index(&self.holds, person, |hold| hold.person).map(|index| self.holds[index].site)
     }
 
     /// Actual births remain behind the mother's barrier, even if the cell is full.

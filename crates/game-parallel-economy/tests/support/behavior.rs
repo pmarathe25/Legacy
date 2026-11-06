@@ -9038,6 +9038,147 @@ fn embodied_guardian_pursues_the_actual_successor_and_resets_mentorship() {
 }
 
 #[test]
+fn family_pairing_and_conception_require_physical_contact_across_the_boundary() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    let family = initial.family.as_mut().unwrap();
+    family.members[0].pregnancy = None;
+    family.members[0].genome.alleles[0] = [1000, 1000];
+    family.rules.conception_one_in = 1;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 2,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: true,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold {
+            person: 1,
+            site: 1,
+            born_inside: false,
+        }],
+        escape: vec![],
+        capture_responses: vec![ConfinementCaptureResponse {
+            person: 1,
+            yield_willingly: true,
+            pressure_threshold: None,
+        }],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let first = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                first
+            })
+    };
+    let separated = run(initial.clone(), 1);
+    assert_eq!(separated, run(initial.clone(), 4));
+    assert!(separated.family.unwrap().members[0].pregnancy.is_none());
+    let mut separate_cells = initial.clone();
+    let sites = separate_cells.work_sites.as_mut().unwrap();
+    sites.next_id = 3;
+    sites.sites.push(WorkSite {
+        id: 2,
+        region: 1,
+        kind: "cell".into(),
+        capacity: 1,
+    });
+    let owner = separate_cells.confinement.as_mut().unwrap();
+    owner.cells.push(ConfinementCell {
+        site: 2,
+        resistance: 10,
+        allow_supplies: true,
+    });
+    owner.holds.push(ConfinementHold {
+        person: 2,
+        site: 2,
+        born_inside: false,
+    });
+    let separated = run(separate_cells.clone(), 1);
+    assert_eq!(separated, run(separate_cells, 4));
+    assert!(separated.family.unwrap().members[0].pregnancy.is_none());
+    let mut together = initial.clone();
+    together
+        .confinement
+        .as_mut()
+        .unwrap()
+        .holds
+        .push(ConfinementHold {
+            person: 2,
+            site: 1,
+            born_inside: false,
+        });
+    assert!(
+        run(together.clone(), 1).family.unwrap().members[0]
+            .pregnancy
+            .is_some()
+    );
+    let mut unheld = initial.clone();
+    unheld.confinement.as_mut().unwrap().holds.clear();
+    assert!(
+        run(unheld.clone(), 1).family.unwrap().members[0]
+            .pregnancy
+            .is_some()
+    );
+    let mut released = Economy::compile(initial.clone()).unwrap();
+    assert!(released.release_held_person(3, 1).unwrap());
+    assert!(
+        released.snapshot().family.unwrap().members[0]
+            .pregnancy
+            .is_none()
+    );
+    released.advance().unwrap();
+    assert!(
+        released.snapshot().family.unwrap().members[0]
+            .pregnancy
+            .is_some()
+    );
+    let mut captured = Economy::compile(unheld).unwrap();
+    assert!(captured.confine_person(3, 1, 1).unwrap());
+    assert!(
+        captured.snapshot().family.unwrap().members[0]
+            .pregnancy
+            .is_none()
+    );
+    for state in [&mut initial, &mut together] {
+        state.family.as_mut().unwrap().members[0].partner = None;
+        state.family.as_mut().unwrap().members[1].partner = None;
+    }
+    assert!(run(initial, 1).family.unwrap().members[0].partner.is_none());
+    let paired = run(together.clone(), 1);
+    assert_eq!(paired, run(together, 4));
+    assert_eq!(paired.family.unwrap().members[0].partner, Some(2));
+}
+
+#[test]
 fn newborns_remain_inside_a_full_cell_with_their_mother() {
     use game_parallel_dependent_care::{Policy as CarePolicy, Rules as CareRules};
     let mut initial = campaign_fixture();

@@ -28,23 +28,30 @@ pub fn partnerships(
             let row = &store.metadata[slot];
             let state = store.state(slot, true);
             let person = physical.read(row.id);
-            (state.partner.is_none() && eligible(state, person, rules))
-                .then(|| (person.region.unwrap(), slot))
+            (state.partner.is_none() && eligible(state, person, rules)).then(|| {
+                (
+                    person.region.unwrap(),
+                    physical.contact_partition(row.id),
+                    slot,
+                )
+            })
         })
         .collect();
-    local.par_sort_unstable_by_key(|&(region, slot)| (region, store.metadata[slot].id));
+    local.par_sort_unstable_by_key(|&(region, partition, slot)| {
+        (region, partition, store.metadata[slot].id)
+    });
     local
-        .par_chunk_by(|a, b| a.0 == b.0)
+        .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
         .flat_map(|group| {
             let area = group[0].0;
             let mut females: Vec<_> = group
                 .par_iter()
-                .map(|&(_, slot)| slot)
+                .map(|&(_, _, slot)| slot)
                 .filter(|&slot| store.metadata[slot].genome.sex == Sex::Female)
                 .collect();
             let mut males: Vec<_> = group
                 .par_iter()
-                .map(|&(_, slot)| slot)
+                .map(|&(_, _, slot)| slot)
                 .filter(|&slot| store.metadata[slot].genome.sex == Sex::Male)
                 .collect();
             if females.is_empty() || males.is_empty() {
@@ -111,6 +118,7 @@ pub fn conceptions(
                     rules,
                 )
                 || physical.read(father.id).region != physical.read(mother.id).region
+                || physical.contact_partition(father.id) != physical.contact_partition(mother.id)
                 || !random(seed ^ 97, mother.id, tick).is_multiple_of(rules.conception_one_in)
                 || random(seed ^ 107, mother.id, tick) % 1500 >= chance
             {

@@ -181,22 +181,24 @@ impl Families {
             .filter_map(|m| {
                 let person = physical.read(m.id);
                 (m.partner.is_none() && !physical.controlled(m.id) && eligible(m, &person, rules))
-                    .then(|| (person.region.unwrap(), m))
+                    .then(|| (person.region.unwrap(), physical.contact_partition(m.id), m))
             })
             .collect();
-        local.par_sort_unstable_by_key(|(region, member)| (*region, member.id));
+        local.par_sort_unstable_by_key(|(region, partition, member)| {
+            (*region, *partition, member.id)
+        });
         let matches: Vec<Vec<_>> = local
-            .par_chunk_by(|a, b| a.0 == b.0)
+            .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
             .map(|group| {
                 let area = group[0].0;
                 let females: Vec<_> = group
                     .par_iter()
-                    .map(|(_, member)| *member)
+                    .map(|(_, _, member)| *member)
                     .filter(|m| m.genome.sex == Sex::Female)
                     .collect();
                 let mut males: Vec<_> = group
                     .par_iter()
-                    .map(|(_, member)| *member)
+                    .map(|(_, _, member)| *member)
                     .filter(|m| m.genome.sex == Sex::Male)
                     .collect();
                 males.par_sort_unstable_by_key(|m| (random(seed ^ 31, m.id, tick), m.id));
@@ -344,6 +346,8 @@ impl Families {
                     || !ancestors(mother.id, &index).is_disjoint(&ancestors(father.id, &index))
                     || !eligible(father, &physical.read(father.id), rules)
                     || physical.read(father.id).region != physical.read(mother.id).region
+                    || physical.contact_partition(father.id)
+                        != physical.contact_partition(mother.id)
                     || !random(seed ^ 97, mother.id, tick).is_multiple_of(rules.conception_one_in)
                     || random(seed ^ 107, mother.id, tick) % 1500 >= chance
                 {

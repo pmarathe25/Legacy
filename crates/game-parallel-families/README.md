@@ -15,6 +15,9 @@ data-defined bounded mutation. Dead people and their ancestry remain saved.
 
 Workers first advance independent personal rows. Region-local matching proposes
 eligible pairs in parallel, then resolves exclusive partner claims deterministically.
+Hosts may additionally supply physical contact partitions for both sides of the
+boundary; matching and conception require equal partitions as well as a shared region.
+The unpartitioned default preserves ordinary regional behavior.
 For large batches, proposals are grouped by the prospective father and resolved in parallel; the earliest female priority wins, as in the serial path. Each proposal considers at most 32 ranked candidates, avoiding an exhaustive
 quadratic search; an unsuccessful person can try again on the next tick. Eligible
 people are healthy, fed, local adults below the fertility limit who have opted in.
