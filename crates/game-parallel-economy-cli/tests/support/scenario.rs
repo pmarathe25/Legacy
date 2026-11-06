@@ -2236,8 +2236,34 @@ fn player_can_be_captured_by_an_individual_and_choose_to_escape() {
     )
     .unwrap();
     Player::new(&mut world).set_capture_yield(false).unwrap();
+    Player::new(&mut world)
+        .set_confinement_reaction(
+            game_parallel_economy::ConfinementExperienceKind::Captured,
+            Some(game_parallel_economy::SubjectiveReaction {
+                trust: -1,
+                affinity: 3,
+                fear: 0,
+                obligation: 0,
+            }),
+        )
+        .unwrap();
     Player::new(&mut world).advance().unwrap();
-    assert!(Player::new(&mut world).view().unwrap().held);
+    let view = Player::new(&mut world).view().unwrap();
+    assert!(view.held);
+    let opinion = view
+        .relationships
+        .iter()
+        .find(|row| row.target == 2)
+        .unwrap();
+    assert_eq!(
+        (
+            opinion.trust,
+            opinion.affinity,
+            opinion.fear,
+            opinion.obligation
+        ),
+        (-1, 3, 0, 0)
+    );
     assert!(Player::new(&mut world).depart(2).is_err());
     assert!(!Player::new(&mut world).escape_confinement().unwrap());
     assert!(Player::new(&mut world).escape_confinement().unwrap());

@@ -4,9 +4,13 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::Arc;
+mod confinement;
 mod harm;
 mod personal_change;
 mod report_trust;
+pub use confinement::{
+    Experience as ConfinementExperience, ExperienceKind as ConfinementExperienceKind,
+};
 pub use personal_change::PersonalChange;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,8 +34,8 @@ impl Clone for Opinions {
     }
 }
 pub use game_parallel_opinions_model::{
-    AffinityRules, Confrontation, Event, ObligationDevelopment, Opinion, RelationshipCase,
-    ReportReception, Rules, Sensitivity,
+    AffinityRules, ConfinementReaction, Confrontation, Event, ObligationDevelopment, Opinion,
+    RelationshipCase, ReportReception, Rules, Sensitivity, SubjectiveReaction,
 };
 
 pub struct Index<'a> {
@@ -109,6 +113,19 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    pub fn tracks_confinement_reactions(&self) -> bool {
+        self.sensitivities.par_iter().any(|row| {
+            row.confinement_reaction.is_some()
+                || row
+                    .relationship_cases
+                    .iter()
+                    .any(|case| case.confinement_reaction.is_some())
+        })
+    }
+    /// Interpret only capture and release experiences reported by their observer.
+    pub fn learn_confinement(&mut self, experiences: &[ConfinementExperience], tick: u64) {
+        confinement::apply(self, experiences, tick);
+    }
     /// Apply simultaneous signed interpretations supplied by their observers.
     pub fn apply_personal_changes(&mut self, changes: &[PersonalChange], tick: u64) {
         personal_change::apply(self, changes, tick);
@@ -288,6 +305,7 @@ impl Opinions {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),
             })

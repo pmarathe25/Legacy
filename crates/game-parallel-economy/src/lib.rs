@@ -45,8 +45,8 @@ pub use game_parallel_fauna::{
     Animal, Fauna, Pregnancy as AnimalPregnancy, Species as AnimalSpecies,
 };
 pub use game_parallel_opinions::{
-    ObligationDevelopment, Opinion, RelationshipCase, ReportReception,
-    Sensitivity as OpinionSensitivity,
+    ConfinementExperienceKind, ConfinementReaction, ObligationDevelopment, Opinion,
+    RelationshipCase, ReportReception, Sensitivity as OpinionSensitivity, SubjectiveReaction,
 };
 pub use game_parallel_practices::work::Evaluation as WorkPracticeEvaluation;
 pub use game_parallel_practices::work::outcome::Policy as WorkOutcomePolicy;
@@ -614,6 +614,48 @@ impl Economy {
         sensitivity.trust_promise_fulfilled = reactions.map(|row| row.0);
         sensitivity.trust_promise_unfulfilled = reactions.map(|row| row.1);
         self.set_opinion_sensitivity(sensitivity)
+    }
+    /// Choose this person's own response to a directly experienced event.
+    pub fn set_confinement_reaction(
+        &mut self,
+        person: u64,
+        kind: ConfinementExperienceKind,
+        value: Option<SubjectiveReaction>,
+    ) -> Result<(), String> {
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        let mut sensitivity = owner
+            .sensitivities
+            .iter()
+            .find(|row| row.person == person)
+            .cloned()
+            .unwrap_or_else(|| OpinionSensitivity {
+                person,
+                ..Default::default()
+            });
+        let mut reaction = sensitivity.confinement_reaction.unwrap_or_default();
+        match kind {
+            ConfinementExperienceKind::Captured => reaction.captured = value.unwrap_or_default(),
+            ConfinementExperienceKind::Resisted => reaction.resisted = value.unwrap_or_default(),
+            ConfinementExperienceKind::Released => reaction.released = value.unwrap_or_default(),
+        }
+        sensitivity.confinement_reaction =
+            (reaction != ConfinementReaction::default()).then_some(reaction);
+        self.set_opinion_sensitivity(sensitivity)
+    }
+    pub fn confinement_reaction(&self, person: u64) -> Result<Option<ConfinementReaction>, String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .is_err()
+        {
+            return Err("unknown person".into());
+        }
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        Ok(owner
+            .sensitivities
+            .iter()
+            .find(|row| row.person == person)
+            .and_then(|row| row.confinement_reaction))
     }
     pub fn promise_trust_reactions(
         &self,
@@ -3824,9 +3866,54 @@ impl Economy {
                     target: reaction.target,
                     trust: reaction.trust,
                     affinity: reaction.affinity,
+                    fear: 0,
+                    obligation: 0,
                 })
                 .collect();
             opinions.apply_personal_changes(&changes, tick);
+        }
+        if let (Some(opinions), Some(confinement)) = (&mut next_opinions, &next_confinement)
+            && confinement.events.par_iter().any(|event| {
+                matches!(
+                    event.kind,
+                    game_parallel_economy_confinement::EventKind::Confined
+                        | game_parallel_economy_confinement::EventKind::CaptureResisted
+                        | game_parallel_economy_confinement::EventKind::Released
+                )
+            })
+            && opinions.tracks_confinement_reactions()
+        {
+            let experiences: Vec<_> = confinement
+                .events
+                .par_iter()
+                .filter_map(|event| {
+                    use game_parallel_economy_confinement::EventKind;
+                    let kind = match event.kind {
+                        EventKind::Confined => {
+                            game_parallel_opinions::ConfinementExperienceKind::Captured
+                        }
+                        EventKind::CaptureResisted => {
+                            game_parallel_opinions::ConfinementExperienceKind::Resisted
+                        }
+                        EventKind::Released => {
+                            game_parallel_opinions::ConfinementExperienceKind::Released
+                        }
+                        _ => return None,
+                    };
+                    let actor = event.actor?;
+                    let observer = self
+                        .people
+                        .binary_search_by_key(&event.person, |person| person.id)
+                        .ok()
+                        .map(|i| &self.people[i])?;
+                    (observer.health > 0).then_some(game_parallel_opinions::ConfinementExperience {
+                        observer: observer.id,
+                        actor,
+                        kind,
+                    })
+                })
+                .collect();
+            opinions.learn_confinement(&experiences, tick);
         }
         development::enroll(&mut next_opinions, family.as_ref(), tick);
         if let Some(claims) = dynamics

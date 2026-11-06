@@ -614,6 +614,7 @@ pub fn sensitivities(profiles: &[Profile]) -> Vec<game_parallel_opinions::Sensit
                     affinity_site_salvage: rule.affinity_site_salvage,
                     affinity_work_success: rule.affinity_work_success,
                     affinity_work_refusal: rule.affinity_work_refusal,
+                    confinement_reaction: None,
                     relationship_cases: Vec::new(),
                     obligation_development: rule.obligation_development.clone(),
                 }

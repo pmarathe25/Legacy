@@ -1055,6 +1055,19 @@ impl<'a> Player<'a> {
     pub fn promise_trust_reactions(&self) -> Result<(Option<i32>, Option<i32>), String> {
         self.world.promise_trust_reactions(self.current()?)
     }
+    pub fn set_confinement_reaction(
+        &mut self,
+        kind: game_parallel_economy::ConfinementExperienceKind,
+        value: Option<game_parallel_economy::SubjectiveReaction>,
+    ) -> Result<(), String> {
+        self.world
+            .set_confinement_reaction(self.current()?, kind, value)
+    }
+    pub fn confinement_reaction(
+        &self,
+    ) -> Result<Option<game_parallel_economy::ConfinementReaction>, String> {
+        self.world.confinement_reaction(self.current()?)
+    }
     pub fn set_practice_willingness(&mut self, enabled: bool) -> Result<(), String> {
         self.world
             .set_practice_willingness(self.current()?, enabled)

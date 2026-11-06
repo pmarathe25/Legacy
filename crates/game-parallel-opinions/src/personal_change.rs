@@ -8,6 +8,8 @@ pub struct PersonalChange {
     pub target: u64,
     pub trust: i32,
     pub affinity: i32,
+    pub fear: i64,
+    pub obligation: i64,
 }
 
 pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
@@ -16,7 +18,10 @@ pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
         .copied()
         .filter(|row| {
             row.observer != row.target
-                && (row.trust != 0 || (row.affinity != 0 && state.rules.affinity.is_some()))
+                && (row.trust != 0
+                    || row.fear != 0
+                    || row.obligation != 0
+                    || (row.affinity != 0 && state.rules.affinity.is_some()))
         })
         .collect();
     if rows.is_empty() {
@@ -26,13 +31,31 @@ pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
     let updates: Vec<_> = rows
         .par_chunk_by(|a, b| (a.observer, a.target) == (b.observer, b.target))
         .map(|group| {
-            let (trust, affinity) = group
+            let (trust, affinity, fear, obligation) = group
                 .par_iter()
-                .map(|row| (i128::from(row.trust), i128::from(row.affinity)))
-                .reduce(|| (0, 0), |a, b| (a.0 + b.0, a.1 + b.1));
-            ((group[0].observer, group[0].target), trust, affinity)
+                .map(|row| {
+                    (
+                        i128::from(row.trust),
+                        i128::from(row.affinity),
+                        i128::from(row.fear),
+                        i128::from(row.obligation),
+                    )
+                })
+                .reduce(
+                    || (0, 0, 0, 0),
+                    |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3),
+                );
+            (
+                (group[0].observer, group[0].target),
+                trust,
+                affinity,
+                fear,
+                obligation,
+            )
         })
-        .filter(|row| row.1 != 0 || (row.2 != 0 && state.rules.affinity.is_some()))
+        .filter(|row| {
+            row.1 != 0 || row.3 != 0 || row.4 != 0 || (row.2 != 0 && state.rules.affinity.is_some())
+        })
         .collect();
     if updates.is_empty() {
         return;
@@ -44,10 +67,26 @@ pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
     {
         old.par_sort_unstable_by_key(|row| (row.observer, row.target));
     }
+    let updates: Vec<_> = updates
+        .into_par_iter()
+        .filter(|row| {
+            row.1 != 0
+                || (row.2 != 0 && state.rules.affinity.is_some())
+                || row.3 > 0
+                || row.4 > 0
+                || old
+                    .binary_search_by_key(&row.0, |opinion| (opinion.observer, opinion.target))
+                    .is_ok()
+        })
+        .collect();
+    if updates.is_empty() {
+        state.records = old;
+        return;
+    }
     let rules = &state.rules;
     let events: Vec<_> = updates
         .par_iter()
-        .filter_map(|&(pair, trust, _)| {
+        .filter_map(|&(pair, trust, _, _, _)| {
             if trust == 0 {
                 return None;
             }
@@ -85,7 +124,7 @@ pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
             };
             let mut cursor = start;
             let mut merged = Vec::with_capacity(end - start + chunk.len());
-            for &(pair, trust, affinity) in chunk {
+            for &(pair, trust, affinity, fear, obligation) in chunk {
                 while cursor < end && (old[cursor].observer, old[cursor].target) < pair {
                     merged.push(old[cursor].clone());
                     cursor += 1;
@@ -113,6 +152,10 @@ pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
                     opinion.affinity =
                         (i128::from(opinion.affinity) + affinity).clamp(-limit, limit) as i32;
                 }
+                opinion.fear =
+                    (i128::from(opinion.fear) + fear).clamp(0, i128::from(u64::MAX)) as u64;
+                opinion.obligation = (i128::from(opinion.obligation) + obligation)
+                    .clamp(0, i128::from(u64::MAX)) as u64;
                 merged.push(opinion);
             }
             merged.extend_from_slice(&old[cursor..end]);

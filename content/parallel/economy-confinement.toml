@@ -278,6 +278,7 @@ person = 2
 gratitude_gain = 0
 affinity_work_success = 2
 affinity_work_refusal = -1
+confinement_reaction = { captured = { trust = -1, affinity = 2 }, released = { affinity = -1 } }
 
 [combat]
 damage = 10

@@ -1,4 +1,89 @@
 use super::*;
+
+#[test]
+fn confinement_experiences_use_personal_signed_reactions_and_case_overrides() {
+    let mut rules = rules();
+    rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let reaction = ConfinementReaction {
+        captured: SubjectiveReaction {
+            trust: 1,
+            affinity: -2,
+            fear: 3,
+            obligation: 4,
+        },
+        ..Default::default()
+    };
+    let mut sensitivities: Vec<_> = (1..=4096)
+        .map(|person| Sensitivity {
+            person,
+            confinement_reaction: Some(reaction),
+            ..Default::default()
+        })
+        .collect();
+    sensitivities[0].relationship_cases.push(RelationshipCase {
+        target: 9000,
+        confinement_reaction: Some(ConfinementReaction {
+            captured: SubjectiveReaction {
+                trust: -1,
+                affinity: 5,
+                fear: 0,
+                obligation: 0,
+            },
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let initial = Opinions {
+        rules,
+        sensitivities: sensitivities.into(),
+        records: vec![],
+        events: vec![],
+    };
+    let experiences: Vec<_> = (1..=4096)
+        .map(|observer| ConfinementExperience {
+            observer,
+            actor: 9000,
+            kind: ConfinementExperienceKind::Captured,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut owner = initial.clone();
+                owner.learn_confinement(&experiences, 1);
+                owner
+            })
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    let index = result.index();
+    assert_eq!(
+        (
+            index.trust(1, 9000),
+            index.affinity(1, 9000),
+            index.feelings(1, 9000)
+        ),
+        (-1, 5, (0, 0))
+    );
+    assert_eq!(
+        (
+            index.trust(2, 9000),
+            index.affinity(2, 9000),
+            index.feelings(2, 9000)
+        ),
+        (1, -2, (3, 4))
+    );
+}
+
 #[test]
 fn simultaneous_personal_changes_are_signed_bounded_and_worker_invariant() {
     let mut rules = rules();
@@ -22,6 +107,8 @@ fn simultaneous_personal_changes_are_signed_bounded_and_worker_invariant() {
             target: 9000,
             trust: -2,
             affinity: 3,
+            fear: if observer == 1 { 3 } else { 0 },
+            obligation: if observer == 1 { -4 } else { 0 },
         })
         .collect();
     changes.extend([
@@ -30,12 +117,24 @@ fn simultaneous_personal_changes_are_signed_bounded_and_worker_invariant() {
             target: 9000,
             trust: 5,
             affinity: -10,
+            fear: -5,
+            obligation: 9,
         },
         PersonalChange {
             observer: 2,
             target: 9000,
             trust: 2,
             affinity: -3,
+            fear: 0,
+            obligation: 0,
+        },
+        PersonalChange {
+            observer: 4000,
+            target: 9000,
+            trust: 0,
+            affinity: 0,
+            fear: -1,
+            obligation: -1,
         },
     ]);
     let run = |workers| {
@@ -53,6 +152,7 @@ fn simultaneous_personal_changes_are_signed_bounded_and_worker_invariant() {
     assert_eq!(result, run(4));
     let index = result.index();
     assert_eq!((index.trust(1, 9000), index.affinity(1, 9000)), (3, -7));
+    assert_eq!(index.feelings(1, 9000), (0, 5));
     assert_eq!((index.trust(2, 9000), index.affinity(2, 9000)), (0, 0));
     assert_eq!((index.trust(3, 9000), index.affinity(3, 9000)), (-2, 3));
     assert_eq!(result.records.len(), 2999);
@@ -362,6 +462,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
                 promise_obligation_gain: None,
@@ -387,6 +488,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
                 promise_obligation_gain: None,
@@ -426,6 +528,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: None,
+            confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
             promise_obligation_gain: None,
@@ -501,6 +604,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
                 promise_obligation_gain: None,
@@ -526,6 +630,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
                 promise_obligation_gain: None,
@@ -954,6 +1059,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
         promise_obligation_gain: None,
@@ -1021,6 +1127,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        confinement_reaction: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
             report_discrepancy: None,
@@ -1036,6 +1143,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
             site_salvage: None,
             work_success: None,
             work_refusal: None,
+            confinement_reaction: None,
             obligation_gain: None,
             obligation_relief: None,
             promise_obligation_gain: None,
@@ -1090,6 +1198,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        confinement_reaction: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
             report_discrepancy: None,
@@ -1105,6 +1214,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
             site_salvage: None,
             work_success: None,
             work_refusal: None,
+            confinement_reaction: None,
             obligation_gain: Some(4),
             obligation_relief: Some(2),
             promise_obligation_gain: None,

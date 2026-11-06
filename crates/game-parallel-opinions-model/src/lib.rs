@@ -61,6 +61,9 @@ pub struct Sensitivity {
     pub affinity_work_success: Option<i32>,
     #[serde(default)]
     pub affinity_work_refusal: Option<i32>,
+    /// This person's own signed interpretation of capture, resistance, and release.
+    #[serde(default)]
+    pub confinement_reaction: Option<ConfinementReaction>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -121,12 +124,39 @@ pub struct RelationshipCase {
     pub work_success: Option<i32>,
     #[serde(default)]
     pub work_refusal: Option<i32>,
+    /// Overrides this observer's general confinement interpretation for this person.
+    #[serde(default)]
+    pub confinement_reaction: Option<ConfinementReaction>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]
     pub promise_obligation_gain: Option<u64>,
     #[serde(default)]
     pub obligation_relief: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SubjectiveReaction {
+    #[serde(default)]
+    pub trust: i32,
+    #[serde(default)]
+    pub affinity: i32,
+    #[serde(default)]
+    pub fear: i64,
+    #[serde(default)]
+    pub obligation: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConfinementReaction {
+    #[serde(default)]
+    pub captured: SubjectiveReaction,
+    #[serde(default)]
+    pub resisted: SubjectiveReaction,
+    #[serde(default)]
+    pub released: SubjectiveReaction,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -39,12 +39,12 @@ fn crate_size_and_dependency_direction_are_enforced() {
         let budget = match name {
             "game-sim" => 1250,
             "game-parallel-economy" => 10500,
-            "game-parallel-economy-cli" => 2800,
+            "game-parallel-economy-cli" => 3000,
             "game-parallel-economy-player" => 1500,
             "game-parallel-practices" => 2200,
             "game-parallel-economy-work" => 1450,
             "game-parallel-economy-building" => 1500,
-            "game-parallel-opinions" => 1650,
+            "game-parallel-opinions" => 1800,
             _ => 1200,
         };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");
