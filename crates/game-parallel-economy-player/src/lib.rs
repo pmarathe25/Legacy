@@ -856,6 +856,17 @@ impl<'a> Player<'a> {
     pub fn escape_confinement(&mut self) -> Result<bool, String> {
         self.world.escape_confinement(self.current()?)
     }
+    pub fn guard_cell(&mut self, site: u64) -> Result<bool, String> {
+        if !self
+            .view()?
+            .work_sites
+            .iter()
+            .any(|row| row.site.id == site)
+        {
+            return Err("cell is not present".into());
+        }
+        self.world.guard_cell(self.current()?, site)
+    }
     pub fn set_capture_yield(&mut self, willing: bool) -> Result<(), String> {
         self.world.set_capture_yield(self.current()?, willing)
     }

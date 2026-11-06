@@ -1,8 +1,10 @@
 //! Physical barriers and individually chosen attempts to escape them.
 mod autonomous;
+mod guarding;
 pub use autonomous::Context as AutonomousContext;
 use game_parallel_economy_person::Person;
 use game_parallel_work_sites::Facilities;
+pub use guarding::{Context as GuardContext, Plan as GuardPlan};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -73,6 +75,19 @@ pub struct CapturePolicy {
     pub pressure_threshold: Option<u64>,
 }
 
+/// A person's own inclination to spend time guarding a physical site.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuardPolicy {
+    pub person: u64,
+    pub site: u64,
+    pub willing: bool,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capture {
     pub actor: u64,
@@ -99,6 +114,7 @@ pub enum EventKind {
     Released,
     CaptureResisted,
     CaptureUnavailable,
+    Guarded,
 }
 
 fn default_effort() -> u64 {
@@ -122,6 +138,8 @@ pub struct Confinement {
     #[serde(default)]
     pub capture_policies: Vec<CapturePolicy>,
     #[serde(default)]
+    pub guard_policies: Vec<GuardPolicy>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -135,6 +153,8 @@ impl Confinement {
         self.capture_responses
             .par_sort_unstable_by_key(|rule| rule.person);
         self.capture_policies
+            .par_sort_unstable_by_key(|rule| rule.person);
+        self.guard_policies
             .par_sort_unstable_by_key(|rule| rule.person);
     }
 
@@ -176,6 +196,10 @@ impl Confinement {
                 .capture_policies
                 .par_windows(2)
                 .any(|w| w[0].person >= w[1].person)
+            || self
+                .guard_policies
+                .par_windows(2)
+                .any(|w| w[0].person >= w[1].person)
             || self.cells.par_iter().any(|cell| {
                 sites
                     .sites
@@ -195,6 +219,16 @@ impl Confinement {
                 rule.person == rule.target
                     || people.binary_search_by_key(&rule.person, |p| p.id).is_err()
                     || people.binary_search_by_key(&rule.target, |p| p.id).is_err()
+                    || rule.site == 0
+                    || rule.site >= sites.next_id
+                    || rule.pressured_by.is_some() != rule.pressure_threshold.is_some()
+                    || rule.pressure_threshold == Some(0)
+                    || rule.pressured_by.is_some_and(|id| {
+                        id == rule.person || people.binary_search_by_key(&id, |p| p.id).is_err()
+                    })
+            })
+            || self.guard_policies.par_iter().any(|rule| {
+                people.binary_search_by_key(&rule.person, |p| p.id).is_err()
                     || rule.site == 0
                     || rule.site >= sites.next_id
                     || rule.pressured_by.is_some() != rule.pressure_threshold.is_some()
@@ -252,9 +286,7 @@ impl Confinement {
     }
 
     pub fn held(&self, person: u64) -> bool {
-        self.holds
-            .binary_search_by_key(&person, |hold| hold.person)
-            .is_ok()
+        ordered_index(&self.holds, person, |hold| hold.person).is_some()
     }
 
     /// Attach barriers only to sites whose construction was physically accepted.
@@ -429,6 +461,7 @@ impl Confinement {
         busy: &[u64],
         tick: u64,
         manual: Option<u64>,
+        guards: &[(u64, u64)],
     ) -> Result<(Self, Vec<u64>), String> {
         if let Some(person) = manual {
             let index = people
@@ -481,6 +514,7 @@ impl Confinement {
             escape: self.escape.par_iter().cloned().collect(),
             capture_responses: self.capture_responses.par_iter().cloned().collect(),
             capture_policies: self.capture_policies.par_iter().cloned().collect(),
+            guard_policies: self.guard_policies.par_iter().cloned().collect(),
             events: attempts
                 .par_iter()
                 .map(|&(site, person, _)| Event {
@@ -494,7 +528,13 @@ impl Confinement {
         };
         next.cells.par_iter_mut().for_each(|cell| {
             if let Ok(index) = changes.binary_search_by_key(&cell.site, |row| row.0) {
-                cell.resistance = cell.resistance.saturating_sub(changes[index].1);
+                let opposition = guards
+                    .binary_search_by_key(&cell.site, |row| row.0)
+                    .ok()
+                    .map_or(0, |i| guards[i].1);
+                cell.resistance = cell
+                    .resistance
+                    .saturating_sub(changes[index].1.saturating_sub(opposition));
             }
         });
         let broken: HashSet<_> = next
@@ -548,6 +588,48 @@ impl Confinement {
 #[macro_export]
 macro_rules! escape_method {
     () => {
+        /// Spend one boundary guarding a local physical barrier.
+        pub fn guard_cell(&mut self, person: u64, site: u64) -> Result<bool, String> {
+            game_parallel_economy_campaign::preflight!(self);
+            let draft = self.prepare_interaction(
+                None,
+                None,
+                None,
+                Some(game_parallel_economy_interaction::PhysicalChoice::Guard { person, site }),
+            )?;
+            let guarded = draft.confinement.as_ref().is_some_and(|owner| {
+                owner.events.iter().any(|event| {
+                    event.person == person
+                        && event.site == site
+                        && event.kind == $crate::EventKind::Guarded
+                })
+            });
+            self.commit(draft)?;
+            Ok(guarded)
+        }
+        /// Change an individual's inclination to guard their configured site.
+        pub fn set_guard_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be capable".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            let owner = self.confinement.as_mut().ok_or("confinement is disabled")?;
+            let index = owner
+                .guard_policies
+                .binary_search_by_key(&person, |row| row.person)
+                .map_err(|_| "person has no guarding preference")?;
+            owner.guard_policies[index].willing = willing;
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Change an individual's inclination to carry out their own capture intention.
         pub fn set_capture_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
             if self

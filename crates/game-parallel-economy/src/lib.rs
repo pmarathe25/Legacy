@@ -15,7 +15,7 @@ pub use game_parallel_economy_combat::Combat;
 pub use game_parallel_economy_confinement::{
     CapturePolicy as ConfinementCapturePolicy, CaptureResponse as ConfinementCaptureResponse,
     Cell as ConfinementCell, CellKind as ConfinementCellKind, Confinement, EscapePreference,
-    Hold as ConfinementHold,
+    GuardPolicy as ConfinementGuardPolicy, Hold as ConfinementHold,
 };
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
@@ -1611,6 +1611,69 @@ impl Economy {
             .par_iter()
             .map(|hold| hold.person)
             .collect();
+        let manual_guard = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::Guard { person, site }) => {
+                Some((person, site))
+            }
+            _ => None,
+        };
+        if manual_guard.is_some() && self.confinement.is_none() {
+            return Err("confinement is disabled".into());
+        }
+        if manual_guard.is_some_and(|(person, _)| {
+            self.physical.work().iter().any(|job| {
+                job.job.worker == person && job.phase == game_parallel_lot_runtime::Phase::Working
+            })
+        }) {
+            return Err("a working person cannot guard a cell".into());
+        }
+        let guard_plan = if let Some(owner) = self
+            .confinement
+            .as_ref()
+            .filter(|owner| manual_guard.is_some() || !owner.guard_policies.is_empty())
+        {
+            let mut guard_busy = busy.clone();
+            if let Some(row) = request {
+                guard_busy.extend([row.actor, row.target]);
+            }
+            if let Some(choice) = player_transfer {
+                use game_parallel_economy_interaction::PhysicalChoice;
+                let target = match choice {
+                    PhysicalChoice::Give { recipient, .. } => Some(recipient),
+                    PhysicalChoice::TreatOther { patient, .. } => Some(patient),
+                    PhysicalChoice::AskFood { target, .. }
+                    | PhysicalChoice::Confine { target, .. }
+                    | PhysicalChoice::ReleaseHeld { target, .. } => Some(target),
+                    PhysicalChoice::AskHaul { carrier, .. } => Some(carrier),
+                    _ => None,
+                };
+                guard_busy.extend(target);
+            }
+            guard_busy.par_sort_unstable();
+            guard_busy.dedup();
+            Some(
+                game_parallel_economy_confinement::GuardContext {
+                    owner,
+                    people: &self.people,
+                    sites: self
+                        .work_sites
+                        .as_ref()
+                        .ok_or("confinement requires physical sites")?,
+                    busy: &guard_busy,
+                    opinions: self.opinions.as_ref(),
+                    manual: manual_guard,
+                    tick,
+                }
+                .prepare()?,
+            )
+        } else {
+            None
+        };
+        if let Some(plan) = &guard_plan
+            && !plan.actors.is_empty()
+        {
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+        }
         let manual_escape = match player_transfer {
             Some(game_parallel_economy_interaction::PhysicalChoice::Escape { person }) => {
                 Some(person)
@@ -1623,9 +1686,30 @@ impl Economy {
         let mut next_confinement = self
             .confinement
             .as_ref()
-            .map(|owner| owner.escape_attempts(&self.people, &busy, tick, manual_escape))
+            .map(|owner| {
+                owner.escape_attempts(
+                    &self.people,
+                    &busy,
+                    tick,
+                    manual_escape,
+                    guard_plan
+                        .as_ref()
+                        .map_or(&[][..], |plan| plan.strengths.as_slice()),
+                )
+            })
             .transpose()?
             .map(|(next, _)| next);
+        if let (Some(owner), Some(plan)) = (&mut next_confinement, guard_plan) {
+            owner.events.par_extend(plan.events);
+            if owner.events.par_windows(2).any(|pair| {
+                (pair[0].person, pair[0].actor, pair[0].kind)
+                    > (pair[1].person, pair[1].actor, pair[1].kind)
+            }) {
+                owner
+                    .events
+                    .par_sort_unstable_by_key(|event| (event.person, event.actor, event.kind));
+            }
+        }
         match player_transfer {
             Some(game_parallel_economy_interaction::PhysicalChoice::Confine {
                 person,

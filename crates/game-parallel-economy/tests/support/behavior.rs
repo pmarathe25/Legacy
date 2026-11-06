@@ -9058,6 +9058,7 @@ fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
         capture_responses: vec![],
@@ -9151,6 +9152,7 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
         capture_responses: vec![],
@@ -9232,6 +9234,7 @@ fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
         default_effort: 1,
@@ -9344,6 +9347,7 @@ fn autonomous_person_can_capture_an_idle_ruler_who_resists_or_yields() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
@@ -9478,6 +9482,7 @@ fn autonomous_capture_resolves_shared_capacity_and_target_contention() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
@@ -9547,6 +9552,118 @@ fn autonomous_capture_resolves_shared_capacity_and_target_contention() {
 }
 
 #[test]
+fn an_individual_guard_spends_time_and_can_stop_or_be_motivated_by_fear() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![WorkPolicy {
+            person: 2,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        }],
+        requests: None,
+    });
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        cell_kinds: vec![],
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 3,
+        }],
+        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        escape: vec![
+            EscapePreference {
+                person: 2,
+                willing: false,
+                effort: 2,
+            },
+            EscapePreference {
+                person: 3,
+                willing: false,
+                effort: 2,
+            },
+        ],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![ConfinementGuardPolicy {
+            person: 2,
+            site: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(!world.escape_confinement(3).unwrap());
+                let guarded = world.snapshot();
+                assert_eq!(guarded.confinement.as_ref().unwrap().cells[0].resistance, 3);
+                assert!(
+                    guarded
+                        .confinement
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.person == 2
+                            && event.kind == game_parallel_economy_confinement::EventKind::Guarded)
+                );
+                assert!(guarded.physical.work.is_empty());
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&guarded).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.set_guard_choice(2, false).unwrap();
+                restored.set_guard_choice(2, false).unwrap();
+                assert!(!world.escape_confinement(3).unwrap());
+                assert!(!restored.escape_confinement(3).unwrap());
+                assert_eq!(
+                    world.snapshot().confinement.as_ref().unwrap().cells[0].resistance,
+                    1
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut pressured = initial;
+    let policy = &mut pressured.confinement.as_mut().unwrap().guard_policies[0];
+    policy.willing = false;
+    policy.pressured_by = Some(1);
+    policy.pressure_threshold = Some(3);
+    pressured.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    });
+    let mut world = Economy::compile(pressured).unwrap();
+    assert!(!world.escape_confinement(3).unwrap());
+    assert_eq!(world.snapshot().confinement.unwrap().cells[0].resistance, 3);
+}
+
+#[test]
 fn controlled_person_can_choose_repeated_physical_escape_attempts() {
     let mut initial = campaign_fixture();
     initial.pending_food.clear();
@@ -9562,6 +9679,7 @@ fn controlled_person_can_choose_repeated_physical_escape_attempts() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
         capture_responses: vec![],

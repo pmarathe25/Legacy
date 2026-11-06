@@ -15,6 +15,7 @@ fn shared_barrier(count: u64) -> (Confinement, Vec<Person>, Facilities) {
         })
         .collect();
     let owner = Confinement {
+        guard_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![Cell {
@@ -113,6 +114,116 @@ fn shared_capacity(count: u64) -> (Confinement, Vec<Person>, Facilities) {
         })
         .collect();
     (owner, people, sites)
+}
+
+fn shared_guarding(count: u64) -> (Confinement, Vec<Person>, Facilities) {
+    let (mut owner, people, sites) = shared_capacity(count);
+    owner.capture_responses.clear();
+    owner.capture_policies.clear();
+    owner.holds = (count + 1..=count * 2)
+        .map(|person| Hold { person, site: 1 })
+        .collect();
+    owner.escape = (count + 1..=count * 2)
+        .map(|person| EscapePreference {
+            person,
+            willing: true,
+            effort: 1,
+        })
+        .collect();
+    owner.guard_policies = (1..=count)
+        .map(|person| GuardPolicy {
+            person,
+            site: 1,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    (owner, people, sites)
+}
+
+#[test]
+fn concurrent_guarding_and_escape_use_actual_personal_effort() {
+    let (initial, people, sites) = shared_guarding(4096);
+    initial.validate(&people, &sites, 0).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let plan = GuardContext {
+                    owner: &initial,
+                    people: &people,
+                    sites: &sites,
+                    busy: &[],
+                    opinions: None,
+                    manual: None,
+                    tick: 1,
+                }
+                .prepare()
+                .unwrap();
+                assert_eq!(plan.actors.len(), 4096);
+                assert_eq!(plan.strengths, vec![(1, 4096)]);
+                let (next, attempts) = initial
+                    .escape_attempts(&people, &[], 1, None, &plan.strengths)
+                    .unwrap();
+                assert_eq!(attempts.len(), 4096);
+                assert_eq!(next.cells[0].resistance, 4097);
+                assert_eq!(next.holds.len(), 4096);
+                (next, plan.actors, plan.strengths, plan.events)
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "manual concentrated guarding benchmark"]
+fn concentrated_guarding_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000);
+    let (initial, people, sites) = shared_guarding(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..5 {
+                let now = std::time::Instant::now();
+                let plan = GuardContext {
+                    owner: &initial,
+                    people: &people,
+                    sites: &sites,
+                    busy: &[],
+                    opinions: None,
+                    manual: None,
+                    tick: 1,
+                }
+                .prepare()
+                .unwrap();
+                let (next, _) = initial
+                    .escape_attempts(&people, &[], 1, None, &plan.strengths)
+                    .unwrap();
+                let elapsed = now.elapsed();
+                assert_eq!(plan.strengths, vec![(1, count)]);
+                assert_eq!(next.cells[0].resistance, count + 1);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort();
+            println!(
+                "workers={workers} guards={count} prisoners={count} elapsed_ms={:.3}",
+                samples[samples.len() / 2].as_secs_f64() * 1000.0
+            );
+        });
 }
 
 #[test]
@@ -337,11 +448,11 @@ fn simultaneous_attempts_reduce_a_shared_barrier_and_release_everyone() {
             .build()
             .unwrap()
             .install(|| {
-                let (first, actors) = initial.escape_attempts(&people, &[], 1, None).unwrap();
+                let (first, actors) = initial.escape_attempts(&people, &[], 1, None, &[]).unwrap();
                 assert_eq!(actors.len(), 4096);
                 assert_eq!(first.cells[0].resistance, 1);
                 assert_eq!(first.holds.len(), 4096);
-                let (second, _) = first.escape_attempts(&people, &[], 2, None).unwrap();
+                let (second, _) = first.escape_attempts(&people, &[], 2, None, &[]).unwrap();
                 assert_eq!(second.cells[0].resistance, 0);
                 assert!(second.holds.is_empty());
                 second.validate(&people, &sites, 2).unwrap();
@@ -371,7 +482,7 @@ fn concentrated_escape_benchmark() {
             let mut samples = Vec::new();
             for round in 0..5 {
                 let now = std::time::Instant::now();
-                let (next, actors) = initial.escape_attempts(&people, &[], 1, None).unwrap();
+                let (next, actors) = initial.escape_attempts(&people, &[], 1, None, &[]).unwrap();
                 let elapsed = now.elapsed();
                 assert_eq!(actors.len(), count as usize);
                 assert_eq!(next.cells[0].resistance, 1);

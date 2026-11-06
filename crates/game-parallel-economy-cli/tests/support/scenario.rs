@@ -2139,6 +2139,11 @@ fn player_can_confine_and_release_a_guardian_using_the_authored_cell() {
         .find(|g| g.person == 99)
         .unwrap();
     assert_eq!((guardian.health, guardian.confined), (2, Some(true)));
+    assert!(Player::new(&mut world).guard_cell(1).unwrap());
+    assert_eq!(
+        world.snapshot().confinement.as_ref().unwrap().cells[0].resistance,
+        6
+    );
     assert!(Player::new(&mut world).release_held_person(99).unwrap());
     assert_eq!(
         Player::new(&mut world)

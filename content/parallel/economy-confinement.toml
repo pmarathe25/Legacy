@@ -327,6 +327,7 @@ escape = [
 ]
 capture_responses = [{ person = 2, yield_willingly = false, pressure_threshold = 3 }]
 capture_policies = [{ person = 2, target = 1, site = 1, willing = true }]
+guard_policies = [{ person = 2, site = 1, willing = false }]
 
 [[regions]]
 id = 1
