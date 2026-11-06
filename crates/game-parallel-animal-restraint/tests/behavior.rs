@@ -91,7 +91,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
         capacity_per_handler: 1,
         release_policies: vec![].into(),
         defense_policies: vec![].into(),
-        holds: vec![],
+        holds: vec![].into(),
         events: vec![],
         policies: (1..=count)
             .map(|person| Policy {
@@ -132,6 +132,53 @@ fn prepare(
     }
     .prepare()
     .unwrap()
+}
+
+#[test]
+fn restraint_lookup_handles_sparse_and_reordered_animals_without_changing_results() {
+    let (people, mut fauna, mut owner) = fixture(64, false);
+    for animal in &mut fauna.animals {
+        animal.id *= 2;
+    }
+    fauna.next_id = 129;
+    for policy in owner.policies_mut() {
+        policy.animal = policy.animal.map(|id| id * 2);
+        policy.effort = 4;
+    }
+    let mut reversed = fauna.clone();
+    reversed.animals.reverse();
+    let mut valid_a = owner.clone();
+    let mut valid_b = owner.clone();
+    valid_a
+        .normalize_and_validate(&people, Some(&fauna), 0)
+        .unwrap();
+    valid_b
+        .normalize_and_validate(&people, Some(&reversed), 0)
+        .unwrap();
+    assert_eq!(valid_a, valid_b);
+    let a = prepare(&valid_a, &fauna, &people, 1, None);
+    let b = prepare(&valid_b, &reversed, &people, 1, None);
+    assert_eq!(a.state, b.state);
+    assert_eq!(a.actors, b.actors);
+    assert_eq!(a.reactions, b.reactions);
+    fauna.animals[4].health = 0;
+    reversed
+        .animals
+        .iter_mut()
+        .find(|animal| animal.id == 10)
+        .unwrap()
+        .health = 0;
+    let mut next_a = a.state.unwrap();
+    let mut next_b = b.state.unwrap();
+    next_a.reconcile(&people, &fauna, &|_| true, 1);
+    next_b.reconcile(&people, &reversed, &|_| true, 1);
+    assert_eq!(next_a, next_b);
+    assert!(
+        next_a
+            .events
+            .iter()
+            .any(|event| event.animal == 10 && event.kind == EventKind::LetGo)
+    );
 }
 
 #[test]
@@ -247,7 +294,7 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
         for policy in owner.policies_mut() {
             policy.willing = false;
         }
-        owner.holds = (1..=if shared { 1 } else { count })
+        *owner.holds_mut() = (1..=if shared { 1 } else { count })
             .map(|animal| Hold {
                 animal,
                 handler: animal,
@@ -284,6 +331,12 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
         let state = one.state.unwrap();
         assert!(state.holds.is_empty());
         assert_eq!(state.events.len(), if shared { 1 } else { count as usize });
+        if shared {
+            let expected = (1..=count)
+                .min_by_key(|&person| (game_parallel_genetics::random(7 ^ 1, person, 1), person))
+                .unwrap();
+            assert_eq!(state.events[0].actor, Some(expected));
+        }
         assert!(
             state
                 .events
@@ -297,7 +350,7 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
 fn flexible_releaser_selects_an_unblocked_local_hold() {
     let (people, fauna, mut owner) = fixture(2, false);
     owner.policies_mut().clear();
-    owner.holds = vec![
+    *owner.holds_mut() = vec![
         Hold {
             animal: 1,
             handler: 1,
@@ -348,7 +401,7 @@ fn a_handler_can_oppose_release_but_can_be_overpowered() {
     let (mut people, mut fauna, mut owner) = fixture(2, true);
     people[1].controlled = true;
     owner.policies_mut().clear();
-    owner.holds = vec![Hold {
+    *owner.holds_mut() = vec![Hold {
         animal: 1,
         handler: 1,
         integrity: 2,
@@ -419,7 +472,7 @@ fn a_handler_cannot_defend_two_animals_at_once() {
     let (people, fauna, mut owner) = fixture(4, false);
     owner.policies_mut().clear();
     owner.capacity_per_handler = 2;
-    owner.holds = vec![
+    *owner.holds_mut() = vec![
         Hold {
             animal: 1,
             handler: 1,
@@ -464,6 +517,11 @@ fn a_handler_cannot_defend_two_animals_at_once() {
     assert_eq!(one.actors, vec![1, 3, 4]);
     let state = one.state.unwrap();
     assert_eq!(state.holds.len(), 1);
+    let expected = [1, 2]
+        .into_iter()
+        .min_by_key(|&animal| (game_parallel_genetics::random(7 ^ 1, animal, 1), animal))
+        .unwrap();
+    assert_eq!(state.holds[0].animal, expected);
     assert_eq!(
         state
             .events
@@ -487,7 +545,7 @@ fn a_controlled_handler_can_explicitly_defend_a_hold() {
     let (mut people, fauna, mut owner) = fixture(2, true);
     people[0].controlled = true;
     owner.policies_mut().clear();
-    owner.holds = vec![Hold {
+    *owner.holds_mut() = vec![Hold {
         animal: 1,
         handler: 1,
         integrity: 2,
@@ -562,12 +620,124 @@ fn policy_generations_are_shared_until_an_individual_choice_changes() {
 }
 
 #[test]
+fn unchanged_holds_share_a_generation_and_real_changes_detach_it() {
+    let (people, mut fauna, mut owner) = fixture(2, true);
+    fauna.animals[0]
+        .restraint_response
+        .as_mut()
+        .unwrap()
+        .escape_willing = false;
+    owner.policies_mut().clear();
+    owner.holds_mut().push(Hold {
+        animal: 1,
+        handler: 1,
+        integrity: 2,
+    });
+    let snapshot = owner.clone();
+    let mut next = prepare(&owner, &fauna, &people, 1, None).state.unwrap();
+    assert!(std::sync::Arc::ptr_eq(&owner.holds, &next.holds));
+    next.events = vec![
+        game_parallel_animal_restraint::Event {
+            tick: 1,
+            animal: 1,
+            actor: Some(2),
+            defender: None,
+            kind: EventKind::Resisted,
+        },
+        game_parallel_animal_restraint::Event {
+            tick: 1,
+            animal: 1,
+            actor: Some(1),
+            defender: None,
+            kind: EventKind::Resisted,
+        },
+    ];
+    next.reconcile(&people, &fauna, &|_| true, 1);
+    assert!(std::sync::Arc::ptr_eq(&owner.holds, &next.holds));
+    assert_eq!(
+        next.events
+            .iter()
+            .map(|event| event.actor)
+            .collect::<Vec<_>>(),
+        vec![Some(1), Some(2)]
+    );
+    next.holds_mut().clear();
+    assert_eq!(owner, snapshot);
+    assert_eq!(owner.holds.len(), 1);
+    assert!(!std::sync::Arc::ptr_eq(&owner.holds, &next.holds));
+    let restored: Restraints =
+        serde_json::from_str(&serde_json::to_string(&owner).unwrap()).unwrap();
+    assert_eq!(restored, owner);
+    *owner.release_policies_mut() = vec![ReleasePolicy {
+        person: 2,
+        animal: Some(1),
+        willing: true,
+        effort: 1,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    let released = prepare(&owner, &fauna, &people, 1, None).state.unwrap();
+    assert!(released.holds.is_empty());
+    assert_eq!(owner.holds.len(), 1);
+}
+
+#[test]
+#[ignore = "manual steady physical holds benchmark"]
+fn steady_holds_benchmark() {
+    let count = std::env::var("LEGACY_ANIMALS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let (people, mut fauna, mut owner) = fixture(count, false);
+    owner.policies_mut().clear();
+    *owner.holds_mut() = (1..=count)
+        .map(|id| Hold {
+            animal: id,
+            handler: id,
+            integrity: 2,
+        })
+        .collect();
+    for animal in &mut fauna.animals {
+        animal.restraint_response.as_mut().unwrap().escape_willing = false;
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..5 {
+                let now = std::time::Instant::now();
+                let mut next = prepare(&owner, &fauna, &people, 1, None).state.unwrap();
+                next.reconcile(&people, &fauna, &|_| true, 1);
+                let elapsed = now.elapsed().as_secs_f64();
+                assert!(std::sync::Arc::ptr_eq(&owner.holds, &next.holds));
+                assert_eq!(next.holds.len(), count as usize);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} animals={count} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
 fn release_and_escape_match_when_capture_preferences_are_absent_or_disabled() {
     let (people, fauna, mut disabled) = fixture(2, true);
     for policy in disabled.policies_mut() {
         policy.willing = false;
     }
-    disabled.holds = vec![Hold {
+    *disabled.holds_mut() = vec![Hold {
         animal: 1,
         handler: 1,
         integrity: 2,

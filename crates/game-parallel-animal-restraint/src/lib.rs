@@ -114,7 +114,7 @@ pub struct Restraints {
     #[serde(default)]
     pub defense_policies: Arc<Vec<DefensePolicy>>,
     #[serde(default)]
-    pub holds: Vec<Hold>,
+    pub holds: Arc<Vec<Hold>>,
     #[serde(default)]
     pub events: Vec<Event>,
 }
@@ -128,18 +128,65 @@ impl Default for Restraints {
             policies: Arc::new(Vec::new()),
             release_policies: Arc::new(Vec::new()),
             defense_policies: Arc::new(Vec::new()),
-            holds: Vec::new(),
+            holds: Arc::new(Vec::new()),
             events: Vec::new(),
         }
     }
 }
 
-fn indexed(fauna: &Fauna) -> Vec<&Animal> {
-    let mut animals: Vec<_> = fauna.animals.par_iter().collect();
-    if animals.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
-        animals.par_sort_unstable_by_key(|animal| animal.id);
+struct AnimalIndex<'a> {
+    animals: &'a [Animal],
+    ordered: Option<Vec<&'a Animal>>,
+    dense_first: Option<u64>,
+}
+
+impl<'a> AnimalIndex<'a> {
+    fn new(fauna: &'a Fauna) -> Self {
+        let animals = &fauna.animals[..];
+        let ordered = if animals.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+            let mut rows: Vec<_> = animals.par_iter().collect();
+            rows.par_sort_unstable_by_key(|animal| animal.id);
+            Some(rows)
+        } else {
+            None
+        };
+        let bounds = match &ordered {
+            Some(rows) => rows.first().zip(rows.last()).map(|(a, b)| (a.id, b.id)),
+            None => animals
+                .first()
+                .zip(animals.last())
+                .map(|(a, b)| (a.id, b.id)),
+        };
+        let dense_first = bounds.and_then(|(first, last)| {
+            (last.checked_sub(first) == Some((animals.len() - 1) as u64)).then_some(first)
+        });
+        Self {
+            animals,
+            ordered,
+            dense_first,
+        }
     }
-    animals
+
+    fn find(&self, id: u64) -> Option<&'a Animal> {
+        if let Some(first) = self.dense_first {
+            let index = usize::try_from(id.checked_sub(first)?).ok()?;
+            return match &self.ordered {
+                Some(rows) => rows.get(index).copied(),
+                None => self.animals.get(index),
+            };
+        }
+        match &self.ordered {
+            Some(rows) => rows
+                .binary_search_by_key(&id, |animal| animal.id)
+                .ok()
+                .map(|i| rows[i]),
+            None => self
+                .animals
+                .binary_search_by_key(&id, |animal| animal.id)
+                .ok()
+                .map(|i| &self.animals[i]),
+        }
+    }
 }
 
 fn detach<T: Clone + Send + Sync>(shared: &mut Arc<Vec<T>>) -> &mut Vec<T> {
@@ -150,6 +197,10 @@ fn detach<T: Clone + Send + Sync>(shared: &mut Arc<Vec<T>>) -> &mut Vec<T> {
 }
 
 impl Restraints {
+    /// Detach the physical hold generation before changing it.
+    pub fn holds_mut(&mut self) -> &mut Vec<Hold> {
+        detach(&mut self.holds)
+    }
     /// Detach a shared policy generation before changing an individual's choice.
     pub fn policies_mut(&mut self) -> &mut Vec<Policy> {
         detach(&mut self.policies)
@@ -175,7 +226,7 @@ impl Restraints {
         tick: u64,
     ) -> Result<(), String> {
         let fauna = fauna.ok_or("animal restraint requires wildlife")?;
-        let animals = indexed(fauna);
+        let animals = AnimalIndex::new(fauna);
         if self
             .policies
             .par_windows(2)
@@ -200,16 +251,18 @@ impl Restraints {
             self.defense_policies_mut()
                 .par_sort_unstable_by_key(|policy| policy.person);
         }
-        self.holds.par_sort_unstable_by_key(|hold| hold.animal);
+        if self
+            .holds
+            .par_windows(2)
+            .any(|pair| pair[0].animal > pair[1].animal)
+        {
+            self.holds_mut()
+                .par_sort_unstable_by_key(|hold| hold.animal);
+        }
         self.events
             .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
         let ids: HashSet<_> = people.par_iter().map(|person| person.id).collect();
-        let animal = |id| {
-            animals
-                .binary_search_by_key(&id, |row| row.id)
-                .ok()
-                .map(|i| animals[i])
-        };
+        let animal = |id| animals.find(id);
         let person = |id| {
             people
                 .binary_search_by_key(&id, |row| row.id)
@@ -319,17 +372,10 @@ impl Restraints {
         if self.holds.is_empty() {
             return;
         }
-        let animals = indexed(fauna);
+        let animals = AnimalIndex::new(fauna);
         let dense_people = people.first().zip(people.last()).and_then(|(first, last)| {
             (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
         });
-        let dense_animals = animals
-            .first()
-            .zip(animals.last())
-            .and_then(|(first, last)| {
-                (last.id.checked_sub(first.id) == Some((animals.len() - 1) as u64))
-                    .then_some(first.id)
-            });
         let keep = |hold: &Hold| {
             let person = dense_people.map_or_else(
                 || {
@@ -345,20 +391,7 @@ impl Restraints {
                         .and_then(|i| people.get(i))
                 },
             );
-            let animal = dense_animals.map_or_else(
-                || {
-                    animals
-                        .binary_search_by_key(&hold.animal, |row| row.id)
-                        .ok()
-                        .map(|i| animals[i])
-                },
-                |first| {
-                    hold.animal
-                        .checked_sub(first)
-                        .and_then(|i| usize::try_from(i).ok())
-                        .and_then(|i| animals.get(i).copied())
-                },
-            );
+            let animal = animals.find(hold.animal);
             deaths.binary_search(&hold.animal).is_err()
                 && person.zip(animal).is_some_and(|(person, animal)| {
                     person.health > 0
@@ -367,6 +400,10 @@ impl Restraints {
                         && available(person.id)
                 })
         };
+        if self.holds.par_iter().all(keep) {
+            sort_events(&mut self.events);
+            return;
+        }
         self.events.par_extend(
             self.holds
                 .par_iter()
@@ -379,19 +416,23 @@ impl Restraints {
                     kind: EventKind::LetGo,
                 }),
         );
-        self.holds = self
-            .holds
-            .par_iter()
-            .filter(|hold| keep(hold))
-            .cloned()
-            .collect();
-        if self.events.par_windows(2).any(|pair| {
-            (pair[0].animal, pair[0].actor, pair[0].kind)
-                > (pair[1].animal, pair[1].actor, pair[1].kind)
-        }) {
-            self.events
-                .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
-        }
+        self.holds = Arc::new(
+            self.holds
+                .par_iter()
+                .filter(|hold| keep(hold))
+                .cloned()
+                .collect(),
+        );
+        sort_events(&mut self.events);
+    }
+}
+
+fn sort_events(events: &mut [Event]) {
+    if events.par_windows(2).any(|pair| {
+        (pair[0].animal, pair[0].actor, pair[0].kind)
+            > (pair[1].animal, pair[1].actor, pair[1].kind)
+    }) {
+        events.par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
     }
 }
 
@@ -416,13 +457,7 @@ fn finish<'a>(
     defended: Option<u64>,
     animal: &(impl Fn(u64) -> Option<&'a Animal> + Sync),
 ) -> Plan {
-    if next.events.par_windows(2).any(|pair| {
-        (pair[0].animal, pair[0].actor, pair[0].kind)
-            > (pair[1].animal, pair[1].actor, pair[1].kind)
-    }) {
-        next.events
-            .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
-    }
+    sort_events(&mut next.events);
     let mut reserved: Vec<_> = next
         .events
         .par_iter()
@@ -507,7 +542,7 @@ impl Context<'_> {
                     policies: Arc::clone(&owner.policies),
                     release_policies: Arc::clone(&owner.release_policies),
                     defense_policies: Arc::clone(&owner.defense_policies),
-                    holds: Vec::new(),
+                    holds: Arc::new(Vec::new()),
                     events: Vec::new(),
                 }),
                 actors: Vec::new(),
@@ -516,14 +551,7 @@ impl Context<'_> {
             });
         }
         let fauna = self.fauna.ok_or("wildlife is disabled")?;
-        let animals = indexed(fauna);
-        let dense_animals = animals
-            .first()
-            .zip(animals.last())
-            .and_then(|(first, last)| {
-                (last.id.checked_sub(first.id) == Some((animals.len() - 1) as u64))
-                    .then_some(first.id)
-            });
+        let animals = AnimalIndex::new(fauna);
         let dense_people = self
             .people
             .first()
@@ -532,18 +560,7 @@ impl Context<'_> {
                 (last.id.checked_sub(first.id) == Some((self.people.len() - 1) as u64))
                     .then_some(first.id)
             });
-        let animal = |id: u64| {
-            if let Some(first) = dense_animals {
-                animals
-                    .get(usize::try_from(id.checked_sub(first)?).ok()?)
-                    .copied()
-            } else {
-                animals
-                    .binary_search_by_key(&id, |row| row.id)
-                    .ok()
-                    .map(|i| animals[i])
-            }
-        };
+        let animal = |id: u64| animals.find(id);
         let person = |id: u64| {
             if let Some(first) = dense_people {
                 self.people
@@ -564,7 +581,7 @@ impl Context<'_> {
                 policies: Arc::clone(&owner.policies),
                 release_policies: Arc::clone(&owner.release_policies),
                 defense_policies: Arc::clone(&owner.defense_policies),
-                holds: owner.holds.par_iter().cloned().collect(),
+                holds: Arc::clone(&owner.holds),
                 events: Vec::new(),
             });
         let mut actors = Vec::new();
@@ -741,14 +758,10 @@ impl Context<'_> {
                     && manual_release != Some(target)
                     && is_held(target)
                     && (willing || pressured))
-                    .then_some((
-                        target,
-                        game_parallel_genetics::random(self.seed ^ target, actor.id, self.tick),
-                        actor.id,
-                    ))
+                    .then_some((target, actor.id))
             })
             .collect();
-        actors.par_extend(release_candidates.par_iter().map(|candidate| candidate.2));
+        actors.par_extend(release_candidates.par_iter().map(|candidate| candidate.1));
         if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
             actors.par_sort_unstable();
         }
@@ -762,14 +775,23 @@ impl Context<'_> {
         let released: Vec<_> = release_candidates
             .par_chunk_by(|a, b| a.0 == b.0)
             .map(|group| {
-                let chosen = group
-                    .par_iter()
-                    .min_by_key(|row| (row.1, row.2))
-                    .expect("nonempty release group");
+                let chosen = if group.len() == 1 {
+                    &group[0]
+                } else {
+                    group
+                        .par_iter()
+                        .min_by_key(|row| {
+                            (
+                                game_parallel_genetics::random(self.seed ^ row.0, row.1, self.tick),
+                                row.1,
+                            )
+                        })
+                        .expect("nonempty release group")
+                };
                 Event {
                     tick: self.tick,
                     animal: chosen.0,
-                    actor: Some(chosen.2),
+                    actor: Some(chosen.1),
                     defender: None,
                     kind: EventKind::Released,
                 }
@@ -813,16 +835,7 @@ impl Context<'_> {
                     if let Some((_, _, effort)) = manual_defend.filter(|(person, animal, _)| {
                         *person == handler.id && *animal == event.animal
                     }) {
-                        return Some((
-                            handler.id,
-                            game_parallel_genetics::random(
-                                self.seed ^ handler.id,
-                                event.animal,
-                                self.tick,
-                            ),
-                            event.animal,
-                            effort,
-                        ));
+                        return Some((handler.id, event.animal, effort));
                     }
                     let policy_index = dense_defenses.map_or_else(
                         || {
@@ -863,16 +876,7 @@ impl Context<'_> {
                             },
                         )
                         && (policy.willing || pressured))
-                        .then_some((
-                            handler.id,
-                            game_parallel_genetics::random(
-                                self.seed ^ handler.id,
-                                event.animal,
-                                self.tick,
-                            ),
-                            event.animal,
-                            policy.effort,
-                        ))
+                        .then_some((handler.id, event.animal, policy.effort))
                 })
                 .collect();
             if defenses.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
@@ -881,10 +885,23 @@ impl Context<'_> {
             let mut chosen: Vec<_> = defenses
                 .par_chunk_by(|a, b| a.0 == b.0)
                 .map(|group| {
-                    *group
-                        .par_iter()
-                        .min_by_key(|row| (row.1, row.2))
-                        .expect("nonempty defense group")
+                    if group.len() == 1 {
+                        group[0]
+                    } else {
+                        *group
+                            .par_iter()
+                            .min_by_key(|row| {
+                                (
+                                    game_parallel_genetics::random(
+                                        self.seed ^ row.0,
+                                        row.1,
+                                        self.tick,
+                                    ),
+                                    row.1,
+                                )
+                            })
+                            .expect("nonempty defense group")
+                    }
                 })
                 .collect();
             actors.par_extend(chosen.par_iter().map(|row| row.0));
@@ -894,11 +911,11 @@ impl Context<'_> {
             if manual_defend.is_some() {
                 actors.dedup();
             }
-            if chosen.par_windows(2).any(|pair| pair[0].2 > pair[1].2) {
-                chosen.par_sort_unstable_by_key(|row| row.2);
+            if chosen.par_windows(2).any(|pair| pair[0].1 > pair[1].1) {
+                chosen.par_sort_unstable_by_key(|row| row.1);
             }
             let dense_chosen = chosen.first().zip(chosen.last()).and_then(|(first, last)| {
-                (last.2.checked_sub(first.2) == Some((chosen.len() - 1) as u64)).then_some(first.2)
+                (last.1.checked_sub(first.1) == Some((chosen.len() - 1) as u64)).then_some(first.1)
             });
             let dense_releasers = next
                 .release_policies
@@ -911,7 +928,7 @@ impl Context<'_> {
                 });
             next.events.par_iter_mut().for_each(|event| {
                 let index = dense_chosen.map_or_else(
-                    || chosen.binary_search_by_key(&event.animal, |row| row.2).ok(),
+                    || chosen.binary_search_by_key(&event.animal, |row| row.1).ok(),
                     |first| {
                         event
                             .animal
@@ -920,7 +937,7 @@ impl Context<'_> {
                             .filter(|&index| index < chosen.len())
                     },
                 );
-                let Some((handler, _, _, defense)) = index.map(|index| chosen[index]) else {
+                let Some((handler, _, defense)) = index.map(|index| chosen[index]) else {
                     return;
                 };
                 event.defender = Some(handler);
@@ -982,22 +999,8 @@ impl Context<'_> {
                 (last.checked_sub(*first) == Some((released_targets.len() - 1) as u64))
                     .then_some(*first)
             });
-        let progressed: Vec<_> = next
-            .holds
-            .par_iter()
-            .filter_map(|hold| {
-                let released = dense_released.map_or_else(
-                    || released_targets.binary_search(&hold.animal).is_ok(),
-                    |first| {
-                        hold.animal
-                            .checked_sub(first)
-                            .and_then(|offset| usize::try_from(offset).ok())
-                            .is_some_and(|index| index < released_targets.len())
-                    },
-                );
-                if released {
-                    return None;
-                }
+        let unchanged = released_targets.is_empty()
+            && next.holds.par_iter().all(|hold| {
                 let blocked = dense_blocked.map_or_else(
                     || blocked_releases.binary_search(&hold.animal).is_ok(),
                     |first| {
@@ -1007,48 +1010,85 @@ impl Context<'_> {
                             .is_some_and(|index| index < blocked_releases.len())
                     },
                 );
-                if blocked {
-                    return Some((Some(hold.clone()), None));
-                }
-                if self.blocked.binary_search(&hold.animal).is_ok() {
-                    return Some((Some(hold.clone()), None));
-                }
-                let target = animal(hold.animal)?;
-                let effort = target
-                    .restraint_response
-                    .as_ref()
-                    .filter(|response| response.escape_willing)
-                    .map_or(0, |response| response.escape_effort);
-                if effort == 0 {
-                    return Some((Some(hold.clone()), None));
-                }
-                let remaining = hold.integrity.saturating_sub(effort);
-                let event = Event {
-                    tick: self.tick,
-                    animal: hold.animal,
-                    actor: None,
-                    defender: None,
-                    kind: if remaining == 0 {
-                        EventKind::Escaped
-                    } else {
-                        EventKind::Struggled
-                    },
-                };
-                Some((
-                    (remaining > 0).then_some(Hold {
-                        integrity: remaining,
-                        ..hold.clone()
-                    }),
-                    Some(event),
-                ))
-            })
-            .collect();
-        next.holds = progressed
-            .par_iter()
-            .filter_map(|row| row.0.clone())
-            .collect();
-        next.events
-            .par_extend(progressed.into_par_iter().filter_map(|row| row.1));
+                blocked
+                    || self.blocked.binary_search(&hold.animal).is_ok()
+                    || animal(hold.animal).is_some_and(|target| {
+                        target.restraint_response.as_ref().is_none_or(|response| {
+                            !response.escape_willing || response.escape_effort == 0
+                        })
+                    })
+            });
+        if !unchanged {
+            let progressed: Vec<_> = next
+                .holds
+                .par_iter()
+                .filter_map(|hold| {
+                    let released = dense_released.map_or_else(
+                        || released_targets.binary_search(&hold.animal).is_ok(),
+                        |first| {
+                            hold.animal
+                                .checked_sub(first)
+                                .and_then(|offset| usize::try_from(offset).ok())
+                                .is_some_and(|index| index < released_targets.len())
+                        },
+                    );
+                    if released {
+                        return None;
+                    }
+                    let blocked = dense_blocked.map_or_else(
+                        || blocked_releases.binary_search(&hold.animal).is_ok(),
+                        |first| {
+                            hold.animal
+                                .checked_sub(first)
+                                .and_then(|offset| usize::try_from(offset).ok())
+                                .is_some_and(|index| index < blocked_releases.len())
+                        },
+                    );
+                    if blocked {
+                        return Some((Some(hold.clone()), None));
+                    }
+                    if self.blocked.binary_search(&hold.animal).is_ok() {
+                        return Some((Some(hold.clone()), None));
+                    }
+                    let target = animal(hold.animal)?;
+                    let effort = target
+                        .restraint_response
+                        .as_ref()
+                        .filter(|response| response.escape_willing)
+                        .map_or(0, |response| response.escape_effort);
+                    if effort == 0 {
+                        return Some((Some(hold.clone()), None));
+                    }
+                    let remaining = hold.integrity.saturating_sub(effort);
+                    let event = Event {
+                        tick: self.tick,
+                        animal: hold.animal,
+                        actor: None,
+                        defender: None,
+                        kind: if remaining == 0 {
+                            EventKind::Escaped
+                        } else {
+                            EventKind::Struggled
+                        },
+                    };
+                    Some((
+                        (remaining > 0).then_some(Hold {
+                            integrity: remaining,
+                            ..hold.clone()
+                        }),
+                        Some(event),
+                    ))
+                })
+                .collect();
+            next.holds = Arc::new(
+                progressed
+                    .par_iter()
+                    .filter_map(|row| row.0.clone())
+                    .collect(),
+            );
+            next.events
+                .par_extend(progressed.into_par_iter().filter_map(|row| row.1));
+        }
         if !matches!(self.manual, Some(Manual::Capture { .. }))
             && next
                 .policies
@@ -1231,14 +1271,17 @@ impl Context<'_> {
                 )
             })
             .collect();
-        next.holds
-            .par_extend(outcomes.par_iter().filter_map(|row| row.0.clone()));
+        if outcomes.par_iter().any(|row| row.0.is_some()) {
+            next.holds_mut()
+                .par_extend(outcomes.par_iter().filter_map(|row| row.0.clone()));
+        }
         if next
             .holds
             .par_windows(2)
             .any(|pair| pair[0].animal > pair[1].animal)
         {
-            next.holds.par_sort_unstable_by_key(|hold| hold.animal);
+            next.holds_mut()
+                .par_sort_unstable_by_key(|hold| hold.animal);
         }
         next.events
             .par_extend(outcomes.into_par_iter().map(|row| row.1));

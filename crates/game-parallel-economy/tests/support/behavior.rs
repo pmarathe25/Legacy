@@ -1137,7 +1137,7 @@ fn animal_restraint_fixture() -> State {
         policies: vec![].into(),
         release_policies: vec![].into(),
         defense_policies: vec![].into(),
-        holds: vec![],
+        holds: vec![].into(),
         events: vec![],
     });
     state.fauna.as_mut().unwrap().animals[0].restraint_response = Some(AnimalRestraintResponse {
@@ -2384,7 +2384,7 @@ fn animal_capture_workload(count: u64, shared: bool) -> State {
             })
             .collect::<Vec<_>>()
             .into(),
-        holds: vec![],
+        holds: vec![].into(),
         events: vec![],
     });
     state
@@ -2468,7 +2468,7 @@ fn animal_release_workload(count: u64, shared: bool) -> State {
     let mut state = animal_capture_workload(count, shared);
     let owner = state.animal_restraints.as_mut().unwrap();
     owner.policies_mut().clear();
-    owner.holds = (1..=if shared { 1 } else { count })
+    *owner.holds_mut() = (1..=if shared { 1 } else { count })
         .map(|animal| AnimalHold {
             animal,
             handler: animal,
@@ -2557,7 +2557,7 @@ fn animal_defense_workload(count: u64, shared: bool) -> State {
     let mut state = animal_release_workload(count, shared);
     let owner = state.animal_restraints.as_mut().unwrap();
     let animals = if shared { 1 } else { count / 2 };
-    owner.holds = (1..=animals)
+    *owner.holds_mut() = (1..=animals)
         .map(|animal| AnimalHold {
             animal,
             handler: animal,
@@ -10551,7 +10551,7 @@ fn newborn_animal_restraint_inclinations_do_not_inherit_targets_or_pressure() {
         }]
         .into(),
         defense_policies: vec![].into(),
-        holds: vec![],
+        holds: vec![].into(),
         events: vec![],
     });
     let run = |workers, inherit| {
