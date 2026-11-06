@@ -1077,6 +1077,162 @@ fn contested_grazing_conserves_stock_and_is_worker_invariant() {
 }
 
 #[test]
+fn concentrated_grazing_rotates_priority_and_handles_partial_grants() {
+    let mut state = initial();
+    state.animals = (1..=64)
+        .map(|id| {
+            let mut a = animal(id, Sex::Male, 500);
+            a.hunger = (id % 3) as u32;
+            a
+        })
+        .collect();
+    state.next_id = 65;
+    let patch = Patch {
+        id: 1,
+        region: 1,
+        good: 1,
+        available: 33,
+    };
+    let seed = 42;
+    let offset = (game_parallel_genetics::random(seed ^ 0x6772617a655f726f, 1, 1) % 64) as usize;
+    let mut expected: Vec<_> = state.animals.iter().map(|a| a.hunger + 1).collect();
+    let mut available = patch.available;
+    for step in 0..state.animals.len() {
+        let index = (offset + step) % state.animals.len();
+        let eaten = available.min(u64::from(expected[index].min(2)));
+        expected[index] -= eaten as u32;
+        available -= eaten;
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let draft = state
+                    .advance_with_hunts(&[patch], &[], &[], &[], seed, 1)
+                    .unwrap();
+                assert_eq!(draft.consumed, vec![(1, 33)]);
+                assert_eq!(
+                    draft
+                        .fauna
+                        .animals
+                        .iter()
+                        .map(|a| a.hunger)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                draft.fauna
+            })
+    };
+    let next = run(1);
+    assert_eq!(next, run(4));
+    let mut reversed = state.clone();
+    reversed.animals.reverse();
+    assert_eq!(
+        next,
+        reversed
+            .advance_with_hunts(&[patch], &[], &[], &[], seed, 1)
+            .unwrap()
+            .fauna
+    );
+    let winners: HashSet<_> = (0..128)
+        .map(|seed| {
+            let draft = state
+                .advance_with_hunts(
+                    &[Patch {
+                        available: 1,
+                        ..patch
+                    }],
+                    &[],
+                    &[],
+                    &[],
+                    seed,
+                    1,
+                )
+                .unwrap();
+            draft
+                .fauna
+                .animals
+                .iter()
+                .position(|a| a.hunger < state.animals[(a.id - 1) as usize].hunger + 1)
+                .unwrap()
+        })
+        .collect();
+    assert!(winners.len() > 40);
+}
+
+#[test]
+fn independent_patches_rotate_and_allocate_their_own_claims() {
+    let mut state = initial();
+    state.animals = (1..=16)
+        .map(|id| {
+            let mut a = animal(id, Sex::Male, 500);
+            a.region = if id % 2 == 0 { 2 } else { 1 };
+            a.hunger = (id % 3) as u32;
+            a
+        })
+        .collect();
+    state.next_id = 17;
+    let patches = [
+        Patch {
+            id: 5,
+            region: 1,
+            good: 1,
+            available: 5,
+        },
+        Patch {
+            id: 9,
+            region: 2,
+            good: 1,
+            available: 7,
+        },
+    ];
+    let seed = 22;
+    let mut expected: Vec<_> = state.animals.iter().map(|a| a.hunger + 1).collect();
+    for patch in patches {
+        let indices: Vec<_> = state
+            .animals
+            .iter()
+            .enumerate()
+            .filter_map(|(i, a)| (a.region == patch.region).then_some(i))
+            .collect();
+        let first = (game_parallel_genetics::random(seed ^ 0x6772617a655f726f, patch.id, 1)
+            % indices.len() as u64) as usize;
+        let mut remaining = patch.available;
+        for step in 0..indices.len() {
+            let i = indices[(first + step) % indices.len()];
+            let eaten = remaining.min(u64::from(expected[i].min(2)));
+            expected[i] -= eaten as u32;
+            remaining -= eaten;
+        }
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let draft = state
+                    .advance_with_hunts(&patches, &[], &[], &[], seed, 1)
+                    .unwrap();
+                assert_eq!(draft.consumed, vec![(5, 5), (9, 7)]);
+                assert_eq!(
+                    draft
+                        .fauna
+                        .animals
+                        .iter()
+                        .map(|a| a.hunger)
+                        .collect::<Vec<_>>(),
+                    expected
+                );
+                draft.fauna
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn concentrated_grazing_benchmark() {
     let count: u64 = std::env::var("LEGACY_COUNT")

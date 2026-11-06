@@ -189,7 +189,6 @@ impl QuietDraft {
 struct Claim {
     patch: u64,
     animal: u64,
-    priority: u64,
     amount: u64,
     available: u64,
 }
@@ -233,7 +232,6 @@ fn allocate_grazing<'a>(
                 Some(Claim {
                     patch: patch.id,
                     animal: a.id,
-                    priority: random(seed ^ 0x666f72616765, a.id, tick),
                     amount: s
                         .intake
                         .min(u64::from(hunger).div_ceil(u64::from(s.relief_per_unit))),
@@ -244,30 +242,56 @@ fn allocate_grazing<'a>(
     } else {
         Vec::new()
     };
-    claims.par_sort_unstable_by_key(|c| (c.patch, c.priority, c.animal));
+    if claims
+        .par_windows(2)
+        .any(|pair| (pair[0].patch, pair[0].animal) > (pair[1].patch, pair[1].animal))
+    {
+        claims.par_sort_unstable_by_key(|claim| (claim.patch, claim.animal));
+    }
+    // Each patch rotates its first claimant independently. Prefix sums resolve
+    // even one heavily contested patch without serial allocation or a random sort.
     let mut granted: Vec<_> = claims
         .par_chunk_by(|a, b| a.patch == b.patch)
         .flat_map(|group| {
-            let amounts: Vec<_> = group.par_iter().map(|c| c.amount).collect();
+            let amounts: Vec<_> = group.par_iter().map(|claim| claim.amount).collect();
             let prefixes = game_parallel_lot_allocation::prefixes(&amounts);
+            let first = (random(seed ^ 0x6772617a655f726f, group[0].patch, tick)
+                % group.len() as u64) as usize;
+            let origin = prefixes[first];
+            let total = prefixes[group.len() - 1] + u128::from(group[group.len() - 1].amount);
             prefixes
                 .into_par_iter()
                 .zip(group.par_iter())
-                .filter_map(|(before, claim)| {
+                .enumerate()
+                .filter_map(move |(index, (prefix, claim))| {
+                    let before = if index >= first {
+                        prefix - origin
+                    } else {
+                        total - origin + prefix
+                    };
                     let remaining = u128::from(claim.available).saturating_sub(before);
                     let eaten = remaining.min(u128::from(claim.amount)) as u64;
                     (eaten > 0).then_some((claim.patch, claim.animal, eaten))
                 })
         })
         .collect();
-    granted.par_sort_unstable_by_key(|row| (row.0, row.1));
+    if granted
+        .par_windows(2)
+        .any(|pair| (pair[0].0, pair[0].1) > (pair[1].0, pair[1].1))
+    {
+        granted.par_sort_unstable_by_key(|row| (row.0, row.1));
+    }
     let mut eaten: Vec<_> = granted.par_iter().map(|row| (row.1, row.2)).collect();
-    eaten.par_sort_unstable_by_key(|row| row.0);
+    if eaten.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        eaten.par_sort_unstable_by_key(|row| row.0);
+    }
     let mut consumed: Vec<_> = granted
         .par_chunk_by(|a, b| a.0 == b.0)
         .map(|group| (group[0].0, group.par_iter().map(|row| row.2).sum()))
         .collect();
-    consumed.par_sort_unstable_by_key(|row| row.0);
+    if consumed.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        consumed.par_sort_unstable_by_key(|row| row.0);
+    }
     GrazingAllocation { eaten, consumed }
 }
 
