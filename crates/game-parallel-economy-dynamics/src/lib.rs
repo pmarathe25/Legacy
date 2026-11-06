@@ -326,27 +326,40 @@ impl Dynamics {
                 .par_iter_mut()
                 .for_each(|event| locality.restore(event));
         }
-        let disease_people: Vec<_> = old
-            .par_iter()
-            .map(|p| game_parallel_disease::Person {
-                id: p.id,
-                health: p.health,
-            })
-            .collect();
-        let meetings = social
-            .as_ref()
-            .map_or(&[][..], |social| social.events.as_slice());
-        let combined: Option<Vec<_>> = (!exposure.is_empty()).then(|| {
-            meetings
-                .par_iter()
-                .chain(exposure.par_iter())
-                .cloned()
-                .collect()
-        });
         let disease = self
             .disease
             .as_ref()
             .map(|disease| {
+                // With no source case, no encounter or strike can introduce an
+                // infection. The host has already validated the staged owners.
+                if disease.cases.is_empty() {
+                    return Ok(game_parallel_disease::Draft {
+                        state: Disease {
+                            strains: disease.strains.clone(),
+                            treatments: disease.treatments.clone(),
+                            cases: Vec::new(),
+                            events: Vec::new(),
+                        },
+                        damage: Vec::new(),
+                    });
+                }
+                let disease_people: Vec<_> = old
+                    .par_iter()
+                    .map(|p| game_parallel_disease::Person {
+                        id: p.id,
+                        health: p.health,
+                    })
+                    .collect();
+                let meetings = social
+                    .as_ref()
+                    .map_or(&[][..], |social| social.events.as_slice());
+                let combined: Option<Vec<_>> = (!exposure.is_empty()).then(|| {
+                    meetings
+                        .par_iter()
+                        .chain(exposure.par_iter())
+                        .cloned()
+                        .collect()
+                });
                 disease.prepare_validated_with_combat(
                     &disease_people,
                     combined.as_deref().unwrap_or(meetings),
@@ -357,7 +370,9 @@ impl Dynamics {
             })
             .transpose()
             .map_err(str::to_owned)?;
-        if let Some(disease) = &disease {
+        if let Some(disease) = &disease
+            && !disease.damage.is_empty()
+        {
             let mut damage = disease.damage.clone();
             damage.par_sort_unstable_by_key(|row| row.person);
             next.par_iter_mut().for_each(|person| {
@@ -373,5 +388,98 @@ impl Dynamics {
             treatment: self.treatment.clone(),
             claims: self.claims.clone(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_parallel_disease::{Case, Event, EventKind, Strain};
+
+    #[test]
+    fn empty_disease_fast_path_matches_normal_preparation_and_clears_old_events() {
+        let first = Person {
+            id: 1,
+            region: Some(1),
+            health: 100,
+            hunger: 0,
+            immortal: None,
+            willing_to_work: false,
+            seek_meals: false,
+            controlled: false,
+        };
+        let people = vec![first.clone(), Person { id: 2, ..first }];
+        let encounters = [game_parallel_social::Encounter {
+            tick: 1,
+            region: 1,
+            a: 1,
+            b: 2,
+            pressured: None,
+        }];
+        for infected in [false, true] {
+            let disease = Disease {
+                strains: vec![Strain {
+                    id: 1,
+                    name: "fever".into(),
+                    incubation: 0,
+                    infectious_ticks: 3,
+                    immunity_ticks: 2,
+                    damage_per_tick: 3,
+                    transmission_per_million: 1_000_000,
+                    combat_transmission_per_million: 0,
+                }],
+                treatments: vec![],
+                cases: if infected {
+                    vec![Case {
+                        person: 1,
+                        strain: 1,
+                        infected_at: 0,
+                        source: None,
+                    }]
+                } else {
+                    vec![]
+                },
+                events: vec![Event {
+                    tick: 0,
+                    person: 1,
+                    strain: 1,
+                    source: None,
+                    kind: EventKind::Infected,
+                }],
+            };
+            let expected = disease
+                .prepare_validated_with_combat(
+                    &[
+                        game_parallel_disease::Person { id: 1, health: 100 },
+                        game_parallel_disease::Person { id: 2, health: 100 },
+                    ],
+                    &encounters,
+                    &[],
+                    7,
+                    0,
+                )
+                .unwrap();
+            let dynamics = Dynamics {
+                social: None,
+                personality: None,
+                disease: Some(disease),
+                treatment: vec![],
+                claims: None,
+            };
+            let mut next_people = people.clone();
+            let result = dynamics
+                .prepare(
+                    &people,
+                    &mut next_people,
+                    &[],
+                    None,
+                    (&encounters, None, &[]),
+                    (7, 1, None),
+                )
+                .unwrap();
+            assert_eq!(result.disease.unwrap(), expected.state);
+            assert_eq!(next_people[0].health, if infected { 97 } else { 100 });
+            assert_eq!(next_people[1].health, 100);
+        }
     }
 }
