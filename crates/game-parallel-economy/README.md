@@ -16,7 +16,7 @@ People held in the same cell can provide direct medical care using medicine they
 
 Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. A controlled person can also ask to meet a cellmate. Physical contact does not cross a cell wall, even when a supply opening allows communication.
 
-The minimum age for work does not by itself prevent a child from having an encounter or receiving medical treatment. Actual activities still compete for that person's time.
+The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.
 
 A person's food-response preference can be motivated by affinity above or below a personally chosen threshold. A signed affinity weight also controls how that person ranks multiple requesters, so they can favor people they like, favor people they dislike, or disregard affinity. Fear or felt obligation can independently motivate a response.
 

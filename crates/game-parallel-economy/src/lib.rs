@@ -2168,13 +2168,14 @@ impl Economy {
             }) => Some((person, recipient, good, quantity)),
             _ => None,
         };
-        // Work-age restrictions are not themselves an activity. Keep otherwise
-        // available children eligible to receive care and have encounters.
+        // Work-age restrictions are not themselves an activity. Preserve
+        // availability for independently chosen personal interactions.
         let underage = self
             .family
             .as_ref()
             .map_or_else(Vec::new, game_parallel_economy_work::underage);
-        let age_exceptions_needed = self.medical.is_some()
+        let age_exceptions_needed = self.giving.is_some()
+            || self.medical.is_some()
             || matches!(
                 player_transfer,
                 Some(game_parallel_economy_interaction::PhysicalChoice::TreatOther { .. })
@@ -2187,15 +2188,6 @@ impl Economy {
         };
         if !underage.is_empty() {
             game_parallel_economy_work::reserve(&mut busy, underage);
-        }
-        if let Some((person, _, _, _)) = manual_give
-            && self.family.as_ref().is_some_and(|f| {
-                f.members
-                    .iter()
-                    .any(|m| m.id == person && m.age < f.rules.min_work_age)
-            })
-        {
-            return Err("person is too young to give possessions".into());
         }
         let promise_offers = game_parallel_economy_promises::offers::prepare(
             game_parallel_economy_promises::offers::Context {
@@ -2224,8 +2216,8 @@ impl Economy {
                     .collect();
             }
         }
-        let mut held_can_give = Vec::new();
-        let mut held_asked = Vec::new();
+        let mut reserved_can_give = Vec::new();
+        let mut asked_actors = Vec::new();
         let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
         if let Some(giving) = &mut next_giving {
             let mut treated: Vec<_> = if available_held.is_empty() {
@@ -2236,20 +2228,21 @@ impl Economy {
             if treated.par_windows(2).any(|pair| pair[0] > pair[1]) {
                 treated.par_sort_unstable();
             }
-            let askable: Vec<_> = available_held
+            let mut askable: Vec<_> = available_held
                 .par_iter()
                 .copied()
-                .filter(|person| {
-                    treated.binary_search(person).is_err()
-                        && self.family.as_ref().is_none_or(|family| {
-                            family
-                                .members
-                                .binary_search_by_key(person, |member| member.id)
-                                .ok()
-                                .is_none_or(|i| family.members[i].age >= family.rules.min_work_age)
-                        })
-                })
+                .filter(|person| treated.binary_search(person).is_err())
                 .collect();
+            if !idle_underage.is_empty() {
+                if askable.is_empty() {
+                    askable.par_extend(idle_underage.par_iter().copied());
+                } else {
+                    game_parallel_economy_work::reserve(
+                        &mut askable,
+                        idle_underage.iter().copied(),
+                    );
+                }
+            }
             let mut asking_busy = (!askable.is_empty())
                 .then(|| game_parallel_economy_work::exclude_sorted(&busy, &askable));
             let askers = giving.ask(
@@ -2298,8 +2291,8 @@ impl Economy {
             if !askable.is_empty() {
                 request_actors.par_extend(askers.par_iter().copied());
                 request_actors.par_sort_unstable();
-                held_asked = request_actors.clone();
-                held_can_give = askable
+                asked_actors = request_actors.clone();
+                reserved_can_give = askable
                     .into_par_iter()
                     .filter(|person| request_actors.binary_search(person).is_err())
                     .collect();
@@ -2354,8 +2347,8 @@ impl Economy {
                 expires_at,
             });
         }
-        let giving_busy = (!held_can_give.is_empty())
-            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &held_can_give));
+        let giving_busy = (!reserved_can_give.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &reserved_can_give));
         let giving_plan = giving::Context {
             owner: self.giving.as_ref(),
             people: &self.people,
@@ -2385,6 +2378,16 @@ impl Economy {
                 .map(|group| group[0])
                 .collect();
         }
+        let free_underage = if idle_underage.is_empty()
+            || (asked_actors.is_empty() && giving_plan.actors.is_empty())
+        {
+            idle_underage.clone()
+        } else {
+            let mut occupied = asked_actors.clone();
+            occupied.par_extend(giving_plan.actors.par_iter().copied());
+            occupied.par_sort_unstable();
+            game_parallel_economy_work::exclude_sorted(&idle_underage, &occupied)
+        };
         let manual_medical = match player_transfer {
             Some(game_parallel_economy_interaction::PhysicalChoice::TreatOther {
                 person,
@@ -2412,7 +2415,7 @@ impl Economy {
         let mut held_committed = Vec::new();
         if !held.is_empty() && needs_medical {
             held_committed.par_extend(treatment.actors.par_iter().copied());
-            held_committed.extend(held_asked.iter().copied());
+            held_committed.extend(asked_actors.iter().copied());
             held_committed.par_extend(giving_plan.actors.par_iter().copied());
             held_committed.par_sort_unstable();
         }
@@ -2475,10 +2478,10 @@ impl Economy {
             Vec::new()
         };
         let mut available_patients = held_patients;
-        if needs_medical && !idle_underage.is_empty() {
+        if needs_medical && !free_underage.is_empty() {
             game_parallel_economy_work::reserve(
                 &mut available_patients,
-                idle_underage.iter().copied(),
+                free_underage.iter().copied(),
             );
         }
         let mut medical_blocked: Vec<_> = if needs_medical {
@@ -3740,7 +3743,7 @@ impl Economy {
         let mut occupied_held = Vec::new();
         if social_enabled && !available_held.is_empty() {
             occupied_held.par_extend(treatment.actors.par_iter().copied());
-            occupied_held.par_extend(held_asked.par_iter().copied());
+            occupied_held.par_extend(asked_actors.par_iter().copied());
             occupied_held.par_extend(giving_plan.actors.par_iter().copied());
             occupied_held.par_extend(medical_plan.actors.par_iter().copied());
             occupied_held.par_sort_unstable();
@@ -3753,9 +3756,9 @@ impl Economy {
         let meeting_held_filtered = (!occupied_held.is_empty())
             .then(|| game_parallel_economy_work::exclude_sorted(&available_held, &occupied_held));
         let meeting_held = meeting_held_filtered.as_deref().unwrap_or(meeting_held);
-        let social_with_children = (social_enabled && !idle_underage.is_empty()).then(|| {
+        let social_with_children = (social_enabled && !free_underage.is_empty()).then(|| {
             let mut available =
-                game_parallel_economy_work::exclude_sorted(&idle_underage, &medical_plan.actors);
+                game_parallel_economy_work::exclude_sorted(&free_underage, &medical_plan.actors);
             game_parallel_economy_work::reserve(&mut available, meeting_held.iter().copied());
             available
         });

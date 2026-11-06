@@ -10600,6 +10600,26 @@ fn set_family_children(state: &mut State, children: &[u64]) {
     state.family = Some(family);
 }
 
+fn set_all_children(state: &mut State, count: u64) {
+    let mut family = campaign_fixture().family.unwrap();
+    let mut prototype = family.members[0].clone();
+    prototype.age = 2;
+    prototype.partner = None;
+    prototype.pregnancy = None;
+    prototype.parents = Default::default();
+    prototype.alive = true;
+    prototype.reproduction_allowed = false;
+    family.members = (1..=count)
+        .map(|id| {
+            let mut member = prototype.clone();
+            member.id = id;
+            member
+        })
+        .collect();
+    family.next_id = count + 1;
+    state.family = Some(family);
+}
+
 #[test]
 fn work_age_does_not_prevent_children_from_meeting() {
     let mut initial = disease_workload(4);
@@ -10644,23 +10664,7 @@ fn many_children_meet_independently_across_workers() {
     let count = 4096u64;
     let mut initial = disease_workload(count);
     initial.dynamics.as_mut().unwrap().disease = None;
-    let mut family = campaign_fixture().family.unwrap();
-    let mut prototype = family.members[0].clone();
-    prototype.age = 2;
-    prototype.partner = None;
-    prototype.pregnancy = None;
-    prototype.parents = Default::default();
-    prototype.alive = true;
-    prototype.reproduction_allowed = false;
-    family.members = (1..=count)
-        .map(|id| {
-            let mut member = prototype.clone();
-            member.id = id;
-            member
-        })
-        .collect();
-    family.next_id = count + 1;
-    initial.family = Some(family);
+    set_all_children(&mut initial, count);
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -10832,6 +10836,329 @@ fn a_held_child_cannot_be_treated_during_a_chosen_meeting() {
             .iter()
             .any(|case| case.person == 1)
     );
+}
+
+fn child_food_request_workload() -> State {
+    let mut initial = giving_workload(4);
+    set_family_children(&mut initial, &[1]);
+    let giving = initial.giving.as_mut().unwrap();
+    giving.policies.clear();
+    giving.asking.push(FoodAsking {
+        person: 1,
+        target: 2,
+        alternatives: vec![],
+        next_target: 0,
+        min_hunger: 1,
+        enabled: true,
+        retry_ticks: 3,
+        request_lifetime: 4,
+        next_review: 0,
+    });
+    giving.responses.push(FoodResponse {
+        person: 2,
+        good: 1,
+        alternatives: vec![],
+        quantity: 1,
+        recipient_hunger_at_least: 0,
+        willing: true,
+        minimum_trust: None,
+        affinity_threshold: None,
+        affinity_at_most: None,
+        affinity_weight: None,
+        pressure_threshold: None,
+    });
+    initial
+}
+
+#[test]
+fn a_child_can_request_food_and_another_person_can_independently_respond() {
+    let initial = child_food_request_workload();
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let first = world.snapshot();
+                assert!(
+                    first
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .iter()
+                        .any(|r| r.requester == 1 && r.target == 2)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    let result = run(initial.clone(), 1);
+    assert_eq!(result, run(initial.clone(), 4));
+    assert_eq!(
+        result
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    let mut refusing = initial;
+    refusing.giving.as_mut().unwrap().responses[0].willing = false;
+    assert_eq!(
+        run(refusing, 1)
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        0
+    );
+}
+
+#[test]
+fn a_child_can_choose_to_give_real_possessions() {
+    let mut initial = giving_workload(4);
+    set_family_children(&mut initial, &[2]);
+    initial
+        .giving
+        .as_mut()
+        .unwrap()
+        .policies
+        .retain(|policy| policy.person == 2);
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    initial.giving.as_mut().unwrap().policies[0].willing = false;
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        0
+    );
+    let mut pressured = initial.clone();
+    let policy = &mut pressured.giving.as_mut().unwrap().policies[0];
+    policy.pressured_by = Some(3);
+    policy.pressure_threshold = Some(2);
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.push(Opinion {
+        observer: 2,
+        target: 3,
+        trust: 0,
+        affinity: 0,
+        fear: 2,
+        obligation: 0,
+    });
+    pressured.opinions = Some(opinions);
+    let mut world = Economy::compile(pressured).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    initial.people[1].controlled = true;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.give(2, 1, 1, 1).unwrap());
+}
+
+#[test]
+fn a_held_child_can_request_food_only_through_an_opening() {
+    let mut initial = child_food_request_workload();
+    let confined = confined_giving_workload(4);
+    initial.work_sites = confined.work_sites;
+    initial.confinement = confined.confinement;
+    let confinement = initial.confinement.as_mut().unwrap();
+    confinement.holds.retain(|hold| hold.person == 1);
+    confinement.cells[0].allow_supplies = true;
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 1 && r.target == 2)
+    );
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().giving.unwrap().requests.is_empty());
+}
+
+#[test]
+fn a_child_giving_food_cannot_also_meet_someone() {
+    let mut initial = giving_workload(4);
+    set_family_children(&mut initial, &[2]);
+    initial
+        .giving
+        .as_mut()
+        .unwrap()
+        .policies
+        .retain(|policy| policy.person == 2);
+    let mut dynamics = disease_workload(4).dynamics.unwrap();
+    dynamics.disease = None;
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .retain(|p| p.person == 2 || p.person == 3);
+    initial.dynamics = Some(dynamics);
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(state.dynamics.unwrap().social.unwrap().events.is_empty());
+}
+
+#[test]
+fn a_childs_food_request_competes_with_treatment_and_meetings() {
+    let mut initial = medical_workload(4);
+    set_family_children(&mut initial, &[1]);
+    initial.people[0].hunger = 5;
+    initial.giving = child_food_request_workload().giving;
+    initial.dynamics.as_mut().unwrap().social = disease_workload(4).dynamics.unwrap().social;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .strains[0]
+        .transmission_per_million = 0;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let first = world.snapshot();
+    assert!(
+        first
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 1)
+    );
+    let dynamics = first.dynamics.unwrap();
+    assert!(
+        dynamics
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .any(|case| case.person == 1)
+    );
+    assert!(
+        dynamics
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.a != 1 && event.b != 1)
+    );
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .all(|case| case.person != 1)
+    );
+}
+
+#[test]
+fn many_children_share_real_goods_with_a_contested_recipient() {
+    let count = 4096u64;
+    let mut initial = giving_workload(count);
+    set_all_children(&mut initial, count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|action| action.accepted)
+                        .count(),
+                    count as usize / 2
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
