@@ -213,6 +213,7 @@ pub struct Draft {
     handled: Option<bool>,
     animal_captured: Option<bool>,
     animal_released: Option<bool>,
+    animal_defended: Option<bool>,
     hunting_births: Vec<HuntingPolicy>,
     animal_care_births: Vec<AnimalCarePolicy>,
     animal_handling_births: Vec<AnimalHandlingPolicy>,
@@ -1115,6 +1116,21 @@ impl Economy {
         let released = draft.animal_released.unwrap_or(false);
         self.commit(draft)?;
         Ok(released)
+    }
+    /// Defend a physically held animal for one boundary; report whether the hold survived a blocked release.
+    pub fn defend_animal(&mut self, person: u64, animal: u64) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::DefendAnimal { person, animal },
+            ),
+        )?;
+        let defended = draft.animal_defended.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(defended)
     }
     /// Change a person's capture inclination without erasing personal pressure.
     pub fn set_animal_capture_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
@@ -2746,11 +2762,16 @@ impl Economy {
                 person,
                 animal,
             }) => Some(game_parallel_animal_restraint::Manual::Release { person, animal }),
+            Some(game_parallel_economy_interaction::PhysicalChoice::DefendAnimal {
+                person,
+                animal,
+            }) => Some(game_parallel_animal_restraint::Manual::Defend { person, animal }),
             _ => None,
         };
         let manual_restraint_target = manual_restraint.map(|choice| match choice {
             game_parallel_animal_restraint::Manual::Capture { animal, .. }
-            | game_parallel_animal_restraint::Manual::Release { animal, .. } => animal,
+            | game_parallel_animal_restraint::Manual::Release { animal, .. }
+            | game_parallel_animal_restraint::Manual::Defend { animal, .. } => animal,
         });
         let restraint_target: Vec<_> = manual_restraint_target.into_iter().collect();
         if player_transfer.is_some_and(|choice| {
@@ -2758,6 +2779,7 @@ impl Economy {
                 choice,
                 game_parallel_economy_interaction::PhysicalChoice::CaptureAnimal { .. }
                     | game_parallel_economy_interaction::PhysicalChoice::ReleaseAnimal { .. }
+                    | game_parallel_economy_interaction::PhysicalChoice::DefendAnimal { .. }
             ) && self.physical.work().iter().any(|work| {
                 work.job.worker == choice.person()
                     && work.phase == game_parallel_lot_runtime::Phase::Working
@@ -4980,6 +5002,21 @@ impl Economy {
             }
             _ => false,
         });
+        let animal_defended = manual_restraint.map(|choice| match choice {
+            game_parallel_animal_restraint::Manual::Defend { person, animal } => {
+                next_animal_restraints.as_ref().is_some_and(|owner| {
+                    owner.events.iter().any(|event| {
+                        event.animal == animal
+                            && event.kind == AnimalRestraintEventKind::ReleaseBlocked
+                    }) && owner
+                        .holds
+                        .binary_search_by_key(&animal, |hold| hold.animal)
+                        .ok()
+                        .is_some_and(|index| owner.holds[index].handler == person)
+                })
+            }
+            _ => false,
+        });
         #[cfg(feature = "profile")]
         drop(profile_phase);
         Ok(Draft {
@@ -5025,6 +5062,7 @@ impl Economy {
             handled,
             animal_captured,
             animal_released,
+            animal_defended,
             hunting_births,
             animal_care_births,
             animal_handling_births,

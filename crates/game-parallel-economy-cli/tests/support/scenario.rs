@@ -281,6 +281,8 @@ fn player_can_capture_and_release_a_live_animal() {
         .unwrap();
     assert!(animal.health > 0);
     assert_eq!(animal.held_by, Some(1));
+    assert!(!Player::new(&mut world).defend_animal(1).unwrap());
+    assert!(Player::new(&mut world).defend_animal(2).is_err());
     assert!(Player::new(&mut world).release_animal(1).unwrap());
     assert_eq!(
         Player::new(&mut world)

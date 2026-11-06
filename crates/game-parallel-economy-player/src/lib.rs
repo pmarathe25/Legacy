@@ -1221,6 +1221,18 @@ impl<'a> Player<'a> {
         }
         self.world.release_animal(self.current()?, animal)
     }
+    pub fn defend_animal(&mut self, animal: u64) -> Result<bool, String> {
+        let current = self.current()?;
+        if !self
+            .view()?
+            .animals
+            .iter()
+            .any(|row| row.id == animal && row.health > 0 && row.held_by == Some(current))
+        {
+            return Err("animal is not held by the current person".into());
+        }
+        self.world.defend_animal(current, animal)
+    }
     pub fn rest(&mut self) -> Result<(), String> {
         self.world.rest(self.current()?)
     }

@@ -478,3 +478,41 @@ fn a_handler_cannot_defend_two_animals_at_once() {
         1
     );
 }
+
+#[test]
+fn a_controlled_handler_can_explicitly_defend_a_hold() {
+    let (mut people, fauna, mut owner) = fixture(2, true);
+    people[0].controlled = true;
+    owner.policies.clear();
+    owner.holds = vec![Hold {
+        animal: 1,
+        handler: 1,
+        integrity: 2,
+    }];
+    owner.release_policies = vec![ReleasePolicy {
+        person: 2,
+        animal: Some(1),
+        willing: true,
+        effort: 2,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    let plan = prepare(
+        &owner,
+        &fauna,
+        &people,
+        1,
+        Some(Manual::Defend {
+            person: 1,
+            animal: 1,
+        }),
+    );
+    assert_eq!(plan.actors, vec![1, 2]);
+    assert_eq!(
+        plan.state.as_ref().unwrap().events[0].kind,
+        EventKind::ReleaseBlocked
+    );
+    assert!(plan.state.unwrap().held(1));
+}

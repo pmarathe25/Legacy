@@ -82,6 +82,10 @@ pub enum PhysicalChoice {
         person: u64,
         animal: u64,
     },
+    DefendAnimal {
+        person: u64,
+        animal: u64,
+    },
     AskFood {
         person: u64,
         target: u64,
@@ -140,6 +144,7 @@ impl PhysicalChoice {
             | Self::HandleAnimal { person, .. }
             | Self::CaptureAnimal { person, .. }
             | Self::ReleaseAnimal { person, .. }
+            | Self::DefendAnimal { person, .. }
             | Self::AskFood { person, .. }
             | Self::AskHaul { person, .. }
             | Self::TreatOther { person, .. }

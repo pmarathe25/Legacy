@@ -336,6 +336,7 @@ impl Restraints {
 pub enum Manual {
     Capture { person: u64, animal: u64 },
     Release { person: u64, animal: u64 },
+    Defend { person: u64, animal: u64 },
 }
 
 pub struct Plan {
@@ -446,6 +447,41 @@ impl Context<'_> {
                 events: Vec::new(),
             });
         let mut actors = Vec::new();
+        let manual_defend = match self.manual {
+            Some(Manual::Defend {
+                person: actor,
+                animal: target,
+            }) => {
+                let actor = person(actor).ok_or("unknown person")?;
+                let target_animal = animal(target).ok_or("unknown animal")?;
+                let held_by_actor = next
+                    .holds
+                    .binary_search_by_key(&target, |hold| hold.animal)
+                    .ok()
+                    .is_some_and(|index| next.holds[index].handler == actor.id);
+                if !actor.controlled
+                    || actor.health == 0
+                    || target_animal.health == 0
+                    || actor.region != Some(target_animal.region)
+                    || !held_by_actor
+                {
+                    return Err(
+                        "defense requires a living controlled handler and their local held animal"
+                            .into(),
+                    );
+                }
+                let effort = next
+                    .defense_policies
+                    .binary_search_by_key(&actor.id, |policy| policy.person)
+                    .ok()
+                    .map_or(next.default_effort, |index| {
+                        next.defense_policies[index].effort
+                    });
+                actors.push(actor.id);
+                Some((actor.id, target, effort))
+            }
+            _ => None,
+        };
         let manual_release = match self.manual {
             Some(Manual::Release {
                 person: actor,
@@ -617,7 +653,8 @@ impl Context<'_> {
             })
             .collect();
         next.events.par_extend(released);
-        if !next.defense_policies.is_empty() && !next.events.is_empty() {
+        if (!next.defense_policies.is_empty() || manual_defend.is_some()) && !next.events.is_empty()
+        {
             // A handler can spend their effort defending at most one hold in this boundary.
             let dense_defenses = next
                 .defense_policies
@@ -650,6 +687,20 @@ impl Context<'_> {
                         return None;
                     }
                     let handler = person(hold.handler)?;
+                    if let Some((_, _, effort)) = manual_defend.filter(|(person, animal, _)| {
+                        *person == handler.id && *animal == event.animal
+                    }) {
+                        return Some((
+                            handler.id,
+                            game_parallel_genetics::random(
+                                self.seed ^ handler.id,
+                                event.animal,
+                                self.tick,
+                            ),
+                            event.animal,
+                            effort,
+                        ));
+                    }
                     let policy_index = dense_defenses.map_or_else(
                         || {
                             next.defense_policies
@@ -716,6 +767,9 @@ impl Context<'_> {
             actors.par_extend(chosen.par_iter().map(|row| row.0));
             if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
                 actors.par_sort_unstable();
+            }
+            if manual_defend.is_some() {
+                actors.dedup();
             }
             if chosen.par_windows(2).any(|pair| pair[0].2 > pair[1].2) {
                 chosen.par_sort_unstable_by_key(|row| row.2);
@@ -1060,6 +1114,9 @@ impl Context<'_> {
             .par_iter()
             .filter_map(|event| (event.kind != EventKind::Unavailable).then_some(event.animal))
             .collect();
+        if let Some((_, animal, _)) = manual_defend {
+            reserved.push(animal);
+        }
         if reserved.par_windows(2).any(|pair| pair[0] >= pair[1]) {
             reserved.par_sort_unstable();
             reserved.dedup();

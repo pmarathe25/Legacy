@@ -24,6 +24,13 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 animal.parse().map_err(|_| "invalid animal")?
             )?
         ),
+        ["defend-animal", person, animal] => println!(
+            "defended={}",
+            world.defend_animal(
+                person.parse().map_err(|_| "invalid person")?,
+                animal.parse().map_err(|_| "invalid animal")?
+            )?
+        ),
         ["eat", person, good] => println!(
             "eaten={}",
             world.eat(

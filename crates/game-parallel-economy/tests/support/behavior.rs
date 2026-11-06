@@ -1578,6 +1578,77 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
 }
 
 #[test]
+fn controlled_handler_can_defend_against_an_autonomous_release() {
+    let mut world = Economy::compile(animal_restraint_fixture()).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    let mut held = world.snapshot();
+    held.animal_restraints
+        .as_mut()
+        .unwrap()
+        .release_policies
+        .push(AnimalReleasePolicy {
+            person: 4,
+            animal: Some(1),
+            willing: true,
+            effort: 2,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(held.clone()).unwrap();
+                let before = world.snapshot();
+                assert!(world.defend_animal(1, 2).is_err());
+                assert_eq!(world.snapshot(), before);
+                assert!(world.defend_animal(1, 1).unwrap());
+                world.snapshot()
+            })
+    };
+    let state = run(1);
+    assert_eq!(state, run(4));
+    assert!(state.animal_restraints.as_ref().unwrap().held(1));
+    assert!(
+        state
+            .animal_restraints
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.animal == 1
+                && event.actor == Some(4)
+                && event.kind == AnimalRestraintEventKind::ReleaseBlocked)
+    );
+    assert_eq!(Economy::compile(state.clone()).unwrap().snapshot(), state);
+    let mut unattended = Economy::compile(held).unwrap();
+    unattended.advance().unwrap();
+    assert!(!unattended.snapshot().animal_restraints.unwrap().held(1));
+}
+
+#[test]
+fn controlled_defense_reserves_the_animal_against_hunting() {
+    let mut world = Economy::compile(animal_restraint_fixture()).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    let mut held = world.snapshot();
+    let mut hunting = hunting_fixture().hunting.unwrap();
+    hunting.policies.retain(|policy| policy.person == 4);
+    hunting.policies[0].willing = true;
+    hunting.policies[0].pressured_by = None;
+    hunting.policies[0].pressure_threshold = None;
+    held.hunting = Some(hunting);
+    let mut world = Economy::compile(held).unwrap();
+    assert!(!world.defend_animal(1, 1).unwrap());
+    let state = world.snapshot();
+    assert!(state.animal_restraints.as_ref().unwrap().held(1));
+    assert!(state.fauna.as_ref().unwrap().animals[0].health > 0);
+}
+
+#[test]
 fn animal_capture_arbitrates_with_feeding_handling_and_hunting() {
     let mut initial = animal_restraint_fixture();
     initial.animal_care = Some(AnimalCare {
