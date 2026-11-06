@@ -31,6 +31,8 @@ pub struct Response {
     pub on_resisted: i32,
     #[serde(default)]
     pub on_released: i32,
+    #[serde(default)]
+    pub on_release_blocked: i32,
 }
 
 /// Yielding is an animal's own inclination, not a prerequisite for physical capture.

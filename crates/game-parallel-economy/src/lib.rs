@@ -68,9 +68,9 @@ pub use animal_feelings::{
 };
 pub use animal_handling::{Handling as AnimalHandling, Policy as AnimalHandlingPolicy};
 pub use game_parallel_animal_restraint::{
-    Event as AnimalRestraintEvent, EventKind as AnimalRestraintEventKind, Hold as AnimalHold,
-    Policy as AnimalCapturePolicy, ReleasePolicy as AnimalReleasePolicy,
-    Restraints as AnimalRestraints,
+    DefensePolicy as AnimalDefensePolicy, Event as AnimalRestraintEvent,
+    EventKind as AnimalRestraintEventKind, Hold as AnimalHold, Policy as AnimalCapturePolicy,
+    ReleasePolicy as AnimalReleasePolicy, Restraints as AnimalRestraints,
 };
 pub use game_parallel_fauna::handling::{
     Event as AnimalHandlingEvent, Outcome as AnimalHandlingOutcome,
@@ -1139,6 +1139,52 @@ impl Economy {
             .binary_search_by_key(&person, |policy| policy.person)
             .map_err(|_| "person has no animal capture preference")?;
         owner.policies[index].willing = willing;
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Change a person's willingness to release an animal, retaining their pressure settings.
+    pub fn set_animal_release_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        self.set_animal_restraint_choice(person, willing, false)
+    }
+    /// Change a handler's willingness to oppose release, retaining their pressure settings.
+    pub fn set_animal_defense_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        self.set_animal_restraint_choice(person, willing, true)
+    }
+    fn set_animal_restraint_choice(
+        &mut self,
+        person: u64,
+        willing: bool,
+        defense: bool,
+    ) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .ok()
+            .is_none_or(|index| self.people[index].health == 0)
+        {
+            return Err("person must be capable".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let owner = self
+            .animal_restraints
+            .as_mut()
+            .ok_or("animal restraint is disabled")?;
+        if defense {
+            let index = owner
+                .defense_policies
+                .binary_search_by_key(&person, |policy| policy.person)
+                .map_err(|_| "person has no animal defense preference")?;
+            owner.defense_policies[index].willing = willing;
+        } else {
+            let index = owner
+                .release_policies
+                .binary_search_by_key(&person, |policy| policy.person)
+                .map_err(|_| "person has no animal release preference")?;
+            owner.release_policies[index].willing = willing;
+        }
         self.epoch = epoch;
         Ok(())
     }
@@ -2780,10 +2826,11 @@ impl Economy {
         }) {
             return Err("handling requires an available person".into());
         }
-        let has_capture_policies = self
-            .animal_restraints
-            .as_ref()
-            .is_some_and(|owner| !owner.policies.is_empty() || !owner.release_policies.is_empty());
+        let has_capture_policies = self.animal_restraints.as_ref().is_some_and(|owner| {
+            !owner.policies.is_empty()
+                || !owner.release_policies.is_empty()
+                || !owner.defense_policies.is_empty()
+        });
         let mut restraint_blocked =
             if self.animal_restraints.is_some() || manual_restraint.is_some() {
                 feed_targets.clone()
@@ -4006,6 +4053,9 @@ impl Economy {
                             }
                             AnimalRestraintEventKind::Released => {
                                 animal_feelings::Experience::Released
+                            }
+                            AnimalRestraintEventKind::ReleaseBlocked => {
+                                animal_feelings::Experience::ReleaseBlocked
                             }
                             _ => return None,
                         };

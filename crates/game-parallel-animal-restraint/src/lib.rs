@@ -37,10 +37,26 @@ pub struct ReleasePolicy {
     #[serde(default)]
     pub animal: Option<u64>,
     pub willing: bool,
+    #[serde(default = "one")]
+    pub effort: u64,
     #[serde(default)]
     pub affinity_at_least: Option<i32>,
     #[serde(default)]
     pub affinity_at_most: Option<i32>,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
+/// A handler's choice to physically oppose another person's release attempt.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DefensePolicy {
+    pub person: u64,
+    pub willing: bool,
+    #[serde(default = "one")]
+    pub effort: u64,
     #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
@@ -66,6 +82,7 @@ pub enum EventKind {
     Struggled,
     Escaped,
     Released,
+    ReleaseBlocked,
     LetGo,
 }
 
@@ -92,6 +109,8 @@ pub struct Restraints {
     #[serde(default)]
     pub release_policies: Vec<ReleasePolicy>,
     #[serde(default)]
+    pub defense_policies: Vec<DefensePolicy>,
+    #[serde(default)]
     pub holds: Vec<Hold>,
     #[serde(default)]
     pub events: Vec<Event>,
@@ -105,6 +124,7 @@ impl Default for Restraints {
             capacity_per_handler: 1,
             policies: Vec::new(),
             release_policies: Vec::new(),
+            defense_policies: Vec::new(),
             holds: Vec::new(),
             events: Vec::new(),
         }
@@ -138,6 +158,8 @@ impl Restraints {
             .par_sort_unstable_by_key(|policy| policy.person);
         self.release_policies
             .par_sort_unstable_by_key(|policy| policy.person);
+        self.defense_policies
+            .par_sort_unstable_by_key(|policy| policy.person);
         self.holds.par_sort_unstable_by_key(|hold| hold.animal);
         self.events
             .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
@@ -167,6 +189,10 @@ impl Restraints {
                 .par_windows(2)
                 .any(|pair| pair[0].person == pair[1].person)
             || self
+                .defense_policies
+                .par_windows(2)
+                .any(|pair| pair[0].person == pair[1].person)
+            || self
                 .holds
                 .par_windows(2)
                 .any(|pair| pair[0].animal == pair[1].animal)
@@ -185,7 +211,17 @@ impl Restraints {
             })
             || self.release_policies.par_iter().any(|policy| {
                 !ids.contains(&policy.person)
+                    || policy.effort == 0
                     || policy.animal.is_some_and(|id| animal(id).is_none())
+                    || policy.pressured_by.is_some() != policy.pressure_threshold.is_some()
+                    || policy.pressure_threshold == Some(0)
+                    || policy
+                        .pressured_by
+                        .is_some_and(|id| id == policy.person || !ids.contains(&id))
+            })
+            || self.defense_policies.par_iter().any(|policy| {
+                !ids.contains(&policy.person)
+                    || policy.effort == 0
                     || policy.pressured_by.is_some() != policy.pressure_threshold.is_some()
                     || policy.pressure_threshold == Some(0)
                     || policy
@@ -337,6 +373,7 @@ impl Context<'_> {
         if let Some(owner) = self.owner.filter(|owner| {
             owner.policies.is_empty()
                 && owner.release_policies.is_empty()
+                && owner.defense_policies.is_empty()
                 && owner.holds.is_empty()
                 && self.manual.is_none()
         }) {
@@ -347,6 +384,7 @@ impl Context<'_> {
                     capacity_per_handler: owner.capacity_per_handler,
                     policies: Vec::new(),
                     release_policies: Vec::new(),
+                    defense_policies: Vec::new(),
                     holds: Vec::new(),
                     events: Vec::new(),
                 }),
@@ -403,6 +441,7 @@ impl Context<'_> {
                 capacity_per_handler: owner.capacity_per_handler,
                 policies: owner.policies.par_iter().cloned().collect(),
                 release_policies: owner.release_policies.par_iter().cloned().collect(),
+                defense_policies: owner.defense_policies.par_iter().cloned().collect(),
                 holds: owner.holds.par_iter().cloned().collect(),
                 events: Vec::new(),
             });
@@ -444,6 +483,10 @@ impl Context<'_> {
                     .any(|policy| policy.pressure_threshold.is_some())
                     || next
                         .release_policies
+                        .par_iter()
+                        .any(|policy| policy.pressure_threshold.is_some())
+                    || next
+                        .defense_policies
                         .par_iter()
                         .any(|policy| policy.pressure_threshold.is_some())
             })
@@ -574,8 +617,180 @@ impl Context<'_> {
             })
             .collect();
         next.events.par_extend(released);
-        let mut released_targets: Vec<_> =
-            next.events.par_iter().map(|event| event.animal).collect();
+        if !next.defense_policies.is_empty() && !next.events.is_empty() {
+            // A handler can spend their effort defending at most one hold in this boundary.
+            let dense_defenses = next
+                .defense_policies
+                .first()
+                .zip(next.defense_policies.last())
+                .and_then(|(first, last)| {
+                    (last.person.checked_sub(first.person)
+                        == Some((next.defense_policies.len() - 1) as u64))
+                    .then_some(first.person)
+                });
+            let dense_actors = actors.first().zip(actors.last()).and_then(|(first, last)| {
+                (last.checked_sub(*first) == Some((actors.len() - 1) as u64)).then_some(*first)
+            });
+            let mut defenses: Vec<_> = next
+                .events
+                .par_iter()
+                .filter_map(|event| {
+                    let actor = event.actor?;
+                    let hold_index = if let Some(first) = dense_holds {
+                        usize::try_from(event.animal.checked_sub(first)?)
+                            .ok()
+                            .filter(|&i| i < next.holds.len())?
+                    } else {
+                        next.holds
+                            .binary_search_by_key(&event.animal, |hold| hold.animal)
+                            .ok()?
+                    };
+                    let hold = &next.holds[hold_index];
+                    if hold.handler == actor {
+                        return None;
+                    }
+                    let handler = person(hold.handler)?;
+                    let policy_index = dense_defenses.map_or_else(
+                        || {
+                            next.defense_policies
+                                .binary_search_by_key(&handler.id, |policy| policy.person)
+                                .ok()
+                        },
+                        |first| {
+                            handler
+                                .id
+                                .checked_sub(first)
+                                .and_then(|offset| usize::try_from(offset).ok())
+                                .filter(|&index| index < next.defense_policies.len())
+                        },
+                    )?;
+                    let policy = &next.defense_policies[policy_index];
+                    let pressured = policy
+                        .pressured_by
+                        .zip(policy.pressure_threshold)
+                        .is_some_and(|(other, threshold)| {
+                            opinions.as_ref().is_some_and(|index| {
+                                let (fear, obligation) = index.feelings(handler.id, other);
+                                fear.saturating_add(obligation) >= threshold
+                            })
+                        });
+                    (!handler.controlled
+                        && handler.health > 0
+                        && handler.hunger <= self.max_hunger
+                        && self.busy.binary_search(&handler.id).is_err()
+                        && dense_actors.map_or_else(
+                            || actors.binary_search(&handler.id).is_err(),
+                            |first| {
+                                handler
+                                    .id
+                                    .checked_sub(first)
+                                    .and_then(|offset| usize::try_from(offset).ok())
+                                    .is_none_or(|index| index >= actors.len())
+                            },
+                        )
+                        && (policy.willing || pressured))
+                        .then_some((
+                            handler.id,
+                            game_parallel_genetics::random(
+                                self.seed ^ handler.id,
+                                event.animal,
+                                self.tick,
+                            ),
+                            event.animal,
+                            policy.effort,
+                        ))
+                })
+                .collect();
+            if defenses.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+                defenses.par_sort_unstable_by_key(|row| row.0);
+            }
+            let mut chosen: Vec<_> = defenses
+                .par_chunk_by(|a, b| a.0 == b.0)
+                .map(|group| {
+                    *group
+                        .par_iter()
+                        .min_by_key(|row| (row.1, row.2))
+                        .expect("nonempty defense group")
+                })
+                .collect();
+            actors.par_extend(chosen.par_iter().map(|row| row.0));
+            if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+                actors.par_sort_unstable();
+            }
+            if chosen.par_windows(2).any(|pair| pair[0].2 > pair[1].2) {
+                chosen.par_sort_unstable_by_key(|row| row.2);
+            }
+            let dense_chosen = chosen.first().zip(chosen.last()).and_then(|(first, last)| {
+                (last.2.checked_sub(first.2) == Some((chosen.len() - 1) as u64)).then_some(first.2)
+            });
+            let dense_releasers = next
+                .release_policies
+                .first()
+                .zip(next.release_policies.last())
+                .and_then(|(first, last)| {
+                    (last.person.checked_sub(first.person)
+                        == Some((next.release_policies.len() - 1) as u64))
+                    .then_some(first.person)
+                });
+            next.events.par_iter_mut().for_each(|event| {
+                let index = dense_chosen.map_or_else(
+                    || chosen.binary_search_by_key(&event.animal, |row| row.2).ok(),
+                    |first| {
+                        event
+                            .animal
+                            .checked_sub(first)
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .filter(|&index| index < chosen.len())
+                    },
+                );
+                let Some((_, _, _, defense)) = index.map(|index| chosen[index]) else {
+                    return;
+                };
+                let actor = event.actor.expect("release has an actor");
+                let policy_index = dense_releasers.map_or_else(
+                    || {
+                        next.release_policies
+                            .binary_search_by_key(&actor, |policy| policy.person)
+                            .ok()
+                    },
+                    |first| {
+                        actor
+                            .checked_sub(first)
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .filter(|&index| index < next.release_policies.len())
+                    },
+                );
+                let effort = policy_index.map_or(next.default_effort, |index| {
+                    next.release_policies[index].effort
+                });
+                if defense >= effort {
+                    event.kind = EventKind::ReleaseBlocked;
+                }
+            });
+        }
+        let mut released_targets: Vec<_> = next
+            .events
+            .par_iter()
+            .filter_map(|event| (event.kind == EventKind::Released).then_some(event.animal))
+            .collect();
+        let mut blocked_releases: Vec<_> = next
+            .events
+            .par_iter()
+            .filter_map(|event| (event.kind == EventKind::ReleaseBlocked).then_some(event.animal))
+            .collect();
+        if blocked_releases
+            .par_windows(2)
+            .any(|pair| pair[0] > pair[1])
+        {
+            blocked_releases.par_sort_unstable();
+        }
+        let dense_blocked = blocked_releases
+            .first()
+            .zip(blocked_releases.last())
+            .and_then(|(first, last)| {
+                (last.checked_sub(*first) == Some((blocked_releases.len() - 1) as u64))
+                    .then_some(*first)
+            });
         if released_targets
             .par_windows(2)
             .any(|pair| pair[0] > pair[1])
@@ -604,6 +819,18 @@ impl Context<'_> {
                 );
                 if released {
                     return None;
+                }
+                let blocked = dense_blocked.map_or_else(
+                    || blocked_releases.binary_search(&hold.animal).is_ok(),
+                    |first| {
+                        hold.animal
+                            .checked_sub(first)
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .is_some_and(|index| index < blocked_releases.len())
+                    },
+                );
+                if blocked {
+                    return Some((Some(hold.clone()), None));
                 }
                 if self.blocked.binary_search(&hold.animal).is_ok() {
                     return Some((Some(hold.clone()), None));
@@ -848,6 +1075,7 @@ impl Context<'_> {
                     EventKind::Forced => response.on_forced,
                     EventKind::Resisted => response.on_resisted,
                     EventKind::Released => response.on_released,
+                    EventKind::ReleaseBlocked => response.on_release_blocked,
                     _ => 0,
                 };
                 (change != 0).then_some(restraint::Reaction {

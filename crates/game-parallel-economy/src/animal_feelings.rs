@@ -35,6 +35,8 @@ pub struct Mind {
     #[serde(default)]
     pub on_animal_released: i32,
     #[serde(default)]
+    pub on_animal_release_blocked: i32,
+    #[serde(default)]
     pub opinions: Vec<Opinion>,
 }
 
@@ -54,6 +56,7 @@ pub enum Experience {
     CaptureForced,
     CaptureResisted,
     Released,
+    ReleaseBlocked,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -148,6 +151,7 @@ impl AnimalFeelings {
                             Experience::CaptureForced => mind.on_capture_forced != 0,
                             Experience::CaptureResisted => mind.on_capture_resisted != 0,
                             Experience::Released => mind.on_animal_released != 0,
+                            Experience::ReleaseBlocked => mind.on_animal_release_blocked != 0,
                         }
                 })
             })
@@ -184,6 +188,7 @@ impl AnimalFeelings {
                                 Experience::CaptureForced => mind.on_capture_forced,
                                 Experience::CaptureResisted => mind.on_capture_resisted,
                                 Experience::Released => mind.on_animal_released,
+                                Experience::ReleaseBlocked => mind.on_animal_release_blocked,
                             };
                             if delta == 0 {
                                 continue;
@@ -242,6 +247,7 @@ mod tests {
                         on_capture_forced: 0,
                         on_capture_resisted: 0,
                         on_animal_released: 0,
+                        on_animal_release_blocked: 0,
                         opinions: vec![],
                     })
                     .collect(),

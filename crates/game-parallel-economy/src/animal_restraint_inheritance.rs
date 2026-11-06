@@ -67,6 +67,7 @@ pub fn enroll(owner: Option<&mut AnimalRestraints>, family: Option<&Families>, t
                 person: member.id,
                 animal: None,
                 willing: parent.willing,
+                effort: owner.default_effort,
                 affinity_at_least: parent.affinity_at_least,
                 affinity_at_most: parent.affinity_at_most,
                 pressured_by: None,

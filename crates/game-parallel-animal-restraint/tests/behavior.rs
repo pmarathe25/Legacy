@@ -1,5 +1,5 @@
 use game_parallel_animal_restraint::{
-    Context, EventKind, Hold, Manual, Policy, ReleasePolicy, Restraints,
+    Context, DefensePolicy, EventKind, Hold, Manual, Policy, ReleasePolicy, Restraints,
 };
 use game_parallel_economy_person::Person;
 use game_parallel_fauna::{Animal, Fauna, SocialResponse, Species, restraint};
@@ -79,6 +79,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
                     on_forced: -3,
                     on_resisted: 2,
                     on_released: 1,
+                    on_release_blocked: 0,
                 }),
                 opinions: vec![],
             })
@@ -89,6 +90,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
         default_effort: 2,
         capacity_per_handler: 1,
         release_policies: vec![],
+        defense_policies: vec![],
         holds: vec![],
         events: vec![],
         policies: (1..=count)
@@ -256,6 +258,7 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
                 person,
                 animal: Some(if shared { 1 } else { person }),
                 willing: true,
+                effort: 1,
                 affinity_at_least: None,
                 affinity_at_most: None,
                 pressured_by: None,
@@ -309,6 +312,7 @@ fn flexible_releaser_selects_an_unblocked_local_hold() {
         person: 1,
         animal: None,
         willing: true,
+        effort: 1,
         affinity_at_least: None,
         affinity_at_most: None,
         pressured_by: None,
@@ -336,4 +340,141 @@ fn flexible_releaser_selects_an_unblocked_local_hold() {
     assert!(result.events.iter().any(|event| event.animal == 2
         && event.actor == Some(1)
         && event.kind == EventKind::Released));
+}
+
+#[test]
+fn a_handler_can_oppose_release_but_can_be_overpowered() {
+    let (mut people, mut fauna, mut owner) = fixture(2, true);
+    people[1].controlled = true;
+    owner.policies.clear();
+    owner.holds = vec![Hold {
+        animal: 1,
+        handler: 1,
+        integrity: 2,
+    }];
+    owner.defense_policies = vec![DefensePolicy {
+        person: 1,
+        willing: true,
+        effort: 2,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    owner.release_policies = vec![ReleasePolicy {
+        person: 2,
+        animal: Some(1),
+        willing: false,
+        effort: 2,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    fauna.animals[0]
+        .restraint_response
+        .as_mut()
+        .unwrap()
+        .on_release_blocked = -3;
+    let blocked = prepare(
+        &owner,
+        &fauna,
+        &people,
+        1,
+        Some(Manual::Release {
+            person: 2,
+            animal: 1,
+        }),
+    );
+    assert_eq!(blocked.actors, vec![1, 2]);
+    assert_eq!(
+        blocked.state.as_ref().unwrap().events[0].kind,
+        EventKind::ReleaseBlocked
+    );
+    assert_eq!(blocked.state.as_ref().unwrap().holds[0].integrity, 2);
+    restraint::apply_reactions(&mut fauna, &blocked.reactions);
+    assert_eq!(fauna.animals[0].opinions[0].affinity, -3);
+    owner.release_policies[0].effort = 3;
+    let released = prepare(
+        &owner,
+        &fauna,
+        &people,
+        1,
+        Some(Manual::Release {
+            person: 2,
+            animal: 1,
+        }),
+    );
+    assert_eq!(released.actors, vec![1, 2]);
+    assert_eq!(
+        released.state.as_ref().unwrap().events[0].kind,
+        EventKind::Released
+    );
+    assert!(released.state.unwrap().holds.is_empty());
+}
+
+#[test]
+fn a_handler_cannot_defend_two_animals_at_once() {
+    let (people, fauna, mut owner) = fixture(4, false);
+    owner.policies.clear();
+    owner.capacity_per_handler = 2;
+    owner.holds = vec![
+        Hold {
+            animal: 1,
+            handler: 1,
+            integrity: 2,
+        },
+        Hold {
+            animal: 2,
+            handler: 1,
+            integrity: 2,
+        },
+    ];
+    owner.defense_policies = vec![DefensePolicy {
+        person: 1,
+        willing: true,
+        effort: 1,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    owner.release_policies = [(3, 1), (4, 2)]
+        .into_iter()
+        .map(|(person, animal)| ReleasePolicy {
+            person,
+            animal: Some(animal),
+            willing: true,
+            effort: 1,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| prepare(&owner, &fauna, &people, 1, None))
+    };
+    let one = run(1);
+    let four = run(4);
+    assert_eq!(one.state, four.state);
+    assert_eq!(one.actors, vec![1, 3, 4]);
+    let state = one.state.unwrap();
+    assert_eq!(state.holds.len(), 1);
+    assert_eq!(
+        state
+            .events
+            .iter()
+            .filter(|event| event.kind == EventKind::ReleaseBlocked)
+            .count(),
+        1
+    );
+    assert_eq!(
+        state
+            .events
+            .iter()
+            .filter(|event| event.kind == EventKind::Released)
+            .count(),
+        1
+    );
 }
