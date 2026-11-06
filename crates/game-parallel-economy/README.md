@@ -14,6 +14,8 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 People held in the same cell can provide direct medical care using medicine they carry, provided they are available and the caregiver chooses to act. A barrier blocks treatment across it even when an opening permits supplies to pass. Escape, self-treatment, requests, and giving compete with medical care for the person's action.
 
+People can independently attempt to handle a living local animal. The animal's own willingness and remembered affinity determine its response, and its configured signed reactions can change later behavior. Feeding takes precedence for an animal already selected for feeding, and handling excludes hunting that animal in the same boundary. Handling preserves the animal's identity and does not establish ownership or obedience.
+
 Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. People can also choose to converse through a supply opening, including with strangers, acquaintances, or someone they fear. Talking through the opening is a social encounter but does not count as direct contact for the ordinary contact-based disease route; physical treatment still cannot cross the wall.
 
 The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.

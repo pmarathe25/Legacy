@@ -59,10 +59,16 @@ pub use game_parallel_practices::{
 };
 mod animal_care;
 mod animal_feelings;
+mod animal_handling;
 mod construction_planning;
 pub use animal_care::{AnimalCare, Config as AnimalCareConfig, Policy as AnimalCarePolicy};
 pub use animal_feelings::{
     AnimalFeelings, Mind as AnimalFeelingMind, Opinion as AnimalFeelingOpinion,
+};
+pub use animal_handling::{Handling as AnimalHandling, Policy as AnimalHandlingPolicy};
+pub use game_parallel_fauna::handling::{
+    Event as AnimalHandlingEvent, Outcome as AnimalHandlingOutcome,
+    Response as AnimalHandlingResponse,
 };
 mod development;
 mod environment;
@@ -146,6 +152,7 @@ pub struct Economy {
     gathering: Option<Gathering>,
     fauna: Option<Fauna>,
     animal_care: Option<AnimalCare>,
+    animal_handling: Option<AnimalHandling>,
     animal_feelings: Option<AnimalFeelings>,
     hunting: Option<Hunting>,
     food_search: Option<FoodSearch>,
@@ -184,6 +191,7 @@ pub struct Draft {
     purpose: Option<Purpose>,
     gathering: Option<Gathering>,
     fauna: Option<Fauna>,
+    animal_handling: Option<AnimalHandling>,
     gathered: Option<bool>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
@@ -193,8 +201,10 @@ pub struct Draft {
     treated_other: Option<bool>,
     fed_animal: Option<bool>,
     hunted: Option<bool>,
+    handled: Option<bool>,
     hunting_births: Vec<HuntingPolicy>,
     animal_care_births: Vec<AnimalCarePolicy>,
+    animal_handling_births: Vec<AnimalHandlingPolicy>,
     animal_feelings_update: Option<AnimalFeelings>,
 }
 impl Draft {
@@ -1041,6 +1051,47 @@ impl Economy {
         self.commit(draft)?;
         Ok(hunted)
     }
+    /// Approach a living animal; its own response determines whether handling succeeds.
+    pub fn handle_animal(&mut self, person: u64, animal: u64) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::HandleAnimal { person, animal },
+            ),
+        )?;
+        let handled = draft.handled.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(handled)
+    }
+    /// Change an individual's willingness without removing their personal pressure.
+    pub fn set_animal_handling_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .ok()
+            .is_none_or(|index| self.people[index].health == 0)
+        {
+            return Err("person must be capable".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let owner = self
+            .animal_handling
+            .as_mut()
+            .ok_or("animal handling is disabled")?;
+        let index = owner
+            .policies
+            .binary_search_by_key(&person, |policy| policy.person)
+            .map_err(|_| "person has no animal handling preference")?;
+        owner.policies[index].willing = willing;
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Attempt treatment; the result reports whether medicine was consumed.
     pub fn treat_other(
         &mut self,
@@ -1165,6 +1216,9 @@ impl Economy {
         }
         if let Some(care) = &state.animal_care {
             care.validate(&ids, &goods, state.fauna.as_ref())?;
+        }
+        if let Some(handling) = &mut state.animal_handling {
+            handling.validate(&ids, state.fauna.as_ref(), physical.tick())?;
         }
         if let Some(feelings) = &mut state.animal_feelings {
             feelings.normalize_and_validate(&ids, state.fauna.as_ref())?;
@@ -1377,6 +1431,7 @@ impl Economy {
             gathering: state.gathering,
             fauna: state.fauna,
             animal_care: state.animal_care,
+            animal_handling: state.animal_handling,
             animal_feelings: state.animal_feelings,
             hunting: state.hunting,
             food_search: state.food_search,
@@ -1422,6 +1477,7 @@ impl Economy {
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             animal_care: self.animal_care.clone(),
+            animal_handling: self.animal_handling.clone(),
             animal_feelings: self.animal_feelings.clone(),
             hunting: self.hunting.clone(),
             food_search: self.food_search.clone(),
@@ -2175,6 +2231,7 @@ impl Economy {
             .as_ref()
             .map_or_else(Vec::new, game_parallel_economy_work::underage);
         let age_exceptions_needed = self.giving.is_some()
+            || self.animal_handling.is_some()
             || self.medical.is_some()
             || matches!(
                 player_transfer,
@@ -2583,6 +2640,84 @@ impl Economy {
         }) = player_transfer
         {
             feed_targets.push(animal);
+            feed_targets.par_sort_unstable();
+            feed_targets.dedup();
+        }
+        let manual_handling = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::HandleAnimal {
+                person,
+                animal,
+            }) => Some((person, animal)),
+            _ => None,
+        };
+        if manual_handling.is_some_and(|(person, _)| {
+            self.physical.work().iter().any(|work| {
+                work.job.worker == person && work.phase == game_parallel_lot_runtime::Phase::Working
+            })
+        }) {
+            return Err("handling requires an available person".into());
+        }
+        let has_handling_policies = self
+            .animal_handling
+            .as_ref()
+            .is_some_and(|owner| !owner.policies.is_empty());
+        let mut handling_blocked = if has_handling_policies || manual_handling.is_some() {
+            feed_targets.clone()
+        } else {
+            Vec::new()
+        };
+        if let Some((_, animal)) = manual_hunt {
+            handling_blocked.push(animal);
+            handling_blocked.par_sort_unstable();
+            handling_blocked.dedup();
+        }
+        let handling_children = if has_handling_policies && !free_underage.is_empty() {
+            game_parallel_economy_work::exclude_sorted(&free_underage, &medical_plan.actors)
+        } else {
+            Vec::new()
+        };
+        let handling_busy = (!handling_children.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &handling_children));
+        let handling_plan = animal_handling::Context {
+            owner: self.animal_handling.as_ref(),
+            fauna: self.fauna.as_ref(),
+            people: &self.people,
+            opinions: self.opinions.as_ref(),
+            feelings: self.animal_feelings.as_ref(),
+            busy: handling_busy.as_deref().unwrap_or(&busy),
+            blocked: &handling_blocked,
+            max_hunger: self.rules.max_work_hunger,
+            seed: self.seed,
+            tick,
+            manual: manual_handling,
+        }
+        .prepare()?;
+        if !handling_plan.actors.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, handling_plan.actors.iter().copied());
+        }
+        let handled = manual_handling.map(|(person, animal)| {
+            handling_plan.events.iter().any(|event| {
+                event.person == person
+                    && event.animal == animal
+                    && event.outcome == AnimalHandlingOutcome::Accepted
+            })
+        });
+        let next_animal_handling = (self.animal_handling.is_some() || manual_handling.is_some())
+            .then(|| AnimalHandling {
+                inherit_births: self
+                    .animal_handling
+                    .as_ref()
+                    .is_some_and(|owner| owner.inherit_births),
+                policies: self
+                    .animal_handling
+                    .as_ref()
+                    .map_or_else(Vec::new, |owner| owner.policies.clone()),
+                events: handling_plan.events.clone(),
+            });
+        feed_targets.par_extend(handling_plan.events.par_iter().filter_map(|event| {
+            (event.outcome != AnimalHandlingOutcome::Unavailable).then_some(event.animal)
+        }));
+        if feed_targets.par_windows(2).any(|pair| pair[0] >= pair[1]) {
             feed_targets.par_sort_unstable();
             feed_targets.dedup();
         }
@@ -3642,6 +3777,18 @@ impl Economy {
                         kind: animal_feelings::Experience::Hunt,
                     })
             }));
+            experiences.par_extend(handling_plan.events.par_iter().filter_map(|event| {
+                let kind = match event.outcome {
+                    AnimalHandlingOutcome::Accepted => animal_feelings::Experience::HandleAccepted,
+                    AnimalHandlingOutcome::Refused => animal_feelings::Experience::HandleRefused,
+                    AnimalHandlingOutcome::Unavailable => return None,
+                };
+                Some(animal_feelings::Event {
+                    person: event.person,
+                    animal: event.animal,
+                    kind,
+                })
+            }));
             let relevant = owner.relevant(experiences);
             (!relevant.is_empty()).then(|| owner.advance(&relevant))
         });
@@ -3681,7 +3828,7 @@ impl Economy {
                     severity: season.map_or(hazard.damage, |season| season.exposure(hazard.damage)),
                 })
                 .collect();
-            let draft = fauna
+            let mut draft = fauna
                 .advance_with_hunts(
                     &patches,
                     &feedings,
@@ -3691,6 +3838,7 @@ impl Economy {
                     tick,
                 )
                 .map_err(str::to_owned)?;
+            game_parallel_fauna::handling::apply(&mut draft.fauna, &handling_plan.events);
             if let Some(gathering) = &mut gathering {
                 gathering
                     .nodes
@@ -3746,6 +3894,7 @@ impl Economy {
             occupied_held.par_extend(asked_actors.par_iter().copied());
             occupied_held.par_extend(giving_plan.actors.par_iter().copied());
             occupied_held.par_extend(medical_plan.actors.par_iter().copied());
+            occupied_held.par_extend(handling_plan.actors.par_iter().copied());
             occupied_held.par_sort_unstable();
         }
         let meeting_held = if occupied_held.is_empty() {
@@ -3757,8 +3906,13 @@ impl Economy {
             .then(|| game_parallel_economy_work::exclude_sorted(&available_held, &occupied_held));
         let meeting_held = meeting_held_filtered.as_deref().unwrap_or(meeting_held);
         let social_with_children = (social_enabled && !free_underage.is_empty()).then(|| {
+            let mut occupied = medical_plan.actors.clone();
+            game_parallel_economy_work::reserve(
+                &mut occupied,
+                handling_plan.actors.iter().copied(),
+            );
             let mut available =
-                game_parallel_economy_work::exclude_sorted(&free_underage, &medical_plan.actors);
+                game_parallel_economy_work::exclude_sorted(&free_underage, &occupied);
             game_parallel_economy_work::reserve(&mut available, meeting_held.iter().copied());
             available
         });
@@ -3994,6 +4148,8 @@ impl Economy {
         let hunting_births = hunting::enroll(self.hunting.as_ref(), family.as_ref(), tick);
         let animal_care_births =
             animal_care::enroll(self.animal_care.as_ref(), family.as_ref(), tick);
+        let animal_handling_births =
+            animal_handling::enroll(self.animal_handling.as_ref(), family.as_ref(), tick);
         food_search::enroll(food_search.as_mut(), family.as_ref(), tick);
         #[cfg(feature = "profile")]
         {
@@ -4536,6 +4692,7 @@ impl Economy {
             purpose,
             gathering,
             fauna,
+            animal_handling: next_animal_handling,
             gathered,
             food_search,
             giving: next_giving,
@@ -4545,8 +4702,10 @@ impl Economy {
             treated_other,
             fed_animal,
             hunted,
+            handled,
             hunting_births,
             animal_care_births,
+            animal_handling_births,
             animal_feelings_update,
         })
     }
@@ -4595,6 +4754,7 @@ impl Economy {
         self.purpose = draft.purpose;
         self.gathering = draft.gathering;
         self.fauna = draft.fauna;
+        self.animal_handling = draft.animal_handling;
         if let Some(feelings) = draft.animal_feelings_update {
             self.animal_feelings = Some(feelings);
         }
@@ -4611,6 +4771,13 @@ impl Economy {
                 .expect("new animal care preferences have an owner")
                 .policies
                 .par_extend(draft.animal_care_births);
+        }
+        if !draft.animal_handling_births.is_empty() {
+            self.animal_handling
+                .as_mut()
+                .expect("new animal handling preferences have an owner")
+                .policies
+                .par_extend(draft.animal_handling_births);
         }
         self.food_search = draft.food_search;
         let old_giving = std::mem::replace(&mut self.giving, draft.giving);

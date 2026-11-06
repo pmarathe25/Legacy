@@ -3,6 +3,13 @@ pub mod player;
 use game_parallel_economy::{Economy, MissionStart};
 pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
     match words {
+        ["handle-animal", person, animal] => println!(
+            "handled={}",
+            world.handle_animal(
+                person.parse().map_err(|_| "invalid person")?,
+                animal.parse().map_err(|_| "invalid animal")?,
+            )?
+        ),
         ["eat", person, good] => println!(
             "eaten={}",
             world.eat(

@@ -23,6 +23,10 @@ pub struct Mind {
     #[serde(default)]
     pub on_hunt: i32,
     #[serde(default)]
+    pub on_handle_accepted: i32,
+    #[serde(default)]
+    pub on_handle_refused: i32,
+    #[serde(default)]
     pub opinions: Vec<Opinion>,
 }
 
@@ -36,6 +40,8 @@ pub struct AnimalFeelings {
 pub enum Experience {
     Feed,
     Hunt,
+    HandleAccepted,
+    HandleRefused,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -124,6 +130,8 @@ impl AnimalFeelings {
                         && match event.kind {
                             Experience::Feed => mind.on_feed != 0,
                             Experience::Hunt => mind.on_hunt != 0,
+                            Experience::HandleAccepted => mind.on_handle_accepted != 0,
+                            Experience::HandleRefused => mind.on_handle_refused != 0,
                         }
                 })
             })
@@ -154,6 +162,8 @@ impl AnimalFeelings {
                             let delta = match event.kind {
                                 Experience::Feed => mind.on_feed,
                                 Experience::Hunt => mind.on_hunt,
+                                Experience::HandleAccepted => mind.on_handle_accepted,
+                                Experience::HandleRefused => mind.on_handle_refused,
                             };
                             if delta == 0 {
                                 continue;
@@ -206,6 +216,8 @@ mod tests {
                         capacity: 1,
                         on_feed: 2,
                         on_hunt: -1,
+                        on_handle_accepted: 0,
+                        on_handle_refused: 0,
                         opinions: vec![],
                     })
                     .collect(),

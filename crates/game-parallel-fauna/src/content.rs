@@ -1,5 +1,5 @@
 //! Data-file conversion for species with named food goods.
-use crate::{Animal, Climate, Fauna, HuntYield, Species};
+use crate::{Animal, Climate, Fauna, HuntYield, SocialResponse, Species, handling};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -38,6 +38,10 @@ struct SpeciesConfig {
     climate: Option<Climate>,
     #[serde(default)]
     hunting: Option<HuntYieldConfig>,
+    #[serde(default)]
+    newborn_social_response: Option<SocialResponse>,
+    #[serde(default)]
+    newborn_handling_response: Option<handling::Response>,
 }
 
 #[derive(Deserialize)]
@@ -85,6 +89,8 @@ impl Config {
                             })
                         })
                         .transpose()?,
+                    newborn_social_response: s.newborn_social_response,
+                    newborn_handling_response: s.newborn_handling_response,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

@@ -33,6 +33,8 @@ fn species() -> Species {
         mutation_step: 0,
         climate: None,
         hunting: None,
+        newborn_social_response: None,
+        newborn_handling_response: None,
     }
 }
 fn animal(id: u64, sex: Sex, allele: u16) -> Animal {
@@ -47,6 +49,7 @@ fn animal(id: u64, sex: Sex, allele: u16) -> Animal {
         pregnancy: None,
         parents: None,
         social_response: None,
+        handling_response: None,
         opinions: vec![],
     }
 }
@@ -57,6 +60,130 @@ fn initial() -> Fauna {
         next_id: 3,
         last_tick: 0,
     }
+}
+
+#[test]
+fn individual_animals_interpret_handling_and_choose_whether_to_accept() {
+    use game_parallel_fauna::handling::{Event, Outcome, Response, apply, respond};
+    let mut state = initial();
+    for animal in &mut state.animals {
+        animal.social_response = Some(SocialResponse {
+            feed_affinity: 0,
+            minimum: -5,
+            maximum: 5,
+            capacity: 2,
+        });
+    }
+    state.animals[0].handling_response = Some(Response {
+        willing: false,
+        affinity_at_least: Some(2),
+        affinity_at_most: None,
+        on_accept: -3,
+        on_refuse: 2,
+    });
+    state.animals[1].handling_response = Some(Response {
+        willing: true,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        on_accept: 3,
+        on_refuse: 0,
+    });
+    assert_eq!(respond(&state.animals[0], 10), Outcome::Refused);
+    assert_eq!(respond(&state.animals[1], 10), Outcome::Accepted);
+    let events = [
+        Event {
+            tick: 1,
+            person: 10,
+            animal: 1,
+            outcome: Outcome::Refused,
+        },
+        Event {
+            tick: 1,
+            person: 10,
+            animal: 2,
+            outcome: Outcome::Accepted,
+        },
+    ];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = state.clone();
+                apply(&mut next, &events);
+                next
+            })
+    };
+    let next = run(1);
+    assert_eq!(next, run(4));
+    assert_eq!(next.animals[0].opinions[0].affinity, 2);
+    assert_eq!(next.animals[1].opinions[0].affinity, 3);
+    assert_eq!(respond(&next.animals[0], 10), Outcome::Accepted);
+    assert_eq!(respond(&next.animals[0], 11), Outcome::Refused);
+    let mut again = next.clone();
+    apply(
+        &mut again,
+        &[
+            Event {
+                tick: 2,
+                person: 10,
+                animal: 1,
+                outcome: Outcome::Accepted,
+            },
+            Event {
+                tick: 2,
+                person: 11,
+                animal: 2,
+                outcome: Outcome::Unavailable,
+            },
+        ],
+    );
+    assert_eq!(again.animals[0].opinions[0].affinity, -1);
+    assert_eq!(respond(&again.animals[0], 10), Outcome::Refused);
+    assert_eq!(again.animals[1].opinions, next.animals[1].opinions);
+    let saved: Fauna = serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+    assert_eq!(saved, next);
+}
+
+#[test]
+fn newborn_animals_receive_configured_temperament_but_no_relationships() {
+    use game_parallel_fauna::handling::Response;
+    let mut state = initial();
+    state.species[0].newborn_social_response = Some(SocialResponse {
+        feed_affinity: 1,
+        minimum: -5,
+        maximum: 5,
+        capacity: 2,
+    });
+    state.species[0].newborn_handling_response = Some(Response {
+        willing: false,
+        affinity_at_least: Some(2),
+        affinity_at_most: None,
+        on_accept: -1,
+        on_refuse: 1,
+    });
+    state.animals[0].social_response = state.species[0].newborn_social_response.clone();
+    state.animals[0].opinions.push(AnimalOpinion {
+        person: 7,
+        affinity: 4,
+    });
+    state.animals[0].pregnancy = Some(Pregnancy {
+        father: 2,
+        father_genome: state.animals[1].genome.clone(),
+        due: 1,
+    });
+    let next = state.advance_with_feeding(&[], &[], 7, 1).unwrap().fauna;
+    let newborn = next.animals.iter().find(|animal| animal.id == 3).unwrap();
+    assert_eq!(
+        newborn.social_response,
+        state.species[0].newborn_social_response
+    );
+    assert_eq!(
+        newborn.handling_response,
+        state.species[0].newborn_handling_response
+    );
+    assert!(newborn.opinions.is_empty());
 }
 
 #[test]

@@ -239,6 +239,30 @@ fn player_hunts_a_local_animal_into_actual_possessions() {
 }
 
 #[test]
+fn player_can_handle_an_animal_after_its_own_experience_changes_its_response() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-wildlife.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let bread = world
+        .snapshot()
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "bread")
+        .unwrap()
+        .id;
+    assert!(!Player::new(&mut world).handle_animal(1).unwrap());
+    assert!(Player::new(&mut world).feed_animal(1, bread, 1).unwrap());
+    assert!(Player::new(&mut world).handle_animal(1).unwrap());
+    assert!(Player::new(&mut world).handle_animal(3).is_err());
+    assert!(world.snapshot().fauna.unwrap().animals[0].health > 0);
+}
+
+#[test]
 fn wildlife_scenario_hungry_person_can_hunt_for_their_own_reserve() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut state = scenario(
@@ -323,6 +347,8 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
             capacity: 4,
             on_feed: 3,
             on_hunt: -1,
+            on_handle_accepted: 0,
+            on_handle_refused: 0,
             opinions: vec![],
         }],
     });

@@ -75,6 +75,8 @@ pub struct State {
     #[serde(default)]
     pub animal_care: Option<crate::animal_care::AnimalCare>,
     #[serde(default)]
+    pub animal_handling: Option<crate::animal_handling::Handling>,
+    #[serde(default)]
     pub animal_feelings: Option<crate::animal_feelings::AnimalFeelings>,
     #[serde(default)]
     pub hunting: Option<crate::hunting::Hunting>,

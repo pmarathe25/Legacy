@@ -456,6 +456,10 @@ reserve_good = "raw-meat"
 reserve_below = 2
 request_response = { willing = true }
 
+[animal_handling]
+inherit_births = true
+policies = [{ person = 2, animal = 3, willing = false }]
+
 [fauna]
 next_id = 4
 last_tick = 0
@@ -478,6 +482,8 @@ conception_one_in = 4
 breeding_max_hunger = 4
 newborn_health = 10
 hunting = { good = "raw-meat", quantity = 2, success_per_thousand = 1000 }
+newborn_social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+newborn_handling_response = { willing = false, affinity_at_least = 2, on_accept = -1, on_refuse = 0 }
 
 [[fauna.animals]]
 id = 1
@@ -487,6 +493,8 @@ age = 2
 health = 10
 hunger = 1
 genome = { sex = "Female", alleles = [[300, 300], [400, 400], [500, 500], [600, 600]] }
+social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
+handling_response = { willing = false, affinity_at_least = 2, on_accept = -1, on_refuse = 0 }
 
 [[fauna.animals]]
 id = 2
@@ -505,3 +513,4 @@ age = 2
 health = 10
 hunger = 1
 genome = { sex = "Male", alleles = [[600, 600], [500, 500], [400, 400], [300, 300]] }
+handling_response = { willing = true, on_accept = 0, on_refuse = 0 }

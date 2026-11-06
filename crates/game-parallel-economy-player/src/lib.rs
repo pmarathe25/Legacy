@@ -1185,6 +1185,17 @@ impl<'a> Player<'a> {
         }
         self.world.hunt_animal(self.current()?, animal)
     }
+    pub fn handle_animal(&mut self, animal: u64) -> Result<bool, String> {
+        if !self
+            .view()?
+            .animals
+            .iter()
+            .any(|row| row.id == animal && row.health > 0)
+        {
+            return Err("animal is not present".into());
+        }
+        self.world.handle_animal(self.current()?, animal)
+    }
     pub fn rest(&mut self) -> Result<(), String> {
         self.world.rest(self.current()?)
     }

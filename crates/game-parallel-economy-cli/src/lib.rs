@@ -91,6 +91,8 @@ struct Scenario {
     #[serde(default)]
     animal_care: Option<game_parallel_economy::AnimalCareConfig>,
     #[serde(default)]
+    animal_handling: Option<game_parallel_economy::AnimalHandling>,
+    #[serde(default)]
     animal_feelings: Option<game_parallel_economy::AnimalFeelings>,
     #[serde(default)]
     hunting: Option<game_parallel_economy::HuntingConfig>,
@@ -1346,6 +1348,7 @@ pub fn scenario_with_options(
         gathering,
         fauna,
         animal_care,
+        animal_handling: scenario.animal_handling,
         animal_feelings: scenario.animal_feelings,
         hunting,
         food_search: scenario.food_search,

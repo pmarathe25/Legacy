@@ -220,6 +220,7 @@ fn fixture() -> State {
         gathering: None,
         fauna: None,
         animal_care: None,
+        animal_handling: None,
         animal_feelings: None,
         hunting: None,
         food_search: None,
@@ -263,6 +264,8 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             mutation_step: 0,
             climate: None,
             hunting: None,
+            newborn_social_response: None,
+            newborn_handling_response: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -277,6 +280,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             },
             pregnancy: None,
             parents: None,
+            handling_response: None,
             social_response: Some(game_parallel_fauna::SocialResponse {
                 feed_affinity: 2,
                 minimum: -10,
@@ -489,6 +493,8 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 capacity: 4,
                 on_feed: -3,
                 on_hunt: 4,
+                on_handle_accepted: 0,
+                on_handle_refused: 0,
                 opinions: vec![AnimalFeelingOpinion {
                     animal: 1,
                     affinity: -2,
@@ -501,6 +507,8 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 capacity: 4,
                 on_feed: 9,
                 on_hunt: 9,
+                on_handle_accepted: 0,
+                on_handle_refused: 0,
                 opinions: vec![],
             },
             AnimalFeelingMind {
@@ -510,6 +518,8 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 capacity: 4,
                 on_feed: 2,
                 on_hunt: -4,
+                on_handle_accepted: 0,
+                on_handle_refused: 0,
                 opinions: vec![],
             },
         ],
@@ -562,6 +572,8 @@ fn a_persons_affinity_can_influence_their_hunting_choice_in_either_direction() {
             capacity: 4,
             on_feed: 0,
             on_hunt: 0,
+            on_handle_accepted: 0,
+            on_handle_refused: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: 3,
@@ -608,6 +620,8 @@ fn personal_animal_memories_are_bounded_and_do_not_invent_other_feelings() {
             capacity: 1,
             on_feed: 2,
             on_hunt: -2,
+            on_handle_accepted: 0,
+            on_handle_refused: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: -1,
@@ -921,6 +935,8 @@ fn hunting_fixture() -> State {
                 quantity: 2,
                 success_per_thousand: 1000,
             }),
+            newborn_social_response: None,
+            newborn_handling_response: None,
         }],
         animals: vec![
             Animal {
@@ -938,6 +954,7 @@ fn hunting_fixture() -> State {
                 }),
                 parents: None,
                 social_response: None,
+                handling_response: None,
                 opinions: vec![],
             },
             Animal {
@@ -951,6 +968,7 @@ fn hunting_fixture() -> State {
                 pregnancy: None,
                 parents: None,
                 social_response: None,
+                handling_response: None,
                 opinions: vec![],
             },
         ],
@@ -987,6 +1005,366 @@ fn hunting_fixture() -> State {
         ],
     });
     state
+}
+
+fn handling_fixture() -> State {
+    let mut state = hunting_fixture();
+    state.hunting = None;
+    let animal = &mut state.fauna.as_mut().unwrap().animals[0];
+    animal.social_response = Some(game_parallel_fauna::SocialResponse {
+        feed_affinity: 2,
+        minimum: -10,
+        maximum: 10,
+        capacity: 8,
+    });
+    animal.handling_response = Some(AnimalHandlingResponse {
+        willing: false,
+        affinity_at_least: Some(2),
+        affinity_at_most: None,
+        on_accept: -3,
+        on_refuse: 0,
+    });
+    state
+}
+
+#[test]
+fn an_animal_can_learn_to_accept_and_later_refuse_handling() {
+    let mut initial = handling_fixture();
+    initial.people[0].controlled = true;
+    initial.animal_feelings = Some(AnimalFeelings {
+        minds: vec![AnimalFeelingMind {
+            person: 1,
+            minimum: -10,
+            maximum: 10,
+            capacity: 4,
+            on_feed: 0,
+            on_hunt: 0,
+            on_handle_accepted: -4,
+            on_handle_refused: 2,
+            opinions: vec![],
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(!world.handle_animal(1, 1).unwrap());
+                assert_eq!(world.tick(), 1);
+                assert_eq!(
+                    world.snapshot().animal_feelings.as_ref().unwrap().minds[0].opinions[0]
+                        .affinity,
+                    2
+                );
+                assert!(world.snapshot().fauna.as_ref().unwrap().animals[0].health > 0);
+                assert!(world.feed_animal(1, 1, 1, 1).unwrap());
+                let saved = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.handle_animal(1, 1).unwrap());
+                assert!(restored.handle_animal(1, 1).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let animal = &world.snapshot().fauna.unwrap().animals[0];
+                assert_eq!(animal.opinions[0].affinity, -1);
+                assert!(animal.health > 0);
+                assert_eq!(
+                    world.snapshot().animal_feelings.as_ref().unwrap().minds[0].opinions[0]
+                        .affinity,
+                    -2
+                );
+                assert!(!world.handle_animal(1, 1).unwrap());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn personal_handling_competes_for_one_animal_and_preserves_its_life() {
+    let mut initial = handling_fixture();
+    initial.fauna.as_mut().unwrap().animals[0]
+        .handling_response
+        .as_mut()
+        .unwrap()
+        .willing = true;
+    initial.animal_handling = Some(AnimalHandling {
+        inherit_births: false,
+        events: vec![],
+        policies: [1, 4]
+            .into_iter()
+            .map(|person| AnimalHandlingPolicy {
+                person,
+                animal: Some(1),
+                willing: true,
+                affinity_at_least: None,
+                affinity_at_most: None,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.animal_handling.as_ref().unwrap().events;
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].outcome, AnimalHandlingOutcome::Accepted);
+                assert!(state.fauna.as_ref().unwrap().animals[0].health > 0);
+                assert_eq!(state.fauna.as_ref().unwrap().next_id, 4); // The actual pregnancy still completes.
+                state
+            })
+    };
+    assert_eq!(run(initial.clone(), 1), run(initial.clone(), 4));
+    initial.people[0].controlled = true;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.handle_animal(1, 1).unwrap());
+    assert_eq!(
+        world.snapshot().animal_handling.unwrap().events[0].person,
+        1
+    );
+}
+
+#[test]
+fn animal_handling_respects_feeding_hunting_and_individual_pressure() {
+    let mut initial = handling_fixture();
+    initial.fauna.as_mut().unwrap().animals[0]
+        .handling_response
+        .as_mut()
+        .unwrap()
+        .willing = true;
+    initial.animal_handling = Some(AnimalHandling {
+        inherit_births: false,
+        events: vec![],
+        policies: vec![AnimalHandlingPolicy {
+            person: 4,
+            animal: Some(1),
+            willing: false,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: Some(1),
+            pressure_threshold: Some(3),
+        }],
+    });
+    initial.opinions.as_mut().unwrap().records.clear();
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().animal_handling.unwrap().events.is_empty());
+    initial.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 4,
+        target: 1,
+        trust: 0,
+        affinity: 0,
+        fear: 3,
+        obligation: 0,
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    let stale = world.prepare().unwrap();
+    world.set_animal_handling_choice(4, true).unwrap();
+    assert!(world.commit(stale).is_err());
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().animal_handling.unwrap().events[0].person,
+        4
+    );
+    initial.people[1].controlled = true;
+    initial.animal_care = Some(AnimalCare {
+        inherit_births: false,
+        policies: vec![AnimalCarePolicy {
+            person: 1,
+            animal: Some(1),
+            good: 1,
+            quantity: 1,
+            willing: true,
+            health_at_most: 10,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    assert!(!world.handle_animal(2, 1).unwrap());
+    assert_eq!(
+        world.snapshot().animal_handling.unwrap().events[0].outcome,
+        AnimalHandlingOutcome::Unavailable
+    );
+    initial.animal_care = None;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.hunt_animal(2, 1).unwrap());
+    let state = world.snapshot();
+    assert!(state.animal_handling.unwrap().events.is_empty());
+    assert_eq!(state.fauna.unwrap().animals[0].health, 0);
+}
+
+#[test]
+fn a_child_can_choose_to_handle_an_animal_instead_of_meeting() {
+    let mut initial = handling_fixture();
+    set_family_children(&mut initial, &[1]);
+    initial.fauna.as_mut().unwrap().animals[0]
+        .handling_response
+        .as_mut()
+        .unwrap()
+        .willing = true;
+    initial.animal_handling = Some(AnimalHandling {
+        inherit_births: false,
+        policies: vec![AnimalHandlingPolicy {
+            person: 1,
+            animal: Some(1),
+            willing: true,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        events: vec![],
+    });
+    let mut dynamics = disease_workload(4).dynamics.unwrap();
+    dynamics.disease = None;
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .retain(|p| p.person <= 2);
+    initial.dynamics = Some(dynamics);
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(
+        state.animal_handling.unwrap().events[0].outcome,
+        AnimalHandlingOutcome::Accepted
+    );
+    assert!(state.dynamics.unwrap().social.unwrap().events.is_empty());
+}
+
+fn handling_workload(count: u64, shared: bool) -> State {
+    let mut state = concentrated(count);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    let mut fauna = hunting_fixture().fauna.unwrap();
+    let mut animal = fauna.animals[1].clone();
+    animal.social_response = None;
+    animal.handling_response = Some(AnimalHandlingResponse {
+        willing: true,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        on_accept: 0,
+        on_refuse: 0,
+    });
+    let animal_count = if shared { 1 } else { count };
+    fauna.animals = (1..=animal_count)
+        .map(|id| {
+            let mut row = animal.clone();
+            row.id = id;
+            row
+        })
+        .collect();
+    fauna.next_id = animal_count + 1;
+    state.fauna = Some(fauna);
+    state.animal_handling = Some(AnimalHandling {
+        inherit_births: false,
+        events: vec![],
+        policies: (1..=count)
+            .map(|person| AnimalHandlingPolicy {
+                person,
+                animal: Some(if shared { 1 } else { person }),
+                willing: true,
+                affinity_at_least: None,
+                affinity_at_most: None,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+    });
+    state
+}
+
+#[test]
+fn concentrated_and_independent_animal_handling_are_worker_deterministic() {
+    for shared in [false, true] {
+        let count = 4096;
+        let initial = handling_workload(count, shared);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(
+                        state.animal_handling.as_ref().unwrap().events.len(),
+                        if shared { 1 } else { count as usize }
+                    );
+                    assert!(
+                        state
+                            .fauna
+                            .as_ref()
+                            .unwrap()
+                            .animals
+                            .iter()
+                            .all(|animal| animal.health > 0)
+                    );
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+#[ignore = "manual concentrated animal handling benchmark"]
+fn concentrated_animal_handling_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let shared = std::env::var_os("LEGACY_SHARED").is_some();
+    let initial = handling_workload(count, shared);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let now = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = now.elapsed().as_secs_f64();
+                assert_eq!(
+                    world.snapshot().animal_handling.unwrap().events.len(),
+                    if shared { 1 } else { count as usize }
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} shared={shared} elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 fn requested_hunting_fixture() -> State {
@@ -8241,6 +8619,81 @@ fn newborn_hunting_inclinations_do_not_inherit_targets_or_pressure() {
                             .records
                             .iter()
                             .all(|record| record.observer != 5)
+                    );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn newborn_handling_inclinations_do_not_inherit_targets_or_pressure() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.autowork = None;
+    initial.agreements = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.controlled = false;
+    }
+    initial.fauna = hunting_fixture().fauna;
+    initial.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    initial.animal_handling = Some(AnimalHandling {
+        inherit_births: true,
+        events: vec![],
+        policies: vec![AnimalHandlingPolicy {
+            person: 1,
+            animal: Some(1),
+            willing: false,
+            affinity_at_least: Some(-2),
+            affinity_at_most: Some(3),
+            pressured_by: Some(2),
+            pressure_threshold: Some(3),
+        }],
+    });
+    let run = |workers, inherit| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.animal_handling.as_mut().unwrap().inherit_births = inherit;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let policy = state
+                    .animal_handling
+                    .as_ref()
+                    .unwrap()
+                    .policies
+                    .iter()
+                    .find(|policy| policy.person == 5);
+                assert_eq!(policy.is_some(), inherit);
+                if let Some(policy) = policy {
+                    assert!(!policy.willing);
+                    assert_eq!(
+                        (
+                            policy.animal,
+                            policy.pressured_by,
+                            policy.pressure_threshold
+                        ),
+                        (None, None, None)
+                    );
+                    assert_eq!(
+                        (policy.affinity_at_least, policy.affinity_at_most),
+                        (Some(-2), Some(3))
                     );
                 }
                 state
@@ -20545,6 +20998,8 @@ fn concentrated_animal_care_benchmark() {
             mutation_step: 0,
             climate: None,
             hunting: None,
+            newborn_social_response: None,
+            newborn_handling_response: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -20559,6 +21014,7 @@ fn concentrated_animal_care_benchmark() {
             },
             pregnancy: None,
             parents: None,
+            handling_response: None,
             social_response: social.then_some(game_parallel_fauna::SocialResponse {
                 feed_affinity: 1,
                 minimum: -10,
@@ -20595,6 +21051,8 @@ fn concentrated_animal_care_benchmark() {
                     capacity: 1,
                     on_feed: 1,
                     on_hunt: 0,
+                    on_handle_accepted: 0,
+                    on_handle_refused: 0,
                     opinions: vec![],
                 })
                 .collect(),
@@ -20763,6 +21221,8 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
             mutation_step: 0,
             climate: None,
             hunting: None,
+            newborn_social_response: None,
+            newborn_handling_response: None,
         }],
         animals: (1..=2)
             .map(|id| Animal {
@@ -20779,6 +21239,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
                 pregnancy: None,
                 parents: None,
                 social_response: None,
+                handling_response: None,
                 opinions: vec![],
             })
             .collect(),

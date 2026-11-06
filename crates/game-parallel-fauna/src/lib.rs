@@ -1,5 +1,6 @@
 //! Independent animals, local grazing and inherited life histories.
 pub mod content;
+pub mod handling;
 use game_parallel_genetics::{Genome, Sex, inherit, random};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -34,6 +35,11 @@ pub struct Species {
     pub climate: Option<Climate>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hunting: Option<HuntYield>,
+    /// Optional newborn temperament and capacity for individual experiences.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newborn_social_response: Option<SocialResponse>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newborn_handling_response: Option<handling::Response>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -86,6 +92,9 @@ pub struct Animal {
     /// Private, individual response to receiving an offering.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub social_response: Option<SocialResponse>,
+    /// This animal's independent willingness and reactions to handling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handling_response: Option<handling::Response>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub opinions: Vec<AnimalOpinion>,
 }
@@ -219,6 +228,9 @@ impl Fauna {
                         !goods.contains(&yield_.good)
                             || yield_.quantity == 0
                             || yield_.success_per_thousand > 1000
+                    })
+                    || s.newborn_social_response.as_ref().is_some_and(|response| {
+                        response.capacity > 64 || response.minimum > 0 || response.maximum < 0
                     })
             })
             || ids.first() == Some(&0)
@@ -657,7 +669,8 @@ impl Fauna {
                     ),
                     pregnancy: None,
                     parents: Some([mother.id, pregnancy.father]),
-                    social_response: None,
+                    social_response: s.newborn_social_response.clone(),
+                    handling_response: s.newborn_handling_response.clone(),
                     opinions: Vec::new(),
                 })
             })
