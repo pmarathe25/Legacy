@@ -60,6 +60,13 @@ pub enum PhysicalChoice {
         good: u32,
         quantity: u64,
     },
+    TakeFrom {
+        person: u64,
+        target: u64,
+        good: u32,
+        quantity: u64,
+        escalate: bool,
+    },
     FeedAnimal {
         person: u64,
         animal: u64,
@@ -139,6 +146,7 @@ impl PhysicalChoice {
             | Self::LocalStore { person, .. }
             | Self::Gather { person, .. }
             | Self::Give { person, .. }
+            | Self::TakeFrom { person, .. }
             | Self::FeedAnimal { person, .. }
             | Self::HuntAnimal { person, .. }
             | Self::HandleAnimal { person, .. }

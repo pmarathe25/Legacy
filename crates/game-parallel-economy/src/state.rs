@@ -81,6 +81,8 @@ pub struct State {
     #[serde(default)]
     pub animal_feelings: Option<crate::animal_feelings::AnimalFeelings>,
     #[serde(default)]
+    pub taking: Option<game_parallel_economy_taking::Taking>,
+    #[serde(default)]
     pub hunting: Option<crate::hunting::Hunting>,
     #[serde(default)]
     pub food_search: Option<crate::food_search::FoodSearch>,

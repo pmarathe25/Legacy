@@ -415,7 +415,7 @@ pub fn advance_validated_with_partition(
 
 #[macro_export]
 macro_rules! prepare_people {
-    ($world:expr, $view:expr, $request:expr, $work:expr, $meal:expr, $physical:expr, $fighters:expr) => {{
+    ($world:expr, $view:expr, $request:expr, $work:expr, $meal:expr, $physical:expr, $fighters:expr, $reserved:expr) => {{
         game_parallel_economy_combat::validate_manual!(
             $world.combat,
             $request,
@@ -425,6 +425,16 @@ macro_rules! prepare_people {
         );
         game_parallel_economy_interaction::validate_work_world!($world, $work);
         let fighters = $fighters;
+        let reserved = $reserved;
+        let meal_blocked = if reserved.is_empty() {
+            None
+        } else {
+            let mut rows = fighters.to_vec();
+            rows.extend_from_slice(reserved);
+            rows.par_sort_unstable();
+            rows.dedup();
+            Some(rows)
+        };
         let people: Vec<game_parallel_production_model::PersonSnapshot> = $world
             .people
             .par_iter()
@@ -436,7 +446,7 @@ macro_rules! prepare_people {
             $world.physical.goods(),
             &$view,
             $meal,
-            fighters,
+            meal_blocked.as_deref().unwrap_or(fighters),
         )?;
         let mut busy = game_parallel_economy_work::initial_busy(
             &$world.people,
@@ -450,6 +460,9 @@ macro_rules! prepare_people {
         }
         if !fighters.is_empty() {
             game_parallel_economy_work::reserve(&mut busy, fighters.iter().copied());
+        }
+        if !reserved.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, reserved.iter().copied());
         }
         (fighters, resting, people, candidates, meals, busy)
     }};

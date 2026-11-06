@@ -3,6 +3,48 @@ pub mod player;
 use game_parallel_economy::{Economy, MissionStart};
 pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
     match words {
+        ["take-from", person, target, good, quantity, escalation] => {
+            let escalate = match *escalation {
+                "escalate" => true,
+                "withdraw" => false,
+                _ => return Err("expected escalate or withdraw".into()),
+            };
+            println!(
+                "outcome={:?}",
+                world.take_possessions(
+                    person.parse().map_err(|_| "invalid person")?,
+                    target.parse().map_err(|_| "invalid target")?,
+                    good.parse().map_err(|_| "invalid good")?,
+                    quantity.parse().map_err(|_| "invalid quantity")?,
+                    escalate
+                )?
+            );
+        }
+        ["taking-response", person, notice, resistance] => {
+            let notices = match *notice {
+                "notice" => true,
+                "unaware" => false,
+                _ => return Err("expected notice or unaware".into()),
+            };
+            let resist = match *resistance {
+                "resist" => true,
+                "no-default" => false,
+                _ => return Err("expected resist or no-default".into()),
+            };
+            world.set_taking_response(
+                person.parse().map_err(|_| "invalid person")?,
+                notices,
+                resist,
+            )?;
+        }
+        ["taking-choice", person, choice] => {
+            let willing = match *choice {
+                "on" => true,
+                "off" => false,
+                _ => return Err("expected on or off".into()),
+            };
+            world.set_taking_choice(person.parse().map_err(|_| "invalid person")?, willing)?;
+        }
         ["handle-animal", person, animal] => println!(
             "handled={}",
             world.handle_animal(

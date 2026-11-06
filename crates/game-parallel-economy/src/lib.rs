@@ -36,6 +36,11 @@ pub use game_parallel_economy_promises::{
     Decision as PromiseDecision, Proposal as PromiseProposal,
 };
 pub use game_parallel_economy_skills::Skills;
+pub use game_parallel_economy_taking::{
+    Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
+    Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
+    Response as TakingResponse, Taking,
+};
 pub use game_parallel_economy_work::care::DependentCare;
 pub use game_parallel_economy_work::sites::{
     Binding as WorkSiteBinding, Facilities as WorkSites, Requirement as WorkSiteRequirement,
@@ -162,6 +167,7 @@ pub struct Economy {
     animal_handling: Option<AnimalHandling>,
     animal_restraints: Option<AnimalRestraints>,
     animal_feelings: Option<AnimalFeelings>,
+    taking: Option<Taking>,
     hunting: Option<Hunting>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
@@ -210,6 +216,7 @@ pub struct Draft {
     fauna: Option<FaunaDraft>,
     animal_handling: Option<AnimalHandling>,
     animal_restraints: Option<AnimalRestraints>,
+    taking: Option<Taking>,
     gathered: Option<bool>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
@@ -223,6 +230,7 @@ pub struct Draft {
     animal_captured: Option<bool>,
     animal_released: Option<bool>,
     animal_defended: Option<bool>,
+    taking_outcome: Option<TakingOutcome>,
     hunting_births: Vec<HuntingPolicy>,
     animal_care_births: Vec<AnimalCarePolicy>,
     animal_handling_births: Vec<AnimalHandlingPolicy>,
@@ -1081,6 +1089,103 @@ impl Economy {
         self.commit(draft)?;
         Ok(hunted)
     }
+    /// Attempt to take real possessions; opposition and escalation are separate choices.
+    pub fn take_possessions(
+        &mut self,
+        person: u64,
+        target: u64,
+        good: u32,
+        quantity: u64,
+        escalate: bool,
+    ) -> Result<TakingOutcome, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        if !self.physical.goods().iter().any(|row| row.id == good) {
+            return Err("unknown good".into());
+        }
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::TakeFrom {
+                    person,
+                    target,
+                    good,
+                    quantity,
+                    escalate,
+                },
+            ),
+        )?;
+        let outcome = draft
+            .taking_outcome
+            .ok_or("taking attempt was not selected")?;
+        self.commit(draft)?;
+        Ok(outcome)
+    }
+    /// Set one person's standing notice and resistance without implying approval.
+    pub fn set_taking_response(
+        &mut self,
+        person: u64,
+        notices: bool,
+        resist: bool,
+    ) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let mut owner = self.taking.clone().unwrap_or_default();
+        let responses = owner.responses_mut();
+        if let Some(response) = responses.iter_mut().find(|row| row.person == person) {
+            response.notices = notices;
+            response.resist = resist;
+        } else {
+            responses.push(TakingResponse {
+                person,
+                notices,
+                resist,
+                resist_if_fear_at_least: None,
+                resist_if_affinity_at_least: None,
+                resist_if_affinity_at_most: None,
+            });
+        }
+        responses.par_sort_unstable_by_key(|row| row.person);
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Change a person's voluntary inclination without removing personal pressure.
+    pub fn set_taking_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let mut owner = self.taking.clone().ok_or("taking is disabled")?;
+        let policy = owner
+            .policies_mut()
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no taking preference")?;
+        policy.willing = willing;
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Approach a living animal; its own response determines whether handling succeeds.
     pub fn handle_animal(&mut self, person: u64, animal: u64) -> Result<bool, String> {
         game_parallel_economy_campaign::preflight!(self);
@@ -1334,6 +1439,11 @@ impl Economy {
             purpose.validate(&ids).map_err(str::to_owned)?;
         }
         let goods: HashSet<_> = physical.goods().iter().map(|row| row.id).collect();
+        if let Some(taking) = &state.taking {
+            taking
+                .validate(&ids, &goods, physical.tick())
+                .map_err(str::to_owned)?;
+        }
         game_parallel_economy_skills::validate_world!(state, physical, ids);
         let view = physical.view(physical.tick())?;
         environment::validate(state.environment.as_ref(), &view, &goods)?;
@@ -1596,6 +1706,7 @@ impl Economy {
             animal_handling: state.animal_handling,
             animal_restraints: state.animal_restraints,
             animal_feelings: state.animal_feelings,
+            taking: state.taking,
             hunting: state.hunting,
             food_search: state.food_search,
             giving: state.giving,
@@ -1643,6 +1754,7 @@ impl Economy {
             animal_handling: self.animal_handling.clone(),
             animal_restraints: self.animal_restraints.clone(),
             animal_feelings: self.animal_feelings.clone(),
+            taking: self.taking.clone(),
             hunting: self.hunting.clone(),
             food_search: self.food_search.clone(),
             giving: self.giving.clone(),
@@ -1681,6 +1793,7 @@ impl Economy {
                             row,
                             game_parallel_economy_interaction::PhysicalChoice::AskFood { .. }
                                 | game_parallel_economy_interaction::PhysicalChoice::Give { .. }
+                                | game_parallel_economy_interaction::PhysicalChoice::TakeFrom { .. }
                                 | game_parallel_economy_interaction::PhysicalChoice::TreatOther { .. }
                         ))
                 })
@@ -1696,6 +1809,7 @@ impl Economy {
                     game_parallel_economy_interaction::PhysicalChoice::TreatOther {
                         person, patient, ..
                     } => !owner.can_touch(person, patient),
+                    game_parallel_economy_interaction::PhysicalChoice::TakeFrom { person, target, .. } => !owner.can_touch(person, target),
                     game_parallel_economy_interaction::PhysicalChoice::AskFood {
                         person,
                         target,
@@ -1793,6 +1907,102 @@ impl Economy {
         let site_classes = claims
             .as_ref()
             .map_or_else(Vec::new, |index| index.site_classes());
+        let manual_taking = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::TakeFrom {
+                person,
+                target,
+                good,
+                quantity,
+                escalate,
+            }) => Some(TakingIntent {
+                actor: person,
+                target,
+                good,
+                quantity,
+                escalate,
+            }),
+            _ => None,
+        };
+        let default_taking = Taking::default();
+        let mut taking_plan = if self.taking.is_some() || manual_taking.is_some() {
+            let mut taking_busy =
+                game_parallel_economy_fatigue::resting(self.fatigue.as_ref(), &self.people);
+            taking_busy.par_extend(
+                self.physical
+                    .work()
+                    .par_iter()
+                    .filter(|row| row.phase == game_parallel_lot_runtime::Phase::Working)
+                    .map(|row| row.job.worker),
+            );
+            taking_busy.par_sort_unstable();
+            taking_busy.dedup();
+            if manual_taking.is_some_and(|intent| taking_busy.binary_search(&intent.actor).is_ok())
+            {
+                return Err("a busy person cannot attempt to take possessions".into());
+            }
+            let mut taking_blocked = self
+                .combat
+                .as_ref()
+                .map_or_else(Vec::new, |combat| combat.actors().to_vec());
+            if let Some(row) = request {
+                taking_blocked.extend([row.actor, row.target]);
+            }
+            taking_blocked.extend(player_work.map(|row| row.actor()));
+            taking_blocked.extend(player_meal.map(|row| row.person));
+            if let Some(choice) = player_transfer
+                && manual_taking.is_none()
+            {
+                use game_parallel_economy_interaction::PhysicalChoice;
+                taking_blocked.push(choice.person());
+                match choice {
+                    PhysicalChoice::Give { recipient, .. } => taking_blocked.push(recipient),
+                    PhysicalChoice::TreatOther { patient, .. } => taking_blocked.push(patient),
+                    PhysicalChoice::AskFood { target, .. }
+                    | PhysicalChoice::Confine { target, .. }
+                    | PhysicalChoice::ReleaseHeld { target, .. } => taking_blocked.push(target),
+                    PhysicalChoice::AskHaul { carrier, .. } => taking_blocked.push(carrier),
+                    _ => {}
+                }
+            }
+            taking_blocked.par_sort_unstable();
+            taking_blocked.dedup();
+            let locations = Colocation::new(self.travel.as_ref());
+            let can_touch = |a, b| {
+                self.confinement
+                    .as_ref()
+                    .is_none_or(|owner| owner.can_touch(a, b))
+            };
+            Some(
+                game_parallel_economy_taking::Context {
+                    owner: self.taking.as_ref().unwrap_or(&default_taking),
+                    people: &self.people,
+                    opinions: self.opinions.as_ref(),
+                    locations: &locations,
+                    busy: &taking_busy,
+                    blocked: &taking_blocked,
+                    can_touch: &can_touch,
+                    max_hunger: self.rules.max_work_hunger,
+                    manual: manual_taking,
+                    action_base: 0,
+                    seed: self.seed,
+                    tick,
+                }
+                .prepare()?,
+            )
+        } else {
+            None
+        };
+        let requested_contests: Vec<_> = taking_plan
+            .as_ref()
+            .map_or(&[][..], |plan| plan.contests.as_slice())
+            .par_iter()
+            .map(|contest| (contest.actor, contest.target, contest.region))
+            .collect();
+        let taking_confrontation = game_parallel_economy_combat::confrontation::select_requested(
+            self.combat.as_ref(),
+            &self.people,
+            &requested_contests,
+        )?;
         let confrontation = if self.combat.is_some()
             && self.opinions.as_ref().is_some_and(|opinions| {
                 opinions.sensitivities.par_iter().any(|row| {
@@ -1817,6 +2027,9 @@ impl Economy {
             let mut unavailable = Vec::new();
             if let Some(combat) = &self.combat {
                 unavailable.extend_from_slice(combat.actors());
+            }
+            if let Some(plan) = &taking_plan {
+                unavailable.extend_from_slice(&plan.actors);
             }
             if let Some(confinement) = &self.confinement {
                 unavailable.extend(confinement.holds.iter().map(|hold| hold.person));
@@ -1854,6 +2067,10 @@ impl Economy {
         } else {
             None
         };
+        let confrontation = game_parallel_economy_combat::confrontation::combine(
+            confrontation,
+            taking_confrontation,
+        )?;
         let current_fighters = self
             .combat
             .as_ref()
@@ -1873,7 +2090,10 @@ impl Economy {
             player_work,
             player_meal,
             player_transfer,
-            initial_fighters
+            initial_fighters,
+            taking_plan
+                .as_ref()
+                .map_or(&[][..], |plan| plan.actors.as_slice())
         );
         let mut held: Vec<_> = self
             .confinement
@@ -1954,13 +2174,21 @@ impl Economy {
         if manual_escape.is_some() && self.confinement.is_none() {
             return Err("confinement is disabled".into());
         }
+        let confinement_busy = taking_plan
+            .as_ref()
+            .filter(|plan| !plan.targets.is_empty())
+            .map(|plan| {
+                let mut rows = busy.clone();
+                game_parallel_economy_work::reserve(&mut rows, plan.targets.iter().copied());
+                rows
+            });
         let (mut next_confinement, mut escape_actors, escape_efforts) = self
             .confinement
             .as_ref()
             .map(|owner| {
                 owner.escape_attempts(
                     &self.people,
-                    &busy,
+                    confinement_busy.as_deref().unwrap_or(&busy),
                     tick,
                     manual_escape,
                     guard_plan
@@ -2135,6 +2363,9 @@ impl Economy {
                 _ => None,
             };
             reserved_targets.extend(target);
+            if let Some(plan) = &taking_plan {
+                reserved_targets.extend_from_slice(&plan.targets);
+            }
             reserved_targets.sort_unstable();
             reserved_targets.dedup();
             let actors = game_parallel_economy_confinement::ReleaseContext {
@@ -2190,6 +2421,9 @@ impl Economy {
             .filter(|owner| !owner.capture_policies.is_empty())
         {
             let mut autonomous_busy = busy.clone();
+            if let Some(plan) = &taking_plan {
+                autonomous_busy.extend_from_slice(&plan.targets);
+            }
             if let Some(choice) = player_transfer {
                 use game_parallel_economy_interaction::PhysicalChoice;
                 let target = match choice {
@@ -2206,6 +2440,9 @@ impl Economy {
             autonomous_busy.par_sort_unstable();
             autonomous_busy.dedup();
             let mut controlled_unavailable = initial_fighters.to_vec();
+            if let Some(plan) = &taking_plan {
+                controlled_unavailable.extend_from_slice(&plan.targets);
+            }
             controlled_unavailable.extend(held.iter().copied());
             controlled_unavailable.extend(resting.iter().copied());
             controlled_unavailable.extend(meal_candidates.iter().map(|row| row.0));
@@ -2283,6 +2520,12 @@ impl Economy {
             .map_err(|_| "action count overflow")?
             .checked_add(1)
             .ok_or("action count overflow")?;
+        if let Some(plan) = &mut taking_plan {
+            plan.rebase(action_base).map_err(str::to_owned)?;
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+        }
         let care = family::prepare_care!(
             self,
             people,
@@ -3357,6 +3600,14 @@ impl Economy {
             resting,
             work_offers
         );
+        if let Some(plan) = &taking_plan {
+            game_parallel_economy_combat::interrupt(
+                &plan.actors,
+                self.physical.work(),
+                &mut rates,
+                &mut abandon,
+            );
+        }
         if !held.is_empty() {
             game_parallel_economy_combat::interrupt(
                 &held,
@@ -3786,6 +4037,9 @@ impl Economy {
             profile_phase = game_diagnostics::span("economy.work_admission");
         }
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
+        if let Some(plan) = &taking_plan {
+            actions.par_extend(plan.actions.par_iter().cloned());
+        }
         if let Some((_, _, action)) = &manual_animal_feed {
             actions.push(action.clone());
         }
@@ -4743,11 +4997,29 @@ impl Economy {
             );
         }
         game_parallel_economy_combat::finish_world!(combat, person);
-        if let Some((combat, selected)) = combat.as_mut().zip(confrontation.as_ref()) {
-            #[cfg(feature = "profile")]
-            let _confrontation_span = game_diagnostics::span("economy.confrontation_start");
-            combat.add_confrontations(selected, &person.people)?;
+        let started_confrontations =
+            if let Some((combat, selected)) = combat.as_mut().zip(confrontation.as_ref()) {
+                #[cfg(feature = "profile")]
+                let _confrontation_span = game_diagnostics::span("economy.confrontation_start");
+                combat.add_confrontations(selected, &person.people)?
+            } else {
+                Vec::new()
+            };
+        let mut next_taking = self
+            .taking
+            .clone()
+            .or_else(|| manual_taking.map(|_| Taking::default()));
+        if let (Some(owner), Some(plan)) = (&mut next_taking, &taking_plan) {
+            owner.events = plan.publish(physical.events(), &started_confrontations);
         }
+        let taking_outcome = manual_taking.and_then(|intent| {
+            next_taking
+                .as_ref()?
+                .events
+                .iter()
+                .find(|event| event.actor == intent.actor && event.target == intent.target)
+                .map(|event| event.outcome)
+        });
         let missions = game_parallel_economy_expeditions::finish_world!(
             self, expedition, person, travel, dynamics, held, tick
         );
@@ -4815,6 +5087,40 @@ impl Economy {
         }
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
+        if let (Some(opinions), Some(owner)) = (&mut next_opinions, &next_taking) {
+            let changes = owner.personal_changes(&owner.events);
+            opinions.apply_personal_changes(&changes, tick);
+            if opinions.tracks_opposed_action_reactions() {
+                use game_parallel_opinions::{
+                    OpposedActionExperience as Experience, OpposedActionOutcome as Outcome,
+                };
+                let experiences: Vec<_> = owner
+                    .events
+                    .par_iter()
+                    .filter(|event| {
+                        matches!(
+                            event.outcome,
+                            TakingOutcome::Resisted | TakingOutcome::Conflict
+                        )
+                    })
+                    .flat_map_iter(|event| {
+                        [
+                            Experience {
+                                observer: event.actor,
+                                other: event.target,
+                                outcome: Outcome::Blocked,
+                            },
+                            Experience {
+                                observer: event.target,
+                                other: event.actor,
+                                outcome: Outcome::BlockedOther,
+                            },
+                        ]
+                    })
+                    .collect();
+                opinions.learn_opposed_actions(&experiences, tick);
+            }
+        }
         if let Some(opinions) = &mut next_opinions {
             let changes: Vec<_> = work_reactions
                 .par_iter()
@@ -5174,6 +5480,7 @@ impl Economy {
             fauna,
             animal_handling: next_animal_handling,
             animal_restraints: next_animal_restraints,
+            taking: next_taking,
             gathered,
             food_search,
             giving: next_giving,
@@ -5187,6 +5494,7 @@ impl Economy {
             animal_captured,
             animal_released,
             animal_defended,
+            taking_outcome,
             hunting_births,
             animal_care_births,
             animal_handling_births,
@@ -5260,6 +5568,7 @@ impl Economy {
         }
         self.animal_handling = draft.animal_handling;
         self.animal_restraints = draft.animal_restraints;
+        self.taking = draft.taking;
         if let Some(feelings) = draft.animal_feelings_update {
             self.animal_feelings = Some(feelings);
         }

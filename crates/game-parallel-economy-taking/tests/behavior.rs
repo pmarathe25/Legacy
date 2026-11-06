@@ -114,9 +114,13 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
         ..Default::default()
     };
     let people = people(2);
-    let plan = plan(&owner, &people, None);
+    let mut plan = plan(&owner, &people, None);
     assert_eq!(plan.actors, vec![1]);
     assert!(plan.contests.is_empty());
+    plan.rebase(20).unwrap();
+    assert_eq!(plan.actions[0].id, 20);
+    assert_eq!(plan.actions[0].movements[0].id, 20);
+    assert!(plan.rebase(u64::MAX).is_err());
     let mut physical = runtime(5, 1);
     let before = physical.snapshot();
     let draft = physical
@@ -161,6 +165,7 @@ fn resistance_and_escalation_are_separate_personal_choices() {
         }]
         .into(),
         events: vec![],
+        ..Default::default()
     };
     let mut people = people(2);
     people[1].controlled = true;
@@ -262,6 +267,160 @@ fn barriers_and_controlled_intent_have_physical_priority() {
         tick: 1,
     };
     assert!(blocked.prepare().is_err());
+}
+
+#[test]
+fn participants_interpret_only_experiences_they_notice_using_their_own_rules() {
+    use game_parallel_economy_taking::{Event, Interpretation, Reaction};
+    use game_parallel_opinions::SubjectiveReaction;
+    let response = |affinity| {
+        Some(SubjectiveReaction {
+            affinity,
+            ..Default::default()
+        })
+    };
+    let owner = Taking {
+        reactions: vec![
+            Reaction {
+                person: 1,
+                as_actor: Interpretation {
+                    transferred: response(-2),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Reaction {
+                person: 2,
+                as_target: Interpretation {
+                    transferred: response(3),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            Reaction {
+                person: 2,
+                other: Some(1),
+                as_target: Interpretation {
+                    transferred: response(0),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let event = Event {
+        tick: 1,
+        actor: 1,
+        target: 2,
+        good: 1,
+        quantity: 1,
+        noticed: true,
+        outcome: Outcome::Transferred,
+    };
+    let changes = owner.personal_changes(std::slice::from_ref(&event));
+    assert_eq!(changes.len(), 2);
+    assert_eq!(changes[0].affinity, -2);
+    assert_eq!(changes[1].affinity, 0);
+    let unaware = Event {
+        noticed: false,
+        ..event
+    };
+    let changes = owner.personal_changes(&[unaware]);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].observer, 1);
+}
+
+#[test]
+fn fear_can_motivate_an_unwilling_actor_and_the_target_uses_their_own_affinity() {
+    use game_parallel_opinions::{AffinityRules, Opinion, Opinions, Rules};
+    let mut actor = policy(1, 2);
+    actor.willing = false;
+    actor.pressured_by = Some(2);
+    actor.pressure_threshold = Some(3);
+    let owner = Taking {
+        policies: vec![actor].into(),
+        responses: vec![Response {
+            person: 2,
+            notices: true,
+            resist: false,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: Some(2),
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        ..Default::default()
+    };
+    let opinions = Opinions {
+        rules: Rules {
+            minimum: -10,
+            maximum: 10,
+            initial: 0,
+            fulfilled_gain: 0,
+            default_loss: 0,
+            theft_loss: 0,
+            encounter_gain: 0,
+            fear_per_damage: 0,
+            fear_decay_per_tick: 0,
+            gratitude_gain: 0,
+            obligation_relief: 0,
+            minimum_report_trust: None,
+            affinity: Some(AffinityRules {
+                limit: 10,
+                encounter_change: 0,
+                pressured_encounter_change: 0,
+                help_change: 0,
+                harm_change_per_damage: 0,
+            }),
+            newborn_obligation_development: None,
+        },
+        sensitivities: vec![].into(),
+        records: vec![
+            Opinion {
+                observer: 1,
+                target: 2,
+                trust: 0,
+                affinity: 0,
+                fear: 3,
+                obligation: 0,
+            },
+            Opinion {
+                observer: 2,
+                target: 1,
+                trust: 0,
+                affinity: 2,
+                fear: 0,
+                obligation: 0,
+            },
+        ],
+        events: vec![],
+    };
+    let people = people(2);
+    let locations = Colocation::new(None);
+    let run = |feelings| {
+        Context {
+            owner: &owner,
+            people: &people,
+            opinions: feelings,
+            locations: &locations,
+            busy: &[],
+            blocked: &[],
+            can_touch: &|_, _| true,
+            max_hunger: 100,
+            manual: None,
+            action_base: 10,
+            seed: 7,
+            tick: 1,
+        }
+        .prepare()
+        .unwrap()
+    };
+    assert!(run(None).actors.is_empty());
+    let plan = run(Some(&opinions));
+    assert_eq!(plan.actors, vec![1, 2]);
+    assert!(plan.actions.is_empty());
+    assert_eq!(plan.contests.len(), 1);
 }
 
 #[test]

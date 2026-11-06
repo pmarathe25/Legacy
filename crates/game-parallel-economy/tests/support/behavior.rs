@@ -223,6 +223,7 @@ fn fixture() -> State {
         animal_handling: None,
         animal_restraints: None,
         animal_feelings: None,
+        taking: None,
         hunting: None,
         food_search: None,
         giving: None,
@@ -21098,6 +21099,539 @@ fn combat_rules() -> Combat {
         protection: vec![],
         weapons: vec![],
     }
+}
+
+#[test]
+fn taking_from_a_living_person_uses_real_custody_and_can_be_unnoticed() {
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                assert_eq!(
+                    world.take_possessions(1, 4, 1, 1, false).unwrap(),
+                    TakingOutcome::Transferred
+                );
+                let saved = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), saved);
+                let taking = saved.taking.as_ref().unwrap();
+                assert_eq!(taking.events.len(), 1);
+                assert!(!taking.events[0].noticed);
+                let holder = |person| {
+                    saved
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(person))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>()
+                };
+                assert_eq!(holder(1), 2);
+                assert_eq!(holder(4), 0);
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), saved);
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_person_may_enjoy_or_dislike_the_same_observed_taking() {
+    use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    initial.opinions.as_mut().unwrap().records.clear();
+    initial.opinions.as_mut().unwrap().rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    initial.taking = Some(Taking {
+        responses: vec![TakingResponse {
+            person: 4,
+            notices: true,
+            resist: false,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: None,
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        reactions: vec![
+            TakingReaction {
+                person: 1,
+                as_actor: TakingInterpretation {
+                    transferred: Some(SubjectiveReaction {
+                        affinity: -2,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            TakingReaction {
+                person: 4,
+                as_target: TakingInterpretation {
+                    transferred: Some(SubjectiveReaction {
+                        affinity: 3,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ]
+        .into(),
+        ..Default::default()
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(
+                    world.take_possessions(1, 4, 1, 1, false).unwrap(),
+                    TakingOutcome::Transferred
+                );
+                let state = world.snapshot();
+                let index = state.opinions.as_ref().unwrap().index();
+                assert_eq!(index.affinity(1, 4), -2);
+                assert_eq!(index.affinity(4, 1), 3);
+                assert_eq!(index.obligation(4, 1), 0);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn missing_goods_do_not_trigger_an_interpretation_of_a_successful_taking() {
+    use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    initial.opinions.as_mut().unwrap().records.clear();
+    initial.opinions.as_mut().unwrap().rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    initial.taking = Some(Taking {
+        responses: vec![TakingResponse {
+            person: 2,
+            notices: true,
+            resist: false,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: None,
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        reactions: vec![TakingReaction {
+            person: 2,
+            as_target: TakingInterpretation {
+                transferred: Some(SubjectiveReaction {
+                    affinity: 5,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(
+        world.take_possessions(1, 2, 1, 1, false).unwrap(),
+        TakingOutcome::Unavailable
+    );
+    let state = world.snapshot();
+    assert!(state.opinions.unwrap().records.is_empty());
+    assert_eq!(
+        state.taking.unwrap().events[0].outcome,
+        TakingOutcome::Unavailable
+    );
+}
+
+#[test]
+fn a_noticing_target_can_resist_and_escalation_starts_real_combat() {
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    initial.combat = Some(combat_rules());
+    initial.taking = Some(Taking {
+        responses: vec![TakingResponse {
+            person: 4,
+            notices: true,
+            resist: true,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: None,
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        ..Default::default()
+    });
+    let run = |workers, escalate| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let outcome = world.take_possessions(1, 4, 1, 1, escalate).unwrap();
+                assert_eq!(
+                    outcome,
+                    if escalate {
+                        TakingOutcome::Conflict
+                    } else {
+                        TakingOutcome::Resisted
+                    }
+                );
+                let state = world.snapshot();
+                assert_eq!(
+                    state.combat.as_ref().unwrap().conflict.encounters.len(),
+                    usize::from(escalate)
+                );
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Person(4))
+                    .unwrap();
+                assert_eq!(holder.lots[0].quantity, 1);
+                assert_eq!(state.people[3].health, 100);
+                state
+            })
+    };
+    for escalate in [false, true] {
+        assert_eq!(run(1, escalate), run(4, escalate));
+    }
+}
+
+#[test]
+fn an_opposed_taking_uses_each_persons_general_opposition_reaction() {
+    use game_parallel_opinions::{
+        AffinityRules, OpposedActionReaction, Sensitivity, SubjectiveReaction,
+    };
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = vec![
+        Sensitivity {
+            person: 1,
+            opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+                blocked: Some(SubjectiveReaction {
+                    affinity: 2,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        Sensitivity {
+            person: 4,
+            opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+                blocked_other: Some(SubjectiveReaction {
+                    affinity: -3,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    ]
+    .into();
+    initial.taking = Some(Taking {
+        responses: vec![TakingResponse {
+            person: 4,
+            notices: true,
+            resist: true,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: None,
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        ..Default::default()
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(
+        world.take_possessions(1, 4, 1, 1, false).unwrap(),
+        TakingOutcome::Resisted
+    );
+    let state = world.snapshot();
+    let index = state.opinions.as_ref().unwrap().index();
+    assert_eq!(index.affinity(1, 4), 2);
+    assert_eq!(index.affinity(4, 1), -3);
+}
+
+#[test]
+fn a_supply_opening_does_not_allow_taking_across_a_barrier() {
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 2,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: true,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold {
+            person: 4,
+            site: 1,
+            born_inside: false,
+        }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    let before = world.snapshot();
+    assert!(world.take_possessions(1, 4, 1, 1, false).is_err());
+    assert_eq!(world.snapshot(), before);
+    initial
+        .confinement
+        .as_mut()
+        .unwrap()
+        .holds
+        .push(ConfinementHold {
+            person: 1,
+            site: 1,
+            born_inside: false,
+        });
+    let mut same_cell = Economy::compile(initial).unwrap();
+    assert_eq!(
+        same_cell.take_possessions(1, 4, 1, 1, false).unwrap(),
+        TakingOutcome::Transferred
+    );
+}
+
+#[test]
+fn a_controlled_target_can_change_their_standing_response_without_publishing_a_stale_attempt() {
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    initial.taking = Some(Taking {
+        policies: vec![TakingPolicy {
+            person: 4,
+            target: 1,
+            good: 1,
+            quantity: 1,
+            willing: true,
+            interval: 1,
+            escalate: false,
+            pressured_by: None,
+            pressure_threshold: None,
+            affinity_at_least: None,
+            affinity_at_most: None,
+        }]
+        .into(),
+        responses: vec![TakingResponse {
+            person: 1,
+            notices: true,
+            resist: true,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: None,
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        events: vec![],
+        ..Default::default()
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    let stale = world.prepare().unwrap();
+    world.set_taking_response(1, false, false).unwrap();
+    let changed = world.snapshot();
+    assert!(world.commit(stale).is_err());
+    assert_eq!(world.snapshot(), changed);
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(
+        state.taking.unwrap().events[0].outcome,
+        TakingOutcome::Transferred
+    );
+    let target = state
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    assert!(target.lots.is_empty());
+}
+
+fn taking_workload(count: u64, shared: bool) -> State {
+    let mut state = concentrated(count * 2);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    state.taking = Some(Taking {
+        policies: (1..=count)
+            .map(|id| TakingPolicy {
+                person: count + id,
+                target: if shared { 1 } else { id },
+                good: 1,
+                quantity: 1,
+                willing: true,
+                interval: 1,
+                escalate: false,
+                pressured_by: None,
+                pressure_threshold: None,
+                affinity_at_least: None,
+                affinity_at_most: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    });
+    state
+}
+
+#[test]
+fn autonomous_takings_conserve_possessions_for_shared_and_independent_targets() {
+    for shared in [false, true] {
+        let count = 4096;
+        let initial = taking_workload(count, shared);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let events = &state.taking.as_ref().unwrap().events;
+                    assert_eq!(events.len(), if shared { 1 } else { count as usize });
+                    assert!(
+                        events
+                            .iter()
+                            .all(|event| event.outcome == TakingOutcome::Transferred)
+                    );
+                    let quantity: u64 = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .filter(|row| matches!(row.place, Place::Person(_)))
+                        .flat_map(|row| &row.lots)
+                        .filter(|lot| lot.good == 1)
+                        .map(|lot| lot.quantity)
+                        .sum();
+                    assert_eq!(quantity, count);
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+#[ignore = "manual complete-world taking benchmark"]
+fn taking_world_benchmark() {
+    let count = std::env::var("LEGACY_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let shared = std::env::var_os("LEGACY_SHARED").is_some();
+    let initial = taking_workload(count, shared);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let now = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = now.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                let events = &state.taking.as_ref().unwrap().events;
+                assert_eq!(events.len(), if shared { 1 } else { count as usize });
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| event.outcome == TakingOutcome::Transferred)
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} attempts={count} people={} shared={shared} elapsed={:.6}",
+                count * 2,
+                samples[1]
+            );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!(
+                    "{name}: {:.3} ms/call",
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
+        });
 }
 
 #[test]

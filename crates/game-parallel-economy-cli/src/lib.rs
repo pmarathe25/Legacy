@@ -97,6 +97,8 @@ struct Scenario {
     #[serde(default)]
     animal_feelings: Option<game_parallel_economy::AnimalFeelings>,
     #[serde(default)]
+    taking: Option<game_parallel_economy_taking::content::Config>,
+    #[serde(default)]
     hunting: Option<game_parallel_economy::HuntingConfig>,
     #[serde(default)]
     food_search: Option<game_parallel_economy::FoodSearch>,
@@ -1131,6 +1133,10 @@ pub fn scenario_with_options(
         .hunting
         .map(|config| config.build(|name| goods.get(name).copied()))
         .transpose()?;
+    let taking = scenario
+        .taking
+        .map(|config| config.build(|name| goods.get(name).copied()))
+        .transpose()?;
     let combat = scenario
         .combat
         .map(|config| {
@@ -1353,6 +1359,7 @@ pub fn scenario_with_options(
         animal_handling: scenario.animal_handling,
         animal_restraints: scenario.animal_restraints,
         animal_feelings: scenario.animal_feelings,
+        taking,
         hunting,
         food_search: scenario.food_search,
         giving,

@@ -1,10 +1,13 @@
 //! Individual attempts to take real possessions, with independent resistance.
+pub mod content;
+mod reactions;
 use game_parallel_economy_person::{Person, travel::Colocation};
 use game_parallel_genetics::random;
 use game_parallel_lot_runtime::Events;
 use game_parallel_lots::{Movement, Place, Transaction};
 use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
+pub use reactions::{Interpretation, Reaction};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 
@@ -76,15 +79,27 @@ pub struct Taking {
     #[serde(default)]
     pub responses: Arc<Vec<Response>>,
     #[serde(default)]
+    pub reactions: Arc<Vec<Reaction>>,
+    #[serde(default)]
     pub events: Vec<Event>,
+}
+
+fn detach<T: Clone + Send + Sync>(shared: &mut Arc<Vec<T>>) -> &mut Vec<T> {
+    if Arc::get_mut(shared).is_none() {
+        *shared = Arc::new(shared.par_iter().cloned().collect());
+    }
+    Arc::get_mut(shared).expect("exclusive taking generation")
 }
 
 impl Taking {
     pub fn policies_mut(&mut self) -> &mut Vec<Policy> {
-        Arc::make_mut(&mut self.policies)
+        detach(&mut self.policies)
     }
     pub fn responses_mut(&mut self) -> &mut Vec<Response> {
-        Arc::make_mut(&mut self.responses)
+        detach(&mut self.responses)
+    }
+    pub fn reactions_mut(&mut self) -> &mut Vec<Reaction> {
+        detach(&mut self.reactions)
     }
 
     /// Check content and save data before an owner participates in the world.
@@ -98,8 +113,20 @@ impl Taking {
         actors.par_sort_unstable();
         let mut responders: Vec<_> = self.responses.par_iter().map(|p| p.person).collect();
         responders.par_sort_unstable();
+        let mut reactions: Vec<_> = self
+            .reactions
+            .par_iter()
+            .map(|p| (p.person, p.other))
+            .collect();
+        reactions.par_sort_unstable();
         if actors.par_windows(2).any(|p| p[0] == p[1])
             || responders.par_windows(2).any(|p| p[0] == p[1])
+            || reactions.par_windows(2).any(|p| p[0] == p[1])
+            || self.reactions.par_iter().any(|p| {
+                !people.contains(&p.person)
+                    || p.other
+                        .is_some_and(|other| other == p.person || !people.contains(&other))
+            })
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || !people.contains(&p.target)
@@ -158,10 +185,13 @@ struct Pending {
 /// Detached proposals. Goods and combat remain owned by their respective systems.
 pub struct Plan {
     pub actors: Vec<u64>,
+    /// All targets, including those who do not notice or spend an action.
+    pub targets: Vec<u64>,
     pub actions: Vec<Transaction>,
     pub contests: Vec<Contest>,
     pending: Vec<Pending>,
     tick: u64,
+    action_base: u64,
 }
 
 pub struct Context<'a> {
@@ -305,24 +335,37 @@ impl Context<'_> {
                 }
             })
             .collect();
-        choices.par_sort_unstable_by_key(|(manual, priority, intent, _)| {
-            (!manual, *priority, intent.actor, intent.target)
-        });
-        let mut claims: Vec<_> = choices
-            .par_iter()
-            .enumerate()
-            .flat_map_iter(|(index, row)| [(row.2.actor, index), (row.2.target, index)])
-            .collect();
-        claims.par_sort_unstable();
-        let selected: Vec<_> = choices
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(index, row)| {
-                let actor = claims.partition_point(|claim| claim.0 < row.2.actor);
-                let target = claims.partition_point(|claim| claim.0 < row.2.target);
-                (claims[actor].1 == index && claims[target].1 == index).then_some(row)
-            })
-            .collect();
+        let disjoint_ranges = choices
+            .first()
+            .zip(choices.last())
+            .is_some_and(|(first, last)| {
+                (last.2.actor < first.2.target || last.2.target < first.2.actor)
+                    && choices
+                        .par_windows(2)
+                        .all(|pair| pair[0].2.actor < pair[1].2.actor)
+            });
+        let selected: Vec<_> = if disjoint_ranges {
+            choices
+        } else {
+            choices.par_sort_unstable_by_key(|(manual, priority, intent, _)| {
+                (!manual, *priority, intent.actor, intent.target)
+            });
+            let mut claims: Vec<_> = choices
+                .par_iter()
+                .enumerate()
+                .flat_map_iter(|(index, row)| [(row.2.actor, index), (row.2.target, index)])
+                .collect();
+            claims.par_sort_unstable();
+            choices
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(index, row)| {
+                    let actor = claims.partition_point(|claim| claim.0 < row.2.actor);
+                    let target = claims.partition_point(|claim| claim.0 < row.2.target);
+                    (claims[actor].1 == index && claims[target].1 == index).then_some(row)
+                })
+                .collect()
+        };
         let mut pending: Vec<_> = selected
             .into_par_iter()
             .map(|(_, _, intent, region)| {
@@ -359,7 +402,12 @@ impl Context<'_> {
                 }
             })
             .collect();
-        pending.par_sort_unstable_by_key(|p| (p.intent.actor, p.intent.target));
+        if pending.par_windows(2).any(|pair| {
+            (pair[0].intent.actor, pair[0].intent.target)
+                > (pair[1].intent.actor, pair[1].intent.target)
+        }) {
+            pending.par_sort_unstable_by_key(|p| (p.intent.actor, p.intent.target));
+        }
         // An unnoticed or unopposed target remains free to pursue other work.
         let mut actors: Vec<_> = pending
             .par_iter()
@@ -367,7 +415,13 @@ impl Context<'_> {
                 std::iter::once(p.intent.actor).chain(p.opposed.then_some(p.intent.target))
             })
             .collect();
-        actors.par_sort_unstable();
+        if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            actors.par_sort_unstable();
+        }
+        let mut targets: Vec<_> = pending.par_iter().map(|p| p.intent.target).collect();
+        if targets.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            targets.par_sort_unstable();
+        }
         let flags: Vec<_> = pending.par_iter().map(|p| u64::from(!p.opposed)).collect();
         let action_count: u64 = flags.par_iter().sum();
         self.action_base
@@ -407,15 +461,37 @@ impl Context<'_> {
             .collect();
         Ok(Plan {
             actors,
+            targets,
             actions,
             contests,
             pending,
             tick: self.tick,
+            action_base: self.action_base,
         })
     }
 }
 
 impl Plan {
+    /// Assign the host's final contiguous action range after other planners run.
+    pub fn rebase(&mut self, base: u64) -> Result<(), &'static str> {
+        base.checked_add(self.actions.len() as u64)
+            .ok_or("taking action overflow")?;
+        let previous = self.action_base;
+        self.actions.par_iter_mut().for_each(|action| {
+            let id = base + (action.id - previous);
+            action.id = id;
+            for movement in &mut action.movements {
+                movement.id = id;
+            }
+        });
+        self.pending.par_iter_mut().for_each(|pending| {
+            if let Some(id) = &mut pending.action {
+                *id = base + (*id - previous);
+            }
+        });
+        self.action_base = base;
+        Ok(())
+    }
     /// Resolve only admitted movements and conflicts actually started by the host.
     pub fn publish(&self, events: &Events, started: &[(u64, u64)]) -> Vec<Event> {
         let mut accepted: Vec<_> = events

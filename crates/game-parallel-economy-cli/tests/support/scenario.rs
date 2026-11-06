@@ -2,6 +2,63 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = format!(
+        "{source}\n[[taking.policies]]\nperson = 2\ntarget = 1\ngood = \"bread\"\nquantity = 1\nwilling = false\npressured_by = 1\npressure_threshold = 2\n\n[[taking.responses]]\nperson = 1\nnotices = true\nresist = false\n\n[[taking.reactions]]\nperson = 1\nother = 2\n[taking.reactions.as_target]\ntransferred = {{ affinity = 3 }}\n"
+    );
+    let path = std::env::temp_dir().join(format!("legacy-taking-{}.toml", std::process::id()));
+    std::fs::write(&path, configured).unwrap();
+    let mut world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let state = world.snapshot();
+    let taking = state.taking.unwrap();
+    let bread = taking.policies[0].good;
+    assert_eq!(
+        state
+            .physical
+            .goods
+            .iter()
+            .find(|g| g.id == taking.policies[0].good)
+            .unwrap()
+            .name,
+        "bread"
+    );
+    assert!(!taking.policies[0].willing);
+    assert_eq!(taking.policies[0].pressure_threshold, Some(2));
+    assert_eq!(
+        taking.reactions[0].as_target.transferred.unwrap().affinity,
+        3
+    );
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["taking-response", "notice", "resist"],
+    )
+    .unwrap();
+    assert!(
+        world
+            .snapshot()
+            .taking
+            .unwrap()
+            .responses
+            .iter()
+            .any(|r| r.person == 1 && r.resist)
+    );
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["take-from", "2", &bread.to_string(), "1", "withdraw"],
+    )
+    .unwrap();
+    assert!(world.snapshot().taking.unwrap().events.iter().any(|event| {
+        event.actor == 1
+            && event.target == 2
+            && event.outcome == game_parallel_economy::TakingOutcome::Transferred
+    }));
+}
+
+#[test]
 fn wildlife_receives_the_current_seasonal_exposure() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut state = scenario(

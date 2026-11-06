@@ -17,6 +17,111 @@ pub struct Selection {
     pub actors: Vec<u64>,
 }
 
+fn starting_points(runtime: &Runtime) -> Vec<(u64, [Point; 2])> {
+    let mut starts: Vec<_> = runtime
+        .state
+        .tactics
+        .maps
+        .par_iter()
+        .filter_map(|map| {
+            let mut points = Vec::with_capacity(2);
+            'outer: for x in 0..=map.rules.width.min(63) {
+                for y in 0..=map.rules.height.min(63) {
+                    let point = Point { x, y };
+                    if map.open(point) {
+                        points.push(point);
+                    }
+                    if points.len() == 2 {
+                        break 'outer;
+                    }
+                }
+            }
+            (points.len() == 2).then(|| (map.region, [points[0], points[1]]))
+        })
+        .collect();
+    starts.par_sort_unstable_by_key(|row| row.0);
+    starts
+}
+
+/// Select explicitly requested, already disjoint encounters. Requests without
+/// a usable local map or living participants cannot start a tactical fight.
+pub fn select_requested(
+    runtime: Option<&Runtime>,
+    people: &[Person],
+    requests: &[(u64, u64, u64)],
+) -> Result<Option<Selection>, String> {
+    let Some(runtime) = runtime else {
+        return Ok(None);
+    };
+    if requests.is_empty() {
+        return Ok(None);
+    }
+    let starts = starting_points(runtime);
+    let find = |id| {
+        people
+            .binary_search_by_key(&id, |p| p.id)
+            .ok()
+            .map(|i| &people[i])
+    };
+    let mut choices: Vec<_> = requests
+        .par_iter()
+        .filter_map(|&(actor, target, region)| {
+            let (a, b) = find(actor).zip(find(target))?;
+            (actor != target
+                && a.health > 0
+                && b.health > 0
+                && a.region == Some(region)
+                && b.region == Some(region)
+                && runtime.actors().binary_search(&actor).is_err()
+                && runtime.actors().binary_search(&target).is_err()
+                && starts.binary_search_by_key(&region, |row| row.0).is_ok())
+            .then_some(Choice {
+                actor,
+                target,
+                region,
+            })
+        })
+        .collect();
+    if choices.is_empty() {
+        return Ok(None);
+    }
+    choices.par_sort_unstable_by_key(|row| (row.actor, row.target));
+    let mut actors: Vec<_> = choices
+        .par_iter()
+        .flat_map_iter(|row| [row.actor, row.target])
+        .collect();
+    actors.par_sort_unstable();
+    if actors.par_windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("requested encounters must have disjoint participants".into());
+    }
+    Ok(Some(Selection {
+        choices,
+        starts,
+        actors,
+    }))
+}
+
+/// Combine disjoint sources before constructing and compiling the combat generation.
+pub fn combine(a: Option<Selection>, b: Option<Selection>) -> Result<Option<Selection>, String> {
+    match (a, b) {
+        (None, other) | (other, None) => Ok(other),
+        (Some(mut a), Some(b)) => {
+            if a.starts != b.starts {
+                return Err("encounters use different tactical maps".into());
+            }
+            a.choices.par_extend(b.choices);
+            a.choices
+                .par_sort_unstable_by_key(|row| (row.actor, row.target));
+            a.actors.par_extend(b.actors);
+            a.actors.par_sort_unstable();
+            if a.actors.par_windows(2).any(|pair| pair[0] == pair[1]) {
+                return Err("encounters must have disjoint participants".into());
+            }
+            Ok(Some(a))
+        }
+    }
+}
+
 /// Select disjoint encounters from prior personal opinions. No target consents.
 pub fn select(
     runtime: Option<&Runtime>,
@@ -48,28 +153,7 @@ pub fn select(
                 .all(|pair| pair[0].observer < pair[1].observer))
         .then_some(first.observer)
     });
-    let mut starts: Vec<_> = runtime
-        .state
-        .tactics
-        .maps
-        .par_iter()
-        .filter_map(|map| {
-            let mut points = Vec::with_capacity(2);
-            'outer: for x in 0..=map.rules.width.min(63) {
-                for y in 0..=map.rules.height.min(63) {
-                    let point = Point { x, y };
-                    if map.open(point) {
-                        points.push(point);
-                    }
-                    if points.len() == 2 {
-                        break 'outer;
-                    }
-                }
-            }
-            (points.len() == 2).then(|| (map.region, [points[0], points[1]]))
-        })
-        .collect();
-    starts.par_sort_unstable_by_key(|row| row.0);
+    let starts = starting_points(runtime);
     let dense_people = people.first().zip(people.last()).and_then(|(first, last)| {
         (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
     });
@@ -172,7 +256,7 @@ impl Draft {
         &mut self,
         selection: &Selection,
         people: &[Person],
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(u64, u64)>, String> {
         let find = |id| {
             people
                 .binary_search_by_key(&id, |p| p.id)
@@ -193,7 +277,7 @@ impl Draft {
             })
             .collect();
         if choices.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         let first = self.state.conflict.next_id;
         let next = first
@@ -273,7 +357,10 @@ impl Draft {
             self.state.tactics.index().map_err(str::to_owned)?,
             Some(self.state.conflict.actors()),
         ));
-        Ok(())
+        Ok(choices
+            .par_iter()
+            .map(|choice| (choice.actor, choice.target))
+            .collect())
     }
 }
 
@@ -281,6 +368,65 @@ impl Draft {
 mod tests {
     use super::*;
     use game_parallel_opinions::{Confrontation, Opinion, Rules, Sensitivity};
+
+    #[test]
+    fn explicit_encounters_are_batched_and_require_disjoint_live_local_people() {
+        let people: Vec<_> = (1..=6)
+            .map(|id| Person {
+                id,
+                region: Some(1),
+                health: 100,
+                hunger: 0,
+                immortal: None,
+                willing_to_work: false,
+                seek_meals: false,
+                controlled: false,
+            })
+            .collect();
+        let state = super::super::initial(
+            &[1],
+            1,
+            1,
+            super::super::Rules {
+                width: 10,
+                height: 10,
+                obstacle_count: 0,
+                max_obstacle_size: 1,
+                movement: 1,
+                attack_range: 1,
+            },
+            vec![],
+        )
+        .unwrap();
+        let runtime = Runtime {
+            plan: Plan::compile(&state.conflict).unwrap(),
+            index: state.tactics.index().unwrap(),
+            actors: vec![],
+            goods: Default::default(),
+            state,
+        };
+        let first = select_requested(Some(&runtime), &people, &[(1, 2, 1), (3, 4, 1)])
+            .unwrap()
+            .unwrap();
+        let second = select_requested(Some(&runtime), &people, &[(5, 6, 1)]).unwrap();
+        let combined = combine(Some(first), second).unwrap().unwrap();
+        assert_eq!(combined.actors, vec![1, 2, 3, 4, 5, 6]);
+        assert_eq!(combined.choices.len(), 3);
+        assert!(select_requested(Some(&runtime), &people, &[(1, 2, 1), (3, 2, 1)]).is_err());
+        assert!(
+            select_requested(Some(&runtime), &people, &[(1, 2, 99)])
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            select_requested(None, &people, &[(1, 2, 1)])
+                .unwrap()
+                .is_none()
+        );
+        let a = select_requested(Some(&runtime), &people, &[(1, 2, 1)]).unwrap();
+        let b = select_requested(Some(&runtime), &people, &[(3, 2, 1)]).unwrap();
+        assert!(combine(a, b).is_err());
+    }
 
     #[test]
     #[ignore = "performance measurement"]

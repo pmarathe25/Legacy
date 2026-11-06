@@ -1295,6 +1295,23 @@ impl<'a> Player<'a> {
         self.world
             .recover_possessions(self.current()?, deceased, good, quantity)
     }
+    pub fn take_possessions(
+        &mut self,
+        target: u64,
+        good: u32,
+        quantity: u64,
+        escalate: bool,
+    ) -> Result<game_parallel_economy::TakingOutcome, String> {
+        if !self.view()?.nearby.contains(&target) {
+            return Err("person is not present".into());
+        }
+        self.world
+            .take_possessions(self.current()?, target, good, quantity, escalate)
+    }
+    pub fn set_taking_response(&mut self, notices: bool, resist: bool) -> Result<(), String> {
+        self.world
+            .set_taking_response(self.current()?, notices, resist)
+    }
     pub fn gather(&mut self, node: u64) -> Result<bool, String> {
         if !self
             .view()?
