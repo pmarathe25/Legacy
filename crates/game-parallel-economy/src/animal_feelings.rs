@@ -27,6 +27,14 @@ pub struct Mind {
     #[serde(default)]
     pub on_handle_refused: i32,
     #[serde(default)]
+    pub on_capture_yielded: i32,
+    #[serde(default)]
+    pub on_capture_forced: i32,
+    #[serde(default)]
+    pub on_capture_resisted: i32,
+    #[serde(default)]
+    pub on_animal_released: i32,
+    #[serde(default)]
     pub opinions: Vec<Opinion>,
 }
 
@@ -42,6 +50,10 @@ pub enum Experience {
     Hunt,
     HandleAccepted,
     HandleRefused,
+    CaptureYielded,
+    CaptureForced,
+    CaptureResisted,
+    Released,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -132,6 +144,10 @@ impl AnimalFeelings {
                             Experience::Hunt => mind.on_hunt != 0,
                             Experience::HandleAccepted => mind.on_handle_accepted != 0,
                             Experience::HandleRefused => mind.on_handle_refused != 0,
+                            Experience::CaptureYielded => mind.on_capture_yielded != 0,
+                            Experience::CaptureForced => mind.on_capture_forced != 0,
+                            Experience::CaptureResisted => mind.on_capture_resisted != 0,
+                            Experience::Released => mind.on_animal_released != 0,
                         }
                 })
             })
@@ -164,6 +180,10 @@ impl AnimalFeelings {
                                 Experience::Hunt => mind.on_hunt,
                                 Experience::HandleAccepted => mind.on_handle_accepted,
                                 Experience::HandleRefused => mind.on_handle_refused,
+                                Experience::CaptureYielded => mind.on_capture_yielded,
+                                Experience::CaptureForced => mind.on_capture_forced,
+                                Experience::CaptureResisted => mind.on_capture_resisted,
+                                Experience::Released => mind.on_animal_released,
                             };
                             if delta == 0 {
                                 continue;
@@ -218,6 +238,10 @@ mod tests {
                         on_hunt: -1,
                         on_handle_accepted: 0,
                         on_handle_refused: 0,
+                        on_capture_yielded: 0,
+                        on_capture_forced: 0,
+                        on_capture_resisted: 0,
+                        on_animal_released: 0,
                         opinions: vec![],
                     })
                     .collect(),

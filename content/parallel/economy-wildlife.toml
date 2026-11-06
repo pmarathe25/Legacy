@@ -460,6 +460,11 @@ request_response = { willing = true }
 inherit_births = true
 policies = [{ person = 2, animal = 3, willing = false }]
 
+[animal_restraints]
+default_effort = 2
+capacity_per_handler = 1
+policies = [{ person = 2, animal = 3, willing = false, effort = 2 }]
+
 [fauna]
 next_id = 4
 last_tick = 0
@@ -484,6 +489,7 @@ newborn_health = 10
 hunting = { good = "raw-meat", quantity = 2, success_per_thousand = 1000 }
 newborn_social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 newborn_handling_response = { willing = false, affinity_at_least = 2, on_accept = -1, on_refuse = 0 }
+newborn_restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1 }
 
 [[fauna.animals]]
 id = 1
@@ -495,6 +501,7 @@ hunger = 1
 genome = { sex = "Female", alleles = [[300, 300], [400, 400], [500, 500], [600, 600]] }
 social_response = { feed_affinity = 2, minimum = -10, maximum = 10, capacity = 8 }
 handling_response = { willing = false, affinity_at_least = 2, on_accept = -1, on_refuse = 0 }
+restraint_response = { resistance = 1, escape_willing = true, escape_effort = 1, on_released = 1 }
 
 [[fauna.animals]]
 id = 2
@@ -514,3 +521,4 @@ health = 10
 hunger = 1
 genome = { sex = "Male", alleles = [[600, 600], [500, 500], [400, 400], [300, 300]] }
 handling_response = { willing = true, on_accept = 0, on_refuse = 0 }
+restraint_response = { yield_willingly = true, resistance = 1 }

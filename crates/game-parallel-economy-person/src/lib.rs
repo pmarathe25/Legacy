@@ -173,8 +173,18 @@ macro_rules! departure_method {
                 .epoch
                 .checked_add(1)
                 .ok_or("economic generation overflow")?;
+            let mut restraints = self.animal_restraints.clone();
+            if let (Some(owner), Some(fauna)) = (&mut restraints, &self.fauna) {
+                let available = |person| {
+                    self.confinement
+                        .as_ref()
+                        .is_none_or(|owner| !owner.held(person))
+                };
+                owner.reconcile(&people, fauna, &available, self.tick());
+            }
             self.travel = Some(travel);
             self.people = people;
+            self.animal_restraints = restraints;
             self.epoch = epoch;
             Ok(())
         }

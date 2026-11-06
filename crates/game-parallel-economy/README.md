@@ -16,6 +16,8 @@ People held in the same cell can provide direct medical care using medicine they
 
 People can independently attempt to handle a living local animal. The animal's own willingness and remembered affinity determine its response, and its configured signed reactions can change later behavior. Feeding takes precedence for an animal already selected for feeding, and handling excludes hunting that animal in the same boundary. Handling preserves the animal's identity and does not establish ownership or obedience.
 
+Live animal restraint is a separate physical interaction. An animal may yield, resist, be overpowered, or later escape; any capable local person can release it. A hold is not ownership and ends if the handler leaves, becomes incapacitated, or is separated by a barrier. The animal remains in its actual region and continues ordinary biology.
+
 Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. People can also choose to converse through a supply opening, including with strangers, acquaintances, or someone they fear. Talking through the opening is a social encounter but does not count as direct contact for the ordinary contact-based disease route; physical treatment still cannot cross the wall.
 
 The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.

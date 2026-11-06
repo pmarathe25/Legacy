@@ -66,10 +66,15 @@ pub use animal_feelings::{
     AnimalFeelings, Mind as AnimalFeelingMind, Opinion as AnimalFeelingOpinion,
 };
 pub use animal_handling::{Handling as AnimalHandling, Policy as AnimalHandlingPolicy};
+pub use game_parallel_animal_restraint::{
+    Event as AnimalRestraintEvent, EventKind as AnimalRestraintEventKind, Hold as AnimalHold,
+    Policy as AnimalCapturePolicy, Restraints as AnimalRestraints,
+};
 pub use game_parallel_fauna::handling::{
     Event as AnimalHandlingEvent, Outcome as AnimalHandlingOutcome,
     Response as AnimalHandlingResponse,
 };
+pub use game_parallel_fauna::restraint::Response as AnimalRestraintResponse;
 mod development;
 mod environment;
 mod food_search;
@@ -153,6 +158,7 @@ pub struct Economy {
     fauna: Option<Fauna>,
     animal_care: Option<AnimalCare>,
     animal_handling: Option<AnimalHandling>,
+    animal_restraints: Option<AnimalRestraints>,
     animal_feelings: Option<AnimalFeelings>,
     hunting: Option<Hunting>,
     food_search: Option<FoodSearch>,
@@ -192,6 +198,7 @@ pub struct Draft {
     gathering: Option<Gathering>,
     fauna: Option<Fauna>,
     animal_handling: Option<AnimalHandling>,
+    animal_restraints: Option<AnimalRestraints>,
     gathered: Option<bool>,
     food_search: Option<FoodSearch>,
     giving: Option<Giving>,
@@ -202,6 +209,8 @@ pub struct Draft {
     fed_animal: Option<bool>,
     hunted: Option<bool>,
     handled: Option<bool>,
+    animal_captured: Option<bool>,
+    animal_released: Option<bool>,
     hunting_births: Vec<HuntingPolicy>,
     animal_care_births: Vec<AnimalCarePolicy>,
     animal_handling_births: Vec<AnimalHandlingPolicy>,
@@ -927,6 +936,15 @@ impl Economy {
             .as_ref()
             .map_or(&[], |fauna| fauna.animals.as_slice())
     }
+    /// The physically present handler of an animal, if any; this is not ownership.
+    pub fn animal_handler(&self, animal: u64) -> Option<u64> {
+        let owner = self.animal_restraints.as_ref()?;
+        owner
+            .holds
+            .binary_search_by_key(&animal, |hold| hold.animal)
+            .ok()
+            .map(|index| owner.holds[index].handler)
+    }
     pub fn animal_species(&self) -> &[AnimalSpecies] {
         self.fauna
             .as_ref()
@@ -1065,6 +1083,62 @@ impl Economy {
         let handled = draft.handled.unwrap_or(false);
         self.commit(draft)?;
         Ok(handled)
+    }
+    /// Attempt to physically restrain a local animal; it may resist or escape later.
+    pub fn capture_animal(&mut self, person: u64, animal: u64) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::CaptureAnimal { person, animal },
+            ),
+        )?;
+        let captured = draft.animal_captured.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(captured)
+    }
+    /// Release a local animal from a physical hold, without requiring its handler's consent.
+    pub fn release_animal(&mut self, person: u64, animal: u64) -> Result<bool, String> {
+        game_parallel_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(
+                game_parallel_economy_interaction::PhysicalChoice::ReleaseAnimal { person, animal },
+            ),
+        )?;
+        let released = draft.animal_released.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(released)
+    }
+    /// Change a person's capture inclination without erasing personal pressure.
+    pub fn set_animal_capture_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .ok()
+            .is_none_or(|index| self.people[index].health == 0)
+        {
+            return Err("person must be capable".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let owner = self
+            .animal_restraints
+            .as_mut()
+            .ok_or("animal restraint is disabled")?;
+        let index = owner
+            .policies
+            .binary_search_by_key(&person, |policy| policy.person)
+            .map_err(|_| "person has no animal capture preference")?;
+        owner.policies[index].willing = willing;
+        self.epoch = epoch;
+        Ok(())
     }
     /// Change an individual's willingness without removing their personal pressure.
     pub fn set_animal_handling_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
@@ -1347,6 +1421,21 @@ impl Economy {
                 physical.tick(),
             )?;
         }
+        if let Some(restraints) = &mut state.animal_restraints {
+            restraints.normalize_and_validate(
+                &state.people,
+                state.fauna.as_ref(),
+                physical.tick(),
+            )?;
+            if restraints.holds.par_iter().any(|hold| {
+                state
+                    .confinement
+                    .as_ref()
+                    .is_some_and(|owner| owner.held(hold.handler))
+            }) {
+                return Err("an animal handler cannot be held behind a barrier".into());
+            }
+        }
         if let Some(claims) = state.dynamics.as_ref().and_then(|d| d.claims.as_ref())
             && (claims.site_claims.par_iter().any(|claim| {
                 state
@@ -1432,6 +1521,7 @@ impl Economy {
             fauna: state.fauna,
             animal_care: state.animal_care,
             animal_handling: state.animal_handling,
+            animal_restraints: state.animal_restraints,
             animal_feelings: state.animal_feelings,
             hunting: state.hunting,
             food_search: state.food_search,
@@ -1478,6 +1568,7 @@ impl Economy {
             fauna: self.fauna.clone(),
             animal_care: self.animal_care.clone(),
             animal_handling: self.animal_handling.clone(),
+            animal_restraints: self.animal_restraints.clone(),
             animal_feelings: self.animal_feelings.clone(),
             hunting: self.hunting.clone(),
             food_search: self.food_search.clone(),
@@ -2232,6 +2323,7 @@ impl Economy {
             .map_or_else(Vec::new, game_parallel_economy_work::underage);
         let age_exceptions_needed = self.giving.is_some()
             || self.animal_handling.is_some()
+            || self.animal_restraints.is_some()
             || self.medical.is_some()
             || matches!(
                 player_transfer,
@@ -2597,6 +2689,34 @@ impl Economy {
                 .map(|group| group[0])
                 .collect();
         }
+        let manual_restraint = match player_transfer {
+            Some(game_parallel_economy_interaction::PhysicalChoice::CaptureAnimal {
+                person,
+                animal,
+            }) => Some(game_parallel_animal_restraint::Manual::Capture { person, animal }),
+            Some(game_parallel_economy_interaction::PhysicalChoice::ReleaseAnimal {
+                person,
+                animal,
+            }) => Some(game_parallel_animal_restraint::Manual::Release { person, animal }),
+            _ => None,
+        };
+        let manual_restraint_target = manual_restraint.map(|choice| match choice {
+            game_parallel_animal_restraint::Manual::Capture { animal, .. }
+            | game_parallel_animal_restraint::Manual::Release { animal, .. } => animal,
+        });
+        let restraint_target: Vec<_> = manual_restraint_target.into_iter().collect();
+        if player_transfer.is_some_and(|choice| {
+            matches!(
+                choice,
+                game_parallel_economy_interaction::PhysicalChoice::CaptureAnimal { .. }
+                    | game_parallel_economy_interaction::PhysicalChoice::ReleaseAnimal { .. }
+            ) && self.physical.work().iter().any(|work| {
+                work.job.worker == choice.person()
+                    && work.phase == game_parallel_lot_runtime::Phase::Working
+            })
+        }) {
+            return Err("animal restraint requires an available person".into());
+        }
         let mut animal_care_plan = animal_care::Context {
             owner: self.animal_care.as_ref(),
             fauna: self.fauna.as_ref(),
@@ -2605,6 +2725,7 @@ impl Economy {
             animal_feelings: self.animal_feelings.as_ref(),
             view: &view,
             busy: &busy,
+            blocked_animals: &restraint_target,
             max_hunger: self.rules.max_work_hunger,
             seed: self.seed,
             tick,
@@ -2657,6 +2778,76 @@ impl Economy {
         }) {
             return Err("handling requires an available person".into());
         }
+        let has_capture_policies = self
+            .animal_restraints
+            .as_ref()
+            .is_some_and(|owner| !owner.policies.is_empty());
+        let mut restraint_blocked =
+            if self.animal_restraints.is_some() || manual_restraint.is_some() {
+                feed_targets.clone()
+            } else {
+                Vec::new()
+            };
+        restraint_blocked.extend(manual_hunt.map(|(_, animal)| animal));
+        restraint_blocked.extend(manual_handling.map(|(_, animal)| animal));
+        if restraint_blocked
+            .par_windows(2)
+            .any(|pair| pair[0] >= pair[1])
+        {
+            restraint_blocked.par_sort_unstable();
+            restraint_blocked.dedup();
+        }
+        let restraint_children = if has_capture_policies && !free_underage.is_empty() {
+            game_parallel_economy_work::exclude_sorted(&free_underage, &medical_plan.actors)
+        } else {
+            Vec::new()
+        };
+        let restraint_busy = (!restraint_children.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &restraint_children));
+        let restraint_affinity = |person, animal| {
+            self.animal_feelings
+                .as_ref()
+                .and_then(|feelings| feelings.affinity(person, animal))
+                .unwrap_or(0)
+        };
+        let restraint_plan = game_parallel_animal_restraint::Context {
+            owner: self.animal_restraints.as_ref(),
+            fauna: self.fauna.as_ref(),
+            people: &self.people,
+            opinions: self.opinions.as_ref(),
+            affinity: self
+                .animal_feelings
+                .as_ref()
+                .map(|_| &restraint_affinity as &(dyn Fn(u64, u64) -> i32 + Sync)),
+            busy: restraint_busy.as_deref().unwrap_or(&busy),
+            blocked: &restraint_blocked,
+            max_hunger: self.rules.max_work_hunger,
+            seed: self.seed,
+            tick,
+            manual: manual_restraint,
+        }
+        .prepare()?;
+        if !restraint_plan.actors.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, restraint_plan.actors.iter().copied());
+        }
+        let animal_released = manual_restraint.map(|choice| match choice {
+            game_parallel_animal_restraint::Manual::Release { person, animal } => {
+                restraint_plan.state.as_ref().is_some_and(|owner| {
+                    owner.events.iter().any(|event| {
+                        event.animal == animal
+                            && event.actor == Some(person)
+                            && event.kind == AnimalRestraintEventKind::Released
+                    })
+                })
+            }
+            _ => false,
+        });
+        let mut next_animal_restraints = restraint_plan.state;
+        feed_targets.par_extend(restraint_plan.reserved.par_iter().copied());
+        if feed_targets.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            feed_targets.par_sort_unstable();
+            feed_targets.dedup();
+        }
         let has_handling_policies = self
             .animal_handling
             .as_ref()
@@ -2672,7 +2863,12 @@ impl Economy {
             handling_blocked.dedup();
         }
         let handling_children = if has_handling_policies && !free_underage.is_empty() {
-            game_parallel_economy_work::exclude_sorted(&free_underage, &medical_plan.actors)
+            let mut occupied = medical_plan.actors.clone();
+            game_parallel_economy_work::reserve(
+                &mut occupied,
+                restraint_plan.actors.iter().copied(),
+            );
+            game_parallel_economy_work::exclude_sorted(&free_underage, &occupied)
         } else {
             Vec::new()
         };
@@ -3789,6 +3985,35 @@ impl Economy {
                     kind,
                 })
             }));
+            experiences.par_extend(
+                next_animal_restraints
+                    .as_ref()
+                    .map_or(&[][..], |owner| owner.events.as_slice())
+                    .par_iter()
+                    .filter_map(|event| {
+                        let person = event.actor?;
+                        let kind = match event.kind {
+                            AnimalRestraintEventKind::Yielded => {
+                                animal_feelings::Experience::CaptureYielded
+                            }
+                            AnimalRestraintEventKind::Forced => {
+                                animal_feelings::Experience::CaptureForced
+                            }
+                            AnimalRestraintEventKind::Resisted => {
+                                animal_feelings::Experience::CaptureResisted
+                            }
+                            AnimalRestraintEventKind::Released => {
+                                animal_feelings::Experience::Released
+                            }
+                            _ => return None,
+                        };
+                        Some(animal_feelings::Event {
+                            person,
+                            animal: event.animal,
+                            kind,
+                        })
+                    }),
+            );
             let relevant = owner.relevant(experiences);
             (!relevant.is_empty()).then(|| owner.advance(&relevant))
         });
@@ -3839,6 +4064,10 @@ impl Economy {
                 )
                 .map_err(str::to_owned)?;
             game_parallel_fauna::handling::apply(&mut draft.fauna, &handling_plan.events);
+            game_parallel_fauna::restraint::apply_reactions(
+                &mut draft.fauna,
+                &restraint_plan.reactions,
+            );
             if let Some(gathering) = &mut gathering {
                 gathering
                     .nodes
@@ -3895,6 +4124,7 @@ impl Economy {
             occupied_held.par_extend(giving_plan.actors.par_iter().copied());
             occupied_held.par_extend(medical_plan.actors.par_iter().copied());
             occupied_held.par_extend(handling_plan.actors.par_iter().copied());
+            occupied_held.par_extend(restraint_plan.actors.par_iter().copied());
             occupied_held.par_sort_unstable();
         }
         let meeting_held = if occupied_held.is_empty() {
@@ -3910,6 +4140,10 @@ impl Economy {
             game_parallel_economy_work::reserve(
                 &mut occupied,
                 handling_plan.actors.iter().copied(),
+            );
+            game_parallel_economy_work::reserve(
+                &mut occupied,
+                restraint_plan.actors.iter().copied(),
             );
             let mut available =
                 game_parallel_economy_work::exclude_sorted(&free_underage, &occupied);
@@ -4661,6 +4895,34 @@ impl Economy {
                 owner.events.par_sort_unstable_by_key(|event| event.person);
             }
         }
+        if let (Some(owner), Some(fauna)) = (&mut next_animal_restraints, &fauna) {
+            let available = |person| {
+                next_confinement
+                    .as_ref()
+                    .is_none_or(|confinement| !confinement.held(person))
+            };
+            owner.reconcile(&person.people, fauna, &available, tick);
+        }
+        let animal_captured = manual_restraint.map(|choice| match choice {
+            game_parallel_animal_restraint::Manual::Capture { person, animal } => {
+                next_animal_restraints.as_ref().is_some_and(|owner| {
+                    owner.events.iter().any(|event| {
+                        event.animal == animal
+                            && event.actor == Some(person)
+                            && matches!(
+                                event.kind,
+                                AnimalRestraintEventKind::Yielded
+                                    | AnimalRestraintEventKind::Forced
+                            )
+                    }) && owner
+                        .holds
+                        .binary_search_by_key(&animal, |hold| hold.animal)
+                        .ok()
+                        .is_some_and(|index| owner.holds[index].handler == person)
+                })
+            }
+            _ => false,
+        });
         #[cfg(feature = "profile")]
         drop(profile_phase);
         Ok(Draft {
@@ -4693,6 +4955,7 @@ impl Economy {
             gathering,
             fauna,
             animal_handling: next_animal_handling,
+            animal_restraints: next_animal_restraints,
             gathered,
             food_search,
             giving: next_giving,
@@ -4703,6 +4966,8 @@ impl Economy {
             fed_animal,
             hunted,
             handled,
+            animal_captured,
+            animal_released,
             hunting_births,
             animal_care_births,
             animal_handling_births,
@@ -4755,6 +5020,7 @@ impl Economy {
         self.gathering = draft.gathering;
         self.fauna = draft.fauna;
         self.animal_handling = draft.animal_handling;
+        self.animal_restraints = draft.animal_restraints;
         if let Some(feelings) = draft.animal_feelings_update {
             self.animal_feelings = Some(feelings);
         }

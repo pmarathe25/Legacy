@@ -77,6 +77,8 @@ pub struct State {
     #[serde(default)]
     pub animal_handling: Option<crate::animal_handling::Handling>,
     #[serde(default)]
+    pub animal_restraints: Option<game_parallel_animal_restraint::Restraints>,
+    #[serde(default)]
     pub animal_feelings: Option<crate::animal_feelings::AnimalFeelings>,
     #[serde(default)]
     pub hunting: Option<crate::hunting::Hunting>,

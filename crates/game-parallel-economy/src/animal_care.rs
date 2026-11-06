@@ -196,6 +196,7 @@ pub struct Context<'a> {
     pub animal_feelings: Option<&'a crate::AnimalFeelings>,
     pub view: &'a View,
     pub busy: &'a [u64],
+    pub blocked_animals: &'a [u64],
     pub max_hunger: u32,
     pub seed: u64,
     pub tick: u64,
@@ -278,6 +279,7 @@ impl Context<'_> {
                     && animal.health > 0
                     && actor.region == Some(animal.region)
                     && self.busy.binary_search(&actor.id).is_err()
+                    && self.blocked_animals.binary_search(&animal.id).is_err()
                     && (pressured
                         || (p.willing
                             && animal.health <= p.health_at_most

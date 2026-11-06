@@ -1,6 +1,7 @@
 //! Independent animals, local grazing and inherited life histories.
 pub mod content;
 pub mod handling;
+pub mod restraint;
 use game_parallel_genetics::{Genome, Sex, inherit, random};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -40,6 +41,8 @@ pub struct Species {
     pub newborn_social_response: Option<SocialResponse>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub newborn_handling_response: Option<handling::Response>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub newborn_restraint_response: Option<restraint::Response>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +98,8 @@ pub struct Animal {
     /// This animal's independent willingness and reactions to handling.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub handling_response: Option<handling::Response>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restraint_response: Option<restraint::Response>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub opinions: Vec<AnimalOpinion>,
 }
@@ -671,6 +676,7 @@ impl Fauna {
                     parents: Some([mother.id, pregnancy.father]),
                     social_response: s.newborn_social_response.clone(),
                     handling_response: s.newborn_handling_response.clone(),
+                    restraint_response: s.newborn_restraint_response.clone(),
                     opinions: Vec::new(),
                 })
             })

@@ -10,6 +10,20 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 animal.parse().map_err(|_| "invalid animal")?,
             )?
         ),
+        ["capture-animal", person, animal] => println!(
+            "captured={}",
+            world.capture_animal(
+                person.parse().map_err(|_| "invalid person")?,
+                animal.parse().map_err(|_| "invalid animal")?
+            )?
+        ),
+        ["release-animal", person, animal] => println!(
+            "released={}",
+            world.release_animal(
+                person.parse().map_err(|_| "invalid person")?,
+                animal.parse().map_err(|_| "invalid animal")?
+            )?
+        ),
         ["eat", person, good] => println!(
             "eaten={}",
             world.eat(

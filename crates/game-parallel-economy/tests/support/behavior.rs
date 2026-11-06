@@ -221,6 +221,7 @@ fn fixture() -> State {
         fauna: None,
         animal_care: None,
         animal_handling: None,
+        animal_restraints: None,
         animal_feelings: None,
         hunting: None,
         food_search: None,
@@ -266,6 +267,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             hunting: None,
             newborn_social_response: None,
             newborn_handling_response: None,
+            newborn_restraint_response: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -281,6 +283,7 @@ fn autonomous_animal_care_uses_real_food_and_personal_motivation() {
             pregnancy: None,
             parents: None,
             handling_response: None,
+            restraint_response: None,
             social_response: Some(game_parallel_fauna::SocialResponse {
                 feed_affinity: 2,
                 minimum: -10,
@@ -495,6 +498,10 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 on_hunt: 4,
                 on_handle_accepted: 0,
                 on_handle_refused: 0,
+                on_capture_yielded: 0,
+                on_capture_forced: 0,
+                on_capture_resisted: 0,
+                on_animal_released: 0,
                 opinions: vec![AnimalFeelingOpinion {
                     animal: 1,
                     affinity: -2,
@@ -509,6 +516,10 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 on_hunt: 9,
                 on_handle_accepted: 0,
                 on_handle_refused: 0,
+                on_capture_yielded: 0,
+                on_capture_forced: 0,
+                on_capture_resisted: 0,
+                on_animal_released: 0,
                 opinions: vec![],
             },
             AnimalFeelingMind {
@@ -520,6 +531,10 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 on_hunt: -4,
                 on_handle_accepted: 0,
                 on_handle_refused: 0,
+                on_capture_yielded: 0,
+                on_capture_forced: 0,
+                on_capture_resisted: 0,
+                on_animal_released: 0,
                 opinions: vec![],
             },
         ],
@@ -574,6 +589,10 @@ fn a_persons_affinity_can_influence_their_hunting_choice_in_either_direction() {
             on_hunt: 0,
             on_handle_accepted: 0,
             on_handle_refused: 0,
+            on_capture_yielded: 0,
+            on_capture_forced: 0,
+            on_capture_resisted: 0,
+            on_animal_released: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: 3,
@@ -622,6 +641,10 @@ fn personal_animal_memories_are_bounded_and_do_not_invent_other_feelings() {
             on_hunt: -2,
             on_handle_accepted: 0,
             on_handle_refused: 0,
+            on_capture_yielded: 0,
+            on_capture_forced: 0,
+            on_capture_resisted: 0,
+            on_animal_released: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: -1,
@@ -937,6 +960,7 @@ fn hunting_fixture() -> State {
             }),
             newborn_social_response: None,
             newborn_handling_response: None,
+            newborn_restraint_response: None,
         }],
         animals: vec![
             Animal {
@@ -955,6 +979,7 @@ fn hunting_fixture() -> State {
                 parents: None,
                 social_response: None,
                 handling_response: None,
+                restraint_response: None,
                 opinions: vec![],
             },
             Animal {
@@ -969,6 +994,7 @@ fn hunting_fixture() -> State {
                 parents: None,
                 social_response: None,
                 handling_response: None,
+                restraint_response: None,
                 opinions: vec![],
             },
         ],
@@ -1027,6 +1053,447 @@ fn handling_fixture() -> State {
     state
 }
 
+fn animal_restraint_fixture() -> State {
+    let mut state = handling_fixture();
+    state.people[0].controlled = true;
+    state.animal_restraints = Some(AnimalRestraints {
+        default_effort: 3,
+        capacity_per_handler: 1,
+        policies: vec![],
+        holds: vec![],
+        events: vec![],
+    });
+    state.fauna.as_mut().unwrap().animals[0].restraint_response = Some(AnimalRestraintResponse {
+        yield_willingly: false,
+        yield_affinity_at_least: None,
+        yield_affinity_at_most: None,
+        resistance: 2,
+        escape_willing: false,
+        escape_effort: 0,
+        on_yielded: 0,
+        on_forced: 2,
+        on_resisted: 0,
+        on_released: -1,
+    });
+    state
+}
+
+#[test]
+fn a_person_can_physically_capture_an_unwilling_animal_and_another_can_release_it() {
+    let mut initial = animal_restraint_fixture();
+    initial.people[1].controlled = true;
+    initial.animal_feelings = Some(AnimalFeelings {
+        minds: vec![AnimalFeelingMind {
+            person: 1,
+            minimum: -10,
+            maximum: 10,
+            capacity: 2,
+            on_feed: 0,
+            on_hunt: 0,
+            on_handle_accepted: 0,
+            on_handle_refused: 0,
+            on_capture_yielded: 0,
+            on_capture_forced: -3,
+            on_capture_resisted: 0,
+            on_animal_released: 0,
+            opinions: vec![],
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.capture_animal(1, 1).unwrap());
+                let captured = world.snapshot();
+                assert_eq!(
+                    captured.animal_restraints.as_ref().unwrap().holds[0].handler,
+                    1
+                );
+                assert_eq!(
+                    captured.animal_restraints.as_ref().unwrap().events[0].kind,
+                    AnimalRestraintEventKind::Forced
+                );
+                assert_eq!(
+                    captured.fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
+                    2
+                );
+                assert_eq!(
+                    captured.animal_feelings.as_ref().unwrap().minds[0].opinions[0].affinity,
+                    -3
+                );
+                assert!(captured.fauna.as_ref().unwrap().animals[0].health > 0);
+                assert_eq!(captured.fauna.as_ref().unwrap().next_id, 4);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&captured).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.release_animal(2, 1).unwrap());
+                assert!(restored.release_animal(2, 1).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert!(world.snapshot().animal_restraints.unwrap().holds.is_empty());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn an_animal_can_resist_then_yield_and_later_escape() {
+    let mut initial = animal_restraint_fixture();
+    initial.animal_restraints.as_mut().unwrap().default_effort = 2;
+    let response = initial.fauna.as_mut().unwrap().animals[0]
+        .restraint_response
+        .as_mut()
+        .unwrap();
+    response.resistance = 3;
+    response.yield_affinity_at_least = Some(2);
+    response.on_resisted = 2;
+    response.on_yielded = -3;
+    response.escape_willing = true;
+    response.escape_effort = 1;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(!world.capture_animal(1, 1).unwrap());
+    assert_eq!(
+        world.snapshot().fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
+        2
+    );
+    assert!(world.capture_animal(1, 1).unwrap());
+    assert_eq!(
+        world.snapshot().fauna.as_ref().unwrap().animals[0].opinions[0].affinity,
+        -1
+    );
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().animal_restraints.as_ref().unwrap().holds[0].integrity,
+        1
+    );
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.animal_restraints.as_ref().unwrap().holds.is_empty());
+    assert!(
+        state
+            .animal_restraints
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::Escaped)
+    );
+    assert!(state.fauna.unwrap().animals[0].health > 0);
+}
+
+#[test]
+fn a_departing_handler_leaves_the_animal_at_its_real_location() {
+    let mut initial = animal_restraint_fixture();
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Stock { region: 2, good: 2 }, 10, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    initial.travel = Some(Travel {
+        routes: vec![Route {
+            source: 1,
+            destination: 2,
+            ticks: 3,
+        }],
+        journeys: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    let before = world.snapshot();
+    assert!(
+        world
+            .depart(&[Departure {
+                person: 1,
+                destination: 99
+            }])
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    world
+        .depart(&[Departure {
+            person: 1,
+            destination: 2,
+        }])
+        .unwrap();
+    let state = world.snapshot();
+    assert!(state.animal_restraints.as_ref().unwrap().holds.is_empty());
+    assert!(
+        state
+            .animal_restraints
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::LetGo)
+    );
+    assert_eq!(state.fauna.as_ref().unwrap().animals[0].region, 1);
+    assert_eq!(state.people[0].region, None);
+    assert_eq!(Economy::compile(state.clone()).unwrap().snapshot(), state);
+}
+
+#[test]
+fn confining_a_handler_separates_them_from_the_animal() {
+    let mut initial = animal_restraint_fixture();
+    initial.people[1].controlled = true;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: vec![],
+        escape: vec![],
+        capture_responses: vec![ConfinementCaptureResponse {
+            person: 1,
+            yield_willingly: true,
+            pressure_threshold: None,
+        }],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    let mut state = world.snapshot();
+    state.people[0].controlled = false;
+    let mut world = Economy::compile(state).unwrap();
+    assert!(world.confine_person(2, 1, 1).unwrap());
+    let state = world.snapshot();
+    assert!(state.confinement.as_ref().unwrap().held(1));
+    assert!(state.animal_restraints.as_ref().unwrap().holds.is_empty());
+    assert!(
+        state
+            .animal_restraints
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::LetGo)
+    );
+    assert_eq!(state.fauna.as_ref().unwrap().animals[0].region, 1);
+    assert_eq!(Economy::compile(state.clone()).unwrap().snapshot(), state);
+}
+
+#[test]
+fn a_handler_who_dies_cannot_keep_a_physical_hold() {
+    let mut initial = animal_restraint_fixture();
+    initial.pending_food.push(FoodEffect {
+        person: 1,
+        at: 1,
+        health: -100,
+        nutrients: [0; 6],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(!world.capture_animal(1, 1).unwrap());
+    let state = world.snapshot();
+    assert_eq!(state.people[0].health, 0);
+    assert!(state.animal_restraints.as_ref().unwrap().holds.is_empty());
+    assert!(
+        state
+            .animal_restraints
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::LetGo)
+    );
+    assert!(state.fauna.unwrap().animals[0].health > 0);
+}
+
+#[test]
+fn attempting_to_recapture_an_already_held_animal_reports_no_capture() {
+    let mut world = Economy::compile(animal_restraint_fixture()).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    assert!(!world.capture_animal(1, 1).unwrap());
+    let state = world.snapshot();
+    assert_eq!(state.animal_restraints.as_ref().unwrap().holds.len(), 1);
+    assert!(
+        state
+            .animal_restraints
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::Unavailable)
+    );
+}
+
+#[test]
+fn a_persons_own_animal_affinity_can_shape_capture_choices() {
+    let mut initial = animal_restraint_fixture();
+    initial
+        .animal_restraints
+        .as_mut()
+        .unwrap()
+        .policies
+        .push(AnimalCapturePolicy {
+            person: 4,
+            animal: Some(1),
+            willing: true,
+            affinity_at_least: None,
+            affinity_at_most: Some(-2),
+            effort: 3,
+            pressured_by: None,
+            pressure_threshold: None,
+        });
+    initial.animal_feelings = Some(AnimalFeelings {
+        minds: vec![AnimalFeelingMind {
+            person: 4,
+            minimum: -10,
+            maximum: 10,
+            capacity: 2,
+            on_feed: 0,
+            on_hunt: 0,
+            on_handle_accepted: 0,
+            on_handle_refused: 0,
+            on_capture_yielded: 0,
+            on_capture_forced: 0,
+            on_capture_resisted: 0,
+            on_animal_released: 0,
+            opinions: vec![AnimalFeelingOpinion {
+                animal: 1,
+                affinity: -3,
+            }],
+        }],
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().animal_restraints.unwrap().holds[0].handler,
+        4
+    );
+    initial.animal_feelings.as_mut().unwrap().minds[0].opinions[0].affinity = 3;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().animal_restraints.unwrap().holds.is_empty());
+}
+
+#[test]
+fn animal_capture_arbitrates_with_feeding_handling_and_hunting() {
+    let mut initial = animal_restraint_fixture();
+    initial.animal_care = Some(AnimalCare {
+        inherit_births: false,
+        policies: vec![AnimalCarePolicy {
+            person: 4,
+            animal: Some(1),
+            good: 1,
+            quantity: 1,
+            willing: true,
+            health_at_most: 10,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    initial
+        .animal_restraints
+        .as_mut()
+        .unwrap()
+        .policies
+        .push(AnimalCapturePolicy {
+            person: 4,
+            animal: Some(1),
+            willing: true,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            effort: 3,
+            pressured_by: None,
+            pressure_threshold: None,
+        });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    let state = world.snapshot();
+    assert_eq!(
+        state.animal_restraints.as_ref().unwrap().holds[0].handler,
+        1
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(4))
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(!world.capture_animal(1, 2).unwrap());
+    assert!(
+        world
+            .snapshot()
+            .animal_restraints
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::Unavailable)
+    );
+
+    initial.animal_care = None;
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    assert!(world.feed_animal(1, 1, 1, 1).unwrap());
+    assert!(world.snapshot().animal_restraints.unwrap().holds.is_empty());
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.hunt_animal(1, 1).unwrap());
+    let state = world.snapshot();
+    assert!(state.animal_restraints.unwrap().holds.is_empty());
+    assert_eq!(state.fauna.unwrap().animals[0].health, 0);
+}
+
+#[test]
+fn a_person_can_attempt_animal_capture_from_fear_without_willingness() {
+    let mut initial = animal_restraint_fixture();
+    initial
+        .animal_restraints
+        .as_mut()
+        .unwrap()
+        .policies
+        .push(AnimalCapturePolicy {
+            person: 4,
+            animal: Some(1),
+            willing: false,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            effort: 3,
+            pressured_by: Some(1),
+            pressure_threshold: Some(3),
+        });
+    let mut unpressured = initial.clone();
+    unpressured.opinions.as_mut().unwrap().records.clear();
+    let mut world = Economy::compile(unpressured).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().animal_restraints.unwrap().holds.is_empty());
+    let mut world = Economy::compile(initial).unwrap();
+    let stale = world.prepare().unwrap();
+    world.set_animal_capture_choice(4, false).unwrap();
+    assert!(world.commit(stale).is_err());
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.animal_restraints.unwrap().holds[0].handler, 4);
+}
+
 #[test]
 fn an_animal_can_learn_to_accept_and_later_refuse_handling() {
     let mut initial = handling_fixture();
@@ -1041,6 +1508,10 @@ fn an_animal_can_learn_to_accept_and_later_refuse_handling() {
             on_hunt: 0,
             on_handle_accepted: -4,
             on_handle_refused: 2,
+            on_capture_yielded: 0,
+            on_capture_forced: 0,
+            on_capture_resisted: 0,
+            on_animal_released: 0,
             opinions: vec![],
         }],
     });
@@ -1353,6 +1824,118 @@ fn concentrated_animal_handling_benchmark() {
                 let elapsed = now.elapsed().as_secs_f64();
                 assert_eq!(
                     world.snapshot().animal_handling.unwrap().events.len(),
+                    if shared { 1 } else { count as usize }
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} shared={shared} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+fn animal_capture_workload(count: u64, shared: bool) -> State {
+    let mut state = handling_workload(count, shared);
+    state.animal_handling = None;
+    for animal in &mut state.fauna.as_mut().unwrap().animals {
+        animal.restraint_response = Some(AnimalRestraintResponse {
+            yield_willingly: true,
+            yield_affinity_at_least: None,
+            yield_affinity_at_most: None,
+            resistance: 1,
+            escape_willing: false,
+            escape_effort: 0,
+            on_yielded: 0,
+            on_forced: 0,
+            on_resisted: 0,
+            on_released: 0,
+        });
+    }
+    state.animal_restraints = Some(AnimalRestraints {
+        default_effort: 1,
+        capacity_per_handler: 1,
+        policies: (1..=count)
+            .map(|person| AnimalCapturePolicy {
+                person,
+                animal: Some(if shared { 1 } else { person }),
+                willing: true,
+                affinity_at_least: None,
+                affinity_at_most: None,
+                effort: 1,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+        holds: vec![],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn concentrated_and_independent_animal_captures_are_worker_deterministic() {
+    for shared in [false, true] {
+        let count = 4096;
+        let initial = animal_capture_workload(count, shared);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(
+                        state.animal_restraints.as_ref().unwrap().holds.len(),
+                        if shared { 1 } else { count as usize }
+                    );
+                    assert!(
+                        state
+                            .fauna
+                            .as_ref()
+                            .unwrap()
+                            .animals
+                            .iter()
+                            .all(|animal| animal.health > 0)
+                    );
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+#[ignore = "manual concentrated animal capture benchmark"]
+fn concentrated_animal_capture_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let shared = std::env::var_os("LEGACY_SHARED").is_some();
+    let initial = animal_capture_workload(count, shared);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let now = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = now.elapsed().as_secs_f64();
+                assert_eq!(
+                    world.snapshot().animal_restraints.unwrap().holds.len(),
                     if shared { 1 } else { count as usize }
                 );
                 if round > 0 {
@@ -21000,6 +21583,7 @@ fn concentrated_animal_care_benchmark() {
             hunting: None,
             newborn_social_response: None,
             newborn_handling_response: None,
+            newborn_restraint_response: None,
         }],
         animals: vec![Animal {
             id: 1,
@@ -21015,6 +21599,7 @@ fn concentrated_animal_care_benchmark() {
             pregnancy: None,
             parents: None,
             handling_response: None,
+            restraint_response: None,
             social_response: social.then_some(game_parallel_fauna::SocialResponse {
                 feed_affinity: 1,
                 minimum: -10,
@@ -21053,6 +21638,10 @@ fn concentrated_animal_care_benchmark() {
                     on_hunt: 0,
                     on_handle_accepted: 0,
                     on_handle_refused: 0,
+                    on_capture_yielded: 0,
+                    on_capture_forced: 0,
+                    on_capture_resisted: 0,
+                    on_animal_released: 0,
                     opinions: vec![],
                 })
                 .collect(),
@@ -21223,6 +21812,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
             hunting: None,
             newborn_social_response: None,
             newborn_handling_response: None,
+            newborn_restraint_response: None,
         }],
         animals: (1..=2)
             .map(|id| Animal {
@@ -21240,6 +21830,7 @@ fn people_and_wildlife_share_a_finite_physical_resource_atomically() {
                 parents: None,
                 social_response: None,
                 handling_response: None,
+                restraint_response: None,
                 opinions: vec![],
             })
             .collect(),

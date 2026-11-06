@@ -35,6 +35,7 @@ fn species() -> Species {
         hunting: None,
         newborn_social_response: None,
         newborn_handling_response: None,
+        newborn_restraint_response: None,
     }
 }
 fn animal(id: u64, sex: Sex, allele: u16) -> Animal {
@@ -50,6 +51,7 @@ fn animal(id: u64, sex: Sex, allele: u16) -> Animal {
         parents: None,
         social_response: None,
         handling_response: None,
+        restraint_response: None,
         opinions: vec![],
     }
 }

@@ -2811,6 +2811,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "game-parallel-animal-restraint"
+version = "0.2.0"
+dependencies = [
+ "game-parallel-economy-person",
+ "game-parallel-fauna",
+ "game-parallel-genetics",
+ "game-parallel-opinions",
+ "rayon",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "game-parallel-autonomy"
 version = "0.2.0"
 dependencies = [
@@ -3223,6 +3236,7 @@ version = "0.2.0"
 dependencies = [
  "game-diagnostics",
  "game-parallel-agreements",
+ "game-parallel-animal-restraint",
  "game-parallel-autowork",
  "game-parallel-conflict",
  "game-parallel-dependent-care",

@@ -78,6 +78,8 @@ pub struct AnimalView {
     pub id: u64,
     pub species: u32,
     pub health: u32,
+    /// A visible physical hold, not an ownership claim.
+    pub held_by: Option<u64>,
     /// This person's own feeling, when they have a configured animal mind.
     pub affinity: Option<i32>,
 }
@@ -511,6 +513,7 @@ impl<'a> Player<'a> {
                         id: animal.id,
                         species: animal.species,
                         health: animal.health,
+                        held_by: self.world.animal_handler(animal.id),
                         affinity: current
                             .and_then(|person| self.world.animal_affinity(person, animal.id)),
                     })
@@ -1195,6 +1198,28 @@ impl<'a> Player<'a> {
             return Err("animal is not present".into());
         }
         self.world.handle_animal(self.current()?, animal)
+    }
+    pub fn capture_animal(&mut self, animal: u64) -> Result<bool, String> {
+        if !self
+            .view()?
+            .animals
+            .iter()
+            .any(|row| row.id == animal && row.health > 0)
+        {
+            return Err("animal is not present".into());
+        }
+        self.world.capture_animal(self.current()?, animal)
+    }
+    pub fn release_animal(&mut self, animal: u64) -> Result<bool, String> {
+        if !self
+            .view()?
+            .animals
+            .iter()
+            .any(|row| row.id == animal && row.health > 0)
+        {
+            return Err("animal is not present".into());
+        }
+        self.world.release_animal(self.current()?, animal)
     }
     pub fn rest(&mut self) -> Result<(), String> {
         self.world.rest(self.current()?)

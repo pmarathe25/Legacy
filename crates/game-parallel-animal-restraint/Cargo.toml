@@ -1,0 +1,16 @@
+[package]
+name = "game-parallel-animal-restraint"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-fauna = { path = "../game-parallel-fauna" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
