@@ -1192,8 +1192,14 @@ impl Economy {
             .ok_or("economic generation overflow")?;
         let mut owner = self.taking.clone().unwrap_or_default();
         let witnesses = owner.witnesses_mut();
+        let remembered = witnesses
+            .iter()
+            .find(|row| (row.person, row.actor) == (person, actor))
+            .and_then(|row| row.last_seen);
         witnesses.retain(|row| (row.person, row.actor) != (person, actor));
-        if let Some(rule) = rule {
+        if let Some(mut rule) = rule {
+            // Preference changes cannot create or rewrite an observation.
+            rule.last_seen = remembered;
             witnesses.push(rule);
         }
         witnesses.par_sort_unstable_by_key(|row| (row.person, row.actor));
@@ -5135,39 +5141,43 @@ impl Economy {
         }
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
+        let mut witnessed_changes = Vec::new();
+        if let Some(owner) = &mut next_taking
+            && !owner.witnesses.is_empty()
+            && !owner.events.is_empty()
+        {
+            let locations = Colocation::new(self.travel.as_ref());
+            let can_observe = |observer, actor| {
+                let find = |id| {
+                    self.people
+                        .binary_search_by_key(&id, |p| p.id)
+                        .ok()
+                        .map(|index| &self.people[index])
+                };
+                find(observer)
+                    .zip(find(actor))
+                    .is_some_and(|(observer, actor)| {
+                        observer.health > 0
+                            && actor.health > 0
+                            && locations
+                                .region((observer.id, observer.region), (actor.id, actor.region))
+                                .is_some()
+                            && self
+                                .confinement
+                                .as_ref()
+                                .is_none_or(|c| c.can_touch(observer.id, actor.id))
+                            && next_confinement
+                                .as_ref()
+                                .is_none_or(|c| c.can_touch(observer.id, actor.id))
+                    })
+            };
+            let events = std::mem::take(&mut owner.events);
+            witnessed_changes = owner.observe_witnesses(&events, &can_observe);
+            owner.events = events;
+        }
         if let (Some(opinions), Some(owner)) = (&mut next_opinions, &next_taking) {
             let mut changes = owner.personal_changes(&owner.events);
-            if !owner.witnesses.is_empty() && !owner.events.is_empty() {
-                let locations = Colocation::new(self.travel.as_ref());
-                let can_observe = |observer, actor| {
-                    let find = |id| {
-                        self.people
-                            .binary_search_by_key(&id, |p| p.id)
-                            .ok()
-                            .map(|index| &self.people[index])
-                    };
-                    find(observer)
-                        .zip(find(actor))
-                        .is_some_and(|(observer, actor)| {
-                            observer.health > 0
-                                && actor.health > 0
-                                && locations
-                                    .region(
-                                        (observer.id, observer.region),
-                                        (actor.id, actor.region),
-                                    )
-                                    .is_some()
-                                && self
-                                    .confinement
-                                    .as_ref()
-                                    .is_none_or(|c| c.can_touch(observer.id, actor.id))
-                                && next_confinement
-                                    .as_ref()
-                                    .is_none_or(|c| c.can_touch(observer.id, actor.id))
-                        })
-                };
-                changes.par_extend(owner.witness_changes(&owner.events, &can_observe));
-            }
+            changes.par_extend(witnessed_changes);
             opinions.apply_personal_changes(&changes, tick);
             if opinions.tracks_opposed_action_reactions() {
                 use game_parallel_opinions::{

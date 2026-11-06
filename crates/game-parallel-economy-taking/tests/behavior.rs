@@ -469,6 +469,7 @@ fn witnesses_require_attention_and_visibility_and_choose_their_own_reaction() {
             }),
             ..Default::default()
         },
+        last_seen: None,
     };
     let mut owner = Taking {
         witnesses: vec![witness.clone()].into(),
@@ -507,6 +508,23 @@ fn witnesses_require_attention_and_visibility_and_choose_their_own_reaction() {
     assert_eq!(
         (changes[1].observer, changes[1].target, changes[1].affinity),
         (3, 2, -3)
+    );
+    owner.observe_witnesses(std::slice::from_ref(&event), &|_, _| false);
+    assert!(owner.witnesses[0].last_seen.is_none());
+    assert_eq!(
+        owner.observe_witnesses(std::slice::from_ref(&event), &|_, _| true),
+        changes
+    );
+    let seen = owner.witnesses[0].last_seen.unwrap();
+    assert_eq!(
+        (
+            seen.tick,
+            seen.target,
+            seen.good,
+            seen.quantity,
+            seen.outcome
+        ),
+        (1, 2, 1, 1, Outcome::Transferred)
     );
     owner.witnesses_mut()[0].notices = false;
     assert!(

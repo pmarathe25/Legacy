@@ -7,7 +7,7 @@ use game_parallel_lot_runtime::Events;
 use game_parallel_lots::{Movement, Place, Transaction};
 use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
-pub use reactions::{Interpretation, Reaction, Witness};
+pub use reactions::{Interpretation, ObservedTaking, Reaction, Witness};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 
@@ -140,6 +140,14 @@ impl Taking {
                     || w.person == w.actor
                     || w.target.is_some_and(|target| {
                         target == w.person || target == w.actor || !people.contains(&target)
+                    })
+                    || w.last_seen.is_some_and(|seen| {
+                        seen.tick > now
+                            || seen.target == w.person
+                            || seen.target == w.actor
+                            || !people.contains(&seen.target)
+                            || !goods.contains(&seen.good)
+                            || seen.quantity == 0
                     })
             })
             || self.reactions.par_iter().any(|p| {

@@ -6,4 +6,6 @@ Policies and responses are data, not roles or institutions. An unsuccessful atte
 
 Optional `[[taking.witnesses]]` entries describe a person's attention to a particular actor, an optional target filter, and their separate `toward_actor` and `toward_target` interpretations for each outcome. A witness must notice and be physically co-located and accessible; their reaction may be positive, negative, or absent regardless of the participants' views. These observations do not imply legal authority or automatically obligate anyone.
 
+Each witness retains their most recent directly noticed taking by that actor. The observation belongs to that person, persists across saves, and is recorded even when relationship tracking is disabled. Changing attention cannot fabricate or rewrite it.
+
 `taking_selection_benchmark` exercises independent attempts; set `LEGACY_SHARED` to make all attempts target one person and `LEGACY_WORKERS` or `LEGACY_PEOPLE` to vary execution. It measures proposal selection, not the complete world boundary.

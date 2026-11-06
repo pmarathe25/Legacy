@@ -21258,6 +21258,7 @@ fn nearby_witnesses_interpret_a_taking_independently() {
                 notices: true,
                 toward_actor: interpretation(3),
                 toward_target: interpretation(-2),
+                last_seen: None,
             },
             Witness {
                 person: 3,
@@ -21266,6 +21267,7 @@ fn nearby_witnesses_interpret_a_taking_independently() {
                 notices: true,
                 toward_actor: interpretation(-4),
                 toward_target: TakingInterpretation::default(),
+                last_seen: None,
             },
         ]
         .into(),
@@ -21295,6 +21297,28 @@ fn nearby_witnesses_interpret_a_taking_independently() {
                 );
                 let state = world.snapshot();
                 let index = state.opinions.as_ref().unwrap().index();
+                assert_eq!(
+                    world
+                        .taking_witness(2, 1)
+                        .unwrap()
+                        .last_seen
+                        .unwrap()
+                        .target,
+                    4
+                );
+                let mut changed = world.taking_witness(2, 1).unwrap().clone();
+                changed.notices = false;
+                changed.last_seen = None;
+                world.set_taking_witness(2, 1, Some(changed)).unwrap();
+                assert_eq!(
+                    world
+                        .taking_witness(2, 1)
+                        .unwrap()
+                        .last_seen
+                        .unwrap()
+                        .target,
+                    4
+                );
                 assert_eq!(index.affinity(2, 1), 3);
                 assert_eq!(index.affinity(2, 4), -2);
                 assert_eq!(index.affinity(3, 1), -4);
@@ -21308,7 +21332,7 @@ fn nearby_witnesses_interpret_a_taking_independently() {
             })
     };
     assert_eq!(run(1), run(4));
-    let mut distant = initial;
+    let mut distant = initial.clone();
     distant.people[1].region = Some(2);
     distant
         .physical
@@ -21330,6 +21354,32 @@ fn nearby_witnesses_interpret_a_taking_independently() {
     assert_eq!(index.affinity(2, 1), 0);
     assert_eq!(index.affinity(2, 4), 0);
     assert_eq!(index.affinity(3, 1), -4);
+    assert!(world.taking_witness(2, 1).unwrap().last_seen.is_none());
+    assert_eq!(
+        world
+            .taking_witness(3, 1)
+            .unwrap()
+            .last_seen
+            .unwrap()
+            .target,
+        4
+    );
+    let mut without_relationships = initial;
+    without_relationships.opinions = None;
+    let mut world = Economy::compile(without_relationships).unwrap();
+    assert_eq!(
+        world.take_possessions(1, 4, 1, 1, false).unwrap(),
+        TakingOutcome::Transferred
+    );
+    assert_eq!(
+        world
+            .taking_witness(2, 1)
+            .unwrap()
+            .last_seen
+            .unwrap()
+            .target,
+        4
+    );
 }
 
 #[test]
