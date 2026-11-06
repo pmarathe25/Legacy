@@ -1460,6 +1460,7 @@ impl Economy {
                         ) || matches!(
                             row,
                             game_parallel_economy_interaction::PhysicalChoice::AskFood { .. }
+                                | game_parallel_economy_interaction::PhysicalChoice::Give { .. }
                         ))
                 })
                 || player_transfer.is_some_and(|row| match row {
@@ -1467,8 +1468,10 @@ impl Economy {
                         deceased, ..
                     } => owner.held(deceased),
                     game_parallel_economy_interaction::PhysicalChoice::Give {
-                        recipient, ..
-                    } => !owner.can_receive_supplies(recipient),
+                        person,
+                        recipient,
+                        ..
+                    } => !owner.can_communicate(person, recipient),
                     game_parallel_economy_interaction::PhysicalChoice::TreatOther {
                         patient,
                         ..
@@ -2120,6 +2123,7 @@ impl Economy {
             before: self.confinement.as_ref(),
             after: next_confinement.as_ref(),
         };
+        let mut held_can_give = Vec::new();
         let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
         if let Some(giving) = &mut next_giving {
             let mut treated: Vec<_> = if available_held.is_empty() {
@@ -2167,6 +2171,11 @@ impl Economy {
             if let Some(asking_busy) = &mut asking_busy {
                 game_parallel_economy_work::reserve(asking_busy, askers.iter().copied());
             }
+            let mut request_actors: Vec<_> = if askable.is_empty() {
+                Vec::new()
+            } else {
+                askers.par_iter().copied().collect()
+            };
             game_parallel_economy_work::reserve(&mut busy, askers);
             let acquaintances = self
                 .dynamics
@@ -2188,6 +2197,14 @@ impl Economy {
                     tick,
                 },
             )?;
+            if !askable.is_empty() {
+                request_actors.par_extend(askers.par_iter().copied());
+                request_actors.par_sort_unstable();
+                held_can_give = askable
+                    .into_par_iter()
+                    .filter(|person| request_actors.binary_search(person).is_err())
+                    .collect();
+            }
             game_parallel_economy_work::reserve(&mut busy, askers);
         }
         if let Some(game_parallel_economy_interaction::PhysicalChoice::AskFood {
@@ -2238,6 +2255,12 @@ impl Economy {
                 expires_at,
             });
         }
+        let giving_busy = (!held_can_give.is_empty()).then(|| {
+            busy.par_iter()
+                .copied()
+                .filter(|person| held_can_give.binary_search(person).is_err())
+                .collect::<Vec<_>>()
+        });
         let giving_plan = giving::Context {
             owner: self.giving.as_ref(),
             people: &self.people,
@@ -2248,8 +2271,8 @@ impl Economy {
                 .and_then(|auto| auto.requests.as_ref()),
             goods: self.physical.goods(),
             view: &view,
-            busy: &busy,
-            blocked_receivers: &blocked_receivers,
+            busy: giving_busy.as_deref().unwrap_or(&busy),
+            communication: &communication,
             manual: manual_give,
             tick,
             seed: self.seed,

@@ -536,8 +536,7 @@ pub struct Context<'a> {
     pub goods: &'a [Good],
     pub view: &'a View,
     pub busy: &'a [u64],
-    /// Captives behind barriers without an opening for supplies.
-    pub blocked_receivers: &'a [u64],
+    pub communication: &'a game_parallel_economy_confinement::Communication<'a>,
     pub manual: Option<(u64, u64, u32, u64)>,
     pub tick: u64,
     pub seed: u64,
@@ -593,6 +592,7 @@ impl Context<'_> {
                 (!sender.controlled
                     && sender.health > 0
                     && recipient.health > 0
+                    && self.communication.allows(sender.id, recipient.id)
                     && self
                         .locations
                         .region((sender.id, sender.region), (recipient.id, recipient.region))
@@ -659,6 +659,7 @@ impl Context<'_> {
                 (!sender.controlled
                     && sender.health > 0
                     && recipient.health > 0
+                    && self.communication.allows(sender.id, recipient.id)
                     && self
                         .locations
                         .region((sender.id, sender.region), (recipient.id, recipient.region))
@@ -735,6 +736,7 @@ impl Context<'_> {
                     if sender.controlled
                         || sender.health == 0
                         || recipient.health == 0
+                        || !self.communication.allows(sender.id, recipient.id)
                         || !(mind.willing || pressured)
                         || self.busy.binary_search(&sender.id).is_ok()
                         || self
@@ -816,6 +818,7 @@ impl Context<'_> {
                         && !sender.controlled
                         && sender.health > 0
                         && recipient.health > 0
+                        && self.communication.allows(sender.id, recipient.id)
                         && (work.willing || pressured)
                         && occupied.binary_search(&sender.id).is_err()
                         && self.busy.binary_search(&sender.id).is_err()
@@ -874,6 +877,7 @@ impl Context<'_> {
                 (!sender.controlled
                     && sender.health > 0
                     && recipient.health > 0
+                    && self.communication.allows(sender.id, recipient.id)
                     && recipient.hunger >= minimum
                     && self.busy.binary_search(&sender.id).is_err()
                     && self
@@ -895,6 +899,7 @@ impl Context<'_> {
                 || a.health == 0
                 || b.health == 0
                 || sender == recipient
+                || !self.communication.allows(sender, recipient)
                 || self
                     .locations
                     .region((a.id, a.region), (b.id, b.region))
@@ -907,12 +912,6 @@ impl Context<'_> {
                 );
             }
             chosen.push((sender, recipient, good, quantity));
-        }
-        if !self.blocked_receivers.is_empty() {
-            chosen = chosen
-                .into_par_iter()
-                .filter(|row| self.blocked_receivers.binary_search(&row.1).is_err())
-                .collect();
         }
         chosen.par_sort_unstable();
         base.checked_add(chosen.len() as u64)

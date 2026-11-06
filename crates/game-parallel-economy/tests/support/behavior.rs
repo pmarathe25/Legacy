@@ -9450,6 +9450,80 @@ fn captives_can_request_food_through_a_physical_opening() {
             .iter()
             .any(|r| r.requester == 2 && r.target == 3)
     );
+    let mut gift_inside = same_cell.clone();
+    let holder = gift_inside
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(3))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(3),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(gift_inside.clone()).unwrap();
+    assert!(world.give(3, 2, 1, 1).unwrap());
+    assert_eq!(
+        world
+            .snapshot()
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+    let mut external = gift_inside;
+    external
+        .confinement
+        .as_mut()
+        .unwrap()
+        .holds
+        .retain(|hold| hold.person == 3);
+    let mut world = Economy::compile(external.clone()).unwrap();
+    assert!(world.give(3, 1, 1, 1).is_err());
+    external.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let mut world = Economy::compile(external).unwrap();
+    assert!(world.give(3, 1, 1, 1).unwrap());
+    let mut mutual = initial.clone();
+    mutual.work_sites.as_mut().unwrap().sites[0].capacity = 2;
+    let owner = mutual.confinement.as_mut().unwrap();
+    owner.cells[0].allow_supplies = false;
+    owner
+        .holds
+        .insert(0, ConfinementHold { person: 1, site: 1 });
+    let (first, second) = run(mutual.clone(), 1);
+    assert_eq!((first.clone(), second.clone()), run(mutual, 4));
+    assert!(
+        first
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 2 && r.target == 1)
+    );
+    assert_eq!(
+        second
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(second.confinement.as_ref().unwrap().held(1));
+    assert!(second.confinement.unwrap().held(2));
     let mut world = Economy::compile(same_cell).unwrap();
     world.ask_food(3, 2, 4).unwrap();
     assert!(
@@ -14811,6 +14885,82 @@ fn giving_workload(count: u64) -> State {
     state
 }
 
+fn confined_giving_workload(count: u64) -> State {
+    let mut state = giving_workload(count);
+    state.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: count,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    state.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: (1..=count)
+            .map(|person| ConfinementHold { person, site: 1 })
+            .collect(),
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn concentrated_same_cell_gifts_respect_actual_capacity_across_workers() {
+    let count = 4096;
+    let initial = confined_giving_workload(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|action| action.accepted)
+                        .count(),
+                    count as usize / 2
+                );
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    count / 2
+                );
+                assert_eq!(
+                    state.confinement.as_ref().unwrap().holds.len(),
+                    count as usize
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 fn concentrated_gifts_share_actual_recipient_capacity_across_workers() {
     let count = 4096;
@@ -15405,7 +15555,12 @@ fn concentrated_giving_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let mut initial = giving_workload(count);
+    let confined = std::env::var("LEGACY_CONFINED").is_ok_and(|value| value == "1");
+    let mut initial = if confined {
+        confined_giving_workload(count)
+    } else {
+        giving_workload(count)
+    };
     let disease = std::env::var("LEGACY_DISEASE").is_ok_and(|value| value == "1");
     if disease {
         initial.dynamics = Some(infection_from(1));
@@ -15419,8 +15574,9 @@ fn concentrated_giving_benchmark() {
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
-                world.advance().unwrap();
+                let events = world.advance().unwrap();
                 let elapsed = started.elapsed().as_secs_f64();
+                assert_eq!(events.physical_actions.iter().filter(|action| action.accepted).count(), count as usize / 2);
                 if disease {
                     assert_eq!(
                         world
@@ -15440,7 +15596,7 @@ fn concentrated_giving_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} disease={disease} ticks=1 elapsed={:.6}",
+                "workers={workers} people={count} disease={disease} confined={confined} ticks=1 elapsed={:.6}",
                 samples[1]
             );
         });
