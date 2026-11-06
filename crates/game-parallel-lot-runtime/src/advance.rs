@@ -470,12 +470,13 @@ impl Runtime {
         next.par_sort_unstable_by_key(|row| row.job.id);
         self.store.validate_commit(&draft)?;
         let movement_keys = &movement_keys;
-        let physical_movements = draft
-            .outcomes()
-            .par_chunks(2048)
+        let (outcomes, spoiled) = draft.take_receipts();
+        let physical_movements = outcomes
+            .into_par_iter()
+            .chunks(2048)
             .flat_map_iter(|chunk| {
                 let mut cursor = movement_keys.partition_point(|row| row.0 < chunk[0].id);
-                chunk.iter().filter_map(move |movement| {
+                chunk.into_iter().filter_map(move |mut movement| {
                     while cursor < movement_keys.len() && movement_keys[cursor].0 < movement.id {
                         cursor += 1;
                     }
@@ -483,7 +484,6 @@ impl Runtime {
                         .get(cursor)
                         .filter(|row| row.0 == movement.id)?;
                     cursor += 1;
-                    let mut movement = movement.clone();
                     movement.id = request.id;
                     Some(ExternalReceipt {
                         action,
@@ -493,7 +493,6 @@ impl Runtime {
                 })
             })
             .collect();
-        let spoiled = draft.spoiled().to_vec();
         let events = Events {
             tick: next_tick,
             started: started_ids,
@@ -527,14 +526,7 @@ impl Runtime {
     }
     pub fn commit_advance(&mut self, draft: AdvanceDraft) -> Result<Events, String> {
         self.validate_advance(&draft)?;
-        let (outcomes, _spoiled) = self.store.commit(draft.custody)?;
-        // Published events already own their receipts. Large batches of exact
-        // cohort receipts can release their per-movement allocations in parallel.
-        if outcomes.len() < 128 || rayon::current_num_threads() == 1 {
-            drop(outcomes);
-        } else {
-            outcomes.into_par_iter().for_each(drop);
-        }
+        self.store.commit(draft.custody)?;
         self.work = draft.work;
         Ok(draft.events)
     }

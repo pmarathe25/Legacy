@@ -1527,6 +1527,45 @@ fn read_only_views_use_the_requested_boundary_without_mutating_custody() {
 }
 
 #[test]
+fn moving_receipts_out_of_a_draft_preserves_commit_and_stale_validation() {
+    let source = Place::Person(1);
+    let target = Place::Person(2);
+    let mut store = store(vec![
+        container(source, 10, vec![lot(1, 2, Some(1)), lot(1, 3, Some(5))]),
+        container(target, 10, vec![]),
+    ]);
+    let action = Transaction {
+        id: 7,
+        movements: vec![Movement {
+            id: 8,
+            from: source,
+            to: Some(target),
+            good: 1,
+            quantity: 2,
+        }],
+        creations: vec![],
+    };
+    let mut draft = store
+        .prepare_with_empty(1, std::slice::from_ref(&action), vec![], true)
+        .unwrap();
+    let stale = store
+        .prepare_with_empty(1, &[action], vec![], true)
+        .unwrap();
+    let expected_outcomes = draft.outcomes().to_vec();
+    let expected_spoilage = draft.spoiled().to_vec();
+    let (outcomes, spoiled) = draft.take_receipts();
+    assert_eq!(outcomes, expected_outcomes);
+    assert_eq!(spoiled, expected_spoilage);
+    assert_eq!(outcomes[0].lots, vec![lot(1, 2, Some(5))]);
+    assert_eq!(spoiled[0].quantity, 2);
+    assert!(draft.outcomes().is_empty() && draft.spoiled().is_empty());
+    let (returned, returned_spoilage) = store.commit(draft).unwrap();
+    assert!(returned.is_empty() && returned_spoilage.is_empty());
+    assert_eq!(quantity(&store.export(), target, 1, Some(5)), 2);
+    assert!(store.commit(stale).is_err());
+}
+
+#[test]
 fn inventory_views_aggregate_small_and_large_cohorts_at_each_boundary() {
     let lots: Vec<_> = (1..=5)
         .flat_map(|good| (1..=500).map(move |expiry| lot(good, u64::from(good), Some(expiry))))

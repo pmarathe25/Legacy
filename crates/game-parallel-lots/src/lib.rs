@@ -77,6 +77,14 @@ impl Draft {
     pub fn spoiled(&self) -> &[Spoilage] {
         &self.inner.spoiled
     }
+    /// Move receipt data to a detached owner. The draft still commits the same
+    /// custody changes, but its eventual commit returns no drained receipts.
+    pub fn take_receipts(&mut self) -> (Vec<Outcome>, Vec<Spoilage>) {
+        (
+            std::mem::take(&mut self.inner.outcomes),
+            std::mem::take(&mut self.inner.spoiled),
+        )
+    }
     pub fn creations(&self) -> &[(u64, bool)] {
         &self.inner.creations
     }
