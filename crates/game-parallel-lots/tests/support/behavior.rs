@@ -197,7 +197,7 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
         });
     }
     initial.push(container(Place::Person(9000), 10, vec![lot(1, 2, Some(1))]));
-    let run = |workers, reverse: bool, overlap: bool, advance: bool| {
+    let run = |workers, reverse: bool, overlap: bool, advance: bool, sparse: bool| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -210,8 +210,14 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 if reverse {
                     actions.reverse();
                 }
-                let mut fast = store(initial.clone());
-                let mut general = store(initial.clone());
+                let mut holders = initial.clone();
+                if sparse {
+                    holders.extend(
+                        (10_000..11_000).map(|id| container(Place::Person(id), 10, vec![])),
+                    );
+                }
+                let mut fast = store(holders.clone());
+                let mut general = store(holders);
                 let staged = fast
                     .prepare_with_empty(13, &actions, vec![], advance)
                     .unwrap();
@@ -243,9 +249,26 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 result
             })
     };
-    assert_eq!(run(1, false, false, true), run(4, true, false, true));
-    assert_eq!(run(1, false, true, true), run(4, true, true, true));
-    assert_eq!(run(1, false, false, false), run(4, true, false, false));
+    assert_eq!(
+        run(1, false, false, true, false),
+        run(4, true, false, true, false)
+    );
+    assert_eq!(
+        run(1, false, true, true, false),
+        run(4, true, true, true, false)
+    );
+    assert_eq!(
+        run(1, false, false, false, false),
+        run(4, true, false, false, false)
+    );
+    assert_eq!(
+        run(1, false, false, true, true),
+        run(4, true, false, true, true)
+    );
+    assert_eq!(
+        run(1, false, true, true, true),
+        run(4, true, true, true, true)
+    );
     let mut invalid = actions.clone();
     invalid[1].movements[0].id = invalid[0].movements[0].id;
     assert!(
@@ -1500,5 +1523,46 @@ fn read_only_views_use_the_requested_boundary_without_mutating_custody() {
     assert_eq!(next.container(stock).unwrap().capacity, 7);
     assert_eq!(next.container(stock).unwrap().quantity(1), 0);
     assert!(store.view(2).is_err());
+    assert_eq!(store.export(), before);
+}
+
+#[test]
+fn inventory_views_aggregate_small_and_large_cohorts_at_each_boundary() {
+    let lots: Vec<_> = (1..=5)
+        .flat_map(|good| (1..=500).map(move |expiry| lot(good, u64::from(good), Some(expiry))))
+        .collect();
+    let store = store(vec![
+        container(Place::Person(1), 10_000, lots.clone()),
+        container(
+            Place::Person(2),
+            100,
+            vec![lot(1, 2, Some(1)), lot(1, 3, Some(3)), lot(2, 4, None)],
+        ),
+    ]);
+    let before = store.export();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let current = store.view(0).unwrap();
+                let next = store.view(1).unwrap();
+                for good in 1..=5 {
+                    assert_eq!(
+                        current.container(Place::Person(1)).unwrap().quantity(good),
+                        u64::from(good) * 500
+                    );
+                    assert_eq!(
+                        next.container(Place::Person(1)).unwrap().quantity(good),
+                        u64::from(good) * 499
+                    );
+                }
+                assert_eq!(current.container(Place::Person(2)).unwrap().used, 9);
+                assert_eq!(next.container(Place::Person(2)).unwrap().used, 7);
+                (current, next)
+            })
+    };
+    assert_eq!(run(1), run(4));
     assert_eq!(store.export(), before);
 }

@@ -54,22 +54,48 @@ fn prepare_rows(state: &State, boundary: u64, rows: &[Container]) -> Result<View
     let containers = rows
         .par_iter()
         .map(|container| {
-            let goods: Vec<_> = container
-                .lots
-                .par_chunk_by(|a, b| a.good == b.good)
-                .filter_map(|group| {
-                    let quantity = group
-                        .par_iter()
-                        .filter(|lot| lot.expires_at.is_none_or(|at| at > boundary))
-                        .map(|lot| lot.quantity)
-                        .sum();
-                    (quantity > 0).then_some(Balance {
-                        good: group[0].good,
-                        quantity,
+            if container.lots.len() >= 2048 {
+                let goods: Vec<_> = container
+                    .lots
+                    .par_chunk_by(|a, b| a.good == b.good)
+                    .filter_map(|group| {
+                        let quantity = group
+                            .par_iter()
+                            .filter(|lot| lot.expires_at.is_none_or(|at| at > boundary))
+                            .map(|lot| lot.quantity)
+                            .sum();
+                        (quantity > 0).then_some(Balance {
+                            good: group[0].good,
+                            quantity,
+                        })
                     })
-                })
-                .collect();
-            let used = goods.iter().map(|row| row.quantity).sum();
+                    .collect();
+                let used = goods.iter().map(|row| row.quantity).sum();
+                return ContainerView {
+                    place: container.place,
+                    capacity: container.capacity,
+                    used,
+                    goods,
+                };
+            }
+            // Containers are already independent parallel work units and their
+            // cohorts are ordered by good. A local scan avoids scheduling and
+            // allocating a separate parallel task for each tiny inventory.
+            let mut goods: Vec<Balance> = Vec::new();
+            let mut used = 0;
+            for lot in &container.lots {
+                if lot.expires_at.is_some_and(|at| at <= boundary) {
+                    continue;
+                }
+                used += lot.quantity;
+                match goods.last_mut() {
+                    Some(last) if last.good == lot.good => last.quantity += lot.quantity,
+                    _ => goods.push(Balance {
+                        good: lot.good,
+                        quantity: lot.quantity,
+                    }),
+                }
+            }
             ContainerView {
                 place: container.place,
                 capacity: container.capacity,
