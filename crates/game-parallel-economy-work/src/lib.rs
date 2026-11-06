@@ -52,10 +52,101 @@ fn site_disregards(
     people
 }
 pub fn reserve(busy: &mut Vec<u64>, actors: impl IntoIterator<Item = u64>) {
-    busy.extend(actors);
-    busy.par_sort_unstable();
-    busy.dedup();
+    let actors = actors.into_iter();
+    if let Some(upper) = actors.size_hint().1 {
+        let maximum = busy.len().saturating_add(upper);
+        if maximum < 2048 {
+            busy.extend(actors);
+            busy.sort_unstable();
+            busy.dedup();
+            return;
+        }
+        if rayon::current_num_threads() > 1
+            && maximum < 131_072
+            && (upper > 0 || busy.len() < 32_768)
+        {
+            busy.extend(actors);
+            busy.par_sort_unstable();
+            busy.dedup();
+            return;
+        }
+    }
+    let mut incoming: Vec<_> = actors.collect();
+    if busy.len().saturating_add(incoming.len()) < 2048 {
+        busy.extend(incoming);
+        busy.sort_unstable();
+        busy.dedup();
+        return;
+    }
+    // Parallel sorting is cheaper than several merge passes for moderate sets.
+    if rayon::current_num_threads() > 1
+        && busy.len().saturating_add(incoming.len()) < 131_072
+        && (!incoming.is_empty() || busy.len() < 32_768)
+    {
+        busy.extend(incoming);
+        busy.par_sort_unstable();
+        busy.dedup();
+        return;
+    }
+    let normalize = |rows: &mut Vec<u64>| {
+        if rows.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            rows.par_sort_unstable();
+            if rows.par_windows(2).any(|pair| pair[0] == pair[1]) {
+                *rows = rows
+                    .par_chunk_by(|a, b| a == b)
+                    .map(|group| group[0])
+                    .collect();
+            }
+        }
+    };
+    normalize(busy);
+    normalize(&mut incoming);
+    if incoming.is_empty() {
+        return;
+    }
+    if busy.is_empty() {
+        *busy = incoming;
+        return;
+    }
+    if busy.last() < incoming.first() {
+        busy.extend(incoming);
+        return;
+    }
+    const CHUNK: usize = 4096;
+    let old = std::mem::take(busy);
+    *busy = old
+        .par_chunks(CHUNK)
+        .enumerate()
+        .flat_map_iter(|(index, chunk)| {
+            let start = if index == 0 {
+                0
+            } else {
+                incoming.partition_point(|id| *id < chunk[0])
+            };
+            let next = (index + 1) * CHUNK;
+            let end = if next >= old.len() {
+                incoming.len()
+            } else {
+                incoming.partition_point(|id| *id < old[next])
+            };
+            let mut merged = Vec::with_capacity(chunk.len() + end - start);
+            let mut at = start;
+            for &person in chunk {
+                while at < end && incoming[at] < person {
+                    merged.push(incoming[at]);
+                    at += 1;
+                }
+                if at < end && incoming[at] == person {
+                    at += 1;
+                }
+                merged.push(person);
+            }
+            merged.extend_from_slice(&incoming[at..end]);
+            merged
+        })
+        .collect();
 }
+
 pub fn initial_busy(
     people: &[game_parallel_economy_person::Person],
     meals: &[(u64, u32)],
