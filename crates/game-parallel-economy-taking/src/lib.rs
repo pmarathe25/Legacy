@@ -494,13 +494,39 @@ impl Plan {
     }
     /// Resolve only admitted movements and conflicts actually started by the host.
     pub fn publish(&self, events: &Events, started: &[(u64, u64)]) -> Vec<Event> {
-        let mut accepted: Vec<_> = events
-            .physical_actions
-            .par_iter()
-            .filter(|e| e.accepted)
-            .map(|e| e.id)
-            .collect();
-        accepted.par_sort_unstable();
+        // A host normally returns sorted receipts for this contiguous action
+        // range. Keep a general fallback for unordered or partial receipts.
+        let direct = self
+            .action_base
+            .checked_add(self.actions.len() as u64)
+            .and_then(|end| {
+                let rows = &events.physical_actions;
+                if rows.par_windows(2).any(|p| p[0].id >= p[1].id) {
+                    return None;
+                }
+                let begin = rows.partition_point(|row| row.id < self.action_base);
+                let finish = rows.partition_point(|row| row.id < end);
+                let selected = &rows[begin..finish];
+                (selected.len() == self.actions.len()
+                    && selected
+                        .par_iter()
+                        .enumerate()
+                        .all(|(index, row)| row.id == self.action_base + index as u64))
+                .then_some(selected)
+            });
+        let mut accepted: Vec<_> = if direct.is_none() {
+            events
+                .physical_actions
+                .par_iter()
+                .filter(|e| e.accepted)
+                .map(|e| e.id)
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if direct.is_none() {
+            accepted.par_sort_unstable();
+        }
         let mut started = started.to_vec();
         started.par_sort_unstable();
         self.pending
@@ -516,10 +542,17 @@ impl Plan {
                     } else {
                         Outcome::Resisted
                     }
-                } else if p
-                    .action
-                    .is_some_and(|id| accepted.binary_search(&id).is_ok())
-                {
+                } else if p.action.is_some_and(|id| {
+                    direct.map_or_else(
+                        || accepted.binary_search(&id).is_ok(),
+                        |rows| {
+                            id.checked_sub(self.action_base)
+                                .and_then(|offset| usize::try_from(offset).ok())
+                                .and_then(|offset| rows.get(offset))
+                                .is_some_and(|row| row.accepted)
+                        },
+                    )
+                }) {
                     Outcome::Transferred
                 } else {
                     Outcome::Unavailable

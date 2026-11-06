@@ -336,15 +336,19 @@ impl Runtime {
         if external_index.par_windows(2).any(|p| p[0].id > p[1].id) {
             external_index.par_sort_unstable_by_key(|row| row.id);
         }
-        let mut movement_keys: Vec<_> = composed
-            .transactions
+        // Composition orders both the owner keys and the assigned movement IDs.
+        // Pair the external slice with its sorted originals once, then use a
+        // parallel merge for receipts instead of a binary search per movement.
+        let external_begin = composed.keys.partition_point(|key| key.0 < 4);
+        let external_end = composed.keys.partition_point(|key| key.0 <= 4);
+        debug_assert_eq!(external_end - external_begin, external_index.len());
+        let movement_keys: Vec<_> = composed.transactions[external_begin..external_end]
             .par_iter()
-            .zip(composed.keys.par_iter())
-            .filter(|(action, key)| key.0 == 4 && compact.binary_search(&action.id).is_err())
-            .flat_map_iter(|(action, key)| {
-                let original = external_index[external_index
-                    .binary_search_by_key(&key.1, |row| row.id)
-                    .expect("composed external action")];
+            .zip(composed.keys[external_begin..external_end].par_iter())
+            .zip(external_index.par_iter())
+            .filter(|((action, _), _)| compact.binary_search(&action.id).is_err())
+            .flat_map_iter(|((action, key), original)| {
+                debug_assert_eq!(key.1, original.id);
                 action
                     .movements
                     .iter()
@@ -352,7 +356,6 @@ impl Runtime {
                     .map(move |(assigned, source)| (assigned.id, key.1, *source))
             })
             .collect();
-        movement_keys.par_sort_unstable_by_key(|row| row.0);
         game_parallel_lot_work::release_actions(&mut composed.transactions, combined);
         let physical_actions: Vec<_> = draft
             .transactions()
@@ -368,7 +371,7 @@ impl Runtime {
         let accepted: Vec<_> = draft
             .transactions()
             .par_iter()
-            .filter(|row| row.accepted)
+            .filter(|row| row.accepted && composed.keys[(row.id - 1) as usize].0 != 4)
             .map(|outcome| composed.keys[(outcome.id - 1) as usize])
             .collect();
         let mut started_ids: Vec<_> = accepted
@@ -466,20 +469,27 @@ impl Runtime {
         );
         next.par_sort_unstable_by_key(|row| row.job.id);
         self.store.validate_commit(&draft)?;
+        let movement_keys = &movement_keys;
         let physical_movements = draft
             .outcomes()
-            .par_iter()
-            .filter_map(|movement| {
-                let index = movement_keys
-                    .binary_search_by_key(&movement.id, |row| row.0)
-                    .ok()?;
-                let (_, action, request) = movement_keys[index];
-                let mut movement = movement.clone();
-                movement.id = request.id;
-                Some(ExternalReceipt {
-                    action,
-                    request,
-                    movement,
+            .par_chunks(2048)
+            .flat_map_iter(|chunk| {
+                let mut cursor = movement_keys.partition_point(|row| row.0 < chunk[0].id);
+                chunk.iter().filter_map(move |movement| {
+                    while cursor < movement_keys.len() && movement_keys[cursor].0 < movement.id {
+                        cursor += 1;
+                    }
+                    let &(_, action, request) = movement_keys
+                        .get(cursor)
+                        .filter(|row| row.0 == movement.id)?;
+                    cursor += 1;
+                    let mut movement = movement.clone();
+                    movement.id = request.id;
+                    Some(ExternalReceipt {
+                        action,
+                        request,
+                        movement,
+                    })
                 })
             })
             .collect();

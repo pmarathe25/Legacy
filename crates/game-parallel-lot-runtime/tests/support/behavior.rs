@@ -744,6 +744,79 @@ fn external_taking_and_job_completion_compete_for_the_same_snapshot() {
 }
 
 #[test]
+fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_actions() {
+    use game_parallel_lots::Movement;
+    let actions: Vec<_> = (1..=2300)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id: 10000 - id,
+                from: Place::Stock { region: 1, good: 1 },
+                to: None,
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let compact: Vec<_> = (1..=2300).filter(|id| id % 3 == 0).collect();
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                if reverse {
+                    actions.reverse();
+                }
+                let world = runtime();
+                let draft = world
+                    .prepare_with_growth(
+                        &[],
+                        &actions,
+                        &[],
+                        &[],
+                        Growth {
+                            harvest: &[],
+                            animal_yield: &[],
+                            compact_consumption: &compact,
+                        },
+                        19,
+                    )
+                    .unwrap();
+                let events = draft.events();
+                assert_eq!(events.physical_actions.len(), 2300);
+                assert_eq!(events.physical_movements.len(), 2300 - compact.len());
+                for receipt in &events.physical_movements {
+                    assert_ne!(receipt.action % 3, 0);
+                    assert_eq!(receipt.request.id, 10000 - receipt.action);
+                    assert_eq!(receipt.movement.id, receipt.request.id);
+                    assert_eq!(
+                        receipt.movement.accepted,
+                        events.physical_actions[(receipt.action - 1) as usize].accepted
+                    );
+                }
+                (
+                    events.physical_actions.clone(),
+                    events
+                        .physical_movements
+                        .iter()
+                        .map(|receipt| {
+                            (
+                                receipt.action,
+                                receipt.request.id,
+                                receipt.movement.accepted,
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+}
+
+#[test]
 fn detached_generation_rolls_back_and_abandonment_invalidates_it() {
     use game_parallel_lots::{Movement, Transaction};
     let mut runtime = runtime();

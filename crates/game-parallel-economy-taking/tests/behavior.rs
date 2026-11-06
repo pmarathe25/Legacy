@@ -130,7 +130,28 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
     let events = plan.publish(draft.events(), &[]);
     assert_eq!(events[0].outcome, Outcome::Transferred);
     assert!(!events[0].noticed);
-    physical.commit_advance(draft).unwrap();
+    let mut receipts = physical.commit_advance(draft).unwrap();
+    receipts.physical_actions.insert(
+        0,
+        game_parallel_lots::TransactionOutcome {
+            id: 1,
+            accepted: false,
+        },
+    );
+    assert_eq!(
+        plan.publish(&receipts, &[])[0].outcome,
+        Outcome::Transferred
+    );
+    receipts.physical_actions.reverse();
+    assert_eq!(
+        plan.publish(&receipts, &[])[0].outcome,
+        Outcome::Transferred
+    );
+    receipts.physical_actions.clear();
+    assert_eq!(
+        plan.publish(&receipts, &[])[0].outcome,
+        Outcome::Unavailable
+    );
     assert_eq!(
         physical.custody(Place::Person(1)).unwrap().lots[0].quantity,
         1
