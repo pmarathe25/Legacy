@@ -172,7 +172,11 @@ pub struct Economy {
 }
 enum FaunaDraft {
     Complete(Fauna),
-    Quiet(game_parallel_fauna::QuietDraft),
+    Quiet {
+        lifecycle: game_parallel_fauna::QuietDraft,
+        handling: Vec<game_parallel_fauna::handling::Event>,
+        reactions: Vec<game_parallel_fauna::restraint::Reaction>,
+    },
 }
 
 pub struct Draft {
@@ -4164,8 +4168,6 @@ impl Economy {
             let quiet = if patches.par_iter().all(|patch| patch.available == 0)
                 && feedings.is_empty()
                 && hunted_animals.is_empty()
-                && handling_plan.events.is_empty()
-                && restraint_plan.reactions.is_empty()
             {
                 fauna
                     .prepare_quiet(&exposure, self.seed, tick)
@@ -4174,7 +4176,11 @@ impl Economy {
                 None
             };
             if let Some(quiet) = quiet {
-                Some(FaunaDraft::Quiet(quiet))
+                Some(FaunaDraft::Quiet {
+                    lifecycle: quiet,
+                    handling: handling_plan.events,
+                    reactions: restraint_plan.reactions,
+                })
             } else {
                 let mut draft = fauna
                     .advance_with_hunts(
@@ -5089,12 +5095,12 @@ impl Economy {
                 FaunaDraft::Complete(fauna) => {
                     owner.reconcile(&person.people, fauna, &available, tick)
                 }
-                FaunaDraft::Quiet(draft) => owner.reconcile_with_deaths(
+                FaunaDraft::Quiet { lifecycle, .. } => owner.reconcile_with_deaths(
                     &person.people,
                     self.fauna.as_ref().expect("quiet fauna owner"),
                     &available,
                     tick,
-                    draft.deaths(),
+                    lifecycle.deaths(),
                 ),
             }
         }
@@ -5197,11 +5203,11 @@ impl Economy {
             .checked_add(1)
             .ok_or("economic generation overflow")?;
         self.physical.validate_advance(&draft.physical)?;
-        if let Some(FaunaDraft::Quiet(fauna)) = &draft.fauna {
+        if let Some(FaunaDraft::Quiet { lifecycle, .. }) = &draft.fauna {
             self.fauna
                 .as_ref()
                 .ok_or("missing fauna owner")?
-                .validate_quiet(fauna)
+                .validate_quiet(lifecycle)
                 .map_err(str::to_owned)?;
         }
         let events = self.physical.commit_advance(draft.physical)?;
@@ -5239,11 +5245,16 @@ impl Economy {
         self.gathering = draft.gathering;
         match draft.fauna {
             Some(FaunaDraft::Complete(fauna)) => self.fauna = Some(fauna),
-            Some(FaunaDraft::Quiet(fauna)) => self
-                .fauna
-                .as_mut()
-                .expect("validated fauna owner")
-                .publish_quiet_validated(fauna),
+            Some(FaunaDraft::Quiet {
+                lifecycle,
+                handling,
+                reactions,
+            }) => {
+                let fauna = self.fauna.as_mut().expect("validated fauna owner");
+                fauna.publish_quiet_validated(lifecycle);
+                game_parallel_fauna::handling::apply(fauna, &handling);
+                game_parallel_fauna::restraint::apply_reactions(fauna, &reactions);
+            }
             None => self.fauna = None,
         }
         self.animal_handling = draft.animal_handling;

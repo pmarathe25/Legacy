@@ -116,16 +116,13 @@ fn quiet_generations_match_complete_lifecycle_and_preserve_snapshots() {
 }
 
 #[test]
-fn quiet_generation_falls_back_for_reproduction_and_rejects_stale_state() {
+fn quiet_generation_rejects_stale_state_and_falls_back_for_unsorted_animals() {
     let mut state = initial();
-    assert!(state.prepare_quiet(&[], 7, 1).unwrap().is_none());
     state.animals[0].pregnancy = Some(Pregnancy {
         father: 2,
         father_genome: state.animals[1].genome.clone(),
         due: 1,
     });
-    assert!(state.prepare_quiet(&[], 7, 1).unwrap().is_none());
-    state.animals[0].pregnancy.as_mut().unwrap().due = 2;
     let draft = state.prepare_quiet(&[], 7, 1).unwrap().unwrap();
     let mut stale = state.clone();
     stale.animals[0].id = 9;
@@ -135,6 +132,186 @@ fn quiet_generation_falls_back_for_reproduction_and_rejects_stale_state() {
     assert!(state.prepare_quiet(&[], 7, 1).is_err());
     state.animals.swap(0, 1);
     assert!(state.prepare_quiet(&[], 7, 1).unwrap().is_none());
+}
+
+#[test]
+fn staged_births_and_conception_match_complete_lifecycle_across_workers() {
+    let mut state = initial();
+    let mut isolated = animal(3, Sex::Female, 500);
+    isolated.region = 2;
+    state.animals.push(isolated);
+    state.animals.push(animal(4, Sex::Male, 300));
+    state.next_id = 5;
+    state.species[0].mutation_per_million = 500_000;
+    state.species[0].mutation_step = 10;
+    state.species[0].newborn_social_response = Some(SocialResponse {
+        feed_affinity: -1,
+        minimum: -5,
+        maximum: 5,
+        capacity: 3,
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut compact = state.clone();
+                let mut complete = state.clone();
+                for tick in 1..=8 {
+                    let expected = complete
+                        .advance_with_hunts(&[], &[], &[], &[], 7, tick)
+                        .unwrap();
+                    let draft = compact.prepare_quiet(&[], 7, tick).unwrap().unwrap();
+                    assert_eq!(draft.deaths(), expected.deaths);
+                    compact.validate_quiet(&draft).unwrap();
+                    compact.publish_quiet_validated(draft);
+                    complete = expected.fauna;
+                    assert_eq!(compact, complete);
+                }
+                assert!(compact.animals.len() > state.animals.len());
+                assert!(
+                    compact
+                        .animals
+                        .iter()
+                        .find(|a| a.id == 3)
+                        .unwrap()
+                        .pregnancy
+                        .is_none()
+                );
+                compact
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn staged_reproduction_rejects_overflow_without_mutating_the_population() {
+    let mut birth = initial();
+    birth.animals[0].pregnancy = Some(Pregnancy {
+        father: 2,
+        father_genome: birth.animals[1].genome.clone(),
+        due: 1,
+    });
+    birth.next_id = u64::MAX;
+    let before = birth.clone();
+    assert!(birth.prepare_quiet(&[], 7, 1).is_err());
+    assert!(birth.advance_with_hunts(&[], &[], &[], &[], 7, 1).is_err());
+    assert_eq!(birth, before);
+    let mut conception = initial();
+    conception.species[0].gestation = u64::MAX;
+    let before = conception.clone();
+    assert!(conception.prepare_quiet(&[], 7, 1).is_err());
+    assert!(
+        conception
+            .advance_with_hunts(&[], &[], &[], &[], 7, 1)
+            .is_err()
+    );
+    assert_eq!(conception, before);
+}
+
+#[test]
+fn large_birth_growth_moves_animals_without_losing_individual_state() {
+    let mut state = initial();
+    state.animals = (1..=16_384)
+        .map(|id| animal(id, Sex::Male, (id % 1000) as u16))
+        .collect();
+    state.animals[0].genome.sex = Sex::Female;
+    state.animals[0].pregnancy = Some(Pregnancy {
+        father: 2,
+        father_genome: state.animals[1].genome.clone(),
+        due: 1,
+    });
+    state.animals[10].opinions.push(AnimalOpinion {
+        person: 8,
+        affinity: -3,
+    });
+    state.next_id = 16_385;
+    let expected = state
+        .advance_with_hunts(&[], &[], &[], &[], 7, 1)
+        .unwrap()
+        .fauna;
+    for workers in [1, 4] {
+        let next = rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = state.clone();
+                let draft = next.prepare_quiet(&[], 7, 1).unwrap().unwrap();
+                next.validate_quiet(&draft).unwrap();
+                next.publish_quiet_validated(draft);
+                next
+            });
+        assert_eq!(next, expected);
+    }
+}
+
+#[test]
+#[ignore = "manual parallel animal reproduction benchmark"]
+fn staged_reproduction_benchmark() {
+    let count = std::env::var("LEGACY_ANIMALS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let births = std::env::var_os("LEGACY_BIRTHS").is_some();
+    let father = genome(Sex::Male, 900);
+    let mut state = initial();
+    state.animals = (1..=count)
+        .map(|id| {
+            let mut a = animal(id, if id % 2 == 0 { Sex::Male } else { Sex::Female }, 500);
+            if births && a.genome.sex == Sex::Female {
+                a.pregnancy = Some(Pregnancy {
+                    father: 2,
+                    father_genome: father.clone(),
+                    due: 1,
+                });
+            }
+            a
+        })
+        .collect();
+    state.next_id = count + 1;
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut stages = Vec::new();
+            for round in 0..4 {
+                let mut next = state.clone();
+                let now = std::time::Instant::now();
+                let draft = next.prepare_quiet(&[], 7, 1).unwrap().unwrap();
+                next.validate_quiet(&draft).unwrap();
+                let prepared = now.elapsed().as_secs_f64();
+                next.publish_quiet_validated(draft);
+                let elapsed = now.elapsed().as_secs_f64();
+                assert_eq!(
+                    next.animals.len(),
+                    count as usize
+                        + if births {
+                            count.div_ceil(2) as usize
+                        } else {
+                            0
+                        }
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                    stages.push((prepared, elapsed - prepared));
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} animals={count} births={births} elapsed={:.6}",
+                samples[1]
+            );
+            stages.sort_by(|a, b| a.0.total_cmp(&b.0));
+            println!("prepare={:.6} publish={:.6}", stages[1].0, stages[1].1);
+        });
 }
 
 #[test]

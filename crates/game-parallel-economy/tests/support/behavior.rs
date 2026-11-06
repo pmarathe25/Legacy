@@ -2581,6 +2581,135 @@ fn staged_animal_deaths_release_holds_and_stale_drafts_do_not_publish() {
     assert_eq!(run(1), run(4));
 }
 
+#[test]
+fn staged_animal_interactions_match_complete_lifecycle_and_keep_private_feelings() {
+    use game_parallel_fauna::{SocialResponse, handling, restraint};
+    for capture in [false, true] {
+        let mut initial = if capture {
+            animal_capture_workload(8, false)
+        } else {
+            handling_workload(8, false)
+        };
+        initial.gathering = None;
+        initial.environment = None;
+        let fauna = initial.fauna.as_mut().unwrap();
+        for animal in &mut fauna.animals {
+            animal.social_response = Some(SocialResponse {
+                feed_affinity: 0,
+                minimum: -5,
+                maximum: 5,
+                capacity: 2,
+            });
+            if capture {
+                animal.restraint_response.as_mut().unwrap().on_yielded = -2;
+            } else {
+                animal.handling_response.as_mut().unwrap().on_accept = 3;
+            }
+        }
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut expected = initial
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .advance_with_hunts(&[], &[], &[], &[], initial.seed, 1)
+                        .unwrap()
+                        .fauna;
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    let stale = world.prepare().unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert!(world.commit(stale).is_err());
+                    assert_eq!(world.snapshot(), state);
+                    if capture {
+                        let reactions: Vec<_> = state
+                            .animal_restraints
+                            .as_ref()
+                            .unwrap()
+                            .events
+                            .iter()
+                            .filter(|event| event.kind == AnimalRestraintEventKind::Yielded)
+                            .map(|event| restraint::Reaction {
+                                animal: event.animal,
+                                person: event.actor.unwrap(),
+                                change: -2,
+                            })
+                            .collect();
+                        restraint::apply_reactions(&mut expected, &reactions);
+                    } else {
+                        handling::apply(
+                            &mut expected,
+                            &state.animal_handling.as_ref().unwrap().events,
+                        );
+                    }
+                    assert_eq!(state.fauna.as_ref().unwrap(), &expected);
+                    assert!(
+                        expected
+                            .animals
+                            .iter()
+                            .all(|animal| animal.opinions.len() == 1)
+                    );
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+fn animal_births_publish_with_the_world_and_preserve_existing_holds() {
+    use game_parallel_fauna::Pregnancy;
+    use game_parallel_genetics::Sex;
+    let mut initial = animal_defense_workload(8, false);
+    initial.gathering = None;
+    initial.environment = None;
+    let fauna = initial.fauna.as_mut().unwrap();
+    fauna.animals[0].genome.sex = Sex::Female;
+    fauna.animals[0].pregnancy = Some(Pregnancy {
+        father: fauna.animals[1].id,
+        father_genome: fauna.animals[1].genome.clone(),
+        due: 1,
+    });
+    let owner = initial.animal_restraints.as_mut().unwrap();
+    owner.release_policies_mut().clear();
+    owner.defense_policies_mut().clear();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut expected = initial.fauna.clone().unwrap();
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                for tick in 1..=3 {
+                    expected = expected
+                        .advance_with_hunts(&[], &[], &[], &[], initial.seed, tick)
+                        .unwrap()
+                        .fauna;
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(state.fauna.as_ref().unwrap(), &expected);
+                    assert!(
+                        state
+                            .animal_restraints
+                            .as_ref()
+                            .unwrap()
+                            .holds
+                            .iter()
+                            .any(|hold| hold.animal == 1)
+                    );
+                }
+                assert!(expected.animals.len() > initial.fauna.as_ref().unwrap().animals.len());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 fn enable_opposed_action_reactions(state: &mut State) {
     use game_parallel_opinions::{
         AffinityRules, OpposedActionReaction, Sensitivity, SubjectiveReaction,

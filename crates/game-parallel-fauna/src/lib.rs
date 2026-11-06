@@ -155,11 +155,14 @@ pub struct Draft {
     pub deaths: Vec<u64>,
 }
 
-/// A detached generation containing only fields changed by an uneventful boundary.
+/// A detached generation with compact existing-animal changes and actual births.
 pub struct QuietDraft {
     tick: u64,
     updates: Vec<QuietAnimal>,
     deaths: Vec<u64>,
+    pregnancies: Vec<(usize, Pregnancy)>,
+    births: Vec<Animal>,
+    next_id: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -187,9 +190,9 @@ struct Claim {
 }
 
 impl Fauna {
-    /// Stage a boundary with no food, hunts, births, or new pregnancies without
-    /// copying the animals' individual genomes and social histories. Returns
-    /// `None` when the complete lifecycle implementation is needed instead.
+    /// Stage a validated, sorted population's boundary without food or hunts,
+    /// copying genomes and personal histories only for births and new pregnancies.
+    /// Returns `None` if the original animal order requires canonicalization.
     pub fn prepare_quiet(
         &self,
         exposure: &[Exposure],
@@ -259,30 +262,130 @@ impl Fauna {
                         .health
                         .saturating_sub(excess.saturating_mul(climate.damage_per_excess));
                 }
-                next.clear_pregnancy = next.health == 0;
+                next.clear_pregnancy =
+                    next.health == 0 || a.pregnancy.as_ref().is_some_and(|p| p.due <= tick);
                 Ok(next)
             })
             .collect::<Result<_, &'static str>>()?;
-        let needs_lifecycle = self
+        let mothers: Vec<_> = self
             .animals
             .par_iter()
             .zip(updates.par_iter())
-            .any(|(a, next)| {
-                next.health > 0
-                    && (a.pregnancy.as_ref().is_some_and(|p| p.due <= tick)
-                        || (a.genome.sex == Sex::Female
-                            && a.pregnancy.is_none()
-                            && lookup(a.species).is_some_and(|s| {
-                                next.age >= s.adult_age
-                                    && next.age < s.fertile_until
-                                    && next.hunger <= s.breeding_max_hunger
-                                    && random(seed ^ 0x6272656564, a.id, tick)
-                                        .is_multiple_of(s.conception_one_in)
-                            })))
-            });
-        if needs_lifecycle {
-            return Ok(None);
-        }
+            .filter_map(|(a, next)| {
+                (next.health > 0 && a.pregnancy.as_ref().is_some_and(|p| p.due <= tick))
+                    .then_some(a.id)
+            })
+            .collect();
+        let next_id = self
+            .next_id
+            .checked_add(mothers.len() as u64)
+            .ok_or("animal identity overflow")?;
+        let births: Vec<_> = mothers
+            .par_iter()
+            .enumerate()
+            .map(|(index, &id)| -> Result<_, &'static str> {
+                let mother = &self.animals[self
+                    .animals
+                    .binary_search_by_key(&id, |a| a.id)
+                    .expect("mother")];
+                let pregnancy = mother.pregnancy.as_ref().expect("pregnant mother");
+                let s = lookup(mother.species).ok_or("unknown animal species")?;
+                Ok(Animal {
+                    id: self.next_id + index as u64,
+                    species: mother.species,
+                    region: mother.region,
+                    age: 0,
+                    health: s.newborn_health,
+                    hunger: 0,
+                    genome: inherit(
+                        &mother.genome,
+                        &pregnancy.father_genome,
+                        seed,
+                        mother.id,
+                        tick,
+                        s.mutation_per_million,
+                        s.mutation_step,
+                    ),
+                    pregnancy: None,
+                    parents: Some([mother.id, pregnancy.father]),
+                    social_response: s.newborn_social_response.clone(),
+                    handling_response: s.newborn_handling_response.clone(),
+                    restraint_response: s.newborn_restraint_response.clone(),
+                    opinions: Vec::new(),
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let eligible_female = |a: &Animal, next: &QuietAnimal| {
+            next.health > 0
+                && a.genome.sex == Sex::Female
+                && a.pregnancy.is_none()
+                && lookup(a.species).is_some_and(|s| {
+                    next.age >= s.adult_age
+                        && next.age < s.fertile_until
+                        && next.hunger <= s.breeding_max_hunger
+                        && random(seed ^ 0x6272656564, a.id, tick)
+                            .is_multiple_of(s.conception_one_in)
+                })
+        };
+        let breeding = self
+            .animals
+            .par_iter()
+            .zip(updates.par_iter())
+            .any(|(a, next)| eligible_female(a, next));
+        let mut males: Vec<_> = if breeding {
+            self.animals
+                .par_iter()
+                .zip(updates.par_iter())
+                .filter_map(|(a, next)| {
+                    (next.health > 0
+                        && a.genome.sex == Sex::Male
+                        && lookup(a.species).is_some_and(|s| {
+                            next.age >= s.adult_age
+                                && next.age < s.fertile_until
+                                && next.hunger <= s.breeding_max_hunger
+                        }))
+                    .then_some(a)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        males.par_sort_unstable_by_key(|a| (a.region, a.species, a.id));
+        let pregnancies = if males.is_empty() {
+            Vec::new()
+        } else {
+            let candidates: Vec<_> = self
+                .animals
+                .par_iter()
+                .zip(updates.par_iter())
+                .enumerate()
+                .filter(|(_, (a, next))| eligible_female(a, next))
+                .map(|(index, (a, _))| -> Result<Option<_>, &'static str> {
+                    let first =
+                        males.partition_point(|m| (m.region, m.species) < (a.region, a.species));
+                    let end =
+                        males.partition_point(|m| (m.region, m.species) <= (a.region, a.species));
+                    if first == end {
+                        return Ok(None);
+                    }
+                    let offset =
+                        (random(seed ^ 0x6d617465, a.id, tick) % (end - first) as u64) as usize;
+                    let father = males[first + offset];
+                    let s = lookup(a.species).ok_or("unknown animal species")?;
+                    Ok(Some((
+                        index,
+                        Pregnancy {
+                            father: father.id,
+                            father_genome: father.genome.clone(),
+                            due: tick
+                                .checked_add(s.gestation)
+                                .ok_or("animal gestation overflow")?,
+                        },
+                    )))
+                })
+                .collect::<Result<_, _>>()?;
+            candidates.into_par_iter().flatten().collect()
+        };
         let deaths = self
             .animals
             .par_iter()
@@ -293,6 +396,9 @@ impl Fauna {
             tick,
             updates,
             deaths,
+            pregnancies,
+            births,
+            next_id,
         }))
     }
 
@@ -324,6 +430,37 @@ impl Fauna {
                     animal.pregnancy = None;
                 }
             });
+        if !draft.pregnancies.is_empty() {
+            const CHUNK: usize = 1024;
+            self.animals
+                .par_chunks_mut(CHUNK)
+                .enumerate()
+                .for_each(|(chunk, animals)| {
+                    let first = chunk * CHUNK;
+                    let start = draft.pregnancies.partition_point(|p| p.0 < first);
+                    let end = draft
+                        .pregnancies
+                        .partition_point(|p| p.0 < first + animals.len());
+                    for (index, pregnancy) in &draft.pregnancies[start..end] {
+                        animals[index - first].pregnancy = Some(pregnancy.clone());
+                    }
+                });
+        }
+        if !draft.births.is_empty()
+            && self.animals.len() >= 16_384
+            && self.animals.capacity() - self.animals.len() < draft.births.len()
+            && rayon::current_num_threads() > 1
+        {
+            // Move both generations into their final buffer in parallel instead
+            // of serially relocating all existing animals during Vec growth.
+            self.animals = std::mem::take(&mut self.animals)
+                .into_par_iter()
+                .chain(draft.births.into_par_iter())
+                .collect();
+        } else {
+            self.animals.par_extend(draft.births);
+        }
+        self.next_id = draft.next_id;
         self.last_tick = draft.tick;
     }
     /// Validate a feeding's target; dietary response remains private to the animal.
