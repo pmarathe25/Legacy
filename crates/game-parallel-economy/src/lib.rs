@@ -4165,12 +4165,9 @@ impl Economy {
                 .collect();
             // Gathering owns and validates patch identity; empty patches cannot
             // create grazing claims, so they need no animal-side allocation.
-            let quiet = if patches.par_iter().all(|patch| patch.available == 0)
-                && feedings.is_empty()
-                && hunted_animals.is_empty()
-            {
+            let quiet = if patches.par_iter().all(|patch| patch.available == 0) {
                 fauna
-                    .prepare_quiet(&exposure, self.seed, tick)
+                    .prepare_without_grazing(&feedings, &exposure, &hunted_animals, self.seed, tick)
                     .map_err(str::to_owned)?
             } else {
                 None

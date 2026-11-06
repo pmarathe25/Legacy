@@ -2710,6 +2710,57 @@ fn animal_births_publish_with_the_world_and_preserve_existing_holds() {
     assert_eq!(run(1), run(4));
 }
 
+#[test]
+fn staged_feeding_and_hunting_publish_real_transactions_and_animal_state() {
+    use game_parallel_fauna::Feeding;
+    for hunt in [false, true] {
+        let mut initial = handling_fixture();
+        initial.people[0].controlled = true;
+        initial.gathering = None;
+        initial.environment = None;
+        if hunt {
+            initial.hunting = Some(hunting_fixture().hunting.unwrap());
+            initial.hunting.as_mut().unwrap().policies.clear();
+        }
+        let food = if hunt {
+            Vec::new()
+        } else {
+            vec![Feeding {
+                animal: 1,
+                person: Some(1),
+                good: 1,
+                quantity: 1,
+            }]
+        };
+        let hunted = if hunt { vec![1] } else { Vec::new() };
+        let expected = initial
+            .fauna
+            .as_ref()
+            .unwrap()
+            .advance_with_hunts(&[], &food, &[], &hunted, initial.seed, 1)
+            .unwrap()
+            .fauna;
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    if hunt {
+                        assert!(world.hunt_animal(1, 1).unwrap());
+                    } else {
+                        assert!(world.feed_animal(1, 1, 1, 1).unwrap());
+                    }
+                    let state = world.snapshot();
+                    assert_eq!(state.fauna.as_ref().unwrap(), &expected);
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
 fn enable_opposed_action_reactions(state: &mut State) {
     use game_parallel_opinions::{
         AffinityRules, OpposedActionReaction, Sensitivity, SubjectiveReaction,
