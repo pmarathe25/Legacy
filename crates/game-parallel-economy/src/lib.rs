@@ -4836,6 +4836,48 @@ impl Economy {
                 .collect();
             opinions.learn_confinement(&experiences, tick);
         }
+        if let (Some(opinions), Some(restraints)) = (&mut next_opinions, &next_animal_restraints)
+            && restraints
+                .events
+                .par_iter()
+                .any(|event| event.defender.is_some())
+            && opinions.tracks_opposed_action_reactions()
+        {
+            use game_parallel_opinions::{
+                OpposedActionExperience as Experience, OpposedActionOutcome as Outcome,
+            };
+            let experiences: Vec<_> = restraints
+                .events
+                .par_iter()
+                .filter_map(|event| {
+                    let actor = event.actor?;
+                    let defender = event.defender?;
+                    let (actor_outcome, defender_outcome) = match event.kind {
+                        AnimalRestraintEventKind::ReleaseBlocked => {
+                            (Outcome::Blocked, Outcome::BlockedOther)
+                        }
+                        AnimalRestraintEventKind::Released => {
+                            (Outcome::Overcame, Outcome::WasOvercome)
+                        }
+                        _ => return None,
+                    };
+                    Some([
+                        Experience {
+                            observer: actor,
+                            other: defender,
+                            outcome: actor_outcome,
+                        },
+                        Experience {
+                            observer: defender,
+                            other: actor,
+                            outcome: defender_outcome,
+                        },
+                    ])
+                })
+                .flat_map_iter(|pair| pair)
+                .collect();
+            opinions.learn_opposed_actions(&experiences, tick);
+        }
         development::enroll(&mut next_opinions, family.as_ref(), tick);
         if let Some(claims) = dynamics
             .as_ref()

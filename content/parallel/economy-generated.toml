@@ -88,6 +88,7 @@ goods = { bread = 3 }
 
 [population.sensitivity]
 affinity_harm_per_damage = 2
+opposed_action_reaction = { blocked = { affinity = 1 } }
 gratitude_gain = 0
 promise_obligation_gain = 0
 

@@ -271,6 +271,20 @@ fn player_can_capture_and_release_a_live_animal() {
         &root.join("content"),
     )
     .unwrap();
+    let state = world.snapshot();
+    let reaction = state
+        .opinions
+        .as_ref()
+        .unwrap()
+        .sensitivities
+        .iter()
+        .find(|row| row.person == 2)
+        .unwrap()
+        .opposed_action_reaction
+        .as_ref()
+        .unwrap();
+    assert_eq!(reaction.blocked.unwrap().affinity, 1);
+    assert_eq!(reaction.overcame.unwrap().affinity, -1);
     assert!(Player::new(&mut world).capture_animal(1).unwrap());
     let animal = Player::new(&mut world)
         .view()
@@ -581,6 +595,49 @@ fn generated_population_is_seeded_individual_and_worker_invariant() {
                 .unwrap();
                 let before = world.snapshot();
                 assert_eq!(before.people.len(), 129);
+                let reaction = before
+                    .opinions
+                    .as_ref()
+                    .unwrap()
+                    .sensitivities
+                    .iter()
+                    .find(|row| row.person == 2)
+                    .unwrap()
+                    .opposed_action_reaction
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(reaction.blocked.unwrap().affinity, 1);
+                let other = before
+                    .opinions
+                    .as_ref()
+                    .unwrap()
+                    .sensitivities
+                    .iter()
+                    .find(|row| row.person == 4)
+                    .unwrap()
+                    .opposed_action_reaction
+                    .as_ref()
+                    .unwrap();
+                assert!(std::sync::Arc::ptr_eq(reaction, other));
+                assert!(
+                    before
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .sensitivities
+                        .iter()
+                        .find(|row| row.person == 3)
+                        .unwrap()
+                        .opposed_action_reaction
+                        .is_none()
+                );
+                let mut individual = reaction.clone();
+                std::sync::Arc::make_mut(&mut individual)
+                    .blocked
+                    .as_mut()
+                    .unwrap()
+                    .affinity = -4;
+                assert_eq!(other.blocked.unwrap().affinity, 1);
                 assert!(before.people.iter().any(|person| person.region == Some(1)));
                 assert!(before.people.iter().any(|person| person.region == Some(2)));
                 assert!(before.people.iter().any(|person| !person.willing_to_work));

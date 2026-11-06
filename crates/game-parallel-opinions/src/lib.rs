@@ -6,11 +6,13 @@ use std::collections::HashSet;
 use std::sync::Arc;
 mod confinement;
 mod harm;
+mod opposed_action;
 mod personal_change;
 mod report_trust;
 pub use confinement::{
     Experience as ConfinementExperience, ExperienceKind as ConfinementExperienceKind,
 };
+pub use opposed_action::{Experience as OpposedActionExperience, Outcome as OpposedActionOutcome};
 pub use personal_change::PersonalChange;
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -35,7 +37,8 @@ impl Clone for Opinions {
 }
 pub use game_parallel_opinions_model::{
     AffinityRules, ConfinementReaction, Confrontation, Event, ObligationDevelopment, Opinion,
-    RelationshipCase, ReportReception, Rules, Sensitivity, SubjectiveReaction,
+    OpposedActionReaction, RelationshipCase, ReportReception, Rules, Sensitivity,
+    SubjectiveReaction,
 };
 
 pub struct Index<'a> {
@@ -113,6 +116,19 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    pub fn tracks_opposed_action_reactions(&self) -> bool {
+        self.sensitivities.par_iter().any(|row| {
+            row.opposed_action_reaction.is_some()
+                || row
+                    .relationship_cases
+                    .iter()
+                    .any(|case| case.opposed_action_reaction.is_some())
+        })
+    }
+    /// Apply each observer's own interpretation of a directly opposed action.
+    pub fn learn_opposed_actions(&mut self, experiences: &[OpposedActionExperience], tick: u64) {
+        opposed_action::apply(self, experiences, tick);
+    }
     pub fn tracks_confinement_reactions(&self) -> bool {
         self.sensitivities.par_iter().any(|row| {
             row.confinement_reaction.is_some()
@@ -305,6 +321,7 @@ impl Opinions {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                opposed_action_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),

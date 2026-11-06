@@ -20,6 +20,8 @@ Live animal restraint is a separate physical interaction. An animal may yield, r
 
 Individuals can independently choose to release a local held animal, including one held by another person, according to their own affinity or social pressure. Releases contend per animal and take priority over its escape attempt. A handler may independently spend effort resisting one release, and a stronger releaser can prevail.
 
+Each participant in an opposed release may interpret the other person using their own general or relationship-specific opposed-action reactions. These signed feelings can influence later choices; the outcome creates no automatic approval, hostility, or obligation.
+
 Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. People can also choose to converse through a supply opening, including with strangers, acquaintances, or someone they fear. Talking through the opening is a social encounter but does not count as direct contact for the ordinary contact-based disease route; physical treatment still cannot cross the wall.
 
 The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.

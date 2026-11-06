@@ -1478,6 +1478,9 @@ fn an_autonomous_person_can_release_anothers_animal_from_fear() {
 
 #[test]
 fn a_handler_can_resist_release_and_both_participants_interpret_it() {
+    use game_parallel_opinions::{
+        AffinityRules, OpposedActionReaction, RelationshipCase, Sensitivity, SubjectiveReaction,
+    };
     let mut initial = animal_restraint_fixture();
     initial.people[1].controlled = true;
     initial.animal_feelings = Some(AnimalFeelings {
@@ -1534,6 +1537,68 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
         pressured_by: None,
         pressure_threshold: None,
     });
+    let opinions = held.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = vec![
+        Sensitivity {
+            person: 1,
+            opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+                blocked_other: Some(SubjectiveReaction {
+                    trust: 1,
+                    affinity: -5,
+                    fear: 0,
+                    obligation: 0,
+                }),
+                was_overcome: Some(SubjectiveReaction {
+                    trust: 0,
+                    affinity: 2,
+                    fear: 0,
+                    obligation: 0,
+                }),
+                ..Default::default()
+            })),
+            relationship_cases: vec![RelationshipCase {
+                target: 2,
+                opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+                    blocked_other: Some(SubjectiveReaction {
+                        trust: -2,
+                        affinity: 4,
+                        fear: 3,
+                        obligation: 0,
+                    }),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        Sensitivity {
+            person: 2,
+            opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+                blocked: Some(SubjectiveReaction {
+                    trust: 2,
+                    affinity: -3,
+                    fear: 0,
+                    obligation: 0,
+                }),
+                overcame: Some(SubjectiveReaction {
+                    trust: -1,
+                    affinity: 1,
+                    fear: 0,
+                    obligation: 0,
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    ]
+    .into();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -1568,6 +1633,23 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
         state.animal_feelings.as_ref().unwrap().affinity(1, 1),
         Some(-4)
     );
+    let directed = state.opinions.as_ref().unwrap().index();
+    assert_eq!(
+        (
+            directed.trust(1, 2),
+            directed.affinity(1, 2),
+            directed.feelings(1, 2)
+        ),
+        (-2, 4, (3, 0))
+    );
+    assert_eq!(
+        (
+            directed.trust(2, 1),
+            directed.affinity(2, 1),
+            directed.feelings(2, 1)
+        ),
+        (2, -3, (0, 0))
+    );
     assert_eq!(
         state.fauna.as_ref().unwrap().animals[0]
             .opinions
@@ -1596,6 +1678,9 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
             .affinity(1, 1),
         Some(2)
     );
+    let directed = strong_state.opinions.as_ref().unwrap().index();
+    assert_eq!((directed.trust(1, 2), directed.affinity(1, 2)), (0, 2));
+    assert_eq!((directed.trust(2, 1), directed.affinity(2, 1)), (-1, 1));
     assert!(
         strong_state
             .animal_restraints
@@ -2413,6 +2498,71 @@ fn animal_defense_workload(count: u64, shared: bool) -> State {
     state
 }
 
+fn enable_opposed_action_reactions(state: &mut State) {
+    use game_parallel_opinions::{
+        AffinityRules, OpposedActionReaction, Sensitivity, SubjectiveReaction,
+    };
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.clear();
+    opinions.events.clear();
+    opinions.rules.fear_decay_per_tick = 0;
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let reaction = std::sync::Arc::new(OpposedActionReaction {
+        blocked: Some(SubjectiveReaction {
+            affinity: 1,
+            ..Default::default()
+        }),
+        blocked_other: Some(SubjectiveReaction {
+            affinity: -1,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    opinions.sensitivities = state
+        .people
+        .iter()
+        .map(|person| Sensitivity {
+            person: person.id,
+            opposed_action_reaction: Some(reaction.clone()),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    state.opinions = Some(opinions);
+}
+
+#[test]
+fn opposed_action_relationship_changes_are_worker_deterministic_in_a_full_world() {
+    for shared in [false, true] {
+        let count = 4096;
+        let mut initial = animal_defense_workload(count, shared);
+        enable_opposed_action_reactions(&mut initial);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(
+                        state.opinions.as_ref().unwrap().records.len(),
+                        if shared { 2 } else { count as usize }
+                    );
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
 #[test]
 fn concentrated_and_independent_animal_defenses_are_worker_deterministic() {
     for shared in [false, true] {
@@ -2457,7 +2607,11 @@ fn concentrated_animal_defense_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let shared = std::env::var_os("LEGACY_SHARED").is_some();
-    let initial = animal_defense_workload(count, shared);
+    let reactions = std::env::var_os("LEGACY_OPPOSED_REACTIONS").is_some();
+    let mut initial = animal_defense_workload(count, shared);
+    if reactions {
+        enable_opposed_action_reactions(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -2469,7 +2623,8 @@ fn concentrated_animal_defense_benchmark() {
                 let now = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = now.elapsed().as_secs_f64();
-                let owner = world.snapshot().animal_restraints.unwrap();
+                let state = world.snapshot();
+                let owner = state.animal_restraints.unwrap();
                 let expected = if shared { 1 } else { count as usize / 2 };
                 assert_eq!(owner.holds.len(), expected);
                 assert_eq!(
@@ -2480,13 +2635,16 @@ fn concentrated_animal_defense_benchmark() {
                         .count(),
                     expected
                 );
+                if reactions {
+                    assert_eq!(state.opinions.unwrap().records.len(), expected * 2);
+                }
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} shared={shared} elapsed={:.6}",
+                "workers={workers} people={count} shared={shared} reactions={reactions} elapsed={:.6}",
                 samples[1]
             );
         });
@@ -6553,6 +6711,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -14176,14 +14335,17 @@ fn people_interpret_capture_and_release_in_their_own_way() {
     opinions.sensitivities = vec![
         OpinionSensitivity {
             person: 2,
+            opposed_action_reaction: None,
             confinement_reaction: Some(general),
             ..Default::default()
         },
         OpinionSensitivity {
             person: 3,
+            opposed_action_reaction: None,
             confinement_reaction: Some(general),
             relationship_cases: vec![RelationshipCase {
                 target: 1,
+                opposed_action_reaction: None,
                 confinement_reaction: Some(special),
                 ..Default::default()
             }],
@@ -14191,6 +14353,7 @@ fn people_interpret_capture_and_release_in_their_own_way() {
         },
         OpinionSensitivity {
             person: 4,
+            opposed_action_reaction: None,
             confinement_reaction: Some(general),
             ..Default::default()
         },
@@ -26484,6 +26647,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -26659,6 +26823,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -26839,6 +27004,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -26860,6 +27026,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         site_salvage: None,
         work_success: None,
         work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         obligation_gain: None,
         obligation_relief: None,
@@ -26921,6 +27088,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -27015,6 +27183,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: Some(ObligationDevelopment {
@@ -27197,6 +27366,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: None,
+            opposed_action_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: Some(ObligationDevelopment {
@@ -27449,6 +27619,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -27605,6 +27776,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -27822,6 +27994,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: None,
+            opposed_action_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
@@ -28700,6 +28873,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             affinity_site_salvage: None,
             affinity_work_success: Some(-3),
             affinity_work_refusal: Some(5),
+            opposed_action_reaction: None,
             confinement_reaction: None,
             relationship_cases: if override_case {
                 vec![RelationshipCase {
@@ -28717,6 +28891,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     site_salvage: None,
                     work_success: Some(4),
                     work_refusal: Some(-2),
+                    opposed_action_reaction: None,
                     confinement_reaction: None,
                     obligation_gain: None,
                     promise_obligation_gain: None,
@@ -29205,6 +29380,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: Some(2),
+            opposed_action_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
@@ -32759,6 +32935,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -32779,6 +32956,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         site_salvage: None,
         work_success: None,
         work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         obligation_gain: None,
         promise_obligation_gain: None,
@@ -33079,6 +33257,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -34330,6 +34509,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         affinity_site_salvage: Some(rate),
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -34350,6 +34530,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         site_salvage: Some(7),
         work_success: None,
         work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         obligation_gain: None,
         promise_obligation_gain: None,
@@ -35179,6 +35360,7 @@ fn concentrated_site_salvage_benchmark() {
                 affinity_site_salvage: Some(1),
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                opposed_action_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,

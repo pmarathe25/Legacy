@@ -1,5 +1,6 @@
 //! Data for individual social assessments.
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 mod merge;
 pub use merge::{Change, merge};
 
@@ -64,6 +65,9 @@ pub struct Sensitivity {
     /// This person's own signed interpretation of capture, resistance, and release.
     #[serde(default)]
     pub confinement_reaction: Option<ConfinementReaction>,
+    /// Personal interpretations of directly opposed actions; absent outcomes do nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposed_action_reaction: Option<Arc<OpposedActionReaction>>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -127,6 +131,9 @@ pub struct RelationshipCase {
     /// Overrides this observer's general confinement interpretation for this person.
     #[serde(default)]
     pub confinement_reaction: Option<ConfinementReaction>,
+    /// Per-outcome overrides for this particular person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opposed_action_reaction: Option<Arc<OpposedActionReaction>>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]
@@ -146,6 +153,20 @@ pub struct SubjectiveReaction {
     pub fear: i64,
     #[serde(default)]
     pub obligation: i64,
+}
+
+/// An observer's signed interpretations of an action opposed by another person.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OpposedActionReaction {
+    #[serde(default)]
+    pub blocked: Option<SubjectiveReaction>,
+    #[serde(default)]
+    pub overcame: Option<SubjectiveReaction>,
+    #[serde(default)]
+    pub blocked_other: Option<SubjectiveReaction>,
+    #[serde(default)]
+    pub was_overcome: Option<SubjectiveReaction>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

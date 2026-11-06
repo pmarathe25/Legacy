@@ -1,6 +1,123 @@
 use super::*;
 
 #[test]
+fn opposed_actions_use_each_observers_signed_reactions_and_per_outcome_overrides() {
+    let mut rules = rules();
+    rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let reaction = std::sync::Arc::new(OpposedActionReaction {
+        blocked: Some(SubjectiveReaction {
+            trust: 1,
+            affinity: -2,
+            fear: 3,
+            obligation: 0,
+        }),
+        overcame: Some(SubjectiveReaction {
+            trust: 2,
+            affinity: 1,
+            fear: 0,
+            obligation: 0,
+        }),
+        ..Default::default()
+    });
+    let mut sensitivities: Vec<_> = (1..=4096)
+        .map(|person| Sensitivity {
+            person,
+            opposed_action_reaction: Some(reaction.clone()),
+            ..Default::default()
+        })
+        .collect();
+    sensitivities[0].relationship_cases.push(RelationshipCase {
+        target: 9000,
+        opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+            blocked: Some(SubjectiveReaction {
+                trust: -1,
+                affinity: 5,
+                fear: 0,
+                obligation: 0,
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    sensitivities[1].relationship_cases.push(RelationshipCase {
+        target: 9000,
+        opposed_action_reaction: Some(std::sync::Arc::new(OpposedActionReaction {
+            blocked: Some(SubjectiveReaction::default()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    let initial = Opinions {
+        rules,
+        sensitivities: sensitivities.into(),
+        records: vec![],
+        events: vec![],
+    };
+    let mut experiences: Vec<_> = (1..=4096)
+        .map(|observer| OpposedActionExperience {
+            observer,
+            other: 9000,
+            outcome: OpposedActionOutcome::Blocked,
+        })
+        .collect();
+    experiences.push(OpposedActionExperience {
+        observer: 2,
+        other: 9000,
+        outcome: OpposedActionOutcome::Overcame,
+    });
+    experiences.push(OpposedActionExperience {
+        observer: 4097,
+        other: 9000,
+        outcome: OpposedActionOutcome::Blocked,
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut owner = initial.clone();
+                owner.learn_opposed_actions(&experiences, 1);
+                owner
+            })
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    let index = result.index();
+    assert_eq!(
+        (
+            index.trust(1, 9000),
+            index.affinity(1, 9000),
+            index.feelings(1, 9000)
+        ),
+        (-1, 5, (0, 0))
+    );
+    assert_eq!(
+        (
+            index.trust(2, 9000),
+            index.affinity(2, 9000),
+            index.feelings(2, 9000)
+        ),
+        (2, 1, (0, 0))
+    );
+    assert_eq!(
+        (
+            index.trust(3, 9000),
+            index.affinity(3, 9000),
+            index.feelings(3, 9000)
+        ),
+        (1, -2, (3, 0))
+    );
+    assert!(!result.records.iter().any(|row| row.observer == 4097));
+}
+
+#[test]
 fn confinement_experiences_use_personal_signed_reactions_and_case_overrides() {
     let mut rules = rules();
     rules.affinity = Some(AffinityRules {
@@ -22,12 +139,14 @@ fn confinement_experiences_use_personal_signed_reactions_and_case_overrides() {
     let mut sensitivities: Vec<_> = (1..=4096)
         .map(|person| Sensitivity {
             person,
+            opposed_action_reaction: None,
             confinement_reaction: Some(reaction),
             ..Default::default()
         })
         .collect();
     sensitivities[0].relationship_cases.push(RelationshipCase {
         target: 9000,
+        opposed_action_reaction: None,
         confinement_reaction: Some(ConfinementReaction {
             captured: SubjectiveReaction {
                 trust: -1,
@@ -462,6 +581,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                opposed_action_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -488,6 +608,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                opposed_action_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -528,6 +649,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: None,
+            opposed_action_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
@@ -604,6 +726,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                opposed_action_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -630,6 +753,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                opposed_action_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -1059,6 +1183,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -1127,6 +1252,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
@@ -1143,6 +1269,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
             site_salvage: None,
             work_success: None,
             work_refusal: None,
+            opposed_action_reaction: None,
             confinement_reaction: None,
             obligation_gain: None,
             obligation_relief: None,
@@ -1198,6 +1325,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        opposed_action_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
@@ -1214,6 +1342,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
             site_salvage: None,
             work_success: None,
             work_refusal: None,
+            opposed_action_reaction: None,
             confinement_reaction: None,
             obligation_gain: Some(4),
             obligation_relief: Some(2),
