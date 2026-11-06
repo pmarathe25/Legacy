@@ -68,7 +68,8 @@ pub use animal_feelings::{
 pub use animal_handling::{Handling as AnimalHandling, Policy as AnimalHandlingPolicy};
 pub use game_parallel_animal_restraint::{
     Event as AnimalRestraintEvent, EventKind as AnimalRestraintEventKind, Hold as AnimalHold,
-    Policy as AnimalCapturePolicy, Restraints as AnimalRestraints,
+    Policy as AnimalCapturePolicy, ReleasePolicy as AnimalReleasePolicy,
+    Restraints as AnimalRestraints,
 };
 pub use game_parallel_fauna::handling::{
     Event as AnimalHandlingEvent, Outcome as AnimalHandlingOutcome,
@@ -2781,7 +2782,7 @@ impl Economy {
         let has_capture_policies = self
             .animal_restraints
             .as_ref()
-            .is_some_and(|owner| !owner.policies.is_empty());
+            .is_some_and(|owner| !owner.policies.is_empty() || !owner.release_policies.is_empty());
         let mut restraint_blocked =
             if self.animal_restraints.is_some() || manual_restraint.is_some() {
                 feed_targets.clone()

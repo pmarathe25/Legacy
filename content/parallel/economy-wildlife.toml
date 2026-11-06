@@ -464,6 +464,7 @@ policies = [{ person = 2, animal = 3, willing = false }]
 default_effort = 2
 capacity_per_handler = 1
 policies = [{ person = 2, animal = 3, willing = false, effort = 2 }]
+release_policies = [{ person = 2, animal = 3, willing = false }]
 
 [fauna]
 next_id = 4

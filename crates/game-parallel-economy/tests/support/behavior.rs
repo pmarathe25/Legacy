@@ -1060,6 +1060,7 @@ fn animal_restraint_fixture() -> State {
         default_effort: 3,
         capacity_per_handler: 1,
         policies: vec![],
+        release_policies: vec![],
         holds: vec![],
         events: vec![],
     });
@@ -1387,6 +1388,67 @@ fn a_persons_own_animal_affinity_can_shape_capture_choices() {
     let mut world = Economy::compile(initial).unwrap();
     world.advance().unwrap();
     assert!(world.snapshot().animal_restraints.unwrap().holds.is_empty());
+}
+
+#[test]
+fn an_autonomous_person_can_release_anothers_animal_from_fear() {
+    let mut initial = animal_restraint_fixture();
+    initial.opinions.as_mut().unwrap().records.clear();
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.capture_animal(1, 1).unwrap());
+    let mut held = world.snapshot();
+    held.animal_restraints
+        .as_mut()
+        .unwrap()
+        .release_policies
+        .push(AnimalReleasePolicy {
+            person: 4,
+            animal: Some(1),
+            willing: false,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: Some(2),
+            pressure_threshold: Some(3),
+        });
+    let mut no_pressure = Economy::compile(held.clone()).unwrap();
+    no_pressure.advance().unwrap();
+    assert!(no_pressure.snapshot().animal_restraints.unwrap().held(1));
+    held.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 4,
+        target: 2,
+        affinity: 0,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(held.clone()).unwrap();
+                world.advance().unwrap();
+                world.snapshot()
+            })
+    };
+    let state = run(1);
+    assert_eq!(state, run(4));
+    let restraints = state.animal_restraints.as_ref().unwrap();
+    assert!(!restraints.held(1));
+    assert!(restraints.events.iter().any(|event| event.animal == 1
+        && event.actor == Some(4)
+        && event.kind == AnimalRestraintEventKind::Released));
+    assert_eq!(
+        state.fauna.as_ref().unwrap().animals[0]
+            .opinions
+            .iter()
+            .find(|opinion| opinion.person == 4)
+            .unwrap()
+            .affinity,
+        -1
+    );
+    assert_eq!(Economy::compile(state.clone()).unwrap().snapshot(), state);
 }
 
 #[test]
@@ -1858,6 +1920,7 @@ fn animal_capture_workload(count: u64, shared: bool) -> State {
     state.animal_restraints = Some(AnimalRestraints {
         default_effort: 1,
         capacity_per_handler: 1,
+        release_policies: vec![],
         policies: (1..=count)
             .map(|person| AnimalCapturePolicy {
                 person,
@@ -1938,6 +2001,94 @@ fn concentrated_animal_capture_benchmark() {
                     world.snapshot().animal_restraints.unwrap().holds.len(),
                     if shared { 1 } else { count as usize }
                 );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} shared={shared} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+fn animal_release_workload(count: u64, shared: bool) -> State {
+    let mut state = animal_capture_workload(count, shared);
+    let owner = state.animal_restraints.as_mut().unwrap();
+    owner.policies.clear();
+    owner.holds = (1..=if shared { 1 } else { count })
+        .map(|animal| AnimalHold {
+            animal,
+            handler: animal,
+            integrity: 1,
+        })
+        .collect();
+    owner.release_policies = (1..=count)
+        .map(|person| AnimalReleasePolicy {
+            person,
+            animal: Some(if shared { 1 } else { person }),
+            willing: true,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn concentrated_and_independent_animal_releases_are_worker_deterministic() {
+    for shared in [false, true] {
+        let count = 4096;
+        let initial = animal_release_workload(count, shared);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let owner = state.animal_restraints.as_ref().unwrap();
+                    assert!(owner.holds.is_empty());
+                    assert_eq!(owner.events.len(), if shared { 1 } else { count as usize });
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+#[ignore = "manual concentrated animal release benchmark"]
+fn concentrated_animal_release_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let shared = std::env::var_os("LEGACY_SHARED").is_some();
+    let initial = animal_release_workload(count, shared);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let now = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = now.elapsed().as_secs_f64();
+                let owner = world.snapshot().animal_restraints.unwrap();
+                assert!(owner.holds.is_empty());
+                assert_eq!(owner.events.len(), if shared { 1 } else { count as usize });
                 if round > 0 {
                     samples.push(elapsed);
                 }

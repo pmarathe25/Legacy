@@ -29,6 +29,24 @@ pub struct Policy {
     pub pressure_threshold: Option<u64>,
 }
 
+/// A person's independent inclination to release a physically held animal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleasePolicy {
+    pub person: u64,
+    #[serde(default)]
+    pub animal: Option<u64>,
+    pub willing: bool,
+    #[serde(default)]
+    pub affinity_at_least: Option<i32>,
+    #[serde(default)]
+    pub affinity_at_most: Option<i32>,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Hold {
@@ -70,6 +88,8 @@ pub struct Restraints {
     #[serde(default)]
     pub policies: Vec<Policy>,
     #[serde(default)]
+    pub release_policies: Vec<ReleasePolicy>,
+    #[serde(default)]
     pub holds: Vec<Hold>,
     #[serde(default)]
     pub events: Vec<Event>,
@@ -81,6 +101,7 @@ impl Default for Restraints {
             default_effort: 1,
             capacity_per_handler: 1,
             policies: Vec::new(),
+            release_policies: Vec::new(),
             holds: Vec::new(),
             events: Vec::new(),
         }
@@ -112,6 +133,8 @@ impl Restraints {
         let animals = indexed(fauna);
         self.policies
             .par_sort_unstable_by_key(|policy| policy.person);
+        self.release_policies
+            .par_sort_unstable_by_key(|policy| policy.person);
         self.holds.par_sort_unstable_by_key(|hold| hold.animal);
         self.events
             .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
@@ -137,6 +160,10 @@ impl Restraints {
                 .par_windows(2)
                 .any(|pair| pair[0].person == pair[1].person)
             || self
+                .release_policies
+                .par_windows(2)
+                .any(|pair| pair[0].person == pair[1].person)
+            || self
                 .holds
                 .par_windows(2)
                 .any(|pair| pair[0].animal == pair[1].animal)
@@ -146,6 +173,15 @@ impl Restraints {
             || self.policies.par_iter().any(|policy| {
                 !ids.contains(&policy.person)
                     || policy.effort == 0
+                    || policy.animal.is_some_and(|id| animal(id).is_none())
+                    || policy.pressured_by.is_some() != policy.pressure_threshold.is_some()
+                    || policy.pressure_threshold == Some(0)
+                    || policy
+                        .pressured_by
+                        .is_some_and(|id| id == policy.person || !ids.contains(&id))
+            })
+            || self.release_policies.par_iter().any(|policy| {
+                !ids.contains(&policy.person)
                     || policy.animal.is_some_and(|id| animal(id).is_none())
                     || policy.pressured_by.is_some() != policy.pressure_threshold.is_some()
                     || policy.pressure_threshold == Some(0)
@@ -296,13 +332,17 @@ impl Context<'_> {
             });
         }
         if let Some(owner) = self.owner.filter(|owner| {
-            owner.policies.is_empty() && owner.holds.is_empty() && self.manual.is_none()
+            owner.policies.is_empty()
+                && owner.release_policies.is_empty()
+                && owner.holds.is_empty()
+                && self.manual.is_none()
         }) {
             return Ok(Plan {
                 state: Some(Restraints {
                     default_effort: owner.default_effort,
                     capacity_per_handler: owner.capacity_per_handler,
                     policies: Vec::new(),
+                    release_policies: Vec::new(),
                     holds: Vec::new(),
                     events: Vec::new(),
                 }),
@@ -357,6 +397,7 @@ impl Context<'_> {
                 default_effort: owner.default_effort,
                 capacity_per_handler: owner.capacity_per_handler,
                 policies: owner.policies.par_iter().cloned().collect(),
+                release_policies: owner.release_policies.par_iter().cloned().collect(),
                 holds: owner.holds.par_iter().cloned().collect(),
                 events: Vec::new(),
             });
@@ -390,11 +431,173 @@ impl Context<'_> {
             }
             _ => None,
         };
+        let opinions = self
+            .opinions
+            .filter(|_| {
+                next.policies
+                    .par_iter()
+                    .any(|policy| policy.pressure_threshold.is_some())
+                    || next
+                        .release_policies
+                        .par_iter()
+                        .any(|policy| policy.pressure_threshold.is_some())
+            })
+            .map(Opinions::index);
+        let manual_capture = match self.manual {
+            Some(Manual::Capture { animal, .. }) => Some(animal),
+            _ => None,
+        };
+        let dense_holds = next
+            .holds
+            .first()
+            .zip(next.holds.last())
+            .and_then(|(first, last)| {
+                (last.animal.checked_sub(first.animal) == Some((next.holds.len() - 1) as u64))
+                    .then_some(first.animal)
+            });
+        let is_held = |id: u64| {
+            dense_holds.map_or_else(
+                || next.held(id),
+                |first| {
+                    id.checked_sub(first)
+                        .and_then(|offset| usize::try_from(offset).ok())
+                        .is_some_and(|index| index < next.holds.len())
+                },
+            )
+        };
+        let mut held_by_region: Vec<_> = if next
+            .release_policies
+            .par_iter()
+            .any(|policy| policy.animal.is_none())
+        {
+            next.holds
+                .par_iter()
+                .filter(|hold| {
+                    self.blocked.binary_search(&hold.animal).is_err()
+                        && manual_capture != Some(hold.animal)
+                        && manual_release != Some(hold.animal)
+                })
+                .filter_map(|hold| {
+                    animal(hold.animal)
+                        .filter(|a| a.health > 0)
+                        .map(|a| (a.region, a.id))
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if held_by_region.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            held_by_region.par_sort_unstable();
+        }
+        let mut release_candidates: Vec<_> = next
+            .release_policies
+            .par_iter()
+            .filter_map(|policy| {
+                let actor = person(policy.person)?;
+                let target = policy.animal.or_else(|| {
+                    let region = actor.region?;
+                    let start = held_by_region.partition_point(|row| row.0 < region);
+                    let end = held_by_region.partition_point(|row| row.0 <= region);
+                    (start < end).then(|| {
+                        let offset = (game_parallel_genetics::random(
+                            self.seed ^ region,
+                            actor.id,
+                            self.tick,
+                        ) % (end - start) as u64) as usize;
+                        held_by_region[start + offset].1
+                    })
+                })?;
+                let target_animal = animal(target)?;
+                let pressured = policy
+                    .pressured_by
+                    .zip(policy.pressure_threshold)
+                    .is_some_and(|(other, threshold)| {
+                        opinions.as_ref().is_some_and(|index| {
+                            let (fear, obligation) = index.feelings(actor.id, other);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                let affinity = || {
+                    self.affinity
+                        .map_or(0, |feelings| feelings(actor.id, target))
+                };
+                let willing = policy.willing
+                    && policy.affinity_at_least.is_none_or(|min| affinity() >= min)
+                    && policy.affinity_at_most.is_none_or(|max| affinity() <= max);
+                (!actor.controlled
+                    && actor.health > 0
+                    && actor.hunger <= self.max_hunger
+                    && target_animal.health > 0
+                    && actor.region == Some(target_animal.region)
+                    && self.busy.binary_search(&actor.id).is_err()
+                    && self.blocked.binary_search(&target).is_err()
+                    && manual_capture != Some(target)
+                    && manual_release != Some(target)
+                    && is_held(target)
+                    && (willing || pressured))
+                    .then_some((
+                        target,
+                        game_parallel_genetics::random(self.seed ^ target, actor.id, self.tick),
+                        actor.id,
+                    ))
+            })
+            .collect();
+        actors.par_extend(release_candidates.par_iter().map(|candidate| candidate.2));
+        if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            actors.par_sort_unstable();
+        }
+        actors.dedup();
+        if release_candidates
+            .par_windows(2)
+            .any(|pair| pair[0].0 > pair[1].0)
+        {
+            release_candidates.par_sort_unstable_by_key(|row| row.0);
+        }
+        let released: Vec<_> = release_candidates
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                let chosen = group
+                    .par_iter()
+                    .min_by_key(|row| (row.1, row.2))
+                    .expect("nonempty release group");
+                Event {
+                    tick: self.tick,
+                    animal: chosen.0,
+                    actor: Some(chosen.2),
+                    kind: EventKind::Released,
+                }
+            })
+            .collect();
+        next.events.par_extend(released);
+        let mut released_targets: Vec<_> =
+            next.events.par_iter().map(|event| event.animal).collect();
+        if released_targets
+            .par_windows(2)
+            .any(|pair| pair[0] > pair[1])
+        {
+            released_targets.par_sort_unstable();
+        }
+        let dense_released = released_targets
+            .first()
+            .zip(released_targets.last())
+            .and_then(|(first, last)| {
+                (last.checked_sub(*first) == Some((released_targets.len() - 1) as u64))
+                    .then_some(*first)
+            });
         let progressed: Vec<_> = next
             .holds
             .par_iter()
             .filter_map(|hold| {
-                if manual_release == Some(hold.animal) {
+                let released = dense_released.map_or_else(
+                    || released_targets.binary_search(&hold.animal).is_ok(),
+                    |first| {
+                        hold.animal
+                            .checked_sub(first)
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .is_some_and(|index| index < released_targets.len())
+                    },
+                );
+                if released {
                     return None;
                 }
                 if self.blocked.binary_search(&hold.animal).is_ok() {
@@ -437,8 +640,12 @@ impl Context<'_> {
             .par_extend(progressed.into_par_iter().filter_map(|row| row.1));
         let mut unavailable: Vec<_> = next.events.par_iter().map(|event| event.animal).collect();
         unavailable.par_extend(self.blocked.par_iter().copied());
-        unavailable.par_sort_unstable();
-        unavailable.dedup();
+        if unavailable.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            unavailable.par_sort_unstable();
+        }
+        if unavailable.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            unavailable.dedup();
+        }
         let mut handlers: Vec<_> = next.holds.par_iter().map(|hold| hold.handler).collect();
         if handlers.par_windows(2).any(|pair| pair[0] > pair[1]) {
             handlers.par_sort_unstable();
@@ -466,14 +673,6 @@ impl Context<'_> {
         if visible.par_windows(2).any(|pair| pair[0] > pair[1]) {
             visible.par_sort_unstable();
         }
-        let opinions = self
-            .opinions
-            .filter(|_| {
-                next.policies
-                    .par_iter()
-                    .any(|policy| policy.pressure_threshold.is_some())
-            })
-            .map(Opinions::index);
         let mut candidates: Vec<_> = next
             .policies
             .par_iter()
@@ -514,6 +713,7 @@ impl Context<'_> {
                     && target_animal.health > 0
                     && actor.region == Some(target_animal.region)
                     && self.busy.binary_search(&actor.id).is_err()
+                    && actors.binary_search(&actor.id).is_err()
                     && has_capacity(actor.id)
                     && next
                         .holds

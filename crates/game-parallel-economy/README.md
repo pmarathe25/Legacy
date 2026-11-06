@@ -18,6 +18,8 @@ People can independently attempt to handle a living local animal. The animal's o
 
 Live animal restraint is a separate physical interaction. An animal may yield, resist, be overpowered, or later escape; any capable local person can release it. A hold is not ownership and ends if the handler leaves, becomes incapacitated, or is separated by a barrier. The animal remains in its actual region and continues ordinary biology.
 
+Individuals can independently choose to release a local held animal, including one held by another person, according to their own affinity or social pressure. Releases contend per animal and take priority over its escape attempt; active resistance by the handler is not yet represented.
+
 Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. People can also choose to converse through a supply opening, including with strangers, acquaintances, or someone they fear. Talking through the opening is a social encounter but does not count as direct contact for the ordinary contact-based disease route; physical treatment still cannot cross the wall.
 
 The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.

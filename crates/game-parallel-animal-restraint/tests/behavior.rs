@@ -1,4 +1,6 @@
-use game_parallel_animal_restraint::{Context, EventKind, Manual, Policy, Restraints};
+use game_parallel_animal_restraint::{
+    Context, EventKind, Hold, Manual, Policy, ReleasePolicy, Restraints,
+};
 use game_parallel_economy_person::Person;
 use game_parallel_fauna::{Animal, Fauna, SocialResponse, Species, restraint};
 use game_parallel_genetics::{Genome, Sex};
@@ -85,6 +87,7 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
     let owner = Restraints {
         default_effort: 2,
         capacity_per_handler: 1,
+        release_policies: vec![],
         holds: vec![],
         events: vec![],
         policies: (1..=count)
@@ -230,4 +233,106 @@ fn concentrated_and_independent_captures_are_deterministic() {
         assert_eq!(one.state, four.state);
         assert_eq!(one.actors, four.actors);
     }
+}
+
+#[test]
+fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
+    for shared in [false, true] {
+        let count = 4096;
+        let (people, fauna, mut owner) = fixture(count, shared);
+        for policy in &mut owner.policies {
+            policy.willing = false;
+        }
+        owner.holds = (1..=if shared { 1 } else { count })
+            .map(|animal| Hold {
+                animal,
+                handler: animal,
+                integrity: 2,
+            })
+            .collect();
+        owner.release_policies = (1..=count)
+            .map(|person| ReleasePolicy {
+                person,
+                animal: Some(if shared { 1 } else { person }),
+                willing: true,
+                affinity_at_least: None,
+                affinity_at_most: None,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect();
+        owner
+            .normalize_and_validate(&people, Some(&fauna), 0)
+            .unwrap();
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| prepare(&owner, &fauna, &people, 1, None))
+        };
+        let one = run(1);
+        let four = run(4);
+        assert_eq!(one.state, four.state);
+        assert_eq!(one.actors, four.actors);
+        assert_eq!(one.actors.len(), count as usize);
+        let state = one.state.unwrap();
+        assert!(state.holds.is_empty());
+        assert_eq!(state.events.len(), if shared { 1 } else { count as usize });
+        assert!(
+            state
+                .events
+                .iter()
+                .all(|event| event.kind == EventKind::Released)
+        );
+    }
+}
+
+#[test]
+fn flexible_releaser_selects_an_unblocked_local_hold() {
+    let (people, fauna, mut owner) = fixture(2, false);
+    owner.policies.clear();
+    owner.holds = vec![
+        Hold {
+            animal: 1,
+            handler: 1,
+            integrity: 2,
+        },
+        Hold {
+            animal: 2,
+            handler: 2,
+            integrity: 2,
+        },
+    ];
+    owner.release_policies = vec![ReleasePolicy {
+        person: 1,
+        animal: None,
+        willing: true,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    let result = Context {
+        owner: Some(&owner),
+        fauna: Some(&fauna),
+        people: &people,
+        opinions: None,
+        affinity: None,
+        busy: &[],
+        blocked: &[1],
+        max_hunger: 100,
+        seed: 7,
+        tick: 1,
+        manual: None,
+    }
+    .prepare()
+    .unwrap()
+    .state
+    .unwrap();
+    assert!(result.held(1));
+    assert!(!result.held(2));
+    assert!(result.events.iter().any(|event| event.animal == 2
+        && event.actor == Some(1)
+        && event.kind == EventKind::Released));
 }
