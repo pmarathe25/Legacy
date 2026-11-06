@@ -1075,9 +1075,9 @@ fn animal_restraint_fixture() -> State {
         inherit_births: false,
         default_effort: 3,
         capacity_per_handler: 1,
-        policies: vec![],
-        release_policies: vec![],
-        defense_policies: vec![],
+        policies: vec![].into(),
+        release_policies: vec![].into(),
+        defense_policies: vec![].into(),
         holds: vec![],
         events: vec![],
     });
@@ -1368,7 +1368,7 @@ fn a_persons_own_animal_affinity_can_shape_capture_choices() {
         .animal_restraints
         .as_mut()
         .unwrap()
-        .policies
+        .policies_mut()
         .push(AnimalCapturePolicy {
             person: 4,
             animal: Some(1),
@@ -1424,7 +1424,7 @@ fn an_autonomous_person_can_release_anothers_animal_from_fear() {
     held.animal_restraints
         .as_mut()
         .unwrap()
-        .release_policies
+        .release_policies_mut()
         .push(AnimalReleasePolicy {
             person: 4,
             animal: Some(1),
@@ -1520,14 +1520,14 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
     let mut held = world.snapshot();
     held.people[0].controlled = false;
     let owner = held.animal_restraints.as_mut().unwrap();
-    owner.defense_policies.push(AnimalDefensePolicy {
+    owner.defense_policies_mut().push(AnimalDefensePolicy {
         person: 1,
         willing: true,
         effort: 2,
         pressured_by: None,
         pressure_threshold: None,
     });
-    owner.release_policies.push(AnimalReleasePolicy {
+    owner.release_policies_mut().push(AnimalReleasePolicy {
         person: 2,
         animal: Some(1),
         willing: false,
@@ -1665,7 +1665,7 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
         .animal_restraints
         .as_mut()
         .unwrap()
-        .release_policies[0]
+        .release_policies_mut()[0]
         .effort = 3;
     let mut stronger = Economy::compile(stronger).unwrap();
     assert!(stronger.release_animal(2, 1).unwrap());
@@ -1702,7 +1702,7 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
         .animal_restraints
         .as_mut()
         .unwrap()
-        .defense_policies[0];
+        .defense_policies_mut()[0];
     defense.willing = false;
     defense.pressured_by = Some(2);
     defense.pressure_threshold = Some(3);
@@ -1728,7 +1728,7 @@ fn controlled_handler_can_defend_against_an_autonomous_release() {
     held.animal_restraints
         .as_mut()
         .unwrap()
-        .release_policies
+        .release_policies_mut()
         .push(AnimalReleasePolicy {
             person: 4,
             animal: Some(1),
@@ -1813,7 +1813,7 @@ fn animal_capture_arbitrates_with_feeding_handling_and_hunting() {
         .animal_restraints
         .as_mut()
         .unwrap()
-        .policies
+        .policies_mut()
         .push(AnimalCapturePolicy {
             person: 4,
             animal: Some(1),
@@ -1871,7 +1871,7 @@ fn a_person_can_attempt_animal_capture_from_fear_without_willingness() {
         .animal_restraints
         .as_mut()
         .unwrap()
-        .policies
+        .policies_mut()
         .push(AnimalCapturePolicy {
             person: 4,
             animal: Some(1),
@@ -1894,6 +1894,51 @@ fn a_person_can_attempt_animal_capture_from_fear_without_willingness() {
     world.advance().unwrap();
     let state = world.snapshot();
     assert_eq!(state.animal_restraints.unwrap().holds[0].handler, 4);
+}
+
+#[test]
+fn animal_policy_snapshots_remain_independent_when_a_person_changes_their_mind() {
+    let mut initial = animal_restraint_fixture();
+    initial
+        .animal_restraints
+        .as_mut()
+        .unwrap()
+        .policies_mut()
+        .push(AnimalCapturePolicy {
+            person: 4,
+            animal: Some(1),
+            willing: true,
+            affinity_at_least: None,
+            affinity_at_most: None,
+            effort: 3,
+            pressured_by: None,
+            pressure_threshold: None,
+        });
+    let mut world = Economy::compile(initial).unwrap();
+    let before = world.snapshot();
+    world.advance().unwrap();
+    let after = world.snapshot();
+    assert!(std::sync::Arc::ptr_eq(
+        &before.animal_restraints.as_ref().unwrap().policies,
+        &after.animal_restraints.as_ref().unwrap().policies
+    ));
+    let stale = world.prepare().unwrap();
+    world.set_animal_capture_choice(4, false).unwrap();
+    assert!(world.commit(stale).is_err());
+    let changed = world.snapshot();
+    assert!(before.animal_restraints.as_ref().unwrap().policies[0].willing);
+    assert!(after.animal_restraints.as_ref().unwrap().policies[0].willing);
+    assert!(!changed.animal_restraints.as_ref().unwrap().policies[0].willing);
+    assert!(!std::sync::Arc::ptr_eq(
+        &after.animal_restraints.as_ref().unwrap().policies,
+        &changed.animal_restraints.as_ref().unwrap().policies
+    ));
+    assert_eq!(
+        Economy::compile(serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap())
+            .unwrap()
+            .snapshot(),
+        changed
+    );
 }
 
 #[test]
@@ -2265,8 +2310,8 @@ fn animal_capture_workload(count: u64, shared: bool) -> State {
         inherit_births: false,
         default_effort: 1,
         capacity_per_handler: 1,
-        release_policies: vec![],
-        defense_policies: vec![],
+        release_policies: vec![].into(),
+        defense_policies: vec![].into(),
         policies: (1..=count)
             .map(|person| AnimalCapturePolicy {
                 person,
@@ -2278,7 +2323,8 @@ fn animal_capture_workload(count: u64, shared: bool) -> State {
                 pressured_by: None,
                 pressure_threshold: None,
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
         holds: vec![],
         events: vec![],
     });
@@ -2362,7 +2408,7 @@ fn concentrated_animal_capture_benchmark() {
 fn animal_release_workload(count: u64, shared: bool) -> State {
     let mut state = animal_capture_workload(count, shared);
     let owner = state.animal_restraints.as_mut().unwrap();
-    owner.policies.clear();
+    owner.policies_mut().clear();
     owner.holds = (1..=if shared { 1 } else { count })
         .map(|animal| AnimalHold {
             animal,
@@ -2370,7 +2416,7 @@ fn animal_release_workload(count: u64, shared: bool) -> State {
             integrity: 1,
         })
         .collect();
-    owner.release_policies = (1..=count)
+    *owner.release_policies_mut() = (1..=count)
         .map(|person| AnimalReleasePolicy {
             person,
             animal: Some(if shared { 1 } else { person }),
@@ -2459,7 +2505,7 @@ fn animal_defense_workload(count: u64, shared: bool) -> State {
             integrity: 1,
         })
         .collect();
-    owner.defense_policies = (1..=animals)
+    *owner.defense_policies_mut() = (1..=animals)
         .map(|person| AnimalDefensePolicy {
             person,
             willing: true,
@@ -2468,7 +2514,7 @@ fn animal_defense_workload(count: u64, shared: bool) -> State {
             pressure_threshold: None,
         })
         .collect();
-    owner.release_policies = if shared {
+    *owner.release_policies_mut() = if shared {
         (2..=count)
             .map(|person| AnimalReleasePolicy {
                 person,
@@ -10160,7 +10206,8 @@ fn newborn_animal_restraint_inclinations_do_not_inherit_targets_or_pressure() {
             effort: 9,
             pressured_by: Some(2),
             pressure_threshold: Some(3),
-        }],
+        }]
+        .into(),
         release_policies: vec![AnimalReleasePolicy {
             person: 1,
             animal: Some(1),
@@ -10170,8 +10217,9 @@ fn newborn_animal_restraint_inclinations_do_not_inherit_targets_or_pressure() {
             affinity_at_most: Some(5),
             pressured_by: Some(2),
             pressure_threshold: Some(3),
-        }],
-        defense_policies: vec![],
+        }]
+        .into(),
+        defense_policies: vec![].into(),
         holds: vec![],
         events: vec![],
     });

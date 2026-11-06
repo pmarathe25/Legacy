@@ -1154,7 +1154,7 @@ impl Economy {
             .policies
             .binary_search_by_key(&person, |policy| policy.person)
             .map_err(|_| "person has no animal capture preference")?;
-        owner.policies[index].willing = willing;
+        owner.policies_mut()[index].willing = willing;
         self.epoch = epoch;
         Ok(())
     }
@@ -1193,13 +1193,13 @@ impl Economy {
                 .defense_policies
                 .binary_search_by_key(&person, |policy| policy.person)
                 .map_err(|_| "person has no animal defense preference")?;
-            owner.defense_policies[index].willing = willing;
+            owner.defense_policies_mut()[index].willing = willing;
         } else {
             let index = owner
                 .release_policies
                 .binary_search_by_key(&person, |policy| policy.person)
                 .map_err(|_| "person has no animal release preference")?;
-            owner.release_policies[index].willing = willing;
+            owner.release_policies_mut()[index].willing = willing;
         }
         self.epoch = epoch;
         Ok(())

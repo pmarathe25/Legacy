@@ -5,6 +5,7 @@ use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+use std::sync::Arc;
 
 fn one() -> u64 {
     1
@@ -107,11 +108,11 @@ pub struct Restraints {
     #[serde(default = "one")]
     pub capacity_per_handler: u64,
     #[serde(default)]
-    pub policies: Vec<Policy>,
+    pub policies: Arc<Vec<Policy>>,
     #[serde(default)]
-    pub release_policies: Vec<ReleasePolicy>,
+    pub release_policies: Arc<Vec<ReleasePolicy>>,
     #[serde(default)]
-    pub defense_policies: Vec<DefensePolicy>,
+    pub defense_policies: Arc<Vec<DefensePolicy>>,
     #[serde(default)]
     pub holds: Vec<Hold>,
     #[serde(default)]
@@ -124,9 +125,9 @@ impl Default for Restraints {
             inherit_births: false,
             default_effort: 1,
             capacity_per_handler: 1,
-            policies: Vec::new(),
-            release_policies: Vec::new(),
-            defense_policies: Vec::new(),
+            policies: Arc::new(Vec::new()),
+            release_policies: Arc::new(Vec::new()),
+            defense_policies: Arc::new(Vec::new()),
             holds: Vec::new(),
             events: Vec::new(),
         }
@@ -141,7 +142,26 @@ fn indexed(fauna: &Fauna) -> Vec<&Animal> {
     animals
 }
 
+fn detach<T: Clone + Send + Sync>(shared: &mut Arc<Vec<T>>) -> &mut Vec<T> {
+    if Arc::get_mut(shared).is_none() {
+        *shared = Arc::new(shared.par_iter().cloned().collect());
+    }
+    Arc::get_mut(shared).expect("exclusive policy generation")
+}
+
 impl Restraints {
+    /// Detach a shared policy generation before changing an individual's choice.
+    pub fn policies_mut(&mut self) -> &mut Vec<Policy> {
+        detach(&mut self.policies)
+    }
+
+    pub fn release_policies_mut(&mut self) -> &mut Vec<ReleasePolicy> {
+        detach(&mut self.release_policies)
+    }
+
+    pub fn defense_policies_mut(&mut self) -> &mut Vec<DefensePolicy> {
+        detach(&mut self.defense_policies)
+    }
     pub fn held(&self, animal: u64) -> bool {
         self.holds
             .binary_search_by_key(&animal, |hold| hold.animal)
@@ -156,12 +176,30 @@ impl Restraints {
     ) -> Result<(), String> {
         let fauna = fauna.ok_or("animal restraint requires wildlife")?;
         let animals = indexed(fauna);
-        self.policies
-            .par_sort_unstable_by_key(|policy| policy.person);
-        self.release_policies
-            .par_sort_unstable_by_key(|policy| policy.person);
-        self.defense_policies
-            .par_sort_unstable_by_key(|policy| policy.person);
+        if self
+            .policies
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            self.policies_mut()
+                .par_sort_unstable_by_key(|policy| policy.person);
+        }
+        if self
+            .release_policies
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            self.release_policies_mut()
+                .par_sort_unstable_by_key(|policy| policy.person);
+        }
+        if self
+            .defense_policies
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            self.defense_policies_mut()
+                .par_sort_unstable_by_key(|policy| policy.person);
+        }
         self.holds.par_sort_unstable_by_key(|hold| hold.animal);
         self.events
             .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
@@ -453,9 +491,9 @@ impl Context<'_> {
                     inherit_births: owner.inherit_births,
                     default_effort: owner.default_effort,
                     capacity_per_handler: owner.capacity_per_handler,
-                    policies: Vec::new(),
-                    release_policies: Vec::new(),
-                    defense_policies: Vec::new(),
+                    policies: Arc::clone(&owner.policies),
+                    release_policies: Arc::clone(&owner.release_policies),
+                    defense_policies: Arc::clone(&owner.defense_policies),
                     holds: Vec::new(),
                     events: Vec::new(),
                 }),
@@ -510,9 +548,9 @@ impl Context<'_> {
                 inherit_births: owner.inherit_births,
                 default_effort: owner.default_effort,
                 capacity_per_handler: owner.capacity_per_handler,
-                policies: owner.policies.par_iter().cloned().collect(),
-                release_policies: owner.release_policies.par_iter().cloned().collect(),
-                defense_policies: owner.defense_policies.par_iter().cloned().collect(),
+                policies: Arc::clone(&owner.policies),
+                release_policies: Arc::clone(&owner.release_policies),
+                defense_policies: Arc::clone(&owner.defense_policies),
                 holds: owner.holds.par_iter().cloned().collect(),
                 events: Vec::new(),
             });

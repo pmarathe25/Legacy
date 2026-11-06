@@ -75,24 +75,24 @@ pub fn enroll(owner: Option<&mut AnimalRestraints>, family: Option<&Families>, t
             })
         })
         .collect();
-    owner.policies.par_extend(capture);
-    owner.release_policies.par_extend(release);
-    if owner
-        .policies
-        .par_windows(2)
-        .any(|pair| pair[0].person > pair[1].person)
-    {
-        owner
-            .policies
-            .par_sort_unstable_by_key(|policy| policy.person);
+    if !capture.is_empty() {
+        let policies = owner.policies_mut();
+        policies.par_extend(capture);
+        if policies
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            policies.par_sort_unstable_by_key(|policy| policy.person);
+        }
     }
-    if owner
-        .release_policies
-        .par_windows(2)
-        .any(|pair| pair[0].person > pair[1].person)
-    {
-        owner
-            .release_policies
-            .par_sort_unstable_by_key(|policy| policy.person);
+    if !release.is_empty() {
+        let policies = owner.release_policies_mut();
+        policies.par_extend(release);
+        if policies
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            policies.par_sort_unstable_by_key(|policy| policy.person);
+        }
     }
 }

@@ -89,8 +89,8 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
         inherit_births: false,
         default_effort: 2,
         capacity_per_handler: 1,
-        release_policies: vec![],
-        defense_policies: vec![],
+        release_policies: vec![].into(),
+        defense_policies: vec![].into(),
         holds: vec![],
         events: vec![],
         policies: (1..=count)
@@ -104,7 +104,8 @@ fn fixture(count: u64, shared: bool) -> (Vec<Person>, Fauna, Restraints) {
                 pressured_by: None,
                 pressure_threshold: None,
             })
-            .collect(),
+            .collect::<Vec<_>>()
+            .into(),
     };
     (people, fauna, owner)
 }
@@ -172,8 +173,8 @@ fn an_animal_can_resist_then_yield_and_escape_without_losing_identity() {
 #[test]
 fn force_can_overcome_resistance_and_another_person_can_release() {
     let (mut people, fauna, mut owner) = fixture(2, true);
-    owner.policies[0].effort = 4;
-    owner.policies[1].willing = false;
+    owner.policies_mut()[0].effort = 4;
+    owner.policies_mut()[1].willing = false;
     let captured = prepare(&owner, &fauna, &people, 1, None);
     assert_eq!(
         captured.state.as_ref().unwrap().events[0].kind,
@@ -243,7 +244,7 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
     for shared in [false, true] {
         let count = 4096;
         let (people, fauna, mut owner) = fixture(count, shared);
-        for policy in &mut owner.policies {
+        for policy in owner.policies_mut() {
             policy.willing = false;
         }
         owner.holds = (1..=if shared { 1 } else { count })
@@ -253,7 +254,7 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
                 integrity: 2,
             })
             .collect();
-        owner.release_policies = (1..=count)
+        *owner.release_policies_mut() = (1..=count)
             .map(|person| ReleasePolicy {
                 person,
                 animal: Some(if shared { 1 } else { person }),
@@ -295,7 +296,7 @@ fn autonomous_releases_arbitrate_per_animal_and_precede_escape() {
 #[test]
 fn flexible_releaser_selects_an_unblocked_local_hold() {
     let (people, fauna, mut owner) = fixture(2, false);
-    owner.policies.clear();
+    owner.policies_mut().clear();
     owner.holds = vec![
         Hold {
             animal: 1,
@@ -308,7 +309,7 @@ fn flexible_releaser_selects_an_unblocked_local_hold() {
             integrity: 2,
         },
     ];
-    owner.release_policies = vec![ReleasePolicy {
+    *owner.release_policies_mut() = vec![ReleasePolicy {
         person: 1,
         animal: None,
         willing: true,
@@ -346,20 +347,20 @@ fn flexible_releaser_selects_an_unblocked_local_hold() {
 fn a_handler_can_oppose_release_but_can_be_overpowered() {
     let (mut people, mut fauna, mut owner) = fixture(2, true);
     people[1].controlled = true;
-    owner.policies.clear();
+    owner.policies_mut().clear();
     owner.holds = vec![Hold {
         animal: 1,
         handler: 1,
         integrity: 2,
     }];
-    owner.defense_policies = vec![DefensePolicy {
+    *owner.defense_policies_mut() = vec![DefensePolicy {
         person: 1,
         willing: true,
         effort: 2,
         pressured_by: None,
         pressure_threshold: None,
     }];
-    owner.release_policies = vec![ReleasePolicy {
+    *owner.release_policies_mut() = vec![ReleasePolicy {
         person: 2,
         animal: Some(1),
         willing: false,
@@ -393,7 +394,7 @@ fn a_handler_can_oppose_release_but_can_be_overpowered() {
     assert_eq!(blocked.state.as_ref().unwrap().holds[0].integrity, 2);
     restraint::apply_reactions(&mut fauna, &blocked.reactions);
     assert_eq!(fauna.animals[0].opinions[0].affinity, -3);
-    owner.release_policies[0].effort = 3;
+    owner.release_policies_mut()[0].effort = 3;
     let released = prepare(
         &owner,
         &fauna,
@@ -416,7 +417,7 @@ fn a_handler_can_oppose_release_but_can_be_overpowered() {
 #[test]
 fn a_handler_cannot_defend_two_animals_at_once() {
     let (people, fauna, mut owner) = fixture(4, false);
-    owner.policies.clear();
+    owner.policies_mut().clear();
     owner.capacity_per_handler = 2;
     owner.holds = vec![
         Hold {
@@ -430,14 +431,14 @@ fn a_handler_cannot_defend_two_animals_at_once() {
             integrity: 2,
         },
     ];
-    owner.defense_policies = vec![DefensePolicy {
+    *owner.defense_policies_mut() = vec![DefensePolicy {
         person: 1,
         willing: true,
         effort: 1,
         pressured_by: None,
         pressure_threshold: None,
     }];
-    owner.release_policies = [(3, 1), (4, 2)]
+    *owner.release_policies_mut() = [(3, 1), (4, 2)]
         .into_iter()
         .map(|(person, animal)| ReleasePolicy {
             person,
@@ -485,13 +486,13 @@ fn a_handler_cannot_defend_two_animals_at_once() {
 fn a_controlled_handler_can_explicitly_defend_a_hold() {
     let (mut people, fauna, mut owner) = fixture(2, true);
     people[0].controlled = true;
-    owner.policies.clear();
+    owner.policies_mut().clear();
     owner.holds = vec![Hold {
         animal: 1,
         handler: 1,
         integrity: 2,
     }];
-    owner.release_policies = vec![ReleasePolicy {
+    *owner.release_policies_mut() = vec![ReleasePolicy {
         person: 2,
         animal: Some(1),
         willing: true,
@@ -528,9 +529,42 @@ fn older_release_events_load_without_a_defender() {
 }
 
 #[test]
+fn policy_generations_are_shared_until_an_individual_choice_changes() {
+    let (people, fauna, owner) = fixture(2, true);
+    let plan = prepare(&owner, &fauna, &people, 1, None);
+    let mut next = plan.state.unwrap();
+    assert!(std::sync::Arc::ptr_eq(&owner.policies, &next.policies));
+    assert!(std::sync::Arc::ptr_eq(
+        &owner.release_policies,
+        &next.release_policies
+    ));
+    assert!(std::sync::Arc::ptr_eq(
+        &owner.defense_policies,
+        &next.defense_policies
+    ));
+    next.policies_mut()[0].willing = false;
+    assert!(owner.policies[0].willing);
+    assert!(!next.policies[0].willing);
+    assert!(!std::sync::Arc::ptr_eq(&owner.policies, &next.policies));
+    assert!(std::sync::Arc::ptr_eq(
+        &owner.release_policies,
+        &next.release_policies
+    ));
+    let saved: Restraints = serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+    assert_eq!(saved, next);
+    let mut reversed = owner.clone();
+    reversed.policies_mut().reverse();
+    reversed
+        .normalize_and_validate(&people, Some(&fauna), 0)
+        .unwrap();
+    assert_eq!(reversed.policies, owner.policies);
+    assert_eq!(owner.policies[0].person, 1);
+}
+
+#[test]
 fn release_and_escape_match_when_capture_preferences_are_absent_or_disabled() {
     let (people, fauna, mut disabled) = fixture(2, true);
-    for policy in &mut disabled.policies {
+    for policy in disabled.policies_mut() {
         policy.willing = false;
     }
     disabled.holds = vec![Hold {
@@ -538,7 +572,7 @@ fn release_and_escape_match_when_capture_preferences_are_absent_or_disabled() {
         handler: 1,
         integrity: 2,
     }];
-    disabled.release_policies = vec![ReleasePolicy {
+    *disabled.release_policies_mut() = vec![ReleasePolicy {
         person: 2,
         animal: Some(1),
         willing: true,
@@ -550,7 +584,7 @@ fn release_and_escape_match_when_capture_preferences_are_absent_or_disabled() {
     }];
     let compare = |disabled: &Restraints| {
         let mut absent = disabled.clone();
-        absent.policies.clear();
+        absent.policies_mut().clear();
         let fast = prepare(&absent, &fauna, &people, 1, None);
         let ordinary = prepare(disabled, &fauna, &people, 1, None);
         assert_eq!(fast.actors, ordinary.actors);
@@ -567,11 +601,11 @@ fn release_and_escape_match_when_capture_preferences_are_absent_or_disabled() {
     };
     compare(&disabled);
     let mut declined_by_affinity = disabled.clone();
-    for policy in &mut declined_by_affinity.policies {
+    for policy in declined_by_affinity.policies_mut() {
         policy.willing = true;
         policy.affinity_at_least = Some(1);
     }
     compare(&declined_by_affinity);
-    disabled.release_policies.clear();
+    disabled.release_policies_mut().clear();
     compare(&disabled);
 }
