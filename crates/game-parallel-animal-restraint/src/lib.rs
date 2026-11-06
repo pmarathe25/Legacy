@@ -359,6 +359,64 @@ pub struct Plan {
     pub reactions: Vec<restraint::Reaction>,
 }
 
+fn finish<'a>(
+    mut next: Restraints,
+    actors: Vec<u64>,
+    defended: Option<u64>,
+    animal: &(impl Fn(u64) -> Option<&'a Animal> + Sync),
+) -> Plan {
+    if next.events.par_windows(2).any(|pair| {
+        (pair[0].animal, pair[0].actor, pair[0].kind)
+            > (pair[1].animal, pair[1].actor, pair[1].kind)
+    }) {
+        next.events
+            .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
+    }
+    let mut reserved: Vec<_> = next
+        .events
+        .par_iter()
+        .filter_map(|event| (event.kind != EventKind::Unavailable).then_some(event.animal))
+        .collect();
+    reserved.extend(defended);
+    if reserved.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+        reserved.par_sort_unstable();
+        reserved.dedup();
+    }
+    let mut reactions: Vec<_> = next
+        .events
+        .par_iter()
+        .filter_map(|event| {
+            let actor = event.actor?;
+            let response = animal(event.animal)?.restraint_response.as_ref()?;
+            let change = match event.kind {
+                EventKind::Yielded => response.on_yielded,
+                EventKind::Forced => response.on_forced,
+                EventKind::Resisted => response.on_resisted,
+                EventKind::Released => response.on_released,
+                EventKind::ReleaseBlocked => response.on_release_blocked,
+                _ => 0,
+            };
+            (change != 0).then_some(restraint::Reaction {
+                animal: event.animal,
+                person: actor,
+                change,
+            })
+        })
+        .collect();
+    if reactions
+        .par_windows(2)
+        .any(|pair| (pair[0].animal, pair[0].person) > (pair[1].animal, pair[1].person))
+    {
+        reactions.par_sort_unstable_by_key(|reaction| (reaction.animal, reaction.person));
+    }
+    Plan {
+        state: Some(next),
+        actors,
+        reserved,
+        reactions,
+    }
+}
+
 pub struct Context<'a> {
     pub owner: Option<&'a Restraints>,
     pub fauna: Option<&'a Fauna>,
@@ -940,6 +998,19 @@ impl Context<'_> {
             .collect();
         next.events
             .par_extend(progressed.into_par_iter().filter_map(|row| row.1));
+        if !matches!(self.manual, Some(Manual::Capture { .. }))
+            && next
+                .policies
+                .par_iter()
+                .all(|policy| !policy.willing && policy.pressure_threshold.is_none())
+        {
+            return Ok(finish(
+                next,
+                actors,
+                manual_defend.map(|(_, animal, _)| animal),
+                &animal,
+            ));
+        }
         let mut unavailable: Vec<_> = next.events.par_iter().map(|event| event.animal).collect();
         unavailable.par_extend(self.blocked.par_iter().copied());
         if unavailable.par_windows(2).any(|pair| pair[0] > pair[1]) {
@@ -1120,57 +1191,11 @@ impl Context<'_> {
         }
         next.events
             .par_extend(outcomes.into_par_iter().map(|row| row.1));
-        if next.events.par_windows(2).any(|pair| {
-            (pair[0].animal, pair[0].actor, pair[0].kind)
-                > (pair[1].animal, pair[1].actor, pair[1].kind)
-        }) {
-            next.events
-                .par_sort_unstable_by_key(|event| (event.animal, event.actor, event.kind));
-        }
-        let mut reserved: Vec<_> = next
-            .events
-            .par_iter()
-            .filter_map(|event| (event.kind != EventKind::Unavailable).then_some(event.animal))
-            .collect();
-        if let Some((_, animal, _)) = manual_defend {
-            reserved.push(animal);
-        }
-        if reserved.par_windows(2).any(|pair| pair[0] >= pair[1]) {
-            reserved.par_sort_unstable();
-            reserved.dedup();
-        }
-        let mut reactions: Vec<_> = next
-            .events
-            .par_iter()
-            .filter_map(|event| {
-                let actor = event.actor?;
-                let response = animal(event.animal)?.restraint_response.as_ref()?;
-                let change = match event.kind {
-                    EventKind::Yielded => response.on_yielded,
-                    EventKind::Forced => response.on_forced,
-                    EventKind::Resisted => response.on_resisted,
-                    EventKind::Released => response.on_released,
-                    EventKind::ReleaseBlocked => response.on_release_blocked,
-                    _ => 0,
-                };
-                (change != 0).then_some(restraint::Reaction {
-                    animal: event.animal,
-                    person: actor,
-                    change,
-                })
-            })
-            .collect();
-        if reactions
-            .par_windows(2)
-            .any(|pair| (pair[0].animal, pair[0].person) > (pair[1].animal, pair[1].person))
-        {
-            reactions.par_sort_unstable_by_key(|reaction| (reaction.animal, reaction.person));
-        }
-        Ok(Plan {
-            state: Some(next),
+        Ok(finish(
+            next,
             actors,
-            reserved,
-            reactions,
-        })
+            manual_defend.map(|(_, animal, _)| animal),
+            &animal,
+        ))
     }
 }

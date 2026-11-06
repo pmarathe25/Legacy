@@ -440,6 +440,44 @@ fn physically_fed_animals_need_less_food_from_the_patch() {
 }
 
 #[test]
+fn depleted_patches_match_absent_patches_without_skipping_other_animal_behavior() {
+    let mut state = initial();
+    state.animals[0].social_response = Some(SocialResponse {
+        feed_affinity: 2,
+        minimum: -10,
+        maximum: 10,
+        capacity: 4,
+    });
+    let feed = Feeding {
+        animal: 1,
+        person: Some(3),
+        good: 1,
+        quantity: 1,
+    };
+    let empty = Patch {
+        id: 1,
+        region: 1,
+        good: 1,
+        available: 0,
+    };
+    let run = |workers, patches: &[Patch]| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let draft = state.advance_with_feeding(patches, &[feed], 7, 1).unwrap();
+                (draft.fauna, draft.consumed, draft.births, draft.deaths)
+            })
+    };
+    let absent = run(1, &[]);
+    assert_eq!(run(1, &[empty]), absent);
+    assert_eq!(run(4, &[empty]), absent);
+    assert_eq!(absent.0.animals[0].opinions[0].affinity, 2);
+    assert!(absent.1.is_empty());
+}
+
+#[test]
 fn a_nearly_sated_animal_does_not_consume_its_full_maximum_intake() {
     let mut state = initial();
     state.animals.truncate(1);

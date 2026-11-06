@@ -526,3 +526,52 @@ fn older_release_events_load_without_a_defender() {
     assert_eq!(event.defender, None);
     assert_eq!(event.kind, EventKind::Released);
 }
+
+#[test]
+fn release_and_escape_match_when_capture_preferences_are_absent_or_disabled() {
+    let (people, fauna, mut disabled) = fixture(2, true);
+    for policy in &mut disabled.policies {
+        policy.willing = false;
+    }
+    disabled.holds = vec![Hold {
+        animal: 1,
+        handler: 1,
+        integrity: 2,
+    }];
+    disabled.release_policies = vec![ReleasePolicy {
+        person: 2,
+        animal: Some(1),
+        willing: true,
+        effort: 1,
+        affinity_at_least: None,
+        affinity_at_most: None,
+        pressured_by: None,
+        pressure_threshold: None,
+    }];
+    let compare = |disabled: &Restraints| {
+        let mut absent = disabled.clone();
+        absent.policies.clear();
+        let fast = prepare(&absent, &fauna, &people, 1, None);
+        let ordinary = prepare(disabled, &fauna, &people, 1, None);
+        assert_eq!(fast.actors, ordinary.actors);
+        assert_eq!(fast.reserved, ordinary.reserved);
+        assert_eq!(fast.reactions, ordinary.reactions);
+        assert_eq!(
+            fast.state.as_ref().unwrap().holds,
+            ordinary.state.as_ref().unwrap().holds
+        );
+        assert_eq!(
+            fast.state.as_ref().unwrap().events,
+            ordinary.state.as_ref().unwrap().events
+        );
+    };
+    compare(&disabled);
+    let mut declined_by_affinity = disabled.clone();
+    for policy in &mut declined_by_affinity.policies {
+        policy.willing = true;
+        policy.affinity_at_least = Some(1);
+    }
+    compare(&declined_by_affinity);
+    disabled.release_policies.clear();
+    compare(&disabled);
+}

@@ -2647,6 +2647,10 @@ fn concentrated_animal_defense_benchmark() {
                 "workers={workers} people={count} shared={shared} reactions={reactions} elapsed={:.6}",
                 samples[1]
             );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!("{name}: {:.3} ms/call", measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0);
+            }
         });
 }
 

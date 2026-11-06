@@ -2881,6 +2881,8 @@ impl Economy {
                 .and_then(|feelings| feelings.affinity(person, animal))
                 .unwrap_or(0)
         };
+        #[cfg(feature = "profile")]
+        let restraint_timer = game_diagnostics::span("economy.animal_restraint");
         let restraint_plan = game_parallel_animal_restraint::Context {
             owner: self.animal_restraints.as_ref(),
             fauna: self.fauna.as_ref(),
@@ -2898,6 +2900,8 @@ impl Economy {
             manual: manual_restraint,
         }
         .prepare()?;
+        #[cfg(feature = "profile")]
+        drop(restraint_timer);
         if !restraint_plan.actors.is_empty() {
             game_parallel_economy_work::reserve(&mut busy, restraint_plan.actors.iter().copied());
         }
@@ -4843,39 +4847,50 @@ impl Economy {
                 .any(|event| event.defender.is_some())
             && opinions.tracks_opposed_action_reactions()
         {
+            #[cfg(feature = "profile")]
+            let _reaction_timer = game_diagnostics::span("economy.opposed_relationships");
             use game_parallel_opinions::{
                 OpposedActionExperience as Experience, OpposedActionOutcome as Outcome,
             };
-            let experiences: Vec<_> = restraints
-                .events
-                .par_iter()
-                .filter_map(|event| {
-                    let actor = event.actor?;
-                    let defender = event.defender?;
-                    let (actor_outcome, defender_outcome) = match event.kind {
-                        AnimalRestraintEventKind::ReleaseBlocked => {
-                            (Outcome::Blocked, Outcome::BlockedOther)
-                        }
-                        AnimalRestraintEventKind::Released => {
-                            (Outcome::Overcame, Outcome::WasOvercome)
-                        }
-                        _ => return None,
-                    };
-                    Some([
-                        Experience {
-                            observer: actor,
-                            other: defender,
-                            outcome: actor_outcome,
-                        },
-                        Experience {
-                            observer: defender,
-                            other: actor,
-                            outcome: defender_outcome,
-                        },
-                    ])
-                })
-                .flat_map_iter(|pair| pair)
-                .collect();
+            let (mut experiences, actors): (Vec<_>, Vec<_>) = rayon::join(
+                || {
+                    restraints
+                        .events
+                        .par_iter()
+                        .filter_map(|event| {
+                            let outcome = match event.kind {
+                                AnimalRestraintEventKind::ReleaseBlocked => Outcome::BlockedOther,
+                                AnimalRestraintEventKind::Released => Outcome::WasOvercome,
+                                _ => return None,
+                            };
+                            Some(Experience {
+                                observer: event.defender?,
+                                other: event.actor?,
+                                outcome,
+                            })
+                        })
+                        .collect()
+                },
+                || {
+                    restraints
+                        .events
+                        .par_iter()
+                        .filter_map(|event| {
+                            let outcome = match event.kind {
+                                AnimalRestraintEventKind::ReleaseBlocked => Outcome::Blocked,
+                                AnimalRestraintEventKind::Released => Outcome::Overcame,
+                                _ => return None,
+                            };
+                            Some(Experience {
+                                observer: event.actor?,
+                                other: event.defender?,
+                                outcome,
+                            })
+                        })
+                        .collect()
+                },
+            );
+            experiences.par_extend(actors);
             opinions.learn_opposed_actions(&experiences, tick);
         }
         development::enroll(&mut next_opinions, family.as_ref(), tick);

@@ -22,6 +22,8 @@ Individuals can independently choose to release a local held animal, including o
 
 Each participant in an opposed release may interpret the other person using their own general or relationship-specific opposed-action reactions. These signed feelings can influence later choices; the outcome creates no automatic approval, hostility, or obligation.
 
+The ignored `concentrated_animal_defense_benchmark` exercises the complete boundary with contested or independent holds. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to compare population and worker counts, `LEGACY_SHARED` for one contested animal, and `LEGACY_OPPOSED_REACTIONS` to include both participants' relationship updates. Run it with `cargo test -p game-parallel-economy concentrated_animal_defense_benchmark -- --ignored --nocapture`; add `--features profile` and set `LEGACY_PROFILE` for phase timings. Timings depend on the machine and enabled systems.
+
 Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. People can also choose to converse through a supply opening, including with strangers, acquaintances, or someone they fear. Talking through the opening is a social encounter but does not count as direct contact for the ordinary contact-based disease route; physical treatment still cannot cross the wall.
 
 The minimum age for work does not by itself prevent a child from asking for food, giving possessions, having an encounter, or receiving medical treatment. Actual activities still compete for that person's time, and help remains another person's choice.

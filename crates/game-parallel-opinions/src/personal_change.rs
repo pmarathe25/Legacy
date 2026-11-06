@@ -27,36 +27,60 @@ pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
     if rows.is_empty() {
         return;
     }
-    rows.par_sort_unstable_by_key(|row| (row.observer, row.target));
-    let updates: Vec<_> = rows
-        .par_chunk_by(|a, b| (a.observer, a.target) == (b.observer, b.target))
-        .map(|group| {
-            let (trust, affinity, fear, obligation) = group
-                .par_iter()
-                .map(|row| {
-                    (
-                        i128::from(row.trust),
-                        i128::from(row.affinity),
-                        i128::from(row.fear),
-                        i128::from(row.obligation),
-                    )
-                })
-                .reduce(
-                    || (0, 0, 0, 0),
-                    |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3),
-                );
-            (
-                (group[0].observer, group[0].target),
-                trust,
-                affinity,
-                fear,
-                obligation,
-            )
-        })
-        .filter(|row| {
-            row.1 != 0 || row.3 != 0 || row.4 != 0 || (row.2 != 0 && state.rules.affinity.is_some())
-        })
-        .collect();
+    if rows
+        .par_windows(2)
+        .any(|pair| (pair[0].observer, pair[0].target) > (pair[1].observer, pair[1].target))
+    {
+        rows.par_sort_unstable_by_key(|row| (row.observer, row.target));
+    }
+    let duplicate_pairs = rows
+        .par_windows(2)
+        .any(|pair| (pair[0].observer, pair[0].target) == (pair[1].observer, pair[1].target));
+    let updates: Vec<_> = if duplicate_pairs {
+        rows.par_chunk_by(|a, b| (a.observer, a.target) == (b.observer, b.target))
+            .map(|group| {
+                let (trust, affinity, fear, obligation) = group
+                    .par_iter()
+                    .map(|row| {
+                        (
+                            i128::from(row.trust),
+                            i128::from(row.affinity),
+                            i128::from(row.fear),
+                            i128::from(row.obligation),
+                        )
+                    })
+                    .reduce(
+                        || (0, 0, 0, 0),
+                        |a, b| (a.0 + b.0, a.1 + b.1, a.2 + b.2, a.3 + b.3),
+                    );
+                (
+                    (group[0].observer, group[0].target),
+                    trust,
+                    affinity,
+                    fear,
+                    obligation,
+                )
+            })
+            .filter(|row| {
+                row.1 != 0
+                    || row.3 != 0
+                    || row.4 != 0
+                    || (row.2 != 0 && state.rules.affinity.is_some())
+            })
+            .collect()
+    } else {
+        rows.into_par_iter()
+            .map(|row| {
+                (
+                    (row.observer, row.target),
+                    i128::from(row.trust),
+                    i128::from(row.affinity),
+                    i128::from(row.fear),
+                    i128::from(row.obligation),
+                )
+            })
+            .collect()
+    };
     if updates.is_empty() {
         return;
     }

@@ -464,39 +464,42 @@ impl Fauna {
                 .saturating_sub(relief)
                 .saturating_add(species.hunger_per_tick)
         };
-        let mut claims: Vec<_> = self
-            .animals
-            .par_iter()
-            .filter_map(|a| {
-                if a.health == 0 || hunted.binary_search(&a.id).is_ok() {
-                    return None;
-                }
-                let s = lookup(a.species)?;
-                let hunger = before_grazing(a, s);
-                if hunger == 0 {
-                    return None;
-                }
-                let start =
-                    patches.partition_point(|p| (p.region, p.good) < (a.region, s.food_good));
-                let end =
-                    patches.partition_point(|p| (p.region, p.good) <= (a.region, s.food_good));
-                if start == end {
-                    return None;
-                }
-                let offset =
-                    (random(seed ^ 0x6772617a65, a.id, tick) % (end - start) as u64) as usize;
-                let patch = patches[start + offset];
-                Some(Claim {
-                    patch: patch.id,
-                    animal: a.id,
-                    priority: random(seed ^ 0x666f72616765, a.id, tick),
-                    amount: s
-                        .intake
-                        .min(u64::from(hunger).div_ceil(u64::from(s.relief_per_unit))),
-                    available: patch.available,
+        let mut claims: Vec<_> = if patches.par_iter().any(|patch| patch.available > 0) {
+            self.animals
+                .par_iter()
+                .filter_map(|a| {
+                    if a.health == 0 || hunted.binary_search(&a.id).is_ok() {
+                        return None;
+                    }
+                    let s = lookup(a.species)?;
+                    let hunger = before_grazing(a, s);
+                    if hunger == 0 {
+                        return None;
+                    }
+                    let start =
+                        patches.partition_point(|p| (p.region, p.good) < (a.region, s.food_good));
+                    let end =
+                        patches.partition_point(|p| (p.region, p.good) <= (a.region, s.food_good));
+                    if start == end {
+                        return None;
+                    }
+                    let offset =
+                        (random(seed ^ 0x6772617a65, a.id, tick) % (end - start) as u64) as usize;
+                    let patch = patches[start + offset];
+                    Some(Claim {
+                        patch: patch.id,
+                        animal: a.id,
+                        priority: random(seed ^ 0x666f72616765, a.id, tick),
+                        amount: s
+                            .intake
+                            .min(u64::from(hunger).div_ceil(u64::from(s.relief_per_unit))),
+                        available: patch.available,
+                    })
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
         claims.par_sort_unstable_by_key(|c| (c.patch, c.priority, c.animal));
         let mut granted: Vec<_> = claims
             .par_chunk_by(|a, b| a.patch == b.patch)
