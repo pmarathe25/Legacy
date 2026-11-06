@@ -1,6 +1,59 @@
 use super::*;
 
 #[test]
+fn ordered_new_relationships_match_shuffled_merge_for_signed_feelings() {
+    for affinity_enabled in [false, true] {
+        let mut configured = rules();
+        configured.affinity = affinity_enabled.then_some(AffinityRules {
+            limit: 3,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        let initial = Opinions {
+            rules: configured,
+            sensitivities: vec![].into(),
+            records: vec![],
+            events: vec![],
+        };
+        let changes: Vec<_> = (1..=4096)
+            .map(|observer| PersonalChange {
+                observer,
+                target: 5000,
+                trust: 0,
+                affinity: if observer % 3 == 0 { 5 } else { -5 },
+                fear: if observer % 2 == 0 { 4 } else { -4 },
+                obligation: if observer % 5 == 0 { 2 } else { -2 },
+            })
+            .collect();
+        let mut reversed = changes.clone();
+        reversed.reverse();
+        let run = |workers, changes: &[PersonalChange]| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut state = initial.clone();
+                    state.apply_personal_changes(changes, 1);
+                    state
+                })
+        };
+        let ordered = run(1, &changes);
+        assert_eq!(ordered, run(4, &changes));
+        assert_eq!(ordered, run(4, &reversed));
+        assert!(
+            ordered
+                .records
+                .iter()
+                .all(|row| row.trust == initial.rules.initial)
+        );
+        assert!(ordered.events.is_empty());
+    }
+}
+
+#[test]
 #[ignore = "manual sparse relationship merge benchmark"]
 fn sparse_relationship_merge_benchmark() {
     let workers = std::env::var("LEGACY_WORKERS")

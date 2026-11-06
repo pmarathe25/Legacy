@@ -106,5 +106,5 @@ pub fn apply(owner: &mut Opinions, experiences: &[Experience], tick: u64) {
             })
         })
         .collect();
-    owner.apply_personal_changes(&changes, tick);
+    crate::personal_change::apply_owned(owner, changes, tick);
 }

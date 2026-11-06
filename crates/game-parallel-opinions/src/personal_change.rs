@@ -85,18 +85,73 @@ pub struct PersonalChange {
 }
 
 pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
-    let mut rows: Vec<_> = changes
+    let rows = changes
         .par_iter()
         .copied()
-        .filter(|row| {
-            row.observer != row.target
-                && (row.trust != 0
-                    || row.fear != 0
-                    || row.obligation != 0
-                    || (row.affinity != 0 && state.rules.affinity.is_some()))
-        })
+        .filter(|row| effective(row, &state.rules))
         .collect();
+    apply_filtered(state, rows, tick);
+}
+
+pub(crate) fn apply_owned(state: &mut Opinions, mut rows: Vec<PersonalChange>, tick: u64) {
+    if rows.par_iter().any(|row| !effective(row, &state.rules)) {
+        rows = rows
+            .into_par_iter()
+            .filter(|row| effective(row, &state.rules))
+            .collect();
+    }
+    apply_filtered(state, rows, tick);
+}
+
+fn effective(row: &PersonalChange, rules: &Rules) -> bool {
+    row.observer != row.target
+        && (row.trust != 0
+            || row.fear != 0
+            || row.obligation != 0
+            || (row.affinity != 0 && rules.affinity.is_some()))
+}
+
+fn apply_filtered(state: &mut Opinions, mut rows: Vec<PersonalChange>, tick: u64) {
     if rows.is_empty() {
+        return;
+    }
+    if state.records.is_empty()
+        && rows.par_iter().all(|row| row.trust == 0)
+        && rows
+            .par_windows(2)
+            .all(|pair| (pair[0].observer, pair[0].target) < (pair[1].observer, pair[1].target))
+    {
+        let rules = &state.rules;
+        state.records = rows
+            .into_par_iter()
+            .filter_map(|row| {
+                if (row.affinity == 0 || rules.affinity.is_none())
+                    && row.fear <= 0
+                    && row.obligation <= 0
+                {
+                    return None;
+                }
+                let mut opinion = Opinion {
+                    observer: row.observer,
+                    target: row.target,
+                    trust: rules.initial,
+                    fear: 0,
+                    obligation: 0,
+                    affinity: 0,
+                };
+                apply_update(
+                    &mut opinion,
+                    (
+                        0,
+                        i128::from(row.affinity),
+                        i128::from(row.fear),
+                        i128::from(row.obligation),
+                    ),
+                    rules,
+                );
+                Some(opinion)
+            })
+            .collect();
         return;
     }
     if rows

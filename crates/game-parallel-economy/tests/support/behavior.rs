@@ -2970,6 +2970,54 @@ fn concentrated_and_independent_animal_defenses_are_worker_deterministic() {
     }
 }
 
+fn enable_defense_grazing(state: &mut State, count: u64) {
+    state.gathering = Some(Gathering {
+        max_hunger: 20,
+        inherit_births: false,
+        policies: vec![],
+        nodes: vec![ResourceNode {
+            id: 1,
+            region: 1,
+            good: 1,
+            available: count,
+            capacity: count,
+            regrowth: 0,
+            seasonal: false,
+            yield_per_action: 1,
+        }],
+    });
+}
+
+#[test]
+fn defended_animals_graze_a_shared_patch_with_worker_determinism() {
+    let count = 4096;
+    let mut initial = animal_defense_workload(count, false);
+    enable_opposed_action_reactions(&mut initial);
+    enable_defense_grazing(&mut initial, count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.gathering.as_ref().unwrap().nodes[0].available, 0);
+                assert_eq!(
+                    state.animal_restraints.as_ref().unwrap().holds.len(),
+                    count as usize / 2
+                );
+                assert_eq!(
+                    state.opinions.as_ref().unwrap().records.len(),
+                    count as usize
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 #[ignore = "manual concentrated animal defense benchmark"]
 fn concentrated_animal_defense_benchmark() {
@@ -2984,6 +3032,7 @@ fn concentrated_animal_defense_benchmark() {
     let shared = std::env::var_os("LEGACY_SHARED").is_some();
     let reactions = std::env::var_os("LEGACY_OPPOSED_REACTIONS").is_some();
     let preexisting = std::env::var_os("LEGACY_PREEXISTING_EDGES").is_some();
+    let grazing = std::env::var_os("LEGACY_GRAZING").is_some();
     assert!(!preexisting || (shared && reactions));
     let mut initial = animal_defense_workload(count, shared);
     if reactions {
@@ -2991,6 +3040,9 @@ fn concentrated_animal_defense_benchmark() {
     }
     if preexisting {
         seed_shared_animal_relationships(&mut initial);
+    }
+    if grazing {
+        enable_defense_grazing(&mut initial, count);
     }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -3004,6 +3056,9 @@ fn concentrated_animal_defense_benchmark() {
                 world.advance().unwrap();
                 let elapsed = now.elapsed().as_secs_f64();
                 let state = world.snapshot();
+                if grazing {
+                    assert_eq!(state.gathering.as_ref().unwrap().nodes[0].available, if shared { count.saturating_sub(2) } else { 0 });
+                }
                 let owner = state.animal_restraints.unwrap();
                 let expected = if shared { 1 } else { count as usize / 2 };
                 assert_eq!(owner.holds.len(), expected);
@@ -3026,7 +3081,7 @@ fn concentrated_animal_defense_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} shared={shared} reactions={reactions} preexisting={preexisting} elapsed={:.6}",
+                "workers={workers} people={count} shared={shared} reactions={reactions} preexisting={preexisting} grazing={grazing} elapsed={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]
