@@ -67,6 +67,7 @@ pub struct Context<'a> {
     pub relationships: &'a [Relationship],
     pub opinions: Option<&'a Opinions>,
     pub locations: &'a Colocation,
+    pub communication: &'a game_parallel_economy_confinement::Communication<'a>,
     pub seed: u64,
     pub tick: u64,
 }
@@ -123,6 +124,7 @@ pub fn prepare(owner: &mut Giving, context: Context<'_>) -> Result<Vec<u64>, Str
                     || actor.health == 0
                     || actor.hunger < preference.min_hunger
                     || target.health == 0
+                    || !context.communication.allows(actor_id, target_id)
                     || context
                         .locations
                         .region((actor.id, actor.region), (target.id, target.region))

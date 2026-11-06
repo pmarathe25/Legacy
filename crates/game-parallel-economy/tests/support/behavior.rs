@@ -9224,6 +9224,263 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
 }
 
 #[test]
+fn captives_can_request_food_through_a_physical_opening() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[1].hunger = 5;
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 100,
+            allow_supplies: true,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold { person: 2, site: 1 }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![],
+        learning: vec![],
+        acquaintance_asking: vec![],
+        requests: vec![],
+        asking: vec![FoodAsking {
+            person: 2,
+            target: 1,
+            alternatives: vec![],
+            next_target: 0,
+            min_hunger: 1,
+            enabled: true,
+            retry_ticks: 3,
+            request_lifetime: 4,
+            next_review: 0,
+        }],
+        responses: vec![FoodResponse {
+            person: 1,
+            good: 1,
+            alternatives: vec![],
+            quantity: 1,
+            recipient_hunger_at_least: 0,
+            willing: true,
+            minimum_trust: None,
+            affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
+            pressure_threshold: None,
+        }],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let first = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                (first, world.snapshot())
+            })
+    };
+    let (first, second) = run(initial.clone(), 1);
+    assert_eq!((first.clone(), second.clone()), run(initial.clone(), 4));
+    assert!(
+        first
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 2 && r.target == 1)
+    );
+    assert_eq!(
+        second
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(second.confinement.unwrap().held(2));
+    let mut closed = initial.clone();
+    closed.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    assert!(run(closed, 1).0.giving.unwrap().requests.is_empty());
+    let mut refusing = initial.clone();
+    refusing.giving.as_mut().unwrap().responses[0].willing = false;
+    let (request, declined) = run(refusing, 1);
+    assert!(!request.giving.unwrap().requests.is_empty());
+    assert_eq!(
+        declined
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        0
+    );
+    let mut escaping = initial.clone();
+    escaping
+        .confinement
+        .as_mut()
+        .unwrap()
+        .escape
+        .push(EscapePreference {
+            person: 2,
+            willing: true,
+            effort: 1,
+        });
+    assert!(run(escaping, 1).0.giving.unwrap().requests.is_empty());
+    let mut treating = initial.clone();
+    let mut dynamics = infection_from(2);
+    dynamics
+        .disease
+        .as_mut()
+        .unwrap()
+        .treatments
+        .push(game_parallel_disease::Treatment {
+            strain: 1,
+            medicine: 2,
+        });
+    dynamics
+        .treatment
+        .push(game_parallel_economy_dynamics::TreatmentPolicy {
+            person: 2,
+            medicine: 2,
+            quantity: 1,
+            willing: true,
+            health_at_most: Some(100),
+        });
+    treating.dynamics = Some(dynamics);
+    let holder = treating
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(2),
+        10,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let (treated, after_treatment) = run(treating.clone(), 1);
+    assert!(treated.giving.unwrap().requests.is_empty());
+    assert!(treated.dynamics.unwrap().disease.unwrap().cases.is_empty());
+    assert!(
+        after_treatment
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 2)
+    );
+    let mut escape_before_treatment = treating.clone();
+    escape_before_treatment
+        .confinement
+        .as_mut()
+        .unwrap()
+        .escape
+        .push(EscapePreference {
+            person: 2,
+            willing: true,
+            effort: 1,
+        });
+    let first = run(escape_before_treatment, 1).0;
+    assert!(!first.dynamics.unwrap().disease.unwrap().cases.is_empty());
+    assert!(first.giving.unwrap().requests.is_empty());
+    treating.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    assert!(
+        run(treating, 1)
+            .0
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .is_empty()
+    );
+    let mut same_cell = initial.clone();
+    same_cell.work_sites.as_mut().unwrap().sites[0].capacity = 2;
+    let owner = same_cell.confinement.as_mut().unwrap();
+    owner.cells[0].allow_supplies = false;
+    owner.holds.push(ConfinementHold { person: 3, site: 1 });
+    same_cell.giving.as_mut().unwrap().asking[0].target = 3;
+    let first = run(same_cell.clone(), 1).0;
+    assert!(
+        first
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 2 && r.target == 3)
+    );
+    let mut world = Economy::compile(same_cell).unwrap();
+    world.ask_food(3, 2, 4).unwrap();
+    assert!(
+        world
+            .snapshot()
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 3 && r.target == 2)
+    );
+    let mut manual = initial;
+    manual.confinement.as_mut().unwrap().holds[0].person = 3;
+    let mut world = Economy::compile(manual.clone()).unwrap();
+    world.ask_food(3, 1, 4).unwrap();
+    assert!(
+        world
+            .snapshot()
+            .giving
+            .unwrap()
+            .requests
+            .iter()
+            .any(|r| r.requester == 3 && r.target == 1)
+    );
+    manual.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
+    let mut world = Economy::compile(manual).unwrap();
+    assert!(world.ask_food(3, 1, 4).is_err());
+    assert_eq!(world.tick(), 0);
+}
+
+#[test]
 fn a_barrier_prevents_in_person_dependent_care() {
     use game_parallel_dependent_care::{Policy as CarePolicy, Rules as CareRules};
     let mut initial = campaign_fixture();

@@ -260,7 +260,11 @@ impl Giving {
         people: &[Person],
         goods: &[Good],
         view: &View,
-        (busy, practices): (&[u64], Option<&game_parallel_practices::Practices>),
+        (busy, practices, communication): (
+            &[u64],
+            Option<&game_parallel_practices::Practices>,
+            &game_parallel_economy_confinement::Communication<'_>,
+        ),
         tick: u64,
         locations: &Colocation,
     ) -> Result<Vec<u64>, String> {
@@ -326,6 +330,7 @@ impl Giving {
                         .ok()
                         .map(|i| &people[i])?;
                     (target.health > 0
+                        && communication.allows(actor.id, target.id)
                         && locations
                             .region((actor.id, actor.region), (target.id, target.region))
                             .is_some())
@@ -386,6 +391,7 @@ impl Giving {
                     || actor.health == 0
                     || actor.hunger < asking.min_hunger
                     || target.health == 0
+                    || !communication.allows(actor.id, target.id)
                     || explicit.binary_search(&actor.id).is_ok()
                     || busy.binary_search(&actor.id).is_ok()
                     || pending.binary_search(&actor.id).is_ok()
@@ -478,6 +484,7 @@ impl Giving {
                             .is_some_and(|i| {
                                 let target = &people[i];
                                 target.health > 0
+                                    && communication.allows(actor.id, target.id)
                                     && locations
                                         .region(
                                             (actor.id, actor.region),

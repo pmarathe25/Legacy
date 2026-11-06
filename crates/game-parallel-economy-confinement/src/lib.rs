@@ -165,6 +165,19 @@ pub struct Confinement {
     pub events: Vec<Event>,
 }
 
+/// Contact must be possible both at the start and after staged capture or release.
+pub struct Communication<'a> {
+    pub before: Option<&'a Confinement>,
+    pub after: Option<&'a Confinement>,
+}
+
+impl Communication<'_> {
+    pub fn allows(&self, a: u64, b: u64) -> bool {
+        self.before.is_none_or(|owner| owner.can_communicate(a, b))
+            && self.after.is_none_or(|owner| owner.can_communicate(a, b))
+    }
+}
+
 impl Confinement {
     pub fn normalize(&mut self) {
         self.cells.par_sort_unstable_by_key(|cell| cell.site);
@@ -336,6 +349,20 @@ impl Confinement {
                 .ok()
                 .is_some_and(|index| self.cells[index].allow_supplies)
         })
+    }
+
+    /// People in one cell can speak; a supply opening also permits speech across it.
+    pub fn can_communicate(&self, a: u64, b: u64) -> bool {
+        let held = |id| ordered_index(&self.holds, id, |hold| hold.person).map(|i| &self.holds[i]);
+        match (held(a), held(b)) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.site == b.site,
+            (Some(hold), None) | (None, Some(hold)) => self
+                .cells
+                .binary_search_by_key(&hold.site, |cell| cell.site)
+                .ok()
+                .is_some_and(|i| self.cells[i].allow_supplies),
+        }
     }
 
     /// Attach barriers only to sites whose construction was physically accepted.

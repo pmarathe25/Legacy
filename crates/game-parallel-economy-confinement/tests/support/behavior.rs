@@ -145,6 +145,38 @@ fn shared_guarding(count: u64) -> (Confinement, Vec<Person>, Facilities) {
 }
 
 #[test]
+fn communication_respects_both_sides_of_staged_barriers() {
+    let (mut closed, _, _) = shared_guarding(2);
+    assert!(closed.can_communicate(3, 4));
+    assert!(!closed.can_communicate(1, 3));
+    let mut open = closed.clone();
+    open.cells[0].allow_supplies = true;
+    assert!(open.can_communicate(1, 3));
+    assert!(
+        !Communication {
+            before: Some(&closed),
+            after: Some(&open)
+        }
+        .allows(1, 3)
+    );
+    assert!(
+        Communication {
+            before: Some(&open),
+            after: Some(&open)
+        }
+        .allows(1, 3)
+    );
+    closed.cells.push(Cell {
+        site: 2,
+        resistance: 10,
+        allow_supplies: true,
+    });
+    closed.holds[1].site = 2;
+    closed.cells[0].allow_supplies = true;
+    assert!(!closed.can_communicate(3, 4));
+}
+
+#[test]
 fn parallel_releases_resolve_shared_and_distinct_targets() {
     let (mut initial, people, sites) = shared_guarding(4096);
     initial.guard_policies.clear();
