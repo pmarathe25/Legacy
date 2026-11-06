@@ -527,7 +527,14 @@ impl Runtime {
     }
     pub fn commit_advance(&mut self, draft: AdvanceDraft) -> Result<Events, String> {
         self.validate_advance(&draft)?;
-        self.store.commit(draft.custody)?;
+        let (outcomes, _spoiled) = self.store.commit(draft.custody)?;
+        // Published events already own their receipts. Large batches of exact
+        // cohort receipts can release their per-movement allocations in parallel.
+        if outcomes.len() < 128 || rayon::current_num_threads() == 1 {
+            drop(outcomes);
+        } else {
+            outcomes.into_par_iter().for_each(drop);
+        }
         self.work = draft.work;
         Ok(draft.events)
     }
