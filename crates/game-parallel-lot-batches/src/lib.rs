@@ -3,6 +3,7 @@ use game_parallel_lot_model::{Container, State, Transaction};
 use game_parallel_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
 mod independent;
+mod independent_transfer;
 
 pub fn prepare(
     state: &State,
@@ -56,6 +57,12 @@ pub fn prepare(
     }
     if additions.is_empty()
         && let Some(draft) = independent::prepare(state, instance, transactions, &compact, advance)?
+    {
+        return Ok((draft, additions));
+    }
+    if additions.is_empty()
+        && compact.is_empty()
+        && let Some(draft) = independent_transfer::prepare(state, instance, transactions, advance)?
     {
         return Ok((draft, additions));
     }

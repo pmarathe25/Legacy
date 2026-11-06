@@ -161,6 +161,108 @@ fn independent_compact_consumption_matches_general_planning_with_expiry() {
 }
 
 #[test]
+fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
+    let mut initial = Vec::new();
+    let mut actions = Vec::new();
+    for id in 1..=256 {
+        initial.push(container(
+            Place::Person(id),
+            20,
+            vec![
+                lot(1, 2, Some(1)),
+                lot(1, 3, Some(3)),
+                lot(1, 4, None),
+                lot(2, 2, None),
+            ],
+        ));
+        initial.push(container(
+            Place::Person(id + 1000),
+            if id % 7 == 0 { 3 } else { 20 },
+            if id % 7 == 0 {
+                vec![lot(1, 2, Some(3)), lot(2, 1, None)]
+            } else {
+                vec![lot(1, 2, Some(3)), lot(2, 1, Some(1)), lot(2, 1, None)]
+            },
+        ));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id: 1000 - id,
+                from: Place::Person(id),
+                to: Some(Place::Person(id + 1000)),
+                good: if id % 3 == 0 { 2 } else { 1 },
+                quantity: if id % 5 == 0 { 8 } else { 4 },
+            }],
+            creations: vec![],
+        });
+    }
+    initial.push(container(Place::Person(9000), 10, vec![lot(1, 2, Some(1))]));
+    let run = |workers, reverse: bool, overlap: bool, advance: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                if overlap {
+                    actions[1].movements[0].from = actions[0].movements[0].from;
+                }
+                if reverse {
+                    actions.reverse();
+                }
+                let mut fast = store(initial.clone());
+                let mut general = store(initial.clone());
+                let staged = fast
+                    .prepare_with_empty(13, &actions, vec![], advance)
+                    .unwrap();
+                let stale = fast
+                    .prepare_with_empty(13, &actions, vec![], advance)
+                    .unwrap();
+                // Adding a harmless empty holder forces the general planner.
+                let full = general
+                    .prepare_with_empty(
+                        13,
+                        &actions,
+                        vec![container(Place::Inventory(99999), 10, vec![])],
+                        advance,
+                    )
+                    .unwrap();
+                assert_eq!(staged.transactions(), full.transactions());
+                assert_eq!(staged.outcomes(), full.outcomes());
+                assert_eq!(staged.spoiled(), full.spoiled());
+                fast.commit(staged).unwrap();
+                assert!(fast.commit(stale).is_err());
+                general.commit(full).unwrap();
+                let result = fast.export();
+                let mut expected = general.export();
+                expected
+                    .containers
+                    .retain(|c| c.place != Place::Inventory(99999));
+                assert_eq!(result, expected);
+                assert_eq!(Store::compile(result.clone()).unwrap().export(), result);
+                result
+            })
+    };
+    assert_eq!(run(1, false, false, true), run(4, true, false, true));
+    assert_eq!(run(1, false, true, true), run(4, true, true, true));
+    assert_eq!(run(1, false, false, false), run(4, true, false, false));
+    let mut invalid = actions.clone();
+    invalid[1].movements[0].id = invalid[0].movements[0].id;
+    assert!(
+        store(initial.clone())
+            .prepare_with_empty(13, &invalid, vec![], true)
+            .is_err()
+    );
+    invalid = actions;
+    invalid[1].movements[0].to = Some(invalid[1].movements[0].from);
+    assert!(
+        store(initial)
+            .prepare_with_empty(13, &invalid, vec![], true)
+            .is_err()
+    );
+}
+
+#[test]
 fn late_empty_holders_do_not_shift_planned_physical_changes() {
     let mut store = store(vec![
         container(Place::Person(1), 10, vec![lot(1, 3, Some(5))]),
