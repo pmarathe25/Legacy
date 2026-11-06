@@ -1,0 +1,19 @@
+[package]
+name = "game-parallel-economy-taking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-parallel-economy-person = { path = "../game-parallel-economy-person" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
+game-parallel-lot-allocation = { path = "../game-parallel-lot-allocation" }
+game-parallel-lots = { path = "../game-parallel-lots" }
+game-parallel-opinions = { path = "../game-parallel-opinions" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-parallel-production-model = { path = "../game-parallel-production-model" }
+serde_json.workspace = true
