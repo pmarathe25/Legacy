@@ -390,6 +390,8 @@ fn player_feeds_local_animals_only_with_real_carried_food() {
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 0,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![],
         }],
     });

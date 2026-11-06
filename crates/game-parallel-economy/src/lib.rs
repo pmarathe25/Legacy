@@ -4088,6 +4088,29 @@ impl Economy {
                         })
                     }),
             );
+            experiences.par_extend(
+                next_animal_restraints
+                    .as_ref()
+                    .map_or(&[][..], |owner| owner.events.as_slice())
+                    .par_iter()
+                    .filter_map(|event| {
+                        let person = event.defender?;
+                        let kind = match event.kind {
+                            AnimalRestraintEventKind::ReleaseBlocked => {
+                                animal_feelings::Experience::DefenseSucceeded
+                            }
+                            AnimalRestraintEventKind::Released => {
+                                animal_feelings::Experience::DefenseOvercome
+                            }
+                            _ => return None,
+                        };
+                        Some(animal_feelings::Event {
+                            person,
+                            animal: event.animal,
+                            kind,
+                        })
+                    }),
+            );
             let relevant = owner.relevant(experiences);
             (!relevant.is_empty()).then(|| owner.advance(&relevant))
         });
@@ -5007,6 +5030,7 @@ impl Economy {
                 next_animal_restraints.as_ref().is_some_and(|owner| {
                     owner.events.iter().any(|event| {
                         event.animal == animal
+                            && event.defender == Some(person)
                             && event.kind == AnimalRestraintEventKind::ReleaseBlocked
                     }) && owner
                         .holds

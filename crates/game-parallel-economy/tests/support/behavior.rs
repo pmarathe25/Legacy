@@ -503,6 +503,8 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 on_capture_resisted: 0,
                 on_animal_released: 0,
                 on_animal_release_blocked: 0,
+                on_defense_succeeded: 0,
+                on_defense_overcome: 0,
                 opinions: vec![AnimalFeelingOpinion {
                     animal: 1,
                     affinity: -2,
@@ -522,6 +524,8 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 on_capture_resisted: 0,
                 on_animal_released: 0,
                 on_animal_release_blocked: 0,
+                on_defense_succeeded: 0,
+                on_defense_overcome: 0,
                 opinions: vec![],
             },
             AnimalFeelingMind {
@@ -538,6 +542,8 @@ fn people_interpret_their_own_animal_experiences_individually() {
                 on_capture_resisted: 0,
                 on_animal_released: 0,
                 on_animal_release_blocked: 0,
+                on_defense_succeeded: 0,
+                on_defense_overcome: 0,
                 opinions: vec![],
             },
         ],
@@ -597,6 +603,8 @@ fn a_persons_affinity_can_influence_their_hunting_choice_in_either_direction() {
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 0,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: 3,
@@ -650,6 +658,8 @@ fn personal_animal_memories_are_bounded_and_do_not_invent_other_feelings() {
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 0,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: -1,
@@ -1106,6 +1116,8 @@ fn a_person_can_physically_capture_an_unwilling_animal_and_another_can_release_i
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 0,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![],
         }],
     });
@@ -1382,6 +1394,8 @@ fn a_persons_own_animal_affinity_can_shape_capture_choices() {
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 0,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![AnimalFeelingOpinion {
                 animal: 1,
                 affinity: -3,
@@ -1481,9 +1495,18 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 3,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![],
         }],
     });
+    let minds = &mut initial.animal_feelings.as_mut().unwrap().minds;
+    let mut handler_mind = minds[0].clone();
+    handler_mind.person = 1;
+    handler_mind.on_animal_release_blocked = 0;
+    handler_mind.on_defense_succeeded = -4;
+    handler_mind.on_defense_overcome = 2;
+    minds.push(handler_mind);
     initial.fauna.as_mut().unwrap().animals[0]
         .restraint_response
         .as_mut()
@@ -1532,11 +1555,18 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
             .unwrap()
             .events
             .iter()
-            .any(|event| event.kind == AnimalRestraintEventKind::ReleaseBlocked)
+            .any(
+                |event| event.kind == AnimalRestraintEventKind::ReleaseBlocked
+                    && event.defender == Some(1)
+            )
     );
     assert_eq!(
         state.animal_feelings.as_ref().unwrap().affinity(2, 1),
         Some(3)
+    );
+    assert_eq!(
+        state.animal_feelings.as_ref().unwrap().affinity(1, 1),
+        Some(-4)
     );
     assert_eq!(
         state.fauna.as_ref().unwrap().animals[0]
@@ -1548,6 +1578,34 @@ fn a_handler_can_resist_release_and_both_participants_interpret_it() {
         -2
     );
     assert_eq!(Economy::compile(state.clone()).unwrap().snapshot(), state);
+    let mut stronger = held.clone();
+    stronger
+        .animal_restraints
+        .as_mut()
+        .unwrap()
+        .release_policies[0]
+        .effort = 3;
+    let mut stronger = Economy::compile(stronger).unwrap();
+    assert!(stronger.release_animal(2, 1).unwrap());
+    let strong_state = stronger.snapshot();
+    assert_eq!(
+        strong_state
+            .animal_feelings
+            .as_ref()
+            .unwrap()
+            .affinity(1, 1),
+        Some(2)
+    );
+    assert!(
+        strong_state
+            .animal_restraints
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.kind == AnimalRestraintEventKind::Released
+                && event.defender == Some(1))
+    );
     let mut changed = Economy::compile(held.clone()).unwrap();
     let before = changed.snapshot();
     assert!(changed.set_animal_defense_choice(4, false).is_err());
@@ -1772,6 +1830,8 @@ fn an_animal_can_learn_to_accept_and_later_refuse_handling() {
             on_capture_resisted: 0,
             on_animal_released: 0,
             on_animal_release_blocked: 0,
+            on_defense_succeeded: 0,
+            on_defense_overcome: 0,
             opinions: vec![],
         }],
     });
@@ -22233,6 +22293,8 @@ fn concentrated_animal_care_benchmark() {
                     on_capture_resisted: 0,
                     on_animal_released: 0,
                     on_animal_release_blocked: 0,
+                    on_defense_succeeded: 0,
+                    on_defense_overcome: 0,
                     opinions: vec![],
                 })
                 .collect(),

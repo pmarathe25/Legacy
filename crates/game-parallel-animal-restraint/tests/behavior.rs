@@ -389,6 +389,7 @@ fn a_handler_can_oppose_release_but_can_be_overpowered() {
         blocked.state.as_ref().unwrap().events[0].kind,
         EventKind::ReleaseBlocked
     );
+    assert_eq!(blocked.state.as_ref().unwrap().events[0].defender, Some(1));
     assert_eq!(blocked.state.as_ref().unwrap().holds[0].integrity, 2);
     restraint::apply_reactions(&mut fauna, &blocked.reactions);
     assert_eq!(fauna.animals[0].opinions[0].affinity, -3);
@@ -408,6 +409,7 @@ fn a_handler_can_oppose_release_but_can_be_overpowered() {
         released.state.as_ref().unwrap().events[0].kind,
         EventKind::Released
     );
+    assert_eq!(released.state.as_ref().unwrap().events[0].defender, Some(1));
     assert!(released.state.unwrap().holds.is_empty());
 }
 
@@ -515,4 +517,12 @@ fn a_controlled_handler_can_explicitly_defend_a_hold() {
         EventKind::ReleaseBlocked
     );
     assert!(plan.state.unwrap().held(1));
+}
+
+#[test]
+fn older_release_events_load_without_a_defender() {
+    let event: game_parallel_animal_restraint::Event =
+        serde_json::from_str(r#"{"tick":1,"animal":1,"actor":2,"kind":"released"}"#).unwrap();
+    assert_eq!(event.defender, None);
+    assert_eq!(event.kind, EventKind::Released);
 }

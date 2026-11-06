@@ -14,6 +14,8 @@ An animal's `on_yielded`, `on_forced`, `on_resisted`, and `on_released` settings
 
 `animal_restraints.release_policies` contains independent personal choices to release held animals, including someone else's hold. A policy can target one animal or choose a local held animal, condition willingness on the person's own affinity, or describe fear or obligation toward another person. `animal_restraints.defense_policies` lets a handler independently oppose one release attempt with their own effort, willingness, or social pressure. A stronger release effort succeeds regardless of the handler's choice. The animal's `on_release_blocked` and the releaser's `on_animal_release_blocked` are independently signed personal reactions.
 
+Each contested release event identifies its defender. That person can independently set signed `on_defense_succeeded` and `on_defense_overcome` reactions toward the animal, including positive or negative feelings after either outcome.
+
 Administrative commands `animal-release-choice PERSON on|off` and `animal-defense PERSON on|off` change individual willingness without erasing their pressure settings. A controlled handler can choose `defend-animal ANIMAL` to spend a boundary protecting their hold; the result reports whether a release was blocked and the hold remained intact.
 
 With `animal_restraints.inherit_births` and family birth enrollment enabled, newborns may acquire a parent's general capture and release inclinations. Specific animals, relationships, and pressure are not copied; capture effort starts at `default_effort`.

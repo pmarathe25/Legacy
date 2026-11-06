@@ -92,6 +92,8 @@ pub struct Event {
     pub tick: u64,
     pub animal: u64,
     pub actor: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defender: Option<u64>,
     pub kind: EventKind,
 }
 
@@ -240,6 +242,15 @@ impl Restraints {
                 event.tick > tick
                     || animal(event.animal).is_none()
                     || event.actor.is_some_and(|id| !ids.contains(&id))
+                    || event.defender.is_some_and(|id| {
+                        !ids.contains(&id)
+                            || Some(id) == event.actor
+                            || event.actor.is_none()
+                            || !matches!(
+                                event.kind,
+                                EventKind::Released | EventKind::ReleaseBlocked
+                            )
+                    })
             })
         {
             return Err("invalid physical animal restraint".into());
@@ -313,6 +324,7 @@ impl Restraints {
                     tick,
                     animal: hold.animal,
                     actor: None,
+                    defender: None,
                     kind: EventKind::LetGo,
                 }),
         );
@@ -505,6 +517,7 @@ impl Context<'_> {
                     tick: self.tick,
                     animal: target,
                     actor: Some(actor.id),
+                    defender: None,
                     kind: EventKind::Released,
                 });
                 Some(target)
@@ -648,6 +661,7 @@ impl Context<'_> {
                     tick: self.tick,
                     animal: chosen.0,
                     actor: Some(chosen.2),
+                    defender: None,
                     kind: EventKind::Released,
                 }
             })
@@ -797,9 +811,10 @@ impl Context<'_> {
                             .filter(|&index| index < chosen.len())
                     },
                 );
-                let Some((_, _, _, defense)) = index.map(|index| chosen[index]) else {
+                let Some((handler, _, _, defense)) = index.map(|index| chosen[index]) else {
                     return;
                 };
+                event.defender = Some(handler);
                 let actor = event.actor.expect("release has an actor");
                 let policy_index = dense_releasers.map_or_else(
                     || {
@@ -903,6 +918,7 @@ impl Context<'_> {
                     tick: self.tick,
                     animal: hold.animal,
                     actor: None,
+                    defender: None,
                     kind: if remaining == 0 {
                         EventKind::Escaped
                     } else {
@@ -1041,6 +1057,7 @@ impl Context<'_> {
                     tick: self.tick,
                     animal: target,
                     actor: Some(actor.id),
+                    defender: None,
                     kind: EventKind::Unavailable,
                 });
             } else {
@@ -1086,6 +1103,7 @@ impl Context<'_> {
                         tick: self.tick,
                         animal: chosen.0,
                         actor: Some(chosen.3),
+                        defender: None,
                         kind,
                     },
                 )
