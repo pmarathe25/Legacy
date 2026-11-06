@@ -124,7 +124,7 @@ pub struct Context<'a> {
     pub view: &'a View,
     pub busy: &'a [u64],
     pub blocked: &'a [u64],
-    pub held_patients: &'a [u64],
+    pub available_patients: &'a [u64],
     pub communication: &'a game_parallel_economy_confinement::Communication<'a>,
     pub resting: &'a [u64],
     pub seed: u64,
@@ -174,7 +174,7 @@ impl Context<'_> {
                 && (patient.controlled
                     || self.resting.binary_search(&patient.id).is_ok()
                     || self.busy.binary_search(&patient.id).is_err()
-                    || self.held_patients.binary_search(&patient.id).is_ok())
+                    || self.available_patients.binary_search(&patient.id).is_ok())
         };
         let opinions = self.opinions.map(Opinions::index);
         let policies = self.owner.map_or(&[][..], |o| o.policies.as_slice());

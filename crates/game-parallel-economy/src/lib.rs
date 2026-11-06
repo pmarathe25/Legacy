@@ -2168,7 +2168,26 @@ impl Economy {
             }) => Some((person, recipient, good, quantity)),
             _ => None,
         };
-        game_parallel_economy_work::reserve_underage(self.family.as_ref(), &mut busy);
+        // Work-age restrictions are not themselves an activity. Keep otherwise
+        // available children eligible to receive care and have encounters.
+        let underage = self
+            .family
+            .as_ref()
+            .map_or_else(Vec::new, game_parallel_economy_work::underage);
+        let age_exceptions_needed = self.medical.is_some()
+            || matches!(
+                player_transfer,
+                Some(game_parallel_economy_interaction::PhysicalChoice::TreatOther { .. })
+            )
+            || self.dynamics.as_ref().is_some_and(|d| d.social.is_some());
+        let idle_underage = if age_exceptions_needed && !underage.is_empty() {
+            game_parallel_economy_work::exclude_sorted(&underage, &busy)
+        } else {
+            Vec::new()
+        };
+        if !underage.is_empty() {
+            game_parallel_economy_work::reserve(&mut busy, underage);
+        }
         if let Some((person, _, _, _)) = manual_give
             && self.family.as_ref().is_some_and(|f| {
                 f.members
@@ -2375,6 +2394,11 @@ impl Economy {
             }) => Some((person, patient, medicine, quantity)),
             _ => None,
         };
+        let needs_medical = manual_medical.is_some()
+            || self
+                .medical
+                .as_ref()
+                .is_some_and(|owner| !owner.policies.is_empty() || !owner.acquaintances.is_empty());
         if let Some((person, _, _, _)) = manual_medical
             && self.family.as_ref().is_some_and(|f| {
                 f.members
@@ -2386,79 +2410,102 @@ impl Economy {
         }
         // Care requires actual contact and each captive's action must still be free.
         let mut held_committed = Vec::new();
-        if !held.is_empty() && (self.medical.is_some() || manual_medical.is_some()) {
+        if !held.is_empty() && needs_medical {
             held_committed.par_extend(treatment.actors.par_iter().copied());
             held_committed.extend(held_asked.iter().copied());
             held_committed.par_extend(giving_plan.actors.par_iter().copied());
             held_committed.par_sort_unstable();
         }
-        let held_patients: Vec<_> =
-            if (self.medical.is_some() || manual_medical.is_some()) && !held.is_empty() {
-                held.par_iter()
-                    .copied()
-                    .filter(|person| {
-                        let controlled = self
-                            .people
-                            .binary_search_by_key(person, |p| p.id)
+        let held_patients: Vec<_> = if needs_medical && !held.is_empty() {
+            held.par_iter()
+                .copied()
+                .filter(|person| {
+                    let controlled = self
+                        .people
+                        .binary_search_by_key(person, |p| p.id)
+                        .ok()
+                        .is_some_and(|i| self.people[i].controlled);
+                    let child = self.family.as_ref().is_some_and(|family| {
+                        family
+                            .members
+                            .binary_search_by_key(person, |m| m.id)
                             .ok()
-                            .is_some_and(|i| self.people[i].controlled);
-                        let child = self.family.as_ref().is_some_and(|family| {
-                            family
-                                .members
-                                .binary_search_by_key(person, |m| m.id)
-                                .ok()
-                                .is_some_and(|i| family.members[i].age < family.rules.min_work_age)
-                        });
-                        self.confinement
+                            .is_some_and(|i| family.members[i].age < family.rules.min_work_age)
+                    });
+                    self.confinement
+                        .as_ref()
+                        .is_some_and(|owner| owner.held(*person))
+                        && next_confinement
                             .as_ref()
                             .is_some_and(|owner| owner.held(*person))
-                            && next_confinement
-                                .as_ref()
-                                .is_some_and(|owner| owner.held(*person))
-                            && (controlled || child || available_held.binary_search(person).is_ok())
-                            && escape_actors.binary_search(person).is_err()
-                            && held_committed.binary_search(person).is_err()
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-        let held_medical_actors: Vec<_> = available_held
-            .par_iter()
-            .copied()
-            .filter(|person| held_patients.binary_search(person).is_ok())
-            .filter(|person| {
-                self.family.as_ref().is_none_or(|family| {
-                    family
-                        .members
-                        .binary_search_by_key(person, |m| m.id)
-                        .ok()
-                        .is_none_or(|i| family.members[i].age >= family.rules.min_work_age)
+                        && (controlled || child || available_held.binary_search(person).is_ok())
+                        && escape_actors.binary_search(person).is_err()
+                        && held_committed.binary_search(person).is_err()
+                        && interaction
+                            .as_ref()
+                            .is_none_or(|plan| !plan.actors.contains(person))
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let held_medical_actors: Vec<_> = if needs_medical {
+            available_held
+                .par_iter()
+                .copied()
+                .filter(|person| held_patients.binary_search(person).is_ok())
+                .filter(|person| {
+                    self.family.as_ref().is_none_or(|family| {
+                        family
+                            .members
+                            .binary_search_by_key(person, |m| m.id)
+                            .ok()
+                            .is_none_or(|i| family.members[i].age >= family.rules.min_work_age)
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let medical_busy = (!held_medical_actors.is_empty())
             .then(|| game_parallel_economy_work::exclude_sorted(&busy, &held_medical_actors));
-        let blocked_holds = game_parallel_economy_work::exclude_sorted(&held, &held_patients);
-        let mut medical_blocked: Vec<_> = treatment
-            .actors
-            .par_iter()
-            .copied()
-            .chain(fighters.par_iter().copied())
-            .chain(meal_candidates.par_iter().map(|row| row.0))
-            .chain(blocked_holds.par_iter().copied())
-            .collect();
-        medical_blocked.extend(request.map(|choice| choice.actor));
-        medical_blocked.extend(player_work.map(|choice| choice.actor()));
-        medical_blocked.extend(player_transfer.and_then(|choice| {
-            (!matches!(
-                choice,
-                game_parallel_economy_interaction::PhysicalChoice::Rest { .. }
-            ))
-            .then_some(choice.person())
-        }));
-        medical_blocked.par_sort_unstable();
-        medical_blocked.dedup();
+        let blocked_holds = if needs_medical {
+            game_parallel_economy_work::exclude_sorted(&held, &held_patients)
+        } else {
+            Vec::new()
+        };
+        let mut available_patients = held_patients;
+        if needs_medical && !idle_underage.is_empty() {
+            game_parallel_economy_work::reserve(
+                &mut available_patients,
+                idle_underage.iter().copied(),
+            );
+        }
+        let mut medical_blocked: Vec<_> = if needs_medical {
+            treatment
+                .actors
+                .par_iter()
+                .copied()
+                .chain(fighters.par_iter().copied())
+                .chain(meal_candidates.par_iter().map(|row| row.0))
+                .chain(blocked_holds.par_iter().copied())
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if needs_medical {
+            medical_blocked.extend(request.map(|choice| choice.actor));
+            medical_blocked.extend(player_work.map(|choice| choice.actor()));
+            medical_blocked.extend(player_transfer.and_then(|choice| {
+                (!matches!(
+                    choice,
+                    game_parallel_economy_interaction::PhysicalChoice::Rest { .. }
+                ))
+                .then_some(choice.person())
+            }));
+            medical_blocked.par_sort_unstable();
+            medical_blocked.dedup();
+        }
         let medical_plan = medical::Context {
             owner: self.medical.as_ref(),
             disease: self.dynamics.as_ref().and_then(|d| d.disease.as_ref()),
@@ -2469,7 +2516,7 @@ impl Economy {
             view: &view,
             busy: medical_busy.as_deref().unwrap_or(&busy),
             blocked: &medical_blocked,
-            held_patients: &held_patients,
+            available_patients: &available_patients,
             communication: &communication,
             resting: &resting,
             seed: self.seed,
@@ -3706,8 +3753,15 @@ impl Economy {
         let meeting_held_filtered = (!occupied_held.is_empty())
             .then(|| game_parallel_economy_work::exclude_sorted(&available_held, &occupied_held));
         let meeting_held = meeting_held_filtered.as_deref().unwrap_or(meeting_held);
-        let social_busy = (social_enabled && !meeting_held.is_empty())
-            .then(|| game_parallel_economy_work::exclude_sorted(&busy, meeting_held));
+        let social_with_children = (social_enabled && !idle_underage.is_empty()).then(|| {
+            let mut available =
+                game_parallel_economy_work::exclude_sorted(&idle_underage, &medical_plan.actors);
+            game_parallel_economy_work::reserve(&mut available, meeting_held.iter().copied());
+            available
+        });
+        let social_available = social_with_children.as_deref().unwrap_or(meeting_held);
+        let social_busy = (social_enabled && !social_available.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, social_available));
         let social_partition = |person| communication.partition(person);
         let social_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
             (social_enabled && !held.is_empty()).then_some(&social_partition);

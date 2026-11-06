@@ -10588,6 +10588,252 @@ fn concentrated_cell_social_benchmark() {
         });
 }
 
+fn set_family_children(state: &mut State, children: &[u64]) {
+    let mut family = campaign_fixture().family.unwrap();
+    for member in &mut family.members {
+        member.age = if children.contains(&member.id) { 2 } else { 20 };
+        member.alive = true;
+        member.partner = None;
+        member.pregnancy = None;
+        member.reproduction_allowed = false;
+    }
+    state.family = Some(family);
+}
+
+#[test]
+fn work_age_does_not_prevent_children_from_meeting() {
+    let mut initial = disease_workload(4);
+    initial.dynamics.as_mut().unwrap().disease = None;
+    set_family_children(&mut initial, &[1, 2]);
+    let social = initial.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+    social
+        .participants
+        .retain(|participant| participant.person <= 2);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), 1);
+                assert_eq!((events[0].a, events[0].b), (1, 2));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut controlled = initial;
+    controlled.people[0].controlled = true;
+    let mut world = Economy::compile(controlled).unwrap();
+    assert!(world.start_work(1, 1, 1).unwrap_err().contains("too young"));
+    assert_eq!(world.tick(), 0);
+}
+
+#[test]
+fn many_children_meet_independently_across_workers() {
+    let count = 4096u64;
+    let mut initial = disease_workload(count);
+    initial.dynamics.as_mut().unwrap().disease = None;
+    let mut family = campaign_fixture().family.unwrap();
+    let mut prototype = family.members[0].clone();
+    prototype.age = 2;
+    prototype.partner = None;
+    prototype.pregnancy = None;
+    prototype.parents = Default::default();
+    prototype.alive = true;
+    prototype.reproduction_allowed = false;
+    family.members = (1..=count)
+        .map(|id| {
+            let mut member = prototype.clone();
+            member.id = id;
+            member
+        })
+        .collect();
+    family.next_id = count + 1;
+    initial.family = Some(family);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .len(),
+                    count as usize / 2
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn work_age_does_not_prevent_an_idle_child_receiving_medicine() {
+    let mut initial = medical_workload(4);
+    set_family_children(&mut initial, &[1]);
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .strains[0]
+        .transmission_per_million = 0;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .all(|case| case.person != 1)
+    );
+}
+
+#[test]
+fn treatment_and_social_encounters_still_compete_for_a_childs_time() {
+    let mut initial = medical_workload(4);
+    set_family_children(&mut initial, &[1]);
+    initial.dynamics.as_mut().unwrap().social = disease_workload(4).dynamics.unwrap().social;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .strains[0]
+        .transmission_per_million = 0;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(
+        state
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .disease
+            .as_ref()
+            .unwrap()
+            .cases
+            .iter()
+            .all(|case| case.person != 1)
+    );
+    assert!(
+        state
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.a != 1 && event.b != 1)
+    );
+}
+
+#[test]
+fn a_child_eating_is_not_also_treated_or_meeting() {
+    let mut initial = medical_workload(4);
+    set_family_children(&mut initial, &[1]);
+    initial.dynamics.as_mut().unwrap().social = disease_workload(4).dynamics.unwrap().social;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .strains[0]
+        .transmission_per_million = 0;
+    initial.people[0].hunger = 10;
+    initial.people[0].seek_meals = true;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let dynamics = state.dynamics.unwrap();
+    assert!(
+        dynamics
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .any(|case| case.person == 1)
+    );
+    assert!(
+        dynamics
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.a != 1 && event.b != 1)
+    );
+}
+
+#[test]
+fn a_held_child_cannot_be_treated_during_a_chosen_meeting() {
+    let mut initial = medical_workload(4);
+    set_family_children(&mut initial, &[1]);
+    initial.dynamics.as_mut().unwrap().social = disease_workload(4).dynamics.unwrap().social;
+    confine_medical_workload(&mut initial, 3);
+    initial.people[1].controlled = true;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.meet(2, 1).unwrap());
+    let state = world.snapshot();
+    assert!(
+        state
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .any(|case| case.person == 1)
+    );
+}
+
 #[test]
 fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
     let mut initial = campaign_fixture();
