@@ -145,7 +145,7 @@ macro_rules! social_choice_method {
 }
 #[macro_export]
 macro_rules! prepare_dynamics {
-    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr) => {{
+    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr, $partition:expr) => {{
         let exposure = $world
             .dynamics
             .as_ref()
@@ -197,7 +197,12 @@ macro_rules! prepare_dynamics {
                             .and_then(|plan| plan.encounter.as_ref()),
                         &combat_contacts,
                     ),
-                    ($world.seed, $tick, $world.travel.as_ref()),
+                    $crate::Clock {
+                        seed: $world.seed,
+                        tick: $tick,
+                        travel: $world.travel.as_ref(),
+                        partition: $partition,
+                    },
                 )
             })
             .transpose()?;
@@ -222,6 +227,12 @@ pub struct Dynamics {
     pub treatment: Vec<TreatmentPolicy>,
     #[serde(default)]
     pub claims: Option<claims::Claims>,
+}
+pub struct Clock<'a> {
+    pub seed: u64,
+    pub tick: u64,
+    pub travel: Option<&'a game_parallel_economy_person::travel::Travel>,
+    pub partition: Option<&'a (dyn Fn(u64) -> (u64, u64) + Sync)>,
 }
 impl Dynamics {
     pub fn validate(
@@ -265,20 +276,21 @@ impl Dynamics {
             Option<&game_parallel_social::Encounter>,
             &[(u64, u64)],
         ),
-        clock: (
-            u64,
-            u64,
-            Option<&game_parallel_economy_person::travel::Travel>,
-        ),
+        clock: Clock<'_>,
     ) -> Result<Self, String> {
-        let (seed, tick, travel) = clock;
+        let Clock {
+            seed,
+            tick,
+            travel,
+            partition,
+        } = clock;
         let (exposure, requested, combat) = encounters;
         let mut occupied: Vec<_> = exposure.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
         occupied.par_sort_unstable();
         let locality = self
             .social
             .as_ref()
-            .and_then(|_| travel_social::Locality::new(old, travel));
+            .and_then(|_| travel_social::Locality::new(old, travel, partition));
         let contacts: Vec<_> = old
             .par_iter()
             .map(|p| Contact {
@@ -474,7 +486,12 @@ mod tests {
                     &[],
                     None,
                     (&encounters, None, &[]),
-                    (7, 1, None),
+                    Clock {
+                        seed: 7,
+                        tick: 1,
+                        travel: None,
+                        partition: None,
+                    },
                 )
                 .unwrap();
             assert_eq!(result.disease.unwrap(), expected.state);

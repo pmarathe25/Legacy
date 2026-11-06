@@ -10304,6 +10304,290 @@ fn concentrated_cellmates_arbitrate_one_medical_course_across_workers() {
     assert_eq!(run(1), run(4));
 }
 
+fn social_cell_workload(count: u64, held: u64) -> State {
+    let mut state = disease_workload(count);
+    confine_medical_workload(&mut state, held);
+    state.dynamics.as_mut().unwrap().disease = None;
+    state
+}
+
+#[test]
+fn cellmates_can_meet_but_cannot_meet_through_a_wall() {
+    let mut initial = social_cell_workload(4, 2);
+    initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let social = state.dynamics.as_ref().unwrap().social.as_ref().unwrap();
+                assert_eq!(social.events.len(), 2);
+                assert!(
+                    social
+                        .events
+                        .iter()
+                        .any(|event| (event.a, event.b, event.region) == (1, 2, 1))
+                );
+                assert!(
+                    social
+                        .events
+                        .iter()
+                        .any(|event| (event.a, event.b, event.region) == (3, 4, 1))
+                );
+                assert_eq!(social.relationships.len(), 2);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn distinct_cells_and_journeys_keep_social_contact_separate() {
+    let mut initial = social_cell_workload(6, 2);
+    let sites = initial.work_sites.as_mut().unwrap();
+    sites.next_id = 3;
+    sites.sites.push(WorkSite {
+        id: 2,
+        region: 1,
+        kind: "cell".into(),
+        capacity: 2,
+    });
+    let confinement = initial.confinement.as_mut().unwrap();
+    confinement.cells.push(ConfinementCell {
+        site: 2,
+        resistance: 10,
+        allow_supplies: true,
+    });
+    confinement
+        .holds
+        .extend([3, 4].into_iter().map(|person| ConfinementHold {
+            person,
+            site: 2,
+            born_inside: false,
+        }));
+    initial.people[4].region = None;
+    initial.people[5].region = None;
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Stock { region: 2, good: 2 }, 12, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|c| c.place);
+    initial.travel = Some(Travel {
+        routes: vec![Route {
+            source: 1,
+            destination: 2,
+            ticks: 10,
+        }],
+        journeys: [5, 6]
+            .into_iter()
+            .map(|person| Journey {
+                person,
+                source: 1,
+                destination: 2,
+                remaining: 10,
+            })
+            .collect(),
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let events = world.snapshot().dynamics.unwrap().social.unwrap().events;
+    assert_eq!(
+        events
+            .iter()
+            .map(|e| (e.a, e.b, e.region))
+            .collect::<Vec<_>>(),
+        [(1, 2, 1), (3, 4, 1), (5, 6, 1)]
+    );
+}
+
+#[test]
+fn controlled_person_can_meet_a_cellmate_but_not_an_escaping_one() {
+    let mut initial = social_cell_workload(4, 2);
+    initial.people[0].controlled = true;
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    assert!(world.meet(1, 2).unwrap());
+    let state = world.snapshot();
+    assert!(
+        state
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .relationships
+            .iter()
+            .any(|r| (r.a, r.b) == (1, 2))
+    );
+    let mut blocked = initial.clone();
+    blocked
+        .confinement
+        .as_mut()
+        .unwrap()
+        .escape
+        .push(EscapePreference {
+            person: 2,
+            willing: true,
+            effort: 1,
+        });
+    let mut world = Economy::compile(blocked).unwrap();
+    assert!(world.meet(1, 2).is_err());
+    assert_eq!(world.tick(), 0);
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.meet(1, 3).is_err());
+    assert_eq!(world.tick(), 0);
+}
+
+#[test]
+fn many_cellmates_meet_disjointly_across_workers() {
+    let count = 4096;
+    let initial = social_cell_workload(count, count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .len(),
+                    count as usize / 2
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_cellmate_can_meet_from_fear_without_willingness() {
+    use game_parallel_social::PressurePolicy;
+    let mut initial = social_cell_workload(4, 2);
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.push(Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        affinity: 0,
+        fear: 3,
+        obligation: 0,
+    });
+    initial.opinions = Some(opinions);
+    let social = initial.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+    social.participants[1].willing = false;
+    social.pressures.push(PressurePolicy {
+        person: 2,
+        fear_at_least: Some(3),
+        obligation_at_least: None,
+        enabled: true,
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .any(|e| (e.a, e.b, e.pressured) == (1, 2, Some(2)))
+    );
+    let mut world = Economy::compile(initial).unwrap();
+    world.set_social_pressure(2, false).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .social
+            .unwrap()
+            .events
+            .iter()
+            .all(|e| (e.a, e.b) != (1, 2))
+    );
+}
+
+#[test]
+fn disease_follows_actual_cellmate_encounters() {
+    let mut initial = disease_workload(4);
+    confine_medical_workload(&mut initial, 2);
+    let disease = initial.dynamics.as_mut().unwrap().disease.as_mut().unwrap();
+    disease.cases.truncate(1);
+    disease.strains[0].transmission_per_million = 1_000_000;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let disease = state.dynamics.unwrap().disease.unwrap();
+    assert!(
+        disease
+            .cases
+            .iter()
+            .any(|case| case.person == 2 && case.source == Some(1))
+    );
+    assert!(disease.cases.iter().all(|case| case.person <= 2));
+}
+
+#[test]
+#[ignore = "manual concentrated cell social benchmark"]
+fn concentrated_cell_social_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = social_cell_workload(count, count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let now = std::time::Instant::now();
+                world.advance().unwrap();
+                if round > 0 {
+                    samples.push(now.elapsed().as_secs_f64());
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
 #[test]
 fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
     let mut initial = campaign_fixture();

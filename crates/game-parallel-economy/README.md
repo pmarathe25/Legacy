@@ -14,6 +14,8 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 People held in the same cell can provide direct medical care using medicine they carry, provided they are available and the caregiver chooses to act. A barrier blocks treatment across it even when an opening permits supplies to pass. Escape, self-treatment, requests, and giving compete with medical care for the person's action.
 
+Available cellmates can seek ordinary encounters, form relationships, transmit disease through actual contact, and respond to personal pressure. A controlled person can also ask to meet a cellmate. Physical contact does not cross a cell wall, even when a supply opening allows communication.
+
 A person's food-response preference can be motivated by affinity above or below a personally chosen threshold. A signed affinity weight also controls how that person ranks multiple requesters, so they can favor people they like, favor people they dislike, or disregard affinity. Fear or felt obligation can independently motivate a response.
 
 An authored medical preference can set `patient_health_at_most` to act on observable health. If omitted, the caregiver acts when health is below the world's maximum. The caregiver may use an ineffective medicine and still consume it; a cure only follows a successful treatment with a matching remedy. The hidden diagnosis does not decide whether they attempt care.

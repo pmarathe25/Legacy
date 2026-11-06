@@ -1448,7 +1448,7 @@ impl Economy {
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
         if let Some(owner) = &self.confinement {
-            let restricted = request.is_some_and(|row| owner.held(row.actor))
+            let restricted = request.is_some_and(|row| !owner.can_touch(row.actor, row.target))
                 || player_work.is_some_and(|row| owner.held(row.actor()))
                 || player_transfer.is_some_and(|row| {
                     owner.held(row.person())
@@ -1885,6 +1885,7 @@ impl Economy {
         let needs_held_choices = self.giving.is_some()
             || self.care.is_some()
             || self.medical.is_some()
+            || self.dynamics.as_ref().is_some_and(|d| d.social.is_some())
             || matches!(
                 player_transfer,
                 Some(game_parallel_economy_interaction::PhysicalChoice::TreatOther { .. })
@@ -1938,8 +1939,32 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.coordination");
         }
-        let interaction =
-            game_parallel_economy_interaction::prepare_world!(self, request, busy, tick);
+        let meeting_target = request
+            .filter(|row| {
+                self.confinement
+                    .as_ref()
+                    .is_some_and(|owner| owner.held(row.target))
+                    && next_confinement.as_ref().is_some_and(|owner| {
+                        owner.held(row.target) && owner.can_touch(row.actor, row.target)
+                    })
+                    && busy_before_confinement.binary_search(&row.target).is_err()
+                    && escape_actors.binary_search(&row.target).is_err()
+            })
+            .map(|row| row.target);
+        let interaction_busy = meeting_target
+            .map(|target| game_parallel_economy_work::exclude_sorted(&busy, &[target]));
+        let interaction = game_parallel_economy_interaction::prepare(
+            request,
+            self.dynamics.as_ref().and_then(|d| d.social.as_ref()),
+            self.opinions.as_ref(),
+            &self.people,
+            interaction_busy.as_deref().unwrap_or(&busy),
+            (self.physical.work(), self.travel.as_ref()),
+            tick,
+        )?;
+        if let Some(plan) = &interaction {
+            game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+        }
         if let Some(owner) = next_confinement
             .as_mut()
             .filter(|owner| !owner.capture_policies.is_empty())
@@ -2022,6 +2047,9 @@ impl Economy {
                             .is_some_and(|owner| owner.held(*person))
                         && busy_before_confinement.binary_search(person).is_err()
                         && escape_actors.binary_search(person).is_err()
+                        && interaction
+                            .as_ref()
+                            .is_none_or(|plan| !plan.actors.contains(person))
                 })
                 .collect()
         } else {
@@ -2360,7 +2388,7 @@ impl Economy {
         let mut held_committed = Vec::new();
         if !held.is_empty() && (self.medical.is_some() || manual_medical.is_some()) {
             held_committed.par_extend(treatment.actors.par_iter().copied());
-            held_committed.extend(held_asked);
+            held_committed.extend(held_asked.iter().copied());
             held_committed.par_extend(giving_plan.actors.par_iter().copied());
             held_committed.par_sort_unstable();
         }
@@ -3661,17 +3689,40 @@ impl Economy {
             .combat
             .as_ref()
             .map(|combat| combat.prepare(&people, &self.people, tick, self.seed, &view));
+        let social_enabled = self.dynamics.as_ref().is_some_and(|d| d.social.is_some());
+        let mut occupied_held = Vec::new();
+        if social_enabled && !available_held.is_empty() {
+            occupied_held.par_extend(treatment.actors.par_iter().copied());
+            occupied_held.par_extend(held_asked.par_iter().copied());
+            occupied_held.par_extend(giving_plan.actors.par_iter().copied());
+            occupied_held.par_extend(medical_plan.actors.par_iter().copied());
+            occupied_held.par_sort_unstable();
+        }
+        let meeting_held = if occupied_held.is_empty() {
+            available_held.as_slice()
+        } else {
+            &[]
+        };
+        let meeting_held_filtered = (!occupied_held.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&available_held, &occupied_held));
+        let meeting_held = meeting_held_filtered.as_deref().unwrap_or(meeting_held);
+        let social_busy = (social_enabled && !meeting_held.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, meeting_held));
+        let social_partition = |person| communication.partition(person);
+        let social_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
+            (social_enabled && !held.is_empty()).then_some(&social_partition);
         let mut dynamics = game_parallel_economy_dynamics::prepare_dynamics!(
             self,
             person,
-            busy,
+            social_busy.as_deref().unwrap_or(&busy),
             tick,
             treatment,
             physical,
             care,
             interaction,
             medical_plan,
-            combat
+            combat,
+            social_access
         );
         medical_plan.apply(
             dynamics.as_mut().and_then(|d| d.disease.as_mut()),
