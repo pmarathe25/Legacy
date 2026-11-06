@@ -18,7 +18,11 @@ pub struct Context<'a> {
 pub struct Plan {
     pub actors: Vec<u64>,
     /// Sorted `(site, total opposing effort)` pairs.
-    pub strengths: Vec<(u64, u64)>,
+    pub strengths: Vec<(u64, u128)>,
+    /// The subset of guard effort whose owners choose to resist openings.
+    pub opening_strengths: Vec<(u64, u128)>,
+    /// Guard effort whose owners only resist escapes.
+    pub escape_only_strengths: Vec<(u64, u128)>,
     pub events: Vec<Event>,
 }
 
@@ -74,7 +78,12 @@ impl Context<'_> {
                     && self.busy.binary_search(&person.id).is_err()
                     && intact(policy.site)
                     && (policy.willing || pressured))
-                    .then_some((policy.site, person.id, effort(person.id)))
+                    .then_some((
+                        policy.site,
+                        person.id,
+                        effort(person.id),
+                        policy.oppose_opening,
+                    ))
             })
             .collect();
         if let Some((person_id, site_id)) = self.manual {
@@ -88,7 +97,7 @@ impl Context<'_> {
             {
                 return Err("guarding requires a capable local person and intact barrier".into());
             }
-            choices.push((site_id, person_id, effort(person_id)));
+            choices.push((site_id, person_id, effort(person_id), true));
         }
         if choices
             .par_windows(2)
@@ -103,10 +112,38 @@ impl Context<'_> {
                     group[0].0,
                     group
                         .par_iter()
-                        .map(|row| row.2)
-                        .reduce(|| 0, u64::saturating_add),
+                        .map(|row| u128::from(row.2))
+                        .reduce(|| 0, u128::saturating_add),
                 )
             })
+            .collect();
+        let opening_strengths = choices
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                (
+                    group[0].0,
+                    group
+                        .par_iter()
+                        .filter(|row| row.3)
+                        .map(|row| u128::from(row.2))
+                        .reduce(|| 0, u128::saturating_add),
+                )
+            })
+            .filter(|row| row.1 > 0)
+            .collect();
+        let escape_only_strengths = choices
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                (
+                    group[0].0,
+                    group
+                        .par_iter()
+                        .filter(|row| !row.3)
+                        .map(|row| u128::from(row.2))
+                        .reduce(|| 0, u128::saturating_add),
+                )
+            })
+            .filter(|row| row.1 > 0)
             .collect();
         let mut actors: Vec<_> = choices.par_iter().map(|row| row.1).collect();
         if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
@@ -114,7 +151,7 @@ impl Context<'_> {
         }
         let events = choices
             .into_par_iter()
-            .map(|(site, person, _)| Event {
+            .map(|(site, person, _, _)| Event {
                 tick: self.tick,
                 person,
                 actor: Some(person),
@@ -125,6 +162,8 @@ impl Context<'_> {
         Ok(Plan {
             actors,
             strengths,
+            opening_strengths,
+            escape_only_strengths,
             events,
         })
     }

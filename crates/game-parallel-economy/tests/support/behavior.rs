@@ -10995,6 +10995,7 @@ fn an_individual_guard_spends_time_and_can_stop_or_be_motivated_by_fear() {
             person: 2,
             site: 1,
             willing: true,
+            oppose_opening: false,
             pressured_by: None,
             pressure_threshold: None,
         }],
@@ -11054,6 +11055,137 @@ fn an_individual_guard_spends_time_and_can_stop_or_be_motivated_by_fear() {
     let mut world = Economy::compile(pressured).unwrap();
     assert!(!world.escape_confinement(3).unwrap());
     assert_eq!(world.snapshot().confinement.unwrap().cells[0].resistance, 3);
+}
+
+fn guarded_opening_fixture() -> State {
+    let mut state = field_workload(5);
+    state.agriculture = None;
+    state.people[0].controlled = true;
+    state.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 2,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    state.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: [3, 4]
+            .into_iter()
+            .map(|person| ConfinementHold {
+                person,
+                site: 1,
+                born_inside: false,
+            })
+            .collect(),
+        escape: vec![EscapePreference {
+            person: 2,
+            willing: false,
+            effort: 2,
+        }],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![ConfinementGuardPolicy {
+            person: 2,
+            site: 1,
+            willing: true,
+            oppose_opening: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        release_policies: vec![ConfinementReleasePolicy {
+            person: 5,
+            target: 4,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn opening_guards_share_effort_between_manual_and_autonomous_attempts() {
+    let initial = guarded_opening_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(!world.release_held_person(1, 3).unwrap());
+                let stopped = world.snapshot();
+                let owner = stopped.confinement.as_ref().unwrap();
+                assert!(owner.held(3) && owner.held(4));
+                assert_eq!(
+                    owner
+                        .events
+                        .iter()
+                        .filter(|event| event.kind
+                            == game_parallel_economy_confinement::EventKind::ReleaseResisted)
+                        .count(),
+                    2
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&stopped).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let stale = world.prepare().unwrap();
+                world.set_guard_opening_choice(2, false).unwrap();
+                assert!(world.commit(stale).is_err());
+                restored.set_guard_opening_choice(2, false).unwrap();
+                assert!(world.release_held_person(1, 3).unwrap());
+                assert!(restored.release_held_person(1, 3).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let state = world.snapshot();
+                assert!(state.confinement.as_ref().unwrap().holds.is_empty());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn escape_attempts_consume_guard_effort_before_openings() {
+    let mut initial = guarded_opening_fixture();
+    let owner = initial.confinement.as_mut().unwrap();
+    owner.release_policies.clear();
+    owner.escape.push(EscapePreference {
+        person: 3,
+        willing: true,
+        effort: 2,
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    assert!(world.release_held_person(1, 4).unwrap());
+    let state = world.snapshot();
+    assert!(state.confinement.as_ref().unwrap().held(3));
+    assert_eq!(state.confinement.as_ref().unwrap().cells[0].resistance, 10);
+
+    let owner = initial.confinement.as_mut().unwrap();
+    owner.guard_policies[0].oppose_opening = false;
+    owner.guard_policies.push(ConfinementGuardPolicy {
+        person: 5,
+        site: 1,
+        willing: true,
+        oppose_opening: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(!world.release_held_person(1, 4).unwrap());
+    assert!(world.snapshot().confinement.unwrap().held(4));
 }
 
 #[test]

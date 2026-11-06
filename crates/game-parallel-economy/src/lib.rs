@@ -1734,7 +1734,7 @@ impl Economy {
         if manual_escape.is_some() && self.confinement.is_none() {
             return Err("confinement is disabled".into());
         }
-        let (mut next_confinement, mut escape_actors) = self
+        let (mut next_confinement, mut escape_actors, escape_efforts) = self
             .confinement
             .as_ref()
             .map(|owner| {
@@ -1749,10 +1749,33 @@ impl Economy {
                 )
             })
             .transpose()?
-            .map_or_else(|| (None, Vec::new()), |(next, actors)| (Some(next), actors));
+            .map_or_else(
+                || (None, Vec::new(), Vec::new()),
+                |(next, actors, efforts)| (Some(next), actors, efforts),
+            );
         if escape_actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
             escape_actors.par_sort_unstable();
         }
+        // Escape-only guards resist first, leaving flexible guards' unused effort
+        // available for opening attempts without counting any effort twice.
+        let mut opening_guards: Vec<_> = guard_plan.as_ref().map_or_else(Vec::new, |plan| {
+            plan.opening_strengths
+                .par_iter()
+                .filter_map(|&(site, strength)| {
+                    let escape = escape_efforts
+                        .binary_search_by_key(&site, |row| row.0)
+                        .ok()
+                        .map_or(0, |i| escape_efforts[i].1);
+                    let escape_only = plan
+                        .escape_only_strengths
+                        .binary_search_by_key(&site, |row| row.0)
+                        .ok()
+                        .map_or(0, |i| plan.escape_only_strengths[i].1);
+                    let remaining = strength.saturating_sub(escape.saturating_sub(escape_only));
+                    (remaining > 0).then_some((site, remaining))
+                })
+                .collect()
+        });
         if let (Some(owner), Some(plan)) = (&mut next_confinement, guard_plan) {
             owner.events.par_extend(plan.events);
             if owner.events.par_windows(2).any(|pair| {
@@ -1819,6 +1842,10 @@ impl Economy {
                 }
                 let owner = next_confinement.as_mut().ok_or("confinement is disabled")?;
                 if owner.held(target) {
+                    let site = owner.site_of(target).ok_or("person is not held")?;
+                    let guard = opening_guards.binary_search_by_key(&site, |row| row.0).ok();
+                    let opposition = guard.map_or(0, |i| opening_guards[i].1);
+                    let effort = owner.person_effort(person);
                     owner.release(
                         person,
                         target,
@@ -1827,7 +1854,12 @@ impl Economy {
                             .as_ref()
                             .ok_or("confinement requires physical sites")?,
                         tick,
+                        opposition,
                     )?;
+                    if let Some(i) = guard {
+                        opening_guards[i].1 =
+                            opening_guards[i].1.saturating_sub(u128::from(effort));
+                    }
                 } else {
                     self.confinement
                         .clone()
@@ -1840,6 +1872,7 @@ impl Economy {
                                 .as_ref()
                                 .ok_or("confinement requires physical sites")?,
                             tick,
+                            0,
                         )?;
                 }
             }
@@ -1892,6 +1925,7 @@ impl Economy {
                     .ok_or("confinement requires physical sites")?,
                 busy: &busy,
                 reserved_targets: &reserved_targets,
+                opening_guards: &opening_guards,
                 opinions: self.opinions.as_ref(),
                 seed: self.seed,
                 tick,

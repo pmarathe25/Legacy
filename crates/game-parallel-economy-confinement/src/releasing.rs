@@ -12,6 +12,8 @@ pub struct Context<'a> {
     pub busy: &'a [u64],
     /// Targets reserved by an explicit player action.
     pub reserved_targets: &'a [u64],
+    /// Sorted remaining effort of guards who chose to resist outside openings.
+    pub opening_guards: &'a [(u64, u128)],
     pub opinions: Option<&'a Opinions>,
     pub seed: u64,
     pub tick: u64,
@@ -23,6 +25,75 @@ struct Choice {
     target: u64,
     site: u64,
     priority: u64,
+    effort: u64,
+}
+
+/// Compute per-site exclusive prefixes using parallel blocks and a small block scan.
+fn opening_results(mut selected: Vec<Choice>, guards: &[(u64, u128)]) -> Vec<(Choice, bool)> {
+    if guards.is_empty() {
+        return selected
+            .into_par_iter()
+            .map(|choice| (choice, true))
+            .collect();
+    }
+    selected.par_sort_unstable_by_key(|c| (c.site, c.priority, c.actor, c.target));
+    let mut rows: Vec<_> = selected
+        .into_par_iter()
+        .map(|choice| (choice, 0u128))
+        .collect();
+    const BLOCK: usize = 1024;
+    rows.par_chunks_mut(BLOCK).for_each(|chunk| {
+        let mut previous = None;
+        let mut total = 0u128;
+        for (choice, prefix) in chunk {
+            if previous != Some(choice.site) {
+                total = 0;
+            }
+            *prefix = total;
+            total = total.saturating_add(u128::from(choice.effort));
+            previous = Some(choice.site);
+        }
+    });
+    let mut previous = None;
+    let mut carry = 0u128;
+    let offsets: Vec<_> = rows
+        .chunks(BLOCK)
+        .map(|chunk| {
+            let first = chunk[0].0.site;
+            let last = chunk[chunk.len() - 1];
+            let offset = if previous == Some(first) { carry } else { 0 };
+            carry = last.1.saturating_add(u128::from(last.0.effort));
+            if first == last.0.site {
+                carry = carry.saturating_add(offset);
+            }
+            previous = Some(last.0.site);
+            offset
+        })
+        .collect();
+    rows.par_chunks_mut(BLOCK)
+        .zip(offsets.into_par_iter())
+        .for_each(|(chunk, offset)| {
+            let first = chunk[0].0.site;
+            for (choice, prefix) in chunk {
+                if choice.site != first {
+                    break;
+                }
+                *prefix = prefix.saturating_add(offset);
+            }
+        });
+    rows.into_par_iter()
+        .map(|(choice, prefix)| {
+            let opposition = guards
+                .binary_search_by_key(&choice.site, |row| row.0)
+                .ok()
+                .map_or(0, |i| guards[i].1)
+                .saturating_sub(prefix);
+            (
+                choice,
+                opposition == 0 || u128::from(choice.effort) > opposition,
+            )
+        })
+        .collect()
 }
 
 impl Context<'_> {
@@ -74,6 +145,7 @@ impl Context<'_> {
                             actor.id,
                             self.tick,
                         ),
+                        effort: self.owner.person_effort(actor.id),
                     })
             })
             .collect();
@@ -99,7 +171,11 @@ impl Context<'_> {
                 .map(|group| group[0])
                 .collect()
         };
-        let mut targets: Vec<_> = selected.par_iter().map(|c| c.target).collect();
+        let results = opening_results(selected, self.opening_guards);
+        let mut targets: Vec<_> = results
+            .par_iter()
+            .filter_map(|(c, opened)| opened.then_some(c.target))
+            .collect();
         if targets.par_windows(2).any(|p| p[0] > p[1]) {
             targets.par_sort_unstable();
         }
@@ -124,12 +200,16 @@ impl Context<'_> {
             .collect();
         self.owner
             .events
-            .par_extend(selected.par_iter().map(|choice| Event {
+            .par_extend(results.par_iter().map(|(choice, opened)| Event {
                 tick: self.tick,
                 person: choice.target,
                 actor: Some(choice.actor),
                 site: choice.site,
-                kind: EventKind::Released,
+                kind: if *opened {
+                    EventKind::Released
+                } else {
+                    EventKind::ReleaseResisted
+                },
             }));
         if self
             .owner
@@ -141,10 +221,81 @@ impl Context<'_> {
                 .events
                 .par_sort_unstable_by_key(|event| (event.person, event.actor, event.kind));
         }
-        let mut actors: Vec<_> = selected.par_iter().map(|c| c.actor).collect();
+        let mut actors: Vec<_> = results.par_iter().map(|(c, _)| c.actor).collect();
         if actors.par_windows(2).any(|p| p[0] > p[1]) {
             actors.par_sort_unstable();
         }
         actors
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn opening_effort_is_spent_once_across_parallel_block_boundaries() {
+        let choices: Vec<_> = (0..4100)
+            .map(|i| Choice {
+                actor: i + 1,
+                target: i + 5000,
+                site: if i < 2200 { 1 } else { 2 },
+                priority: i,
+                effort: if i % 5 == 0 { 2 } else { 1 },
+            })
+            .collect();
+        let guards = [(1, 1422), (2, 1250)];
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| opening_results(choices.clone(), &guards))
+        };
+        let rows = run(1);
+        assert_eq!(
+            rows.iter()
+                .map(|(c, ok)| (c.actor, *ok))
+                .collect::<Vec<_>>(),
+            run(4)
+                .iter()
+                .map(|(c, ok)| (c.actor, *ok))
+                .collect::<Vec<_>>()
+        );
+        let mut site = 0;
+        let mut spent = 0u128;
+        for (choice, opened) in rows {
+            if site != choice.site {
+                site = choice.site;
+                spent = 0;
+            }
+            let remaining = guards[(site - 1) as usize].1.saturating_sub(spent);
+            assert_eq!(
+                opened,
+                remaining == 0 || u128::from(choice.effort) > remaining
+            );
+            spent = spent.saturating_add(u128::from(choice.effort));
+        }
+    }
+
+    #[test]
+    fn opening_effort_does_not_overflow_when_people_are_extremely_strong() {
+        let choices = (1..=3)
+            .map(|id| Choice {
+                actor: id,
+                target: id + 3,
+                site: 1,
+                priority: id,
+                effort: u64::MAX,
+            })
+            .collect();
+        let results = opening_results(choices, &[(1, 2 * u128::from(u64::MAX))]);
+        assert_eq!(
+            results
+                .into_iter()
+                .map(|(_, opened)| opened)
+                .collect::<Vec<_>>(),
+            [false, false, true]
+        );
     }
 }

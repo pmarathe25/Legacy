@@ -99,6 +99,9 @@ pub struct GuardPolicy {
     pub person: u64,
     pub site: u64,
     pub willing: bool,
+    /// Whether this person also chooses to resist outside openings.
+    #[serde(default)]
+    pub oppose_opening: bool,
     #[serde(default)]
     pub pressured_by: Option<u64>,
     #[serde(default)]
@@ -145,7 +148,11 @@ pub enum EventKind {
     CaptureResisted,
     CaptureUnavailable,
     Guarded,
+    ReleaseResisted,
 }
+
+/// Staged state, escaping people, and total attempted effort by site.
+pub type EscapeOutcome = (Confinement, Vec<u64>, Vec<(u64, u128)>);
 
 fn default_effort() -> u64 {
     1
@@ -587,7 +594,7 @@ impl Confinement {
         Ok(true)
     }
 
-    /// Any capable local person can physically open the cell.
+    /// A capable local person can try to open the cell against opposing effort.
     pub fn release(
         &mut self,
         actor: u64,
@@ -595,7 +602,8 @@ impl Confinement {
         people: &[Person],
         sites: &Facilities,
         tick: u64,
-    ) -> Result<(), String> {
+        opposition: u128,
+    ) -> Result<bool, String> {
         let person = &people[people
             .binary_search_by_key(&actor, |p| p.id)
             .map_err(|_| "unknown person")?];
@@ -615,15 +623,28 @@ impl Confinement {
         {
             return Err("release requires a capable person outside the local cell".into());
         }
-        self.holds.remove(index);
+        let effort = self.person_effort(actor);
+        let opened = opposition == 0 || u128::from(effort) > opposition;
+        if opened {
+            self.holds.remove(index);
+        }
         self.events.push(Event {
             tick,
             person: target,
             actor: Some(actor),
             site: site_id,
-            kind: EventKind::Released,
+            kind: if opened {
+                EventKind::Released
+            } else {
+                EventKind::ReleaseResisted
+            },
         });
-        Ok(())
+        Ok(opened)
+    }
+
+    pub fn person_effort(&self, person: u64) -> u64 {
+        ordered_index(&self.escape, person, |row| row.person)
+            .map_or(self.default_effort, |i| self.escape[i].effort)
     }
 
     /// Disjoint barrier groups resolve concurrently; broken barriers free everyone behind them.
@@ -633,8 +654,8 @@ impl Confinement {
         busy: &[u64],
         tick: u64,
         manual: Option<u64>,
-        guards: &[(u64, u64)],
-    ) -> Result<(Self, Vec<u64>), String> {
+        guards: &[(u64, u128)],
+    ) -> Result<EscapeOutcome, String> {
         if let Some(person) = manual {
             let index = people
                 .binary_search_by_key(&person, |p| p.id)
@@ -673,8 +694,8 @@ impl Confinement {
             .map(|group| {
                 let effort = group
                     .par_iter()
-                    .map(|row| row.2)
-                    .reduce(|| 0, u64::saturating_add);
+                    .map(|row| u128::from(row.2))
+                    .reduce(|| 0, u128::saturating_add);
                 (group[0].0, effort)
             })
             .collect();
@@ -705,9 +726,10 @@ impl Confinement {
                     .binary_search_by_key(&cell.site, |row| row.0)
                     .ok()
                     .map_or(0, |i| guards[i].1);
+                let damage = changes[index].1.saturating_sub(opposition);
                 cell.resistance = cell
                     .resistance
-                    .saturating_sub(changes[index].1.saturating_sub(opposition));
+                    .saturating_sub(u64::try_from(damage).unwrap_or(u64::MAX));
             }
         });
         let broken: HashSet<_> = next
@@ -721,7 +743,11 @@ impl Confinement {
             .into_par_iter()
             .filter(|hold| !broken.contains(&hold.site))
             .collect();
-        Ok((next, attempts.into_par_iter().map(|row| row.1).collect()))
+        Ok((
+            next,
+            attempts.into_par_iter().map(|row| row.1).collect(),
+            changes,
+        ))
     }
 
     /// Physical destruction of a site removes its barrier and releases its occupants.
@@ -800,6 +826,33 @@ macro_rules! escape_method {
                 .binary_search_by_key(&person, |row| row.person)
                 .map_err(|_| "person has no guarding preference")?;
             owner.guard_policies[index].willing = willing;
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Change whether an individual guard chooses to resist outside openings.
+        pub fn set_guard_opening_choice(
+            &mut self,
+            person: u64,
+            oppose: bool,
+        ) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be capable".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            let owner = self.confinement.as_mut().ok_or("confinement is disabled")?;
+            let index = owner
+                .guard_policies
+                .binary_search_by_key(&person, |row| row.person)
+                .map_err(|_| "person has no guarding preference")?;
+            owner.guard_policies[index].oppose_opening = oppose;
             self.epoch = epoch;
             Ok(())
         }

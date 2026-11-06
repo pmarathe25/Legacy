@@ -147,6 +147,7 @@ fn shared_guarding(count: u64) -> (Confinement, Vec<Person>, Facilities) {
             person,
             site: 1,
             willing: true,
+            oppose_opening: false,
             pressured_by: None,
             pressure_threshold: None,
         })
@@ -304,6 +305,7 @@ fn parallel_releases_resolve_shared_and_distinct_targets() {
                     sites: &sites,
                     busy: &[2],
                     reserved_targets: &[4099],
+                    opening_guards: &[],
                     opinions: None,
                     seed: 7,
                     tick: 1,
@@ -350,6 +352,12 @@ fn concentrated_release_benchmark() {
             pressure_threshold: None,
         })
         .collect();
+    let guarded = std::env::var_os("LEGACY_GUARDED").is_some();
+    let opening_guards = if guarded {
+        vec![(1, u128::from(count / 2))]
+    } else {
+        vec![]
+    };
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -373,6 +381,7 @@ fn concentrated_release_benchmark() {
                         sites: &sites,
                         busy: &[],
                         reserved_targets: &[],
+                        opening_guards: &opening_guards,
                         opinions: None,
                         seed: 7,
                         tick: 1,
@@ -386,7 +395,7 @@ fn concentrated_release_benchmark() {
                 }
                 samples.sort();
                 println!(
-                    "workers={workers} actors={count} shared={shared} elapsed_ms={:.3}",
+                    "workers={workers} actors={count} shared={shared} guarded={guarded} elapsed_ms={:.3}",
                     samples[samples.len() / 2].as_secs_f64() * 1000.0
                 );
             }
@@ -416,7 +425,7 @@ fn concurrent_guarding_and_escape_use_actual_personal_effort() {
                 .unwrap();
                 assert_eq!(plan.actors.len(), 4096);
                 assert_eq!(plan.strengths, vec![(1, 4096)]);
-                let (next, attempts) = initial
+                let (next, attempts, _) = initial
                     .escape_attempts(&people, &[], 1, None, &plan.strengths)
                     .unwrap();
                 assert_eq!(attempts.len(), 4096);
@@ -459,11 +468,11 @@ fn concentrated_guarding_benchmark() {
                 }
                 .prepare()
                 .unwrap();
-                let (next, _) = initial
+                let (next, _, _) = initial
                     .escape_attempts(&people, &[], 1, None, &plan.strengths)
                     .unwrap();
                 let elapsed = now.elapsed();
-                assert_eq!(plan.strengths, vec![(1, count)]);
+                assert_eq!(plan.strengths, vec![(1, u128::from(count))]);
                 assert_eq!(next.cells[0].resistance, count + 1);
                 if round > 0 {
                     samples.push(elapsed);
@@ -699,11 +708,12 @@ fn simultaneous_attempts_reduce_a_shared_barrier_and_release_everyone() {
             .build()
             .unwrap()
             .install(|| {
-                let (first, actors) = initial.escape_attempts(&people, &[], 1, None, &[]).unwrap();
+                let (first, actors, _) =
+                    initial.escape_attempts(&people, &[], 1, None, &[]).unwrap();
                 assert_eq!(actors.len(), 4096);
                 assert_eq!(first.cells[0].resistance, 1);
                 assert_eq!(first.holds.len(), 4096);
-                let (second, _) = first.escape_attempts(&people, &[], 2, None, &[]).unwrap();
+                let (second, _, _) = first.escape_attempts(&people, &[], 2, None, &[]).unwrap();
                 assert_eq!(second.cells[0].resistance, 0);
                 assert!(second.holds.is_empty());
                 second.validate(&people, &sites, 2).unwrap();
@@ -733,7 +743,8 @@ fn concentrated_escape_benchmark() {
             let mut samples = Vec::new();
             for round in 0..5 {
                 let now = std::time::Instant::now();
-                let (next, actors) = initial.escape_attempts(&people, &[], 1, None, &[]).unwrap();
+                let (next, actors, _) =
+                    initial.escape_attempts(&people, &[], 1, None, &[]).unwrap();
                 let elapsed = now.elapsed();
                 assert_eq!(actors.len(), count as usize);
                 assert_eq!(next.cells[0].resistance, 1);
