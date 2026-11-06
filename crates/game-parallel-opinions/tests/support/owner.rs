@@ -1,6 +1,259 @@
 use super::*;
 
 #[test]
+#[ignore = "manual sparse relationship merge benchmark"]
+fn sparse_relationship_merge_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_RELATIONSHIPS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000_000u64);
+    let update_count = std::env::var("LEGACY_UPDATES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1u64);
+    let insert = std::env::var_os("LEGACY_INSERT").is_some();
+    assert!(count > 0 && update_count > 0 && update_count <= count);
+    let target = count
+        .checked_mul(2)
+        .and_then(|value| value.checked_add(1))
+        .unwrap();
+    let initial = Opinions {
+        rules: rules(),
+        sensitivities: vec![].into(),
+        events: vec![],
+        records: (1..=count)
+            .map(|id| Opinion {
+                observer: id * 2,
+                target,
+                trust: 0,
+                affinity: 0,
+                fear: 0,
+                obligation: 0,
+            })
+            .collect(),
+    };
+    let changes: Vec<_> = (1..=update_count)
+        .map(|i| PersonalChange {
+            observer: {
+                let position = if update_count == 1 {
+                    count.div_ceil(2)
+                } else {
+                    i
+                };
+                if insert {
+                    position * 2 - 1
+                } else {
+                    position * 2
+                }
+            },
+            target,
+            trust: 1,
+            affinity: 0,
+            fear: 0,
+            obligation: 0,
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..5 {
+                let mut state = initial.clone();
+                let start = std::time::Instant::now();
+                state.apply_personal_changes(&changes, 1);
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(state.records.len(), (count + if insert { update_count } else { 0 }) as usize);
+                assert_eq!(state.events.len(), update_count as usize);
+                assert_eq!(state.index().trust(changes[0].observer, target), 1);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} relationships={count} updates={update_count} insert={insert} elapsed={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+fn parallel_relationship_merge_keeps_existing_and_new_edges_across_boundaries() {
+    let count = 8192u64;
+    let target = count * 2 + 1;
+    let initial = Opinions {
+        rules: rules(),
+        sensitivities: vec![].into(),
+        events: vec![],
+        records: (1..=count)
+            .map(|i| Opinion {
+                observer: 2 * i,
+                target,
+                trust: 0,
+                affinity: 0,
+                fear: 0,
+                obligation: 0,
+            })
+            .collect(),
+    };
+    let changes: Vec<_> = (1..=count * 2)
+        .map(|observer| PersonalChange {
+            observer,
+            target,
+            trust: 1,
+            affinity: 0,
+            fear: 0,
+            obligation: 0,
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.apply_personal_changes(&changes, 1);
+                assert_eq!(state.records.len(), (count * 2) as usize);
+                assert_eq!(state.events.len(), (count * 2) as usize);
+                assert!(
+                    state
+                        .records
+                        .iter()
+                        .enumerate()
+                        .all(|(index, row)| row.observer == index as u64 + 1
+                            && row.target == target
+                            && row.trust == 1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn sparse_updates_mutate_only_owned_existing_edges_and_keep_simultaneous_clamping() {
+    let count = 8192u64;
+    let target = count * 2 + 1;
+    let mut configured = rules();
+    configured.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let initial = Opinions {
+        rules: configured,
+        sensitivities: vec![].into(),
+        events: vec![],
+        records: (1..=count)
+            .map(|i| Opinion {
+                observer: 2 * i,
+                target,
+                trust: 4,
+                affinity: 0,
+                fear: 1,
+                obligation: 3,
+            })
+            .collect(),
+    };
+    let changes = [
+        PersonalChange {
+            observer: 2,
+            target,
+            trust: 10,
+            affinity: 2,
+            fear: -2,
+            obligation: 0,
+        },
+        PersonalChange {
+            observer: 2,
+            target,
+            trust: -10,
+            affinity: -5,
+            fear: 0,
+            obligation: 2,
+        },
+        PersonalChange {
+            observer: count * 2,
+            target,
+            trust: -10,
+            affinity: 0,
+            fear: 4,
+            obligation: -9,
+        },
+    ];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.apply_personal_changes(&changes, 1);
+                assert_eq!(state.records.len(), count as usize);
+                assert_eq!(
+                    (
+                        state.records[0].trust,
+                        state.records[0].affinity,
+                        state.records[0].fear,
+                        state.records[0].obligation
+                    ),
+                    (4, -3, 0, 5)
+                );
+                let last = state.records.last().unwrap();
+                assert_eq!((last.trust, last.fear, last.obligation), (-5, 5, 0));
+                assert_eq!(
+                    &state.records[1..state.records.len() - 1],
+                    &initial.records[1..initial.records.len() - 1]
+                );
+                assert_eq!(state.events.len(), 1);
+                assert_eq!(
+                    state,
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    assert_eq!(initial.records[0].trust, 4);
+
+    let mut mixed = initial.clone();
+    mixed.apply_personal_changes(
+        &[
+            PersonalChange {
+                observer: 2,
+                target,
+                trust: -1,
+                affinity: 0,
+                fear: 0,
+                obligation: 0,
+            },
+            PersonalChange {
+                observer: 3,
+                target,
+                trust: 1,
+                affinity: 0,
+                fear: 0,
+                obligation: 0,
+            },
+        ],
+        1,
+    );
+    assert_eq!(mixed.records.len(), count as usize + 1);
+    assert_eq!((mixed.records[0].observer, mixed.records[0].trust), (2, 3));
+    assert_eq!((mixed.records[1].observer, mixed.records[1].trust), (3, 1));
+    assert_eq!(&mixed.records[2..], &initial.records[1..]);
+}
+
+#[test]
 fn opposed_actions_use_each_observers_signed_reactions_and_per_outcome_overrides() {
     let mut rules = rules();
     rules.affinity = Some(AffinityRules {

@@ -2537,6 +2537,59 @@ fn enable_opposed_action_reactions(state: &mut State) {
     state.opinions = Some(opinions);
 }
 
+fn seed_shared_animal_relationships(state: &mut State) {
+    let count = state.people.len() as u64;
+    let opinions = state
+        .opinions
+        .as_mut()
+        .expect("opposed reactions require opinions");
+    opinions.records = (2..=count)
+        .map(|target| Opinion {
+            observer: 1,
+            target,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: 0,
+        })
+        .chain((2..=count).map(|observer| Opinion {
+            observer,
+            target: 1,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: 0,
+        }))
+        .collect();
+}
+
+#[test]
+fn sparse_opposed_reactions_preserve_unrelated_relationships_across_workers() {
+    let count = 4096;
+    let mut initial = animal_defense_workload(count, true);
+    enable_opposed_action_reactions(&mut initial);
+    seed_shared_animal_relationships(&mut initial);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let records = &state.opinions.as_ref().unwrap().records;
+                assert_eq!(records.len(), (2 * (count - 1)) as usize);
+                assert_eq!(
+                    records.iter().filter(|record| record.affinity != 0).count(),
+                    2
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 fn opposed_action_relationship_changes_are_worker_deterministic_in_a_full_world() {
     for shared in [false, true] {
@@ -2608,9 +2661,14 @@ fn concentrated_animal_defense_benchmark() {
         .unwrap_or(100_000u64);
     let shared = std::env::var_os("LEGACY_SHARED").is_some();
     let reactions = std::env::var_os("LEGACY_OPPOSED_REACTIONS").is_some();
+    let preexisting = std::env::var_os("LEGACY_PREEXISTING_EDGES").is_some();
+    assert!(!preexisting || (shared && reactions));
     let mut initial = animal_defense_workload(count, shared);
     if reactions {
         enable_opposed_action_reactions(&mut initial);
+    }
+    if preexisting {
+        seed_shared_animal_relationships(&mut initial);
     }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -2636,7 +2694,9 @@ fn concentrated_animal_defense_benchmark() {
                     expected
                 );
                 if reactions {
-                    assert_eq!(state.opinions.unwrap().records.len(), expected * 2);
+                    let opinions = state.opinions.unwrap();
+                    assert_eq!(opinions.records.len(), if preexisting { 2 * (count as usize - 1) } else { expected * 2 });
+                    assert_eq!(opinions.records.iter().filter(|record| record.affinity != 0).count(), expected * 2);
                 }
                 if round > 0 {
                     samples.push(elapsed);
@@ -2644,7 +2704,7 @@ fn concentrated_animal_defense_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} shared={shared} reactions={reactions} elapsed={:.6}",
+                "workers={workers} people={count} shared={shared} reactions={reactions} preexisting={preexisting} elapsed={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]

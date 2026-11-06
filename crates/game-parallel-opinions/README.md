@@ -31,6 +31,8 @@ Optional `[[opinions.sensitivities]]` rows override `fear_per_damage`, `gratitud
 
 Unchanged sensitivity generations are shared between snapshots. Call `Opinions::sensitivities_mut()` to change them; it detaches a shared generation in parallel before writing. Serialization remains a normal list of personal rows. Development and newborn enrollment avoid detaching when no row actually changes.
 
+Personal changes combine simultaneous signed deltas before clamping. Sparse changes to existing edges update the owned draft without rebuilding every record; insertions use a deterministic parallel merge balanced over both existing and new edges. Saving still writes canonical directed relationships.
+
 When affinity is enabled, `affinity_site_use` and `affinity_site_destruction` are optional signed personal reactions to locally witnessed use or destruction of a claimed site. A `relationship_cases` entry can override either reaction for a particular actor using `site_use` or `site_destruction`. Absent reactions default to zero; either event can increase or decrease liking, and neither creates obligation.
 
 `affinity_site_salvage` independently controls a person's reaction to witnessing someone recover material from their claimed site's debris. A `relationship_cases` entry can override it for a particular actor with `site_salvage`; an absent setting has no effect. Failed recovery and actions outside the claimant's location are not observed.
