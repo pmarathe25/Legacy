@@ -16,6 +16,7 @@ pub use game_parallel_economy_confinement::{
     CapturePolicy as ConfinementCapturePolicy, CaptureResponse as ConfinementCaptureResponse,
     Cell as ConfinementCell, CellKind as ConfinementCellKind, Confinement, EscapePreference,
     GuardPolicy as ConfinementGuardPolicy, Hold as ConfinementHold,
+    ReleasePolicy as ConfinementReleasePolicy,
 };
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
@@ -1835,6 +1836,40 @@ impl Economy {
         }
         if !held.is_empty() {
             game_parallel_economy_work::reserve(&mut busy, held.iter().copied());
+        }
+        if let Some(owner) = next_confinement
+            .as_mut()
+            .filter(|owner| !owner.release_policies.is_empty())
+        {
+            use game_parallel_economy_interaction::PhysicalChoice;
+            let mut reserved_targets: Vec<_> = request.map(|row| row.target).into_iter().collect();
+            let target = match player_transfer {
+                Some(PhysicalChoice::Give { recipient, .. }) => Some(recipient),
+                Some(PhysicalChoice::TreatOther { patient, .. }) => Some(patient),
+                Some(PhysicalChoice::AskFood { target, .. })
+                | Some(PhysicalChoice::Confine { target, .. })
+                | Some(PhysicalChoice::ReleaseHeld { target, .. }) => Some(target),
+                Some(PhysicalChoice::AskHaul { carrier, .. }) => Some(carrier),
+                _ => None,
+            };
+            reserved_targets.extend(target);
+            reserved_targets.sort_unstable();
+            reserved_targets.dedup();
+            let actors = game_parallel_economy_confinement::ReleaseContext {
+                owner,
+                people: &self.people,
+                sites: self
+                    .work_sites
+                    .as_ref()
+                    .ok_or("confinement requires physical sites")?,
+                busy: &busy,
+                reserved_targets: &reserved_targets,
+                opinions: self.opinions.as_ref(),
+                seed: self.seed,
+                tick,
+            }
+            .prepare();
+            game_parallel_economy_work::reserve(&mut busy, actors);
         }
         #[cfg(feature = "profile")]
         {

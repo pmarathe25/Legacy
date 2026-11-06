@@ -9059,6 +9059,7 @@ fn physical_barrier_holds_a_recovering_guardian_until_their_escape_breaks_it() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
@@ -9153,6 +9154,7 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
@@ -9220,6 +9222,109 @@ fn a_person_can_physically_confine_and_release_an_incapacitated_guardian() {
 }
 
 #[test]
+fn individuals_can_release_a_captive_by_choice_or_personal_pressure() {
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold { person: 3, site: 1 }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![ConfinementReleasePolicy {
+            person: 2,
+            target: 3,
+            willing: false,
+            pressured_by: Some(1),
+            pressure_threshold: Some(3),
+        }],
+        events: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert!(run(initial.clone(), 1).confinement.unwrap().held(3));
+    let mut voluntary = Economy::compile(initial.clone()).unwrap();
+    let stale = voluntary.prepare().unwrap();
+    voluntary.set_release_choice(2, true).unwrap();
+    assert!(voluntary.commit(stale).is_err());
+    voluntary.advance().unwrap();
+    assert!(!voluntary.snapshot().confinement.unwrap().held(3));
+    let mut pressured = initial.clone();
+    pressured.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        affinity: 0,
+        fear: 1,
+        obligation: 2,
+    });
+    let result = run(pressured.clone(), 1);
+    assert_eq!(result, run(pressured.clone(), 4));
+    let owner = result.confinement.unwrap();
+    assert!(!owner.held(3));
+    assert!(owner.events.iter().any(|event| event.person == 3
+        && event.actor == Some(2)
+        && event.kind == game_parallel_economy_confinement::EventKind::Released));
+    pressured
+        .confinement
+        .as_mut()
+        .unwrap()
+        .release_policies
+        .push(ConfinementReleasePolicy {
+            person: 1,
+            target: 3,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        });
+    let result = run(pressured.clone(), 1);
+    assert_eq!(result, run(pressured, 4));
+    let owner = result.confinement.unwrap();
+    assert!(!owner.held(3));
+    assert_eq!(
+        owner
+            .events
+            .iter()
+            .filter(|event| event.kind == game_parallel_economy_confinement::EventKind::Released)
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
     let mut initial = campaign_fixture();
     initial.pending_food.clear();
@@ -9235,6 +9340,7 @@ fn conscious_capture_reflects_resistance_yield_force_and_felt_pressure() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],
@@ -9348,6 +9454,7 @@ fn autonomous_person_can_capture_an_idle_ruler_who_resists_or_yields() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
@@ -9483,6 +9590,7 @@ fn autonomous_capture_resolves_shared_capacity_and_target_contention() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
@@ -9578,6 +9686,7 @@ fn an_individual_guard_spends_time_and_can_stop_or_be_motivated_by_fear() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
         cells: vec![ConfinementCell {
@@ -9686,6 +9795,7 @@ fn people_interpret_capture_and_release_in_their_own_way() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         default_effort: 1,
         cell_kinds: vec![],
         cells: vec![ConfinementCell {
@@ -9861,6 +9971,7 @@ fn controlled_person_can_choose_repeated_physical_escape_attempts() {
         bindings: vec![],
     });
     initial.confinement = Some(Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         capture_policies: vec![],

@@ -15,6 +15,7 @@ fn shared_barrier(count: u64) -> (Confinement, Vec<Person>, Facilities) {
         })
         .collect();
     let owner = Confinement {
+        release_policies: vec![],
         guard_policies: vec![],
         cell_kinds: vec![],
         default_effort: 1,
@@ -140,6 +141,122 @@ fn shared_guarding(count: u64) -> (Confinement, Vec<Person>, Facilities) {
         })
         .collect();
     (owner, people, sites)
+}
+
+#[test]
+fn parallel_releases_resolve_shared_and_distinct_targets() {
+    let (mut initial, people, sites) = shared_guarding(4096);
+    initial.guard_policies.clear();
+    initial.escape.clear();
+    initial.release_policies = (1..=4096)
+        .map(|person| ReleasePolicy {
+            person,
+            target: person + 4096,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    let run = |state: &Confinement, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut owner = state.clone();
+                let actors = ReleaseContext {
+                    owner: &mut owner,
+                    people: &people,
+                    sites: &sites,
+                    busy: &[2],
+                    reserved_targets: &[4099],
+                    opinions: None,
+                    seed: 7,
+                    tick: 1,
+                }
+                .prepare();
+                owner.validate(&people, &sites, 1).unwrap();
+                (owner, actors)
+            })
+    };
+    let (owner, actors) = run(&initial, 1);
+    assert_eq!((owner.holds.len(), actors.len()), (2, 4094));
+    assert!(owner.held(4098) && owner.held(4099));
+    assert_eq!((owner, actors), run(&initial, 4));
+    initial.holds.truncate(1);
+    for policy in &mut initial.release_policies {
+        policy.target = 4097;
+    }
+    let (owner, actors) = run(&initial, 1);
+    assert!(owner.holds.is_empty());
+    assert_eq!(actors.len(), 1);
+    assert_eq!((owner, actors), run(&initial, 4));
+}
+
+#[test]
+#[ignore = "manual concentrated release benchmark"]
+fn concentrated_release_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000);
+    let (mut initial, people, sites) = shared_guarding(count);
+    initial.guard_policies.clear();
+    initial.escape.clear();
+    initial.release_policies = (1..=count)
+        .map(|person| ReleasePolicy {
+            person,
+            target: person + count,
+            willing: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            for shared in [false, true] {
+                let mut state = initial.clone();
+                if shared {
+                    state.holds.truncate(1);
+                    for policy in &mut state.release_policies {
+                        policy.target = count + 1;
+                    }
+                }
+                let mut samples = Vec::new();
+                for round in 0..6 {
+                    let mut owner = state.clone();
+                    let now = std::time::Instant::now();
+                    let actors = ReleaseContext {
+                        owner: &mut owner,
+                        people: &people,
+                        sites: &sites,
+                        busy: &[],
+                        reserved_targets: &[],
+                        opinions: None,
+                        seed: 7,
+                        tick: 1,
+                    }
+                    .prepare();
+                    let elapsed = now.elapsed();
+                    assert_eq!(actors.len(), if shared { 1 } else { count as usize });
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort();
+                println!(
+                    "workers={workers} actors={count} shared={shared} elapsed_ms={:.3}",
+                    samples[samples.len() / 2].as_secs_f64() * 1000.0
+                );
+            }
+        });
 }
 
 #[test]

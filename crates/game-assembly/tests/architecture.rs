@@ -44,6 +44,7 @@ fn crate_size_and_dependency_direction_are_enforced() {
             "game-parallel-practices" => 2200,
             "game-parallel-economy-work" => 1450,
             "game-parallel-economy-building" => 1500,
+            "game-parallel-economy-confinement" => 1500,
             "game-parallel-opinions" => 1800,
             _ => 1200,
         };

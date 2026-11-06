@@ -1,11 +1,13 @@
 //! Physical barriers and individually chosen attempts to escape them.
 mod autonomous;
 mod guarding;
+mod releasing;
 pub use autonomous::Context as AutonomousContext;
 use game_parallel_economy_person::Person;
 use game_parallel_work_sites::Facilities;
 pub use guarding::{Context as GuardContext, Plan as GuardPlan};
 use rayon::prelude::*;
+pub use releasing::Context as ReleaseContext;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -88,6 +90,19 @@ pub struct GuardPolicy {
     pub pressure_threshold: Option<u64>,
 }
 
+/// A person's own inclination to free a particular captive.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReleasePolicy {
+    pub person: u64,
+    pub target: u64,
+    pub willing: bool,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Capture {
     pub actor: u64,
@@ -140,6 +155,8 @@ pub struct Confinement {
     #[serde(default)]
     pub guard_policies: Vec<GuardPolicy>,
     #[serde(default)]
+    pub release_policies: Vec<ReleasePolicy>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -155,6 +172,8 @@ impl Confinement {
         self.capture_policies
             .par_sort_unstable_by_key(|rule| rule.person);
         self.guard_policies
+            .par_sort_unstable_by_key(|rule| rule.person);
+        self.release_policies
             .par_sort_unstable_by_key(|rule| rule.person);
     }
 
@@ -200,6 +219,10 @@ impl Confinement {
                 .guard_policies
                 .par_windows(2)
                 .any(|w| w[0].person >= w[1].person)
+            || self
+                .release_policies
+                .par_windows(2)
+                .any(|w| w[0].person >= w[1].person)
             || self.cells.par_iter().any(|cell| {
                 sites
                     .sites
@@ -231,6 +254,16 @@ impl Confinement {
                 people.binary_search_by_key(&rule.person, |p| p.id).is_err()
                     || rule.site == 0
                     || rule.site >= sites.next_id
+                    || rule.pressured_by.is_some() != rule.pressure_threshold.is_some()
+                    || rule.pressure_threshold == Some(0)
+                    || rule.pressured_by.is_some_and(|id| {
+                        id == rule.person || people.binary_search_by_key(&id, |p| p.id).is_err()
+                    })
+            })
+            || self.release_policies.par_iter().any(|rule| {
+                rule.person == rule.target
+                    || people.binary_search_by_key(&rule.person, |p| p.id).is_err()
+                    || people.binary_search_by_key(&rule.target, |p| p.id).is_err()
                     || rule.pressured_by.is_some() != rule.pressure_threshold.is_some()
                     || rule.pressure_threshold == Some(0)
                     || rule.pressured_by.is_some_and(|id| {
@@ -515,6 +548,7 @@ impl Confinement {
             capture_responses: self.capture_responses.par_iter().cloned().collect(),
             capture_policies: self.capture_policies.par_iter().cloned().collect(),
             guard_policies: self.guard_policies.par_iter().cloned().collect(),
+            release_policies: self.release_policies.par_iter().cloned().collect(),
             events: attempts
                 .par_iter()
                 .map(|&(site, person, _)| Event {
@@ -627,6 +661,29 @@ macro_rules! escape_method {
                 .binary_search_by_key(&person, |row| row.person)
                 .map_err(|_| "person has no guarding preference")?;
             owner.guard_policies[index].willing = willing;
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Change an individual's inclination to free their configured target.
+        pub fn set_release_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be capable".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            let owner = self.confinement.as_mut().ok_or("confinement is disabled")?;
+            let index = owner
+                .release_policies
+                .binary_search_by_key(&person, |row| row.person)
+                .map_err(|_| "person has no release preference")?;
+            owner.release_policies[index].willing = willing;
             self.epoch = epoch;
             Ok(())
         }
