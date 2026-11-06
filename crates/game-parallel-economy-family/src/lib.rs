@@ -99,7 +99,7 @@ macro_rules! validate_care {
 }
 #[macro_export]
 macro_rules! prepare_care {
-    ($world:expr, $people:expr, $view:expr, $claims:expr, $busy:expr, $meals:expr, $base:expr, $tick:expr, $held:expr) => {{
+    ($world:expr, $people:expr, $view:expr, $claims:expr, $busy:expr, $meals:expr, $base:expr, $tick:expr, $care_busy:expr, $contact:expr, $stock:expr) => {{
         let care = $world
             .care
             .as_ref()
@@ -115,8 +115,11 @@ macro_rules! prepare_care {
                     travel: $world.travel.as_ref(),
                     opinions: $world.opinions.as_ref(),
                     claims: $claims.as_ref(),
-                    busy: &$busy,
-                    confined: &$held,
+                    busy: &$care_busy,
+                    access: game_parallel_economy_work::care::Access {
+                        contact: &$contact,
+                        local_stock: &$stock,
+                    },
                     eating: &$meals,
                     seed: $world.seed,
                     tick: $tick,

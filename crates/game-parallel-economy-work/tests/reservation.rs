@@ -1,4 +1,4 @@
-use game_parallel_economy_work::reserve;
+use game_parallel_economy_work::{exclude_sorted, reserve};
 use rayon::prelude::*;
 
 #[test]
@@ -55,6 +55,73 @@ fn reservations_match_sorting_across_sizes_and_unknown_iterator_lengths() {
                 });
         }
     }
+}
+
+#[test]
+fn sorted_exclusion_matches_membership_at_chunk_boundaries() {
+    for count in [0, 1, 4095, 4096, 4097, 100_000] {
+        let rows: Vec<_> = (0..count).collect();
+        let excluded: Vec<_> = (0..count).filter(|n| n % 3 == 0).collect();
+        let expected: Vec<_> = rows
+            .iter()
+            .copied()
+            .filter(|n| excluded.binary_search(n).is_err())
+            .collect();
+        for workers in [1, 4] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    assert_eq!(exclude_sorted(&rows, &excluded), expected);
+                });
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual ordered exclusion benchmark"]
+fn concentrated_exclusion_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000u64);
+    let rows: Vec<_> = (0..count).collect();
+    let excluded: Vec<_> = (0..count).filter(|n| n % 2 == 0).collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            for mode in ["lookup", "merge"] {
+                let mut samples = Vec::new();
+                for round in 0..8 {
+                    let now = std::time::Instant::now();
+                    let result: Vec<_> = if mode == "lookup" {
+                        rows.par_iter()
+                            .copied()
+                            .filter(|person| excluded.binary_search(person).is_err())
+                            .collect()
+                    } else {
+                        exclude_sorted(&rows, &excluded)
+                    };
+                    let elapsed = now.elapsed();
+                    assert_eq!(result.len(), (count / 2) as usize);
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort();
+                println!(
+                    "workers={workers} people={count} mode={mode} elapsed_ms={:.3}",
+                    samples[samples.len() / 2].as_secs_f64() * 1000.0
+                );
+            }
+        });
 }
 
 #[test]

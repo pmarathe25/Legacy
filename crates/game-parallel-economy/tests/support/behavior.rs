@@ -9647,6 +9647,118 @@ fn a_barrier_prevents_in_person_dependent_care() {
             .used,
         0
     );
+    let mut together = initial.clone();
+    together.work_sites.as_mut().unwrap().sites[0].capacity = 2;
+    let owner = together.confinement.as_mut().unwrap();
+    owner.cells[0].allow_supplies = false;
+    owner
+        .holds
+        .insert(0, ConfinementHold { person: 1, site: 1 });
+    let cared = run(together.clone(), 1);
+    assert_eq!(cared, run(together.clone(), 4));
+    assert!(
+        cared
+            .care
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.child == 3 && event.caregiver == Some(1))
+    );
+    assert_eq!(
+        cared
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(3))
+            .unwrap()
+            .used,
+        1
+    );
+    assert!(cared.confinement.as_ref().unwrap().held(1));
+    assert!(cared.confinement.unwrap().held(3));
+    let mut outside_stock = together;
+    outside_stock.people[0].hunger = 5;
+    outside_stock.care.as_mut().unwrap().rules.fetch_local_food = true;
+    let holder = outside_stock
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(Place::Person(1), 10, vec![]).unwrap();
+    let stock = outside_stock
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    outside_stock.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![],
+        responses: vec![],
+        learning: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![],
+        asking: vec![FoodAsking {
+            person: 1,
+            target: 3,
+            alternatives: vec![],
+            next_target: 0,
+            min_hunger: 1,
+            enabled: true,
+            retry_ticks: 3,
+            request_lifetime: 4,
+            next_review: 0,
+        }],
+    });
+    let cared = run(outside_stock.clone(), 1);
+    assert_eq!(cared, run(outside_stock, 4));
+    assert!(
+        cared
+            .care
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.child == 3 && event.caregiver == Some(1))
+    );
+    assert_eq!(
+        cared
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 1 })
+            .unwrap()
+            .used,
+        1
+    );
+    assert_eq!(
+        cared
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(3))
+            .unwrap()
+            .used,
+        0
+    );
+    assert!(cared.giving.unwrap().requests.is_empty());
     initial.confinement.as_mut().unwrap().holds.clear();
     let free = run(initial, 1);
     assert!(
@@ -20191,6 +20303,38 @@ fn concentrated_family_care_benchmark() {
             .collect(),
         events: vec![],
     });
+    let confined = std::env::var("LEGACY_CONFINED").is_ok_and(|value| value == "1");
+    if confined {
+        initial.work_sites = Some(WorkSites {
+            next_id: 2,
+            sites: vec![WorkSite {
+                id: 1,
+                region: 1,
+                kind: "cell".into(),
+                capacity: count,
+            }],
+            requirements: vec![],
+            bindings: vec![],
+        });
+        initial.confinement = Some(Confinement {
+            default_effort: 1,
+            cells: vec![ConfinementCell {
+                site: 1,
+                resistance: 10,
+                allow_supplies: false,
+            }],
+            cell_kinds: vec![],
+            holds: (1..=count)
+                .map(|person| ConfinementHold { person, site: 1 })
+                .collect(),
+            escape: vec![],
+            capture_responses: vec![],
+            capture_policies: vec![],
+            guard_policies: vec![],
+            release_policies: vec![],
+            events: vec![],
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -20218,7 +20362,7 @@ fn concentrated_family_care_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} dependents={} ticks=3 elapsed={:.6}",
+                "workers={workers} people={count} dependents={} confined={confined} ticks=3 elapsed={:.6}",
                 count - adults,
                 samples[1]
             );

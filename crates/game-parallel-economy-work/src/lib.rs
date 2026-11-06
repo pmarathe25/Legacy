@@ -147,6 +147,24 @@ pub fn reserve(busy: &mut Vec<u64>, actors: impl IntoIterator<Item = u64>) {
         .collect();
 }
 
+/// Remove an ordered set from ordered IDs without a lookup for every row.
+pub fn exclude_sorted(rows: &[u64], excluded: &[u64]) -> Vec<u64> {
+    if excluded.is_empty() {
+        return rows.par_iter().copied().collect();
+    }
+    rows.par_chunks(4096)
+        .flat_map_iter(|chunk| {
+            let mut at = excluded.partition_point(|person| *person < chunk[0]);
+            chunk.iter().copied().filter(move |person| {
+                while at < excluded.len() && excluded[at] < *person {
+                    at += 1;
+                }
+                excluded.get(at) != Some(person)
+            })
+        })
+        .collect()
+}
+
 pub fn initial_busy(
     people: &[game_parallel_economy_person::Person],
     meals: &[(u64, u32)],

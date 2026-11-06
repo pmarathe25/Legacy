@@ -55,6 +55,11 @@ pub struct Plan {
     pub uses: Vec<game_parallel_economy_claims::Use>,
     pub draft: game_parallel_dependent_care::Draft,
 }
+/// Host-provided physical access, independent of social authority.
+pub struct Access<'a> {
+    pub contact: &'a (dyn Fn(u64, u64) -> bool + Sync),
+    pub local_stock: &'a (dyn Fn(u64) -> bool + Sync),
+}
 pub struct Context<'a> {
     pub care: &'a DependentCare,
     pub family: &'a Families,
@@ -66,8 +71,7 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_parallel_economy_claims::Index<'a>>,
     pub busy: &'a [u64],
-    /// People separated by confinement barriers cannot receive in-person care.
-    pub confined: &'a [u64],
+    pub access: Access<'a>,
     pub eating: &'a [(u64, u32)],
     pub seed: u64,
     pub tick: u64,
@@ -78,9 +82,7 @@ impl Context<'_> {
         let opinions = self.opinions.map(Opinions::index);
         let locations = Colocation::new(self.travel);
         let colocated = |a: usize, b: usize| {
-            if self.confined.binary_search(&self.people[a].0).is_ok()
-                || self.confined.binary_search(&self.people[b].0).is_ok()
-            {
+            if !(self.access.contact)(self.people[a].0, self.people[b].0) {
                 return false;
             }
             locations
@@ -157,6 +159,9 @@ impl Context<'_> {
                         })
                     });
                 let local = || {
+                    if !(self.access.local_stock)(parent) {
+                        return None;
+                    }
                     let region = child.1?;
                     let first = stocks.partition_point(|row| row.0 < region);
                     let last = stocks.partition_point(|row| row.0 <= region);

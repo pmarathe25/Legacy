@@ -176,6 +176,18 @@ impl Communication<'_> {
         self.before.is_none_or(|owner| owner.can_communicate(a, b))
             && self.after.is_none_or(|owner| owner.can_communicate(a, b))
     }
+
+    /// Contact must be possible on both sides of the staged boundary.
+    pub fn can_touch(&self, a: u64, b: u64) -> bool {
+        self.before.is_none_or(|owner| owner.can_touch(a, b))
+            && self.after.is_none_or(|owner| owner.can_touch(a, b))
+    }
+
+    /// A person held at either side of this boundary cannot reach outside stock.
+    pub fn held(&self, person: u64) -> bool {
+        self.before.is_some_and(|owner| owner.held(person))
+            || self.after.is_some_and(|owner| owner.held(person))
+    }
 }
 
 impl Confinement {
@@ -362,6 +374,16 @@ impl Confinement {
                 .binary_search_by_key(&hold.site, |cell| cell.site)
                 .ok()
                 .is_some_and(|i| self.cells[i].allow_supplies),
+        }
+    }
+
+    /// Physical contact is possible only on the same side of every barrier.
+    pub fn can_touch(&self, a: u64, b: u64) -> bool {
+        let held = |id| ordered_index(&self.holds, id, |hold| hold.person).map(|i| &self.holds[i]);
+        match (held(a), held(b)) {
+            (None, None) => true,
+            (Some(a), Some(b)) => a.site == b.site,
+            _ => false,
         }
     }
 

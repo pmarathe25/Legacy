@@ -1849,7 +1849,8 @@ impl Economy {
             .dynamics
             .as_ref()
             .is_some_and(|owner| !owner.treatment.is_empty());
-        let needs_held_choices = self.giving.is_some() || has_personal_treatment;
+        let needs_held_choices =
+            self.giving.is_some() || self.care.is_some() || has_personal_treatment;
         let busy_before_confinement = if held.is_empty() || !needs_held_choices {
             Vec::new()
         } else {
@@ -1965,6 +1966,31 @@ impl Economy {
         if !guardian_actors.is_empty() {
             game_parallel_economy_work::reserve(&mut busy, guardian_actors);
         }
+        let communication = game_parallel_economy_confinement::Communication {
+            before: self.confinement.as_ref(),
+            after: next_confinement.as_ref(),
+        };
+        let mut available_held: Vec<_> = if needs_held_choices {
+            held.par_iter()
+                .copied()
+                .filter(|person| {
+                    self.confinement
+                        .as_ref()
+                        .is_some_and(|owner| owner.held(*person))
+                        && next_confinement
+                            .as_ref()
+                            .is_some_and(|owner| owner.held(*person))
+                        && busy_before_confinement.binary_search(person).is_err()
+                        && escape_actors.binary_search(person).is_err()
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let care_busy = (self.care.is_some() && !available_held.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &available_held));
+        let care_contact = |a, b| communication.can_touch(a, b);
+        let care_stock = |person| !communication.held(person);
         let mut action_base = u64::try_from(meals.actions().len())
             .map_err(|_| "action count overflow")?
             .checked_add(1)
@@ -1978,8 +2004,21 @@ impl Economy {
             meal_candidates,
             action_base,
             tick,
-            held
+            care_busy.as_deref().unwrap_or(&busy),
+            care_contact,
+            care_stock
         );
+        if !available_held.is_empty()
+            && let Some(plan) = &care
+            && !plan.actors.is_empty()
+        {
+            let mut caregivers = plan.actors.clone();
+            if caregivers.par_windows(2).any(|pair| pair[0] > pair[1]) {
+                caregivers.par_sort_unstable();
+            }
+            available_held =
+                game_parallel_economy_work::exclude_sorted(&available_held, &caregivers);
+        }
         let (pickup, mut claim_uses, transfer) =
             family::prepare_provisioning!(self, view, busy, action_base, claims, player_transfer);
         let exchange = game_parallel_economy_exchange::Context {
@@ -2039,29 +2078,8 @@ impl Economy {
         action_base = action_base
             .checked_add(promises.action_count() as u64)
             .ok_or("action count overflow")?;
-        let available_held: Vec<_> = if needs_held_choices {
-            held.par_iter()
-                .copied()
-                .filter(|person| {
-                    self.confinement
-                        .as_ref()
-                        .is_some_and(|owner| owner.held(*person))
-                        && next_confinement
-                            .as_ref()
-                            .is_some_and(|owner| owner.held(*person))
-                        && busy_before_confinement.binary_search(person).is_err()
-                        && escape_actors.binary_search(person).is_err()
-                })
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let treatment_busy = (has_personal_treatment && !available_held.is_empty()).then(|| {
-            busy.par_iter()
-                .copied()
-                .filter(|person| available_held.binary_search(person).is_err())
-                .collect::<Vec<_>>()
-        });
+        let treatment_busy = (has_personal_treatment && !available_held.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &available_held));
         let treatment = game_parallel_economy_dynamics::prepare_treatment!(
             self,
             treatment_busy.as_deref().unwrap_or(&busy),
@@ -2119,10 +2137,6 @@ impl Economy {
                     .collect();
             }
         }
-        let communication = game_parallel_economy_confinement::Communication {
-            before: self.confinement.as_ref(),
-            after: next_confinement.as_ref(),
-        };
         let mut held_can_give = Vec::new();
         let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
         if let Some(giving) = &mut next_giving {
@@ -2148,12 +2162,8 @@ impl Economy {
                         })
                 })
                 .collect();
-            let mut asking_busy = (!askable.is_empty()).then(|| {
-                busy.par_iter()
-                    .copied()
-                    .filter(|person| askable.binary_search(person).is_err())
-                    .collect::<Vec<_>>()
-            });
+            let mut asking_busy = (!askable.is_empty())
+                .then(|| game_parallel_economy_work::exclude_sorted(&busy, &askable));
             let askers = giving.ask(
                 &self.people,
                 self.physical.goods(),
@@ -2255,12 +2265,8 @@ impl Economy {
                 expires_at,
             });
         }
-        let giving_busy = (!held_can_give.is_empty()).then(|| {
-            busy.par_iter()
-                .copied()
-                .filter(|person| held_can_give.binary_search(person).is_err())
-                .collect::<Vec<_>>()
-        });
+        let giving_busy = (!held_can_give.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &held_can_give));
         let giving_plan = giving::Context {
             owner: self.giving.as_ref(),
             people: &self.people,
