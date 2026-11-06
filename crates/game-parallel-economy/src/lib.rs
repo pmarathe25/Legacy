@@ -170,6 +170,11 @@ pub struct Economy {
     local_transport: Option<LocalTransport>,
     epoch: u64,
 }
+enum FaunaDraft {
+    Complete(Fauna),
+    Quiet(game_parallel_fauna::QuietDraft),
+}
+
 pub struct Draft {
     epoch: u64,
     physical: AdvanceDraft,
@@ -198,7 +203,7 @@ pub struct Draft {
     fatigue: Option<game_parallel_economy_fatigue::Draft>,
     purpose: Option<Purpose>,
     gathering: Option<Gathering>,
-    fauna: Option<Fauna>,
+    fauna: Option<FaunaDraft>,
     animal_handling: Option<AnimalHandling>,
     animal_restraints: Option<AnimalRestraints>,
     gathered: Option<bool>,
@@ -4154,38 +4159,58 @@ impl Economy {
                     severity: season.map_or(hazard.damage, |season| season.exposure(hazard.damage)),
                 })
                 .collect();
-            let mut draft = fauna
-                .advance_with_hunts(
-                    &patches,
-                    &feedings,
-                    &exposure,
-                    &hunted_animals,
-                    self.seed,
-                    tick,
-                )
-                .map_err(str::to_owned)?;
-            game_parallel_fauna::handling::apply(&mut draft.fauna, &handling_plan.events);
-            game_parallel_fauna::restraint::apply_reactions(
-                &mut draft.fauna,
-                &restraint_plan.reactions,
-            );
-            if let Some(gathering) = &mut gathering {
-                gathering
-                    .nodes
-                    .par_iter_mut()
-                    .try_for_each(|node| -> Result<(), String> {
-                        if let Ok(i) = draft.consumed.binary_search_by_key(&node.id, |row| row.0) {
-                            node.available = node
-                                .available
-                                .checked_sub(draft.consumed[i].1)
-                                .ok_or("animal grazing exceeds physical resource")?;
-                        }
-                        Ok(())
-                    })?;
-            } else if !draft.consumed.is_empty() {
-                return Err("animal grazing requires physical resources".into());
+            // Gathering owns and validates patch identity; empty patches cannot
+            // create grazing claims, so they need no animal-side allocation.
+            let quiet = if patches.par_iter().all(|patch| patch.available == 0)
+                && feedings.is_empty()
+                && hunted_animals.is_empty()
+                && handling_plan.events.is_empty()
+                && restraint_plan.reactions.is_empty()
+            {
+                fauna
+                    .prepare_quiet(&exposure, self.seed, tick)
+                    .map_err(str::to_owned)?
+            } else {
+                None
+            };
+            if let Some(quiet) = quiet {
+                Some(FaunaDraft::Quiet(quiet))
+            } else {
+                let mut draft = fauna
+                    .advance_with_hunts(
+                        &patches,
+                        &feedings,
+                        &exposure,
+                        &hunted_animals,
+                        self.seed,
+                        tick,
+                    )
+                    .map_err(str::to_owned)?;
+                game_parallel_fauna::handling::apply(&mut draft.fauna, &handling_plan.events);
+                game_parallel_fauna::restraint::apply_reactions(
+                    &mut draft.fauna,
+                    &restraint_plan.reactions,
+                );
+                if let Some(gathering) = &mut gathering {
+                    gathering
+                        .nodes
+                        .par_iter_mut()
+                        .try_for_each(|node| -> Result<(), String> {
+                            if let Ok(i) =
+                                draft.consumed.binary_search_by_key(&node.id, |row| row.0)
+                            {
+                                node.available = node
+                                    .available
+                                    .checked_sub(draft.consumed[i].1)
+                                    .ok_or("animal grazing exceeds physical resource")?;
+                            }
+                            Ok(())
+                        })?;
+                } else if !draft.consumed.is_empty() {
+                    return Err("animal grazing requires physical resources".into());
+                }
+                Some(FaunaDraft::Complete(draft.fauna))
             }
-            Some(draft.fauna)
         } else {
             None
         };
@@ -5060,7 +5085,18 @@ impl Economy {
                     .as_ref()
                     .is_none_or(|confinement| !confinement.held(person))
             };
-            owner.reconcile(&person.people, fauna, &available, tick);
+            match fauna {
+                FaunaDraft::Complete(fauna) => {
+                    owner.reconcile(&person.people, fauna, &available, tick)
+                }
+                FaunaDraft::Quiet(draft) => owner.reconcile_with_deaths(
+                    &person.people,
+                    self.fauna.as_ref().expect("quiet fauna owner"),
+                    &available,
+                    tick,
+                    draft.deaths(),
+                ),
+            }
         }
         let animal_captured = manual_restraint.map(|choice| match choice {
             game_parallel_animal_restraint::Manual::Capture { person, animal } => {
@@ -5161,6 +5197,13 @@ impl Economy {
             .checked_add(1)
             .ok_or("economic generation overflow")?;
         self.physical.validate_advance(&draft.physical)?;
+        if let Some(FaunaDraft::Quiet(fauna)) = &draft.fauna {
+            self.fauna
+                .as_ref()
+                .ok_or("missing fauna owner")?
+                .validate_quiet(fauna)
+                .map_err(str::to_owned)?;
+        }
         let events = self.physical.commit_advance(draft.physical)?;
         #[cfg(feature = "profile")]
         {
@@ -5194,7 +5237,15 @@ impl Economy {
         self.fatigue = draft.fatigue.map(|fatigue| fatigue.state);
         self.purpose = draft.purpose;
         self.gathering = draft.gathering;
-        self.fauna = draft.fauna;
+        match draft.fauna {
+            Some(FaunaDraft::Complete(fauna)) => self.fauna = Some(fauna),
+            Some(FaunaDraft::Quiet(fauna)) => self
+                .fauna
+                .as_mut()
+                .expect("validated fauna owner")
+                .publish_quiet_validated(fauna),
+            None => self.fauna = None,
+        }
         self.animal_handling = draft.animal_handling;
         self.animal_restraints = draft.animal_restraints;
         if let Some(feelings) = draft.animal_feelings_update {

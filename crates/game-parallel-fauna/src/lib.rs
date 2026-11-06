@@ -155,6 +155,28 @@ pub struct Draft {
     pub deaths: Vec<u64>,
 }
 
+/// A detached generation containing only fields changed by an uneventful boundary.
+pub struct QuietDraft {
+    tick: u64,
+    updates: Vec<QuietAnimal>,
+    deaths: Vec<u64>,
+}
+
+#[derive(Clone, Copy)]
+struct QuietAnimal {
+    id: u64,
+    age: u64,
+    health: u32,
+    hunger: u32,
+    clear_pregnancy: bool,
+}
+
+impl QuietDraft {
+    pub fn deaths(&self) -> &[u64] {
+        &self.deaths
+    }
+}
+
 #[derive(Clone, Copy)]
 struct Claim {
     patch: u64,
@@ -165,6 +187,145 @@ struct Claim {
 }
 
 impl Fauna {
+    /// Stage a boundary with no food, hunts, births, or new pregnancies without
+    /// copying the animals' individual genomes and social histories. Returns
+    /// `None` when the complete lifecycle implementation is needed instead.
+    pub fn prepare_quiet(
+        &self,
+        exposure: &[Exposure],
+        seed: u64,
+        tick: u64,
+    ) -> Result<Option<QuietDraft>, &'static str> {
+        if self.last_tick.checked_add(1) != Some(tick) {
+            return Err("fauna phase must advance one tick");
+        }
+        if self.animals.par_windows(2).any(|p| p[0].id >= p[1].id) {
+            return Ok(None);
+        }
+        let mut exposure = exposure.to_vec();
+        exposure.par_sort_unstable_by_key(|row| row.region);
+        if exposure.first().is_some_and(|row| row.region == 0)
+            || exposure.par_windows(2).any(|p| p[0].region == p[1].region)
+        {
+            return Err("invalid animal exposure");
+        }
+        let mut species: Vec<_> = self.species.par_iter().collect();
+        species.par_sort_unstable_by_key(|s| s.id);
+        let lookup = |id| {
+            species
+                .binary_search_by_key(&id, |s| s.id)
+                .ok()
+                .map(|i| species[i])
+        };
+        let updates: Vec<_> = self
+            .animals
+            .par_iter()
+            .map(|a| {
+                let mut next = QuietAnimal {
+                    id: a.id,
+                    age: a.age,
+                    health: a.health,
+                    hunger: a.hunger,
+                    clear_pregnancy: false,
+                };
+                if a.health == 0 {
+                    return Ok(next);
+                }
+                let s = lookup(a.species).ok_or("unknown animal species")?;
+                next.age = a.age.checked_add(1).ok_or("animal age overflow")?;
+                next.hunger = a.hunger.saturating_add(s.hunger_per_tick);
+                if next.age >= s.lifespan {
+                    next.health = 0;
+                } else if next.hunger >= s.starvation_threshold {
+                    next.health = next.health.saturating_sub(s.starvation_damage);
+                }
+                if let Some(climate) = &s.climate {
+                    let severity = exposure
+                        .binary_search_by_key(&a.region, |row| row.region)
+                        .ok()
+                        .map_or(0, |i| exposure[i].severity);
+                    let alleles = a
+                        .genome
+                        .alleles
+                        .get(climate.hardiness_locus)
+                        .ok_or("invalid climate hardiness locus")?;
+                    let mean = (u32::from(alleles[0]) + u32::from(alleles[1])) / 2;
+                    let inherited = (u64::from(mean) * u64::from(climate.inherited_tolerance)
+                        / 1000)
+                        .min(u64::from(u32::MAX)) as u32;
+                    let excess =
+                        severity.saturating_sub(climate.tolerance.saturating_add(inherited));
+                    next.health = next
+                        .health
+                        .saturating_sub(excess.saturating_mul(climate.damage_per_excess));
+                }
+                next.clear_pregnancy = next.health == 0;
+                Ok(next)
+            })
+            .collect::<Result<_, &'static str>>()?;
+        let needs_lifecycle = self
+            .animals
+            .par_iter()
+            .zip(updates.par_iter())
+            .any(|(a, next)| {
+                next.health > 0
+                    && (a.pregnancy.as_ref().is_some_and(|p| p.due <= tick)
+                        || (a.genome.sex == Sex::Female
+                            && a.pregnancy.is_none()
+                            && lookup(a.species).is_some_and(|s| {
+                                next.age >= s.adult_age
+                                    && next.age < s.fertile_until
+                                    && next.hunger <= s.breeding_max_hunger
+                                    && random(seed ^ 0x6272656564, a.id, tick)
+                                        .is_multiple_of(s.conception_one_in)
+                            })))
+            });
+        if needs_lifecycle {
+            return Ok(None);
+        }
+        let deaths = self
+            .animals
+            .par_iter()
+            .zip(updates.par_iter())
+            .filter_map(|(old, next)| (old.health > 0 && next.health == 0).then_some(old.id))
+            .collect();
+        Ok(Some(QuietDraft {
+            tick,
+            updates,
+            deaths,
+        }))
+    }
+
+    /// Validate the generation before committing any other owner in the boundary.
+    pub fn validate_quiet(&self, draft: &QuietDraft) -> Result<(), &'static str> {
+        if self.last_tick.checked_add(1) != Some(draft.tick)
+            || self.animals.len() != draft.updates.len()
+            || self
+                .animals
+                .par_iter()
+                .zip(draft.updates.par_iter())
+                .any(|(a, next)| a.id != next.id)
+        {
+            return Err("stale fauna draft");
+        }
+        Ok(())
+    }
+
+    /// Publish a generation after `validate_quiet` has succeeded.
+    pub fn publish_quiet_validated(&mut self, draft: QuietDraft) {
+        self.animals
+            .par_iter_mut()
+            .zip(draft.updates.into_par_iter())
+            .for_each(|(animal, next)| {
+                animal.age = next.age;
+                animal.health = next.health;
+                animal.hunger = next.hunger;
+                if next.clear_pregnancy {
+                    animal.pregnancy = None;
+                }
+            });
+        self.last_tick = draft.tick;
+    }
     /// Validate a feeding's target; dietary response remains private to the animal.
     pub fn check_feeding(&self, feeding: Feeding) -> Result<u64, &'static str> {
         let animal = self

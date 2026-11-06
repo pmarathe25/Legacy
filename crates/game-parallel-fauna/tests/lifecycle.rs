@@ -65,6 +65,79 @@ fn initial() -> Fauna {
 }
 
 #[test]
+fn quiet_generations_match_complete_lifecycle_and_preserve_snapshots() {
+    let mut state = initial();
+    state.animals[0].pregnancy = Some(Pregnancy {
+        father: 2,
+        father_genome: state.animals[1].genome.clone(),
+        due: 5,
+    });
+    state.animals[0].hunger = 9;
+    state.animals[0].health = 3;
+    state.animals[1].opinions.push(AnimalOpinion {
+        person: 7,
+        affinity: -3,
+    });
+    state.species[0].climate = Some(Climate {
+        tolerance: 1,
+        inherited_tolerance: 2,
+        hardiness_locus: 0,
+        damage_per_excess: 1,
+    });
+    let exposure = [Exposure {
+        region: 1,
+        severity: 3,
+    }];
+    let expected = state
+        .advance_with_feeding_and_exposure(&[], &[], &exposure, 7, 1)
+        .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let snapshot = state.clone();
+                let mut next = state.clone();
+                let draft = next.prepare_quiet(&exposure, 7, 1).unwrap().unwrap();
+                assert_eq!(draft.deaths(), expected.deaths);
+                next.validate_quiet(&draft).unwrap();
+                next.publish_quiet_validated(draft);
+                assert_eq!(state, snapshot);
+                assert_eq!(next, expected.fauna);
+                assert_eq!(
+                    serde_json::from_str::<Fauna>(&serde_json::to_string(&next).unwrap()).unwrap(),
+                    next
+                );
+                next
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn quiet_generation_falls_back_for_reproduction_and_rejects_stale_state() {
+    let mut state = initial();
+    assert!(state.prepare_quiet(&[], 7, 1).unwrap().is_none());
+    state.animals[0].pregnancy = Some(Pregnancy {
+        father: 2,
+        father_genome: state.animals[1].genome.clone(),
+        due: 1,
+    });
+    assert!(state.prepare_quiet(&[], 7, 1).unwrap().is_none());
+    state.animals[0].pregnancy.as_mut().unwrap().due = 2;
+    let draft = state.prepare_quiet(&[], 7, 1).unwrap().unwrap();
+    let mut stale = state.clone();
+    stale.animals[0].id = 9;
+    assert!(stale.validate_quiet(&draft).is_err());
+    assert_eq!(state.last_tick, 0);
+    state.animals[0].age = u64::MAX;
+    assert!(state.prepare_quiet(&[], 7, 1).is_err());
+    state.animals.swap(0, 1);
+    assert!(state.prepare_quiet(&[], 7, 1).unwrap().is_none());
+}
+
+#[test]
 fn individual_animals_interpret_handling_and_choose_whether_to_accept() {
     use game_parallel_fauna::handling::{Event, Outcome, Response, apply, respond};
     let mut state = initial();

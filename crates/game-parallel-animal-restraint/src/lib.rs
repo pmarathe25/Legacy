@@ -304,6 +304,18 @@ impl Restraints {
         available: &(dyn Fn(u64) -> bool + Sync),
         tick: u64,
     ) {
+        self.reconcile_with_deaths(people, fauna, available, tick, &[]);
+    }
+
+    /// Reconcile against a staged fauna generation whose newly dead IDs are sorted.
+    pub fn reconcile_with_deaths(
+        &mut self,
+        people: &[Person],
+        fauna: &Fauna,
+        available: &(dyn Fn(u64) -> bool + Sync),
+        tick: u64,
+        deaths: &[u64],
+    ) {
         if self.holds.is_empty() {
             return;
         }
@@ -347,12 +359,13 @@ impl Restraints {
                         .and_then(|i| animals.get(i).copied())
                 },
             );
-            person.zip(animal).is_some_and(|(person, animal)| {
-                person.health > 0
-                    && animal.health > 0
-                    && person.region == Some(animal.region)
-                    && available(person.id)
-            })
+            deaths.binary_search(&hold.animal).is_err()
+                && person.zip(animal).is_some_and(|(person, animal)| {
+                    person.health > 0
+                        && animal.health > 0
+                        && person.region == Some(animal.region)
+                        && available(person.id)
+                })
         };
         self.events.par_extend(
             self.holds

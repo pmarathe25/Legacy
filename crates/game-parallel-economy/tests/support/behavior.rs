@@ -2544,6 +2544,43 @@ fn animal_defense_workload(count: u64, shared: bool) -> State {
     state
 }
 
+#[test]
+fn staged_animal_deaths_release_holds_and_stale_drafts_do_not_publish() {
+    let mut initial = animal_defense_workload(8, false);
+    initial.gathering = None;
+    let fauna = initial.fauna.as_mut().unwrap();
+    fauna.species[0].starvation_threshold = 1;
+    fauna.species[0].starvation_damage = 1;
+    fauna.animals[0].health = 1;
+    let owner = initial.animal_restraints.as_mut().unwrap();
+    owner.release_policies_mut().clear();
+    owner.defense_policies_mut().clear();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                let snapshot = world.snapshot();
+                world.advance().unwrap();
+                let next = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), next);
+                assert_eq!(snapshot.fauna.unwrap().animals[0].health, 1);
+                assert_eq!(next.fauna.as_ref().unwrap().animals[0].health, 0);
+                let owner = next.animal_restraints.as_ref().unwrap();
+                assert!(!owner.holds.iter().any(|hold| hold.animal == 1));
+                assert!(owner.events.iter().any(
+                    |event| event.animal == 1 && event.kind == AnimalRestraintEventKind::LetGo
+                ));
+                next
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 fn enable_opposed_action_reactions(state: &mut State) {
     use game_parallel_opinions::{
         AffinityRules, OpposedActionReaction, Sensitivity, SubjectiveReaction,
