@@ -124,6 +124,8 @@ pub struct Context<'a> {
     pub view: &'a View,
     pub busy: &'a [u64],
     pub blocked: &'a [u64],
+    pub held_patients: &'a [u64],
+    pub communication: &'a game_parallel_economy_confinement::Communication<'a>,
     pub resting: &'a [u64],
     pub seed: u64,
     pub tick: u64,
@@ -171,7 +173,8 @@ impl Context<'_> {
             self.blocked.binary_search(&patient.id).is_err()
                 && (patient.controlled
                     || self.resting.binary_search(&patient.id).is_ok()
-                    || self.busy.binary_search(&patient.id).is_err())
+                    || self.busy.binary_search(&patient.id).is_err()
+                    || self.held_patients.binary_search(&patient.id).is_ok())
         };
         let opinions = self.opinions.map(Opinions::index);
         let policies = self.owner.map_or(&[][..], |o| o.policies.as_slice());
@@ -196,6 +199,7 @@ impl Context<'_> {
                     && patient.health > 0
                     && self.busy.binary_search(&actor.id).is_err()
                     && available(patient)
+                    && self.communication.can_touch(actor.id, patient.id)
                     && (p.willing || pressured)
                     && p.patient_health_at_most.map_or_else(
                         || patient.health < self.max_health,
@@ -264,6 +268,7 @@ impl Context<'_> {
                         || patient.health == 0
                         || self.busy.binary_search(&actor_id).is_ok()
                         || !available(patient)
+                        || !self.communication.can_touch(actor_id, patient_id)
                         || (!preference.willing && !pressured)
                         || patient.health > preference.patient_health_at_most
                         || self
@@ -318,6 +323,7 @@ impl Context<'_> {
                     .region((a.id, a.region), (p.id, p.region))
                     .is_none()
                 || !available(p)
+                || !self.communication.can_touch(actor, patient)
                 || quantity == 0
                 || !self.goods.iter().any(|g| g.id == medicine)
             {

@@ -1461,6 +1461,7 @@ impl Economy {
                             row,
                             game_parallel_economy_interaction::PhysicalChoice::AskFood { .. }
                                 | game_parallel_economy_interaction::PhysicalChoice::Give { .. }
+                                | game_parallel_economy_interaction::PhysicalChoice::TreatOther { .. }
                         ))
                 })
                 || player_transfer.is_some_and(|row| match row {
@@ -1473,9 +1474,8 @@ impl Economy {
                         ..
                     } => !owner.can_communicate(person, recipient),
                     game_parallel_economy_interaction::PhysicalChoice::TreatOther {
-                        patient,
-                        ..
-                    } => owner.held(patient),
+                        person, patient, ..
+                    } => !owner.can_touch(person, patient),
                     game_parallel_economy_interaction::PhysicalChoice::AskFood {
                         person,
                         target,
@@ -1849,8 +1849,14 @@ impl Economy {
             .dynamics
             .as_ref()
             .is_some_and(|owner| !owner.treatment.is_empty());
-        let needs_held_choices =
-            self.giving.is_some() || self.care.is_some() || has_personal_treatment;
+        let needs_held_choices = self.giving.is_some()
+            || self.care.is_some()
+            || self.medical.is_some()
+            || matches!(
+                player_transfer,
+                Some(game_parallel_economy_interaction::PhysicalChoice::TreatOther { .. })
+            )
+            || has_personal_treatment;
         let busy_before_confinement = if held.is_empty() || !needs_held_choices {
             Vec::new()
         } else {
@@ -2138,6 +2144,7 @@ impl Economy {
             }
         }
         let mut held_can_give = Vec::new();
+        let mut held_asked = Vec::new();
         let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
         if let Some(giving) = &mut next_giving {
             let mut treated: Vec<_> = if available_held.is_empty() {
@@ -2210,6 +2217,7 @@ impl Economy {
             if !askable.is_empty() {
                 request_actors.par_extend(askers.par_iter().copied());
                 request_actors.par_sort_unstable();
+                held_asked = request_actors.clone();
                 held_can_give = askable
                     .into_par_iter()
                     .filter(|person| request_actors.binary_search(person).is_err())
@@ -2314,13 +2322,69 @@ impl Economy {
         {
             return Err("person is too young to provide medical care".into());
         }
+        // Care requires actual contact and each captive's action must still be free.
+        let mut held_committed = Vec::new();
+        if !held.is_empty() && (self.medical.is_some() || manual_medical.is_some()) {
+            held_committed.par_extend(treatment.actors.par_iter().copied());
+            held_committed.extend(held_asked);
+            held_committed.par_extend(giving_plan.actors.par_iter().copied());
+            held_committed.par_sort_unstable();
+        }
+        let held_patients: Vec<_> =
+            if (self.medical.is_some() || manual_medical.is_some()) && !held.is_empty() {
+                held.par_iter()
+                    .copied()
+                    .filter(|person| {
+                        let controlled = self
+                            .people
+                            .binary_search_by_key(person, |p| p.id)
+                            .ok()
+                            .is_some_and(|i| self.people[i].controlled);
+                        let child = self.family.as_ref().is_some_and(|family| {
+                            family
+                                .members
+                                .binary_search_by_key(person, |m| m.id)
+                                .ok()
+                                .is_some_and(|i| family.members[i].age < family.rules.min_work_age)
+                        });
+                        self.confinement
+                            .as_ref()
+                            .is_some_and(|owner| owner.held(*person))
+                            && next_confinement
+                                .as_ref()
+                                .is_some_and(|owner| owner.held(*person))
+                            && (controlled || child || available_held.binary_search(person).is_ok())
+                            && escape_actors.binary_search(person).is_err()
+                            && held_committed.binary_search(person).is_err()
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        let held_medical_actors: Vec<_> = available_held
+            .par_iter()
+            .copied()
+            .filter(|person| held_patients.binary_search(person).is_ok())
+            .filter(|person| {
+                self.family.as_ref().is_none_or(|family| {
+                    family
+                        .members
+                        .binary_search_by_key(person, |m| m.id)
+                        .ok()
+                        .is_none_or(|i| family.members[i].age >= family.rules.min_work_age)
+                })
+            })
+            .collect();
+        let medical_busy = (!held_medical_actors.is_empty())
+            .then(|| game_parallel_economy_work::exclude_sorted(&busy, &held_medical_actors));
+        let blocked_holds = game_parallel_economy_work::exclude_sorted(&held, &held_patients);
         let mut medical_blocked: Vec<_> = treatment
             .actors
             .par_iter()
             .copied()
             .chain(fighters.par_iter().copied())
             .chain(meal_candidates.par_iter().map(|row| row.0))
-            .chain(held.par_iter().copied())
+            .chain(blocked_holds.par_iter().copied())
             .collect();
         medical_blocked.extend(request.map(|choice| choice.actor));
         medical_blocked.extend(player_work.map(|choice| choice.actor()));
@@ -2341,8 +2405,10 @@ impl Economy {
             opinions: self.opinions.as_ref(),
             goods: self.physical.goods(),
             view: &view,
-            busy: &busy,
+            busy: medical_busy.as_deref().unwrap_or(&busy),
             blocked: &medical_blocked,
+            held_patients: &held_patients,
+            communication: &communication,
             resting: &resting,
             seed: self.seed,
             tick,

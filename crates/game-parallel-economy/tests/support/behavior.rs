@@ -5714,7 +5714,10 @@ fn concentrated_medical_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = medical_workload(count);
+    let mut initial = medical_workload(count);
+    if std::env::var_os("LEGACY_CONFINED").is_some() {
+        confine_medical_workload(&mut initial, count);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -10132,6 +10135,173 @@ fn a_supply_opening_does_not_make_a_captive_accessible_for_medical_contact() {
             .iter()
             .any(|case| case.person == 1)
     );
+}
+
+fn confine_medical_workload(state: &mut State, count: u64) {
+    state.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: count,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    state.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: (1..=count)
+            .map(|person| ConfinementHold {
+                person,
+                site: 1,
+                born_inside: false,
+            })
+            .collect(),
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    state
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .disease
+        .as_mut()
+        .unwrap()
+        .strains[0]
+        .transmission_per_million = 0;
+}
+
+#[test]
+fn captives_can_choose_medical_care_for_someone_in_their_cell() {
+    let mut initial = medical_workload(4);
+    confine_medical_workload(&mut initial, 2);
+    initial.people[0].controlled = true;
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let snapshot = world.snapshot();
+                assert_eq!(
+                    Economy::compile(snapshot.clone()).unwrap().snapshot(),
+                    snapshot
+                );
+                snapshot
+            })
+    };
+    let cared = run(initial.clone(), 1);
+    assert_eq!(cared, run(initial.clone(), 4));
+    assert!(
+        cared
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .all(|c| c.person != 1)
+    );
+    initial.medical.as_mut().unwrap().policies[0].willing = false;
+    let refused = run(initial, 4);
+    assert!(
+        refused
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .any(|c| c.person == 1)
+    );
+}
+
+#[test]
+fn controlled_captive_can_treat_a_cellmate() {
+    let mut initial = medical_workload(4);
+    confine_medical_workload(&mut initial, 2);
+    initial.people[1].controlled = true;
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.treat_other(2, 1, 2, 1).unwrap());
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .all(|c| c.person != 1)
+    );
+}
+
+#[test]
+fn an_escaping_patient_is_not_also_treated() {
+    let mut initial = medical_workload(4);
+    confine_medical_workload(&mut initial, 2);
+    initial
+        .confinement
+        .as_mut()
+        .unwrap()
+        .escape
+        .push(EscapePreference {
+            person: 1,
+            willing: true,
+            effort: 1,
+        });
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .disease
+            .unwrap()
+            .cases
+            .iter()
+            .any(|c| c.person == 1)
+    );
+}
+
+#[test]
+fn concentrated_cellmates_arbitrate_one_medical_course_across_workers() {
+    let mut initial = medical_workload(4096);
+    confine_medical_workload(&mut initial, 4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|action| action.accepted)
+                        .count(),
+                    1
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
