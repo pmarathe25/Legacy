@@ -4520,6 +4520,7 @@ dependencies = [
 name = "game-parallel-lot-batches"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-parallel-lot-model",
  "game-parallel-lot-planning",
  "rayon",

@@ -1566,3 +1566,58 @@ fn inventory_views_aggregate_small_and_large_cohorts_at_each_boundary() {
     assert_eq!(run(1), run(4));
     assert_eq!(store.export(), before);
 }
+
+#[test]
+#[ignore = "manual independent physical transfer benchmark"]
+fn independent_transfer_benchmark() {
+    let count = std::env::var("LEGACY_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let mut initial = Vec::with_capacity((count * 2) as usize);
+    let mut actions = Vec::with_capacity(count as usize);
+    for id in 1..=count {
+        initial.push(container(Place::Person(id), 10, vec![lot(1, 1, Some(5))]));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: Place::Person(id),
+                to: Some(Place::Person(count + id)),
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        });
+    }
+    initial.extend((count + 1..=count * 2).map(|id| container(Place::Person(id), 10, vec![])));
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let store = store(initial);
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let start = std::time::Instant::now();
+                let draft = store
+                    .prepare_with_empty(13, &actions, vec![], true)
+                    .unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(draft.transactions().len(), count as usize);
+                assert!(draft.transactions().iter().all(|row| row.accepted));
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} transfers={count} prepare={:.6}",
+                samples[2]
+            );
+        });
+}

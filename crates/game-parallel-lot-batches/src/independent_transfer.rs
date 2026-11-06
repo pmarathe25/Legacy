@@ -84,6 +84,8 @@ pub fn prepare(
         .revision
         .checked_add(1)
         .ok_or("lot revision overflow")?;
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("physical.independent.locate");
     let people_start = state
         .containers
         .partition_point(|c| c.place < Place::Person(1));
@@ -116,6 +118,11 @@ pub fn prepare(
         })
         .collect();
     let Some(rows) = rows else { return Ok(None) };
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.independent.validate");
+    }
     let mut endpoints: Vec<_> = rows
         .par_iter()
         .flat_map_iter(|r| [r.source, r.destination])
@@ -132,6 +139,11 @@ pub fn prepare(
         return Ok(None);
     }
 
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.independent.spoilage");
+    }
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
@@ -149,8 +161,14 @@ pub fn prepare(
         .collect();
     spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
 
-    let resolved: Vec<_> = rows
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.independent.resolve_and_group");
+    }
+    let parts: Vec<_> = rows
         .into_par_iter()
+        .with_min_len(2048)
         .map(|row| {
             let source = &state.containers[row.source];
             let destination = &state.containers[row.destination];
@@ -217,18 +235,43 @@ pub fn prepare(
                 destination_change,
             )
         })
+        .fold(
+            || (Vec::new(), Vec::new(), Vec::new()),
+            |(mut outcomes, mut transactions, mut changes),
+             (outcome, transaction, source, destination)| {
+                outcomes.push(outcome);
+                transactions.push(transaction);
+                changes.extend(source);
+                changes.extend(destination);
+                (outcomes, transactions, changes)
+            },
+        )
         .collect();
-    let (mut outcomes, rest): (Vec<_>, Vec<_>) = resolved
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.independent.extract");
+    }
+    let (outcome_parts, rest): (Vec<_>, Vec<_>) = parts
         .into_par_iter()
-        .map(|(outcome, transaction, source, destination)| {
-            (outcome, (transaction, [source, destination]))
-        })
+        .map(|(outcomes, transactions, changes)| (outcomes, (transactions, changes)))
         .unzip();
-    let (mut transaction_outcomes, pairs): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
-    let mut changes: Vec<_> = pairs
-        .into_par_iter()
-        .flat_map_iter(|pair| pair.into_iter().flatten())
-        .collect();
+    let (transaction_parts, change_parts): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
+    let (mut outcomes, (mut transaction_outcomes, mut changes)): (Vec<_>, (Vec<_>, Vec<_>)) =
+        rayon::join(
+            || outcome_parts.into_par_iter().flatten().collect(),
+            || {
+                rayon::join(
+                    || transaction_parts.into_par_iter().flatten().collect(),
+                    || change_parts.into_par_iter().flatten().collect(),
+                )
+            },
+        );
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.independent.untouched_expiry");
+    }
     changes.par_extend(
         state
             .containers
@@ -240,6 +283,11 @@ pub fn prepare(
                 .then(|| (index, after(container, next, 0, 0, &[])))
             }),
     );
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.independent.sort");
+    }
     changes.par_sort_unstable_by_key(|row| row.0);
     if outcomes.par_windows(2).any(|p| p[0].id > p[1].id) {
         outcomes.par_sort_unstable_by_key(|row| row.id);
@@ -250,6 +298,8 @@ pub fn prepare(
     {
         transaction_outcomes.par_sort_unstable_by_key(|row| row.id);
     }
+    #[cfg(feature = "profile")]
+    drop(phase);
     Ok(Some(Draft {
         base_instance: instance,
         base_tick: state.tick,
