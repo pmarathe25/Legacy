@@ -1,5 +1,5 @@
 //! Split actions only where all physical endpoints are exclusive.
-use game_parallel_lot_model::{Place, SimpleTransfer, State, Transaction};
+use game_parallel_lot_model::{Container, Place, SimpleTransfer, State, Transaction};
 use game_parallel_lot_planning::Draft;
 use rayon::prelude::*;
 
@@ -11,6 +11,7 @@ pub fn prepare_transactions(
     seed: u64,
     transactions: &[Transaction],
     compact: &[u64],
+    additions: &[Container],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     if transactions.len() < 256 {
@@ -95,6 +96,13 @@ pub fn prepare_transactions(
                 && movement
                     .to
                     .is_some_and(|to| to != movement.from && to.accepts(movement.good))
+                && (additions.is_empty()
+                    || [movement.from, movement.to.unwrap()].iter().all(|place| {
+                        state
+                            .containers
+                            .binary_search_by_key(place, |row| row.place)
+                            .is_ok()
+                    }))
         })
         .collect();
     let transfers: Vec<_> = transactions
@@ -119,24 +127,34 @@ pub fn prepare_transactions(
     let (fast, general) = rayon::join(
         || super::independent_transfer::prepare_flat(state, instance, &transfers, advance),
         || {
-            super::prepare(
+            super::prepare_unpartitioned(
                 state,
                 instance,
                 seed,
                 &remaining,
                 advance,
-                Vec::new(),
+                additions.to_vec(),
                 compact,
             )
         },
     );
     let Some(fast) = fast? else { return Ok(None) };
-    let (general, additions) = general?;
-    debug_assert!(additions.is_empty());
-    Ok(Some(merge(state, &transfers, fast, general)))
+    let (general, _) = general?;
+    Ok(Some(merge(state, additions, &transfers, fast, general)))
 }
 
-fn merge(state: &State, transfers: &[SimpleTransfer], fast: Draft, mut general: Draft) -> Draft {
+fn merge(
+    state: &State,
+    additions: &[Container],
+    transfers: &[SimpleTransfer],
+    mut fast: Draft,
+    mut general: Draft,
+) -> Draft {
+    if !additions.is_empty() {
+        fast.changes.par_iter_mut().for_each(|row| {
+            row.0 += additions.partition_point(|addition| addition.place < row.1.place);
+        });
+    }
     let mut changes = if fast.spoiled.is_empty() {
         // Without boundary-wide expiry, each planner changes only its own
         // exclusive endpoints, so no ownership filtering is necessary.
@@ -148,10 +166,11 @@ fn merge(state: &State, transfers: &[SimpleTransfer], fast: Draft, mut general: 
             .par_iter()
             .flat_map_iter(|row| [row.movement.from, row.movement.to.unwrap()])
             .map(|place| {
-                state
+                let index = state
                     .containers
                     .binary_search_by_key(&place, |row| row.place)
-                    .expect("the fast planner checked custody")
+                    .expect("the fast planner checked custody");
+                index + additions.partition_point(|addition| addition.place < place)
             })
             .collect();
         independent_endpoints.par_sort_unstable();
@@ -258,5 +277,5 @@ pub fn prepare(
     let Some(fast) = fast? else { return Ok(None) };
     let (general, additions) = general?;
     debug_assert!(additions.is_empty());
-    Ok(Some(merge(state, &independent, fast, general)))
+    Ok(Some(merge(state, &[], &independent, fast, general)))
 }

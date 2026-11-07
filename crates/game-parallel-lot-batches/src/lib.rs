@@ -33,8 +33,54 @@ pub fn prepare(
     seed: u64,
     transactions: &[Transaction],
     advance: bool,
+    additions: Vec<Container>,
+    compact: &[u64],
+) -> Result<(Draft, Vec<Container>), String> {
+    prepare_impl(
+        state,
+        instance,
+        seed,
+        transactions,
+        advance,
+        additions,
+        compact,
+        true,
+    )
+}
+
+/// Run the general arbiter without partitioning, for differential checks and
+/// workloads that need a reference implementation.
+pub fn prepare_unpartitioned(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transactions: &[Transaction],
+    advance: bool,
+    additions: Vec<Container>,
+    compact: &[u64],
+) -> Result<(Draft, Vec<Container>), String> {
+    prepare_impl(
+        state,
+        instance,
+        seed,
+        transactions,
+        advance,
+        additions,
+        compact,
+        false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn prepare_impl(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transactions: &[Transaction],
+    advance: bool,
     mut additions: Vec<Container>,
     compact: &[u64],
+    partition: bool,
 ) -> Result<(Draft, Vec<Container>), String> {
     additions.par_sort_unstable_by_key(|row| row.place);
     if additions
@@ -77,24 +123,27 @@ pub fn prepare(
     {
         return Err("empty physical transaction".into());
     }
-    if additions.is_empty()
+    if partition
+        && additions.is_empty()
         && let Some(draft) = independent::prepare(state, instance, transactions, &compact, advance)?
     {
         return Ok((draft, additions));
     }
-    if additions.is_empty()
+    if partition
+        && additions.is_empty()
         && compact.is_empty()
         && let Some(draft) = independent_transfer::prepare(state, instance, transactions, advance)?
     {
         return Ok((draft, additions));
     }
-    if additions.is_empty()
+    if partition
         && let Some(draft) = partitioned::prepare_transactions(
             state,
             instance,
             seed,
             transactions,
             &compact,
+            &additions,
             advance,
         )?
     {

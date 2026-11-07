@@ -19,6 +19,30 @@ fn store(mut containers: Vec<Container>) -> Store {
     })
     .unwrap()
 }
+fn unpartitioned(
+    owner: &Store,
+    seed: u64,
+    actions: &[Transaction],
+    additions: Vec<Container>,
+    compact: &[u64],
+    advance: bool,
+) -> crate::Draft {
+    let (inner, additions) = game_parallel_lot_batches::prepare_unpartitioned(
+        &owner.state,
+        owner.instance,
+        seed,
+        actions,
+        advance,
+        additions,
+        compact,
+    )
+    .unwrap();
+    crate::Draft {
+        inner,
+        additions,
+        retire: Vec::new(),
+    }
+}
 fn quantity(state: &State, place: Place, good: u32, expiry: Option<u64>) -> u64 {
     state
         .containers
@@ -260,15 +284,14 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 let stale = fast
                     .prepare_with_empty(13, &actions, vec![], advance)
                     .unwrap();
-                // Adding a harmless empty holder forces the general planner.
-                let full = general
-                    .prepare_with_empty(
-                        13,
-                        &actions,
-                        vec![container(Place::Inventory(99999), 10, vec![])],
-                        advance,
-                    )
-                    .unwrap();
+                let full = unpartitioned(
+                    &general,
+                    13,
+                    &actions,
+                    vec![container(Place::Inventory(99999), 10, vec![])],
+                    &[],
+                    advance,
+                );
                 assert_eq!(staged.transactions(), full.transactions());
                 assert_eq!(staged.outcomes(), full.outcomes());
                 assert_eq!(staged.spoiled(), full.spoiled());
@@ -390,14 +413,14 @@ fn ordered_disjoint_ranges_and_interleaved_endpoints_match_general_arbitration()
                         .prepare_flat_transfers(&transfers, true)
                         .unwrap()
                         .unwrap();
-                    let reference = general
-                        .prepare_with_empty(
-                            7,
-                            &actions,
-                            vec![container(Place::Inventory(99999), 10, vec![])],
-                            true,
-                        )
-                        .unwrap();
+                    let reference = unpartitioned(
+                        &general,
+                        7,
+                        &actions,
+                        vec![container(Place::Inventory(99999), 10, vec![])],
+                        &[],
+                        true,
+                    );
                     assert_eq!(draft.transactions(), reference.transactions());
                     assert_eq!(draft.outcomes(), reference.outcomes());
                     assert_eq!(draft.spoiled(), reference.spoiled());
@@ -481,14 +504,14 @@ fn many_interleaved_dated_cohorts_match_the_general_arbiter() {
                     .prepare_flat_transfers(&transfers, true)
                     .unwrap()
                     .unwrap();
-                let reference = general
-                    .prepare_with_empty(
-                        17,
-                        &actions,
-                        vec![container(Place::Inventory(99999), 10, vec![])],
-                        true,
-                    )
-                    .unwrap();
+                let reference = unpartitioned(
+                    &general,
+                    17,
+                    &actions,
+                    vec![container(Place::Inventory(99999), 10, vec![])],
+                    &[],
+                    true,
+                );
                 assert_eq!(draft.transactions(), reference.transactions());
                 assert_eq!(draft.outcomes(), reference.outcomes());
                 assert_eq!(draft.spoiled(), reference.spoiled());
@@ -571,33 +594,49 @@ fn mixed_atomic_actions_match_general_arbitration() {
             lot: lot(1, 2, Some(4)),
         }],
     });
-    let run = |workers, reverse: bool, seed, advance| {
+    let run = |workers, reverse: bool, seed, advance, with_additions| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
                 let mut actions = actions.clone();
+                let additions = if with_additions {
+                    actions.push(Transaction {
+                        id: 1006,
+                        movements: vec![Movement {
+                            id: 1006,
+                            from: Place::Person(10),
+                            to: Some(Place::Person(550)),
+                            good: 1,
+                            quantity: 1,
+                        }],
+                        creations: vec![Creation {
+                            id: 1007,
+                            to: Place::Person(700),
+                            lot: lot(1, 1, Some(4)),
+                        }],
+                    });
+                    vec![
+                        container(Place::Inventory(99999), 10, vec![]),
+                        container(Place::Person(550), 10, vec![]),
+                        container(Place::Person(700), 10, vec![]),
+                    ]
+                } else {
+                    vec![]
+                };
                 if reverse {
                     actions.reverse();
                 }
                 let mut fast = store(initial.clone());
                 let mut general = store(initial.clone());
                 let staged = fast
-                    .prepare_with_empty_compact(seed, &actions, vec![], &[1003], advance)
+                    .prepare_with_empty_compact(seed, &actions, additions.clone(), &[1003], advance)
                     .unwrap();
                 let stale = fast
-                    .prepare_with_empty_compact(seed, &actions, vec![], &[1003], advance)
+                    .prepare_with_empty_compact(seed, &actions, additions.clone(), &[1003], advance)
                     .unwrap();
-                let full = general
-                    .prepare_with_empty_compact(
-                        seed,
-                        &actions,
-                        vec![container(Place::Inventory(99999), 10, vec![])],
-                        &[1003],
-                        advance,
-                    )
-                    .unwrap();
+                let full = unpartitioned(&general, seed, &actions, additions, &[1003], advance);
                 assert_eq!(staged.transactions(), full.transactions());
                 assert_eq!(staged.outcomes(), full.outcomes());
                 assert_eq!(staged.creations(), full.creations());
@@ -622,18 +661,19 @@ fn mixed_atomic_actions_match_general_arbitration() {
                 assert!(fast.commit(stale).is_err());
                 general.commit(full).unwrap();
                 let result = fast.export();
-                let mut expected = general.export();
-                expected
-                    .containers
-                    .retain(|row| row.place != Place::Inventory(99999));
-                assert_eq!(result, expected);
+                assert_eq!(result, general.export());
                 assert_eq!(Store::compile(result.clone()).unwrap().export(), result);
                 result
             })
     };
     for seed in [1, 13] {
         for advance in [false, true] {
-            assert_eq!(run(1, false, seed, advance), run(4, true, seed, advance));
+            for with_additions in [false, true] {
+                assert_eq!(
+                    run(1, false, seed, advance, with_additions),
+                    run(4, true, seed, advance, with_additions)
+                );
+            }
         }
     }
     // IDs must still be checked across both partitions.
@@ -656,6 +696,12 @@ fn mixed_atomic_action_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
+    let with_additions = std::env::var_os("LEGACY_ADDITIONS").is_some();
+    let additions = if with_additions {
+        vec![container(Place::Inventory(1), 10, vec![])]
+    } else {
+        vec![]
+    };
     let mut holders = Vec::new();
     let mut actions = Vec::new();
     for id in 1..=count {
@@ -684,7 +730,11 @@ fn mixed_atomic_action_benchmark() {
         }],
         creations: vec![Creation {
             id: count + 2,
-            to: Place::Person(2),
+            to: if with_additions {
+                Place::Inventory(1)
+            } else {
+                Place::Person(2)
+            },
             lot: lot(1, 1, Some(5)),
         }],
     });
@@ -694,16 +744,9 @@ fn mixed_atomic_action_benchmark() {
         .unwrap()
         .install(|| {
             let owner = store(holders);
-            let general = owner
-                .prepare_with_empty(
-                    13,
-                    &actions,
-                    vec![container(Place::Inventory(99999), 10, vec![])],
-                    true,
-                )
-                .unwrap();
+            let general = unpartitioned(&owner, 13, &actions, additions.clone(), &[], true);
             let partitioned = owner
-                .prepare_with_empty(13, &actions, vec![], true)
+                .prepare_with_empty(13, &actions, additions.clone(), true)
                 .unwrap();
             assert_eq!(general.transactions(), partitioned.transactions());
             assert_eq!(general.outcomes(), partitioned.outcomes());
@@ -711,15 +754,14 @@ fn mixed_atomic_action_benchmark() {
             for mode in ["general", "partitioned"] {
                 let mut samples = Vec::new();
                 for round in 0..5 {
-                    let additions = if mode == "general" {
-                        vec![container(Place::Inventory(99999), 10, vec![])]
-                    } else {
-                        vec![]
-                    };
                     let start = std::time::Instant::now();
-                    let draft = owner
-                        .prepare_with_empty(13, &actions, additions, true)
-                        .unwrap();
+                    let draft = if mode == "general" {
+                        unpartitioned(&owner, 13, &actions, additions.clone(), &[], true)
+                    } else {
+                        owner
+                            .prepare_with_empty(13, &actions, additions.clone(), true)
+                            .unwrap()
+                    };
                     let elapsed = start.elapsed().as_secs_f64();
                     assert_eq!(draft.transactions().len(), actions.len());
                     if round > 0 {
@@ -728,7 +770,7 @@ fn mixed_atomic_action_benchmark() {
                 }
                 samples.sort_by(f64::total_cmp);
                 println!(
-                    "workers={workers} transfers={count} mode={mode} prepare={:.6}",
+                    "workers={workers} transfers={count} additions={with_additions} mode={mode} prepare={:.6}",
                     samples[2]
                 );
             }
@@ -2195,14 +2237,7 @@ fn partitioned_transfer_benchmark() {
         .unwrap()
         .install(|| {
             let owner = store(initial);
-            let general = owner
-                .prepare_with_empty(
-                    13,
-                    &actions,
-                    vec![container(Place::Inventory(99999), 10, vec![])],
-                    true,
-                )
-                .unwrap();
+            let general = unpartitioned(&owner, 13, &actions, vec![], &[], true);
             let partitioned = owner
                 .prepare_partitioned_flat(13, &transfers, true)
                 .unwrap()
@@ -2214,14 +2249,7 @@ fn partitioned_transfer_benchmark() {
                 for round in 0..5 {
                     let start = std::time::Instant::now();
                     let result = if mode == "general" {
-                        owner
-                            .prepare_with_empty(
-                                13,
-                                &actions,
-                                vec![container(Place::Inventory(99999), 10, vec![])],
-                                true,
-                            )
-                            .unwrap()
+                        unpartitioned(&owner, 13, &actions, vec![], &[], true)
                     } else {
                         owner
                             .prepare_partitioned_flat(13, &transfers, true)
