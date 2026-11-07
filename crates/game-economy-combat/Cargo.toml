@@ -1,0 +1,18 @@
+[package]
+name = "game-economy-combat"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-conflict = { path = "../game-conflict" }
+game-conflict-packed = { path = "../game-conflict-packed" }
+game-economy-person = { path = "../game-economy-person" }
+game-lots = { path = "../game-lots" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-opinions = { path = "../game-opinions" }
+game-production-model = { path = "../game-production-model" }
+game-tactics = { path = "../game-tactics" }
+game-tactical-choices = { path = "../game-tactical-choices" }
+rayon.workspace = true
+serde.workspace = true

@@ -1,0 +1,14 @@
+[package]
+name = "game-work-requests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-agreements = { path = "../game-agreements" }
+game-opinions = { path = "../game-opinions" }
+game-families = { path = "../game-families" }
+game-production = { path = "../game-production" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true
+serde.workspace = true

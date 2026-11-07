@@ -1,0 +1,15 @@
+[package]
+name = "game-economy-exchange"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-lot-projection = { path = "../game-lot-projection" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lots = { path = "../game-lots" }
+game-market = { path = "../game-market" }
+game-market-proposals = { path = "../game-market-proposals" }
+game-opinions = { path = "../game-opinions" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true

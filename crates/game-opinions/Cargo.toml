@@ -1,0 +1,14 @@
+[package]
+name = "game-opinions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-agreements = { path = "../game-agreements" }
+game-opinions-model = { path = "../game-opinions-model" }
+rayon.workspace = true
+serde.workspace = true
+game-social = { path = "../game-social" }
+
+[dev-dependencies]
+serde_json.workspace = true

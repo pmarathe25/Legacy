@@ -1,0 +1,17 @@
+[package]
+name = "game-production"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-people = { path = "../game-people" }
+game-transport = { path = "../game-transport" }
+rayon.workspace = true
+game-production-model = { path = "../game-production-model" }
+serde.workspace = true
+game-production-admission = { path = "../game-production-admission" }
+
+game-index = { path = "../game-index" }
+
+game-production-output = { path = "../game-production-output" }

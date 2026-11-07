@@ -1,219 +1,213 @@
-//! Guardian connection, physical search, mentorship, and discretionary orders.
-use game_core::*;
-use game_sim::*;
-use game_storage::Records;
+//! Persistent guardian bodies, physical journeys and local mentorship.
+use game_people::Region;
+use game_transport::Route;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::HashSet;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Guardians {
+    pub recovery_per_tick: u32,
+    pub max_health: u32,
+    pub mentorship_ticks: u64,
+    pub guardians: Vec<Guardian>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Guardian {
-    pub seeking: bool,
-    pub mentoring: bool,
-    pub ready: bool,
-    pub refusal: Option<String>,
-    pub known_danger: BTreeMap<AreaId, u64>,
+    pub id: u64,
+    pub region: u64,
+    pub health: u32,
+    #[serde(default)]
+    pub confined: bool,
+    #[serde(default)]
+    pub journey: Option<Journey>,
+    #[serde(default)]
+    pub student: Option<u64>,
+    #[serde(default)]
+    pub mentorship: u64,
+    /// This guardian's own required local experience; absent uses the scenario default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mentorship_required: Option<u64>,
+    #[serde(default)]
+    pub released: bool,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Guardians(pub Records<PersonId, Guardian>);
-impl Resource for Guardians {
-    const KEY: &'static str = "guardians.mission";
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReleaseDecision {
+    Accepted,
+    NotPresent,
+    NotReady,
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Register {
-    pub person: PersonId,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Journey {
+    pub destination: u64,
+    pub remaining: u32,
 }
-impl Request for Register {
-    const KEY: &'static str = "guardians.register";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Seek {
-    pub guardian: PersonId,
-}
-impl Request for Seek {
-    const KEY: &'static str = "guardians.seek";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Order {
-    pub guardian: PersonId,
-    pub destination: AreaId,
-    pub danger: u64,
-}
-impl Request for Order {
-    const KEY: &'static str = "guardians.order";
-    type Response = bool;
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Assess {
-    pub guardian: PersonId,
-    pub learned: u64,
-}
-impl Request for Assess {
-    const KEY: &'static str = "guardians.assess";
-    type Response = bool;
-}
-fn seek(tx: &mut Transaction<'_>, guardian: PersonId) -> Result<()> {
-    let target = tx.get::<game_lineage::Lineage>()?.current;
-    let Some(target) = target else {
-        return Ok(());
-    };
-    let from = game_transport::area(tx.get()?, guardian)?;
-    let to = game_transport::area(tx.get()?, target)?;
-    if from == to {
-        let g = tx.edit::<Guardians>()?.0.get_mut(&guardian).unwrap();
-        g.seeking = false;
-        g.mentoring = true;
-        return Ok(());
+impl Guardians {
+    pub fn validate_world(
+        &self,
+        has_lineage: bool,
+        regions: &[Region],
+        routes: &[Route],
+    ) -> Result<(), String> {
+        if !has_lineage {
+            return Err("guardians require lineage".into());
+        }
+        self.validate(&regions.iter().map(|r| r.id).collect::<Vec<_>>(), routes)
     }
-    let route = game_spatial::route(tx.get::<game_land::Land>()?, from, to)?;
-    tx.call(game_transport::Move {
-        person: guardian,
-        destination: route.areas[1],
-    })?;
-    Ok(())
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct KnowDanger {
-    pub guardian: PersonId,
-    pub area: AreaId,
-    pub danger: u64,
-}
-impl Request for KnowDanger {
-    const KEY: &'static str = "guardians.know_danger";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct TravelOrder {
-    pub guardian: PersonId,
-    pub destination: AreaId,
-}
-impl Request for TravelOrder {
-    const KEY: &'static str = "guardians.travel_order";
-    type Response = bool;
-}
-pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("guardians", 1)?;
-    b.resource::<Guardians>()?;
-    b.request::<KnowDanger>(|tx, r| {
-        let g = tx
-            .edit::<Guardians>()?
-            .0
-            .get_mut(&r.guardian)
-            .ok_or_else(|| Error::Missing("guardian".into()))?;
-        g.known_danger.insert(r.area, r.danger);
-        Ok(())
-    })?;
-    b.request::<TravelOrder>(|tx, r| {
-        let g = tx
-            .get::<Guardians>()?
-            .0
-            .get(&r.guardian)
-            .ok_or_else(|| Error::Missing("guardian".into()))?;
-        let danger = g.known_danger.get(&r.destination).copied().unwrap_or(100);
-        tx.call(Order {
-            guardian: r.guardian,
-            destination: r.destination,
-            danger,
-        })
-    })?;
-    b.request::<Register>(|tx, r| {
-        require(
-            tx.get::<game_physiology::Bodies>()?
-                .people
-                .get(&r.person)
-                .is_some_and(|p| p.kind == game_physiology::Kind::Guardian),
-            "not a guardian",
-        )?;
-        require(
-            !tx.get::<Guardians>()?.0.contains_key(&r.person),
-            "guardian already registered",
-        )?;
-        tx.edit::<Guardians>()?.0.insert(
-            r.person,
-            Guardian {
-                seeking: false,
-                mentoring: true,
-                ready: false,
-                refusal: None,
-                known_danger: BTreeMap::new(),
-            },
-        );
-        Ok(())
-    })?;
-    b.request::<Seek>(|tx, r| {
-        let g = tx
-            .edit::<Guardians>()?
-            .0
-            .get_mut(&r.guardian)
-            .ok_or_else(|| Error::Missing("guardian".into()))?;
-        g.seeking = true;
-        seek(tx, r.guardian)
-    })?;
-    b.subscribe::<game_lineage::Successor>("guardians.connection", |tx, _| {
-        let people: Vec<_> = tx.get::<Guardians>()?.0.keys().copied().collect();
-        for person in people {
-            tx.edit::<Guardians>()?.0.get_mut(&person).unwrap().seeking = true;
-            if game_physiology::capable(tx, person).is_ok()
-                && !tx.get::<Actions>()?.0.contains_key(&person)
-            {
-                let _ = tx.attempt(Seek { guardian: person });
-            }
-        }
-        Ok(())
-    })?;
-    b.subscribe::<game_transport::Arrived>("guardians.search", |tx, e| {
-        if tx
-            .get::<Guardians>()?
-            .0
-            .get(&e.person)
-            .is_some_and(|g| g.seeking)
+    pub fn validate(&self, regions: &[u64], routes: &[Route]) -> Result<(), String> {
+        let regions: HashSet<_> = regions.iter().copied().collect();
+        let mut ids = HashSet::new();
+        if self.max_health == 0
+            || self.recovery_per_tick == 0
+            || self.mentorship_ticks == 0
+            || self.guardians.iter().any(|g| {
+                g.id == 0
+                    || !ids.insert(g.id)
+                    || !regions.contains(&g.region)
+                    || g.health > self.max_health
+                    || g.mentorship_required == Some(0)
+                    || g.journey.as_ref().is_some_and(|j| {
+                        g.confined
+                            || j.remaining == 0
+                            || !regions.contains(&j.destination)
+                            || !routes.iter().any(|r| {
+                                r.source == g.region
+                                    && r.destination == j.destination
+                                    && j.remaining <= r.ticks
+                            })
+                    })
+            })
         {
-            let _ = tx.attempt(Seek { guardian: e.person });
+            return Err("invalid guardian state".into());
         }
         Ok(())
-    })?;
-    b.request::<Assess>(|tx, r| {
-        let ruler = tx
-            .get::<game_lineage::Lineage>()?
-            .current
-            .ok_or_else(|| Error::Rejected("no ruler".into()))?;
-        let learned = tx
-            .get::<game_skills::Skills>()?
-            .levels
-            .get(&ruler)
-            .map_or(0, |skills| skills.values().copied().sum::<u64>());
-        let ready = learned >= r.learned;
-        let g = tx
-            .edit::<Guardians>()?
-            .0
-            .get_mut(&r.guardian)
-            .ok_or_else(|| Error::Missing("guardian".into()))?;
-        g.ready = ready;
-        g.mentoring = !ready;
-        Ok(ready)
-    })?;
-    b.request::<Order>(|tx, r| {
-        let g = tx
-            .get::<Guardians>()?
-            .0
-            .get(&r.guardian)
-            .ok_or_else(|| Error::Missing("guardian".into()))?;
-        let accepted = g.ready && r.danger < 50;
-        tx.edit::<Guardians>()?
-            .0
-            .get_mut(&r.guardian)
-            .unwrap()
-            .refusal = if accepted {
-            None
-        } else {
-            Some("mentorship or unacceptable risk".into())
-        };
-        if accepted {
-            tx.call(game_transport::Move {
-                person: r.guardian,
-                destination: r.destination,
-            })?;
+    }
+    /// The target is sensed at the beginning of a tick. Traveling targets have no
+    /// local region until arrival; sensing never adds ordinary personal knowledge.
+    pub fn advance(&self, target: Option<(u64, Option<u64>)>, routes: &[Route]) -> Self {
+        let goal = target.and_then(|(_, region)| region);
+        let routing = goal
+            .filter(|&goal| {
+                self.guardians.iter().any(|guardian| {
+                    !guardian.confined
+                        && guardian.journey.is_none()
+                        && guardian.region != goal
+                        && guardian
+                            .health
+                            .saturating_add(self.recovery_per_tick)
+                            .min(self.max_health)
+                            > 0
+                })
+            })
+            .map(|goal| game_transport::routing::Routing::new(routes, &[goal]));
+        let guardians = self
+            .guardians
+            .par_iter()
+            .map(|old| {
+                let mut guardian = old.clone();
+                guardian.health = guardian
+                    .health
+                    .saturating_add(self.recovery_per_tick)
+                    .min(self.max_health);
+                if guardian.student != target.map(|(id, _)| id) {
+                    guardian.student = target.map(|(id, _)| id);
+                    guardian.mentorship = 0;
+                    guardian.released = false;
+                }
+                if let Some(journey) = &mut guardian.journey {
+                    journey.remaining -= 1;
+                    if journey.remaining == 0 {
+                        guardian.region = journey.destination;
+                        guardian.journey = None;
+                    }
+                } else if !guardian.confined
+                    && guardian.health > 0
+                    && let Some(goal) = goal
+                {
+                    if guardian.region == goal {
+                        guardian.mentorship = guardian.mentorship.saturating_add(1);
+                    } else if let Some((destination, ticks)) = routing
+                        .as_ref()
+                        .and_then(|routing| routing.next_leg(guardian.region, goal))
+                    {
+                        guardian.journey = Some(Journey {
+                            destination,
+                            remaining: ticks,
+                        });
+                    }
+                }
+                guardian
+            })
+            .collect();
+        Self {
+            guardians,
+            recovery_per_tick: self.recovery_per_tick,
+            max_health: self.max_health,
+            mentorship_ticks: self.mentorship_ticks,
         }
-        Ok(accepted)
+    }
+    pub fn ready(&self, guardian: &Guardian) -> bool {
+        guardian.student.is_some()
+            && guardian.mentorship
+                >= guardian
+                    .mentorship_required
+                    .unwrap_or(self.mentorship_ticks)
+    }
+    /// A request changes only the guardian's own judgment, not legal status or office.
+    pub fn request_release(
+        &mut self,
+        id: u64,
+        target: Option<(u64, Option<u64>)>,
+    ) -> Result<ReleaseDecision, String> {
+        let (student, region) = target.ok_or("there is no current ruler")?;
+        let threshold = self.mentorship_ticks;
+        let guardian = self
+            .guardians
+            .iter_mut()
+            .find(|guardian| guardian.id == id)
+            .ok_or("unknown guardian")?;
+        if guardian.student != Some(student)
+            || guardian.journey.is_some()
+            || guardian.health == 0
+            || region != Some(guardian.region)
+        {
+            return Ok(ReleaseDecision::NotPresent);
+        }
+        if guardian.mentorship < guardian.mentorship_required.unwrap_or(threshold) {
+            return Ok(ReleaseDecision::NotReady);
+        }
+        guardian.released = true;
+        Ok(ReleaseDecision::Accepted)
+    }
+}
+pub fn target_in_regions(current: Option<u64>, regions: &[Region]) -> Option<(u64, Option<u64>)> {
+    current.map(|id| {
+        (
+            id,
+            regions
+                .par_iter()
+                .find_any(|region| region.people.iter().any(|person| person.id == id))
+                .map(|region| region.id),
+        )
     })
 }
+pub fn prepare_world(
+    guardians: Option<&Guardians>,
+    has_lineage: bool,
+    current: Option<u64>,
+    regions: &[Region],
+    routes: &[Route],
+) -> Result<Option<Guardians>, String> {
+    guardians
+        .map(|guardians| {
+            guardians.validate_world(has_lineage, regions, routes)?;
+            Ok(guardians.advance(target_in_regions(current, regions), routes))
+        })
+        .transpose()
+}
+#[cfg(test)]
+#[path = "../tests/support/routing.rs"]
+mod routing_tests;

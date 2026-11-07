@@ -1,0 +1,11 @@
+[package]
+name = "game-work-asking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-goals = { path = "../game-goals" }
+game-work-requests = { path = "../game-work-requests" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true

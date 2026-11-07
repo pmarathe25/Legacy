@@ -1,393 +1,494 @@
-//! Headless tactical fixture: continuous coordinates and fixed shared rounds.
-use game_storage::Records;
-mod geometry;
-mod resolution;
-mod view;
-pub use geometry::{Map, Point};
-pub use resolution::{Effect, OrderKind, resolve};
+//! Data-defined simultaneous conflict and attributed strike receipts.
+use game_production_model::{PersonSnapshot, person_index};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
-pub use view::{BattleView, view};
-use {game_core::*, game_sim::*};
+use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Conflict {
+    pub damage: u32,
+    pub next_id: u64,
+    #[serde(default)]
+    pub encounters: Vec<Encounter>,
+    #[serde(default)]
+    pub events: Vec<Event>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Encounter {
+    pub id: u64,
+    pub region: u64,
+    pub fighters: Vec<Fighter>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Fighter {
-    pub team: u32,
-    pub point: Point,
-    pub health: u64,
+    pub person: u64,
+    pub side: u32,
+    pub order: Order,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Battle {
-    pub area: AreaId,
-    pub map: Map,
-    pub fighters: BTreeMap<PersonId, Fighter>,
-    pub controlled: BTreeSet<PersonId>,
-    pub orders: BTreeMap<PersonId, OrderKind>,
-    pub round: u64,
-    pub interval: SimDuration,
-    pub movement: i64,
-    pub reach: i64,
-    pub damage: u64,
-    pub scheduled: Option<ScheduleId>,
-    pub finished: bool,
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Order {
+    Attack { target: u64 },
+    Defend,
+    Retreat,
 }
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Battles(pub Records<u64, Battle>);
-impl Resource for Battles {
-    fn allocated_ids(&self) -> Vec<u64> {
-        self.0.keys().copied().collect()
-    }
-    const KEY: &'static str = "conflict.battles";
-    fn validate(&self) -> Result<()> {
-        self.validate_rows(self.0.values())
-    }
-    fn validate_changes(&self, previous: &Self) -> Result<()> {
-        self.validate_rows(self.0.changed(&previous.0).map(|(_, row)| row))
-    }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Event {
+    pub tick: u64,
+    pub encounter: u64,
+    pub attacker: u64,
+    pub target: u64,
+    pub damage: u32,
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Start(pub Battle);
-impl Request for Start {
-    const KEY: &'static str = "conflict.start";
-    type Response = u64;
+#[derive(Clone, Debug)]
+pub struct Command {
+    pub encounter: u64,
+    pub person: u64,
+    pub order: Order,
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Order {
-    pub person: PersonId,
-    pub battle: u64,
-    pub action: OrderKind,
-}
-impl Request for Order {
-    const KEY: &'static str = "conflict.order";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Round {
-    battle: u64,
-}
-impl Request for Round {
-    const KEY: &'static str = "conflict.round";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Cancel {
-    battle: u64,
-    person: PersonId,
-}
-impl Request for Cancel {
-    const KEY: &'static str = "conflict.cancel";
-    type Response = ();
-}
-/// The optional invocation owner serves this fact, avoiding a reverse dependency.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct HasPlayerControl {
-    pub person: PersonId,
-}
-impl Request for HasPlayerControl {
-    const KEY: &'static str = "conflict.player_control";
-    type Response = bool;
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct RefreshTurns;
-/// Direct evidence of a resolved hit, emitted after the round's simultaneous damage.
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Struck {
-    pub battle: u64,
-    pub actor: PersonId,
-    pub target: PersonId,
-    pub amount: u64,
-}
-impl Event for Struck {
-    const KEY: &'static str = "conflict.struck";
-}
-impl Request for RefreshTurns {
-    const KEY: &'static str = "conflict.refresh_turns";
-    type Response = ();
-}
-fn queue(tx: &mut Transaction<'_>, id: u64) -> Result<()> {
-    let battle = tx.get::<Battles>()?.0[&id].clone();
-    if battle.finished || battle.scheduled.is_some() {
-        return Ok(());
-    }
-    for person in &battle.controlled {
-        if battle.fighters[person].health == 0 || battle.orders.contains_key(person) {
-            continue;
+impl Conflict {
+    pub fn validate(
+        &self,
+        people: &HashSet<u64>,
+        regions: &HashSet<u64>,
+        tick: u64,
+    ) -> Result<(), String> {
+        if self.damage == 0 || self.next_id == 0 {
+            return Err("invalid conflict rules".into());
         }
-        if !tx.registered::<HasPlayerControl>() || tx.call(HasPlayerControl { person: *person })? {
-            return Ok(());
-        }
-    }
-    let at = tx.now().after(battle.interval)?;
-    let job = tx.schedule(at, 15, Round { battle: id })?;
-    tx.edit::<Battles>()?.0.get_mut(&id).unwrap().scheduled = Some(job);
-    Ok(())
-}
-type WaitingVersion = game_storage::Version<u64, std::sync::Arc<Battle>>;
-thread_local! {
-    static WAITING:std::cell::RefCell<(Option<WaitingVersion>,Vec<u64>)>=Default::default();
-}
-fn awaiting(host: &Host) -> Result<Option<String>> {
-    let battles = &host.get::<Battles>()?.0;
-    let waiting = WAITING.with(|slot| {
-        let mut cache = slot.borrow_mut();
-        if cache
-            .0
-            .as_ref()
-            .is_none_or(|version| !battles.matches(version))
-        {
-            cache.1 = battles
-                .iter()
-                .filter(|(_, b)| !b.finished && b.scheduled.is_none() && !b.controlled.is_empty())
-                .map(|(id, _)| *id)
-                .collect();
-            cache.0 = Some(battles.version());
-        }
-        cache.1.clone()
-    });
-    for id in waiting {
-        let b = &battles[&id];
-        for person in &b.controlled {
-            if b.fighters[person].health > 0
-                && !b.orders.contains_key(person)
-                && (!host.registered::<HasPlayerControl>()
-                    || host.query(HasPlayerControl { person: *person })?)
+        let mut ids = HashSet::new();
+        let mut actors = HashSet::new();
+        for fight in &self.encounters {
+            if fight.id >= self.next_id
+                || !ids.insert(fight.id)
+                || !regions.contains(&fight.region)
+                || fight.fighters.len() < 2
             {
-                return Ok(Some(format!("combat:{id}")));
+                return Err("invalid encounter".into());
+            }
+            let sides_by_person: HashMap<_, _> = fight
+                .fighters
+                .par_iter()
+                .map(|fighter| (fighter.person, fighter.side))
+                .collect();
+            let mut sides = HashSet::new();
+            for fighter in &fight.fighters {
+                if !people.contains(&fighter.person) || !actors.insert(fighter.person) {
+                    return Err("invalid encounter actor".into());
+                }
+                sides.insert(fighter.side);
+                if let Order::Attack { target } = fighter.order
+                    && !sides_by_person
+                        .get(&target)
+                        .is_some_and(|&side| side != fighter.side)
+                {
+                    return Err("invalid attack target".into());
+                }
+            }
+            if sides.len() < 2 {
+                return Err("encounter needs opposing sides".into());
             }
         }
+        if self.events.par_iter().any(|event| {
+            event.tick > tick
+                || !people.contains(&event.attacker)
+                || !people.contains(&event.target)
+                || event.encounter >= self.next_id
+        }) {
+            return Err("invalid conflict event".into());
+        }
+        Ok(())
     }
-    Ok(None)
-}
-pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("conflict", 1)?;
-    b.resource::<Battles>()?;
-    b.validate_save(|h| {
-        for b in h.get::<Battles>()?.0.values() {
-            for person in b.fighters.keys() {
-                require(
-                    h.get::<game_physiology::Bodies>()?
-                        .people
-                        .contains_key(person),
-                    "unknown fighter",
-                )?;
-            }
+    pub fn actors(&self) -> Vec<u64> {
+        let mut actors: Vec<_> = if self
+            .encounters
+            .par_iter()
+            .any(|fight| fight.fighters.len() >= 4096)
+        {
+            self.encounters
+                .par_iter()
+                .flat_map(|fight| fight.fighters.par_iter().map(|fighter| fighter.person))
+                .collect()
+        } else {
+            self.encounters
+                .par_iter()
+                .flat_map_iter(|fight| fight.fighters.iter().map(|fighter| fighter.person))
+                .collect()
+        };
+        if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            actors.par_sort_unstable();
         }
-        Ok(())
-    });
-    b.stop(awaiting);
-    b.request::<RefreshTurns>(|tx, _| {
-        let ids: Vec<_> = tx.get::<Battles>()?.0.keys().copied().collect();
-        for id in ids {
-            queue(tx, id)?;
+        actors
+    }
+    pub fn begin(
+        &mut self,
+        people: &[PersonSnapshot],
+        busy: &[u64],
+        mut fight: Encounter,
+    ) -> Result<u64, String> {
+        if fight.id != self.next_id || fight.fighters.len() < 2 {
+            return Err("invalid encounter identity".into());
         }
-        Ok(())
-    })?;
-    b.request::<Start>(|tx, r| {
-        let mut battle = r.0;
-        require(
-            battle.round == 0
-                && battle.scheduled.is_none()
-                && !battle.finished
-                && battle.orders.is_empty()
-                && battle.fighters.len() >= 2,
-            "invalid new encounter",
-        )?;
-        let id = tx.allocate()?;
-        for (person, f) in &mut battle.fighters {
-            game_physiology::capable(tx, *person)?;
-            require(
-                game_transport::area(tx.get()?, *person)? == battle.area,
-                "fighter is elsewhere",
-            )?;
-            f.health = tx.get::<game_physiology::Bodies>()?.people[person].health;
-            tx.start_action(
-                *person,
-                "combat",
-                None,
-                Cancel {
-                    battle: id,
-                    person: *person,
-                },
-            )?;
+        let next = self
+            .next_id
+            .checked_add(1)
+            .ok_or("encounter identity overflow")?;
+        let mut actors = self.actors();
+        actors.extend_from_slice(busy);
+        actors.par_sort_unstable();
+        let mut local: Vec<_> = fight
+            .fighters
+            .iter()
+            .map(|fighter| fighter.person)
+            .collect();
+        local.par_sort_unstable();
+        if local.par_windows(2).any(|pair| pair[0] == pair[1])
+            || fight.fighters.par_iter().any(|fighter| {
+                actors.binary_search(&fighter.person).is_ok()
+                    || !person_index(people, fighter.person).is_some_and(|index| {
+                        people[index].1 == Some(fight.region) && people[index].2 > 0
+                    })
+            })
+        {
+            return Err("encounter participants must be living, local, and available".into());
         }
-        tx.edit::<Battles>()?.0.insert(id, battle);
-        queue(tx, id)?;
+        let mut probe = self.clone();
+        probe.next_id = next;
+        probe.encounters.push(fight.clone());
+        let identities: HashSet<_> = people.iter().map(|person| person.0).collect();
+        let regions = [fight.region]
+            .into_iter()
+            .chain(self.encounters.iter().map(|fight| fight.region))
+            .collect();
+        probe.validate(&identities, &regions, u64::MAX)?;
+        fight
+            .fighters
+            .sort_unstable_by_key(|fighter| fighter.person);
+        let id = fight.id;
+        self.encounters.push(fight);
+        self.next_id = next;
         Ok(id)
-    })?;
-    b.request::<Order>(|tx, r| {
-        require(
-            match r.action {
-                OrderKind::Attack(_) => game_vitality::can_manipulate(tx, r.person),
-                OrderKind::Move(_) | OrderKind::Retreat => game_vitality::can_walk(tx, r.person),
-                OrderKind::Wait => true,
-            },
-            "combat action exceeds motor capacity",
-        )?;
-        let battle = tx
-            .get::<Battles>()?
-            .0
-            .get(&r.battle)
-            .ok_or_else(|| Error::Missing("battle".into()))?;
-        require(
-            !battle.finished
-                && battle.scheduled.is_none()
-                && battle.controlled.contains(&r.person)
-                && battle.fighters[&r.person].health > 0,
-            "turn unavailable",
-        )?;
-        match r.action {
-            OrderKind::Move(point) => require(
-                battle.map.contains(point)
-                    && battle.map.clear(battle.fighters[&r.person].point, point)
-                    && geometry::distance2(battle.fighters[&r.person].point, point)
-                        <= i128::from(battle.movement).pow(2),
-                "invalid tactical move",
-            )?,
-            OrderKind::Attack(target) => require(
-                battle
+    }
+    /// Fast checked edits when every encounter's fighters are sorted by identity.
+    pub fn order_sorted(&mut self, commands: &[Command]) -> Result<(), String> {
+        let mut changes = Vec::with_capacity(commands.len());
+        for command in commands {
+            let fight_index = self
+                .encounters
+                .iter()
+                .position(|fight| fight.id == command.encounter)
+                .ok_or("unknown encounter")?;
+            let fight = &self.encounters[fight_index];
+            let index = fight
+                .fighters
+                .binary_search_by_key(&command.person, |fighter| fighter.person)
+                .map_err(|_| "unknown fighter")?;
+            if let Order::Attack { target } = command.order {
+                let target = fight
                     .fighters
-                    .get(&target)
-                    .is_some_and(|f| f.health > 0 && f.team != battle.fighters[&r.person].team),
-                "invalid target",
-            )?,
-            _ => {}
-        }
-        tx.edit::<Battles>()?
-            .0
-            .get_mut(&r.battle)
-            .unwrap()
-            .orders
-            .insert(r.person, r.action);
-        queue(tx, r.battle)
-    })?;
-    b.request::<Round>(|tx, r| {
-        let mut snapshot = tx.get::<Battles>()?.0[&r.battle].clone();
-        for person in snapshot.fighters.keys() {
-            let order = snapshot.orders.get(person);
-            let possible = match order {
-                Some(OrderKind::Move(_) | OrderKind::Retreat) => {
-                    game_vitality::can_walk(tx, *person)
-                }
-                Some(OrderKind::Wait) => true,
-                _ => game_vitality::can_manipulate(tx, *person),
-            };
-            if !possible {
-                snapshot.orders.insert(*person, OrderKind::Wait);
-            }
-        }
-        let strength = snapshot
-            .fighters
-            .keys()
-            .map(|p| (*p, game_vitality::ability(tx, *p, "strength")))
-            .collect();
-        let agility = snapshot
-            .fighters
-            .keys()
-            .map(|p| (*p, game_vitality::ability(tx, *p, "agility")))
-            .collect();
-        let effects = resolution::resolve_with_agility(&snapshot, &strength, &agility);
-        for effect in effects {
-            match effect {
-                Effect::Moved(person, point) => {
-                    tx.edit::<Battles>()?
-                        .0
-                        .get_mut(&r.battle)
-                        .unwrap()
-                        .fighters
-                        .get_mut(&person)
-                        .unwrap()
-                        .point = point;
-                }
-                Effect::Damage(person, amount) => {
-                    tx.call(game_physiology::Damage { person, amount })?;
-                }
-                Effect::Retreated(person) => {
-                    tx.cancel_action(person)?;
-                }
-                Effect::Hit {
-                    actor,
-                    target,
-                    amount,
-                } => {
-                    tx.emit(
-                        Struck {
-                            battle: r.battle,
-                            actor,
-                            target,
-                            amount,
-                        },
-                        vec![actor, target],
-                    )?;
+                    .binary_search_by_key(&target, |fighter| fighter.person)
+                    .map_err(|_| "invalid attack target")?;
+                if fight.fighters[target].side == fight.fighters[index].side {
+                    return Err("invalid attack target".into());
                 }
             }
+            changes.push((fight_index, index, &command.order));
         }
-        let health: BTreeMap<_, _> = snapshot
-            .fighters
-            .keys()
-            .map(|p| {
-                (
-                    *p,
-                    tx.get::<game_physiology::Bodies>().unwrap().people[p].health,
-                )
+        changes.sort_unstable_by_key(|row| (row.0, row.1));
+        if changes
+            .windows(2)
+            .any(|pair| (pair[0].0, pair[0].1) == (pair[1].0, pair[1].1))
+        {
+            return Err("duplicate combat order".into());
+        }
+        for (fight, index, order) in changes {
+            self.encounters[fight].fighters[index].order = order.clone();
+        }
+        Ok(())
+    }
+    pub fn order(&mut self, commands: &[Command]) -> Result<(), String> {
+        let lookup: HashMap<_, _> = self
+            .encounters
+            .par_iter()
+            .enumerate()
+            .flat_map_iter(|(fight_index, fight)| {
+                fight
+                    .fighters
+                    .iter()
+                    .enumerate()
+                    .map(move |(index, fighter)| {
+                        (
+                            (fight.id, fighter.person),
+                            (fight_index, index, fighter.side),
+                        )
+                    })
             })
             .collect();
-        let battle = tx.edit::<Battles>()?.0.get_mut(&r.battle).unwrap();
-        for (person, f) in &mut battle.fighters {
-            if f.health > 0 {
-                f.health = health[person];
-            }
-        }
-        battle.round += 1;
-        battle.orders.clear();
-        battle.scheduled = None;
-        let teams: BTreeSet<_> = battle
-            .fighters
-            .values()
-            .filter(|f| f.health > 0)
-            .map(|f| f.team)
-            .collect();
-        let finished = teams.len() <= 1;
-        battle.finished = finished;
-        if finished {
-            for person in snapshot.fighters.keys() {
-                if tx
-                    .get::<Actions>()?
-                    .0
-                    .get(person)
-                    .is_some_and(|a| a.kind == "combat")
+        let mut changes: Vec<_> = commands
+            .par_iter()
+            .map(|command| -> Result<_, String> {
+                let &(fight, index, side) = lookup
+                    .get(&(command.encounter, command.person))
+                    .ok_or("unknown fighter")?;
+                if let Order::Attack { target } = command.order
+                    && !lookup
+                        .get(&(command.encounter, target))
+                        .is_some_and(|row| row.2 != side)
                 {
-                    tx.finish_action(*person, "combat")?;
+                    return Err("invalid attack target".into());
                 }
-            }
-        } else {
-            queue(tx, r.battle)?;
+                Ok((fight, index, &command.order))
+            })
+            .collect::<Result<_, _>>()?;
+        changes.par_sort_unstable_by_key(|row| (row.0, row.1));
+        if changes
+            .par_windows(2)
+            .any(|pair| (pair[0].0, pair[0].1) == (pair[1].0, pair[1].1))
+        {
+            return Err("duplicate combat order".into());
         }
-        Ok(())
-    })?;
-    b.request::<Cancel>(|tx, r| {
-        if let Some(b) = tx.edit::<Battles>()?.0.get_mut(&r.battle) {
-            b.fighters.get_mut(&r.person).unwrap().health = 0;
-        }
-        queue(tx, r.battle)
-    })
-}
-impl Battles {
-    fn validate_rows<'a>(&'a self, rows: impl Iterator<Item = &'a Battle>) -> Result<()> {
-        for b in rows {
-            require(
-                b.interval.0 > 0
-                    && b.movement > 0
-                    && b.reach > 0
-                    && b.map.width > 0
-                    && b.map.width <= 1_000_000
-                    && b.map.valid(),
-                "invalid tactical rules",
-            )?;
-            require(
-                b.controlled.iter().all(|p| b.fighters.contains_key(p))
-                    && b.fighters.values().all(|f| b.map.contains(f.point)),
-                "invalid tactical positions",
-            )?;
-        }
+        self.encounters
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(fight_index, fight)| {
+                let start = changes.partition_point(|row| row.0 < fight_index);
+                let end = changes.partition_point(|row| row.0 <= fight_index);
+                let rows = &changes[start..end];
+                fight
+                    .fighters
+                    .par_chunks_mut(4096)
+                    .enumerate()
+                    .for_each(|(chunk, fighters)| {
+                        let base = chunk * 4096;
+                        let first = rows.partition_point(|row| row.1 < base);
+                        let last = rows.partition_point(|row| row.1 < base + fighters.len());
+                        for &(_, index, order) in &rows[first..last] {
+                            fighters[index - base].order = order.clone();
+                        }
+                    });
+            });
         Ok(())
     }
 }
+
+/// A round is resolved from tick-start availability; strikes are simultaneous.
+pub fn prepare(conflict: &Conflict, people: &[PersonSnapshot], tick: u64) -> Conflict {
+    let encounters = conflict
+        .encounters
+        .par_iter()
+        .map(|fight| Encounter {
+            id: fight.id,
+            region: fight.region,
+            fighters: fight.fighters.par_iter().cloned().collect(),
+        })
+        .collect();
+    let mut next = Conflict {
+        damage: conflict.damage,
+        next_id: conflict.next_id,
+        encounters,
+        events: Vec::new(),
+    };
+    let mut events: Vec<_> = conflict
+        .encounters
+        .par_iter()
+        .flat_map(|fight| {
+            let mut ordered = None;
+            if fight
+                .fighters
+                .par_windows(2)
+                .any(|pair| pair[0].person > pair[1].person)
+            {
+                let mut rows: Vec<_> = fight.fighters.par_iter().collect();
+                rows.par_sort_unstable_by_key(|fighter| fighter.person);
+                ordered = Some(rows);
+            }
+            let first = fight.fighters.first().map(|fighter| fighter.person);
+            let dense = if ordered.is_none() {
+                first.and_then(|first| {
+                    fight.fighters.last().and_then(|last| {
+                        (last.person.checked_sub(first) == Some((fight.fighters.len() - 1) as u64))
+                            .then_some(first)
+                    })
+                })
+            } else {
+                None
+            };
+            fight.fighters.par_iter().filter_map(move |fighter| {
+                let Order::Attack { target } = fighter.order else {
+                    return None;
+                };
+                let target_fighter = if let Some(first) = dense {
+                    let index = usize::try_from(target.checked_sub(first)?).ok()?;
+                    fight.fighters.get(index)?
+                } else if let Some(rows) = &ordered {
+                    rows.get(
+                        rows.binary_search_by_key(&target, |fighter| fighter.person)
+                            .ok()?,
+                    )
+                    .copied()?
+                } else {
+                    fight.fighters.get(
+                        fight
+                            .fighters
+                            .binary_search_by_key(&target, |fighter| fighter.person)
+                            .ok()?,
+                    )?
+                };
+                let available = |id| {
+                    person_index(people, id)
+                        .is_some_and(|i| people[i].1 == Some(fight.region) && people[i].2 > 0)
+                };
+                if !available(fighter.person) || !available(target) {
+                    return None;
+                }
+                let damage = if matches!(target_fighter.order, Order::Defend) {
+                    (conflict.damage / 2).max(1)
+                } else {
+                    conflict.damage
+                };
+                Some(Event {
+                    tick,
+                    encounter: fight.id,
+                    attacker: fighter.person,
+                    target,
+                    damage,
+                })
+            })
+        })
+        .collect();
+    if events.par_windows(2).any(|pair| {
+        (pair[0].target, pair[0].encounter, pair[0].attacker)
+            > (pair[1].target, pair[1].encounter, pair[1].attacker)
+    }) {
+        events.par_sort_unstable_by_key(|event| (event.target, event.encounter, event.attacker));
+    }
+    next.events = events;
+    next
+}
+/// Resolve withdrawal and incapacitation after physical and lifecycle effects.
+pub fn finish(conflict: &mut Conflict, alive: impl Fn(u64) -> bool + Sync) {
+    conflict.encounters.par_iter_mut().for_each(|fight| {
+        if fight
+            .fighters
+            .par_iter()
+            .all(|fighter| !matches!(fighter.order, Order::Retreat) && alive(fighter.person))
+        {
+            return;
+        }
+        // The committed roster is immutable during this phase. Look up each
+        // target there instead of rebuilding a shared hash set of survivors.
+        let mut ordered = None;
+        if fight
+            .fighters
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            let mut rows: Vec<_> = fight.fighters.par_iter().collect();
+            rows.par_sort_unstable_by_key(|fighter| fighter.person);
+            ordered = Some(rows);
+        }
+        let dense = if ordered.is_none() {
+            fight.fighters.first().and_then(|first| {
+                fight.fighters.last().and_then(|last| {
+                    (last.person.checked_sub(first.person)
+                        == Some((fight.fighters.len() - 1) as u64))
+                    .then_some(first.person)
+                })
+            })
+        } else {
+            None
+        };
+        let survivors: Vec<_> = fight
+            .fighters
+            .par_iter()
+            .filter(|fighter| !matches!(fighter.order, Order::Retreat) && alive(fighter.person))
+            .map(|fighter| {
+                let mut survivor = fighter.clone();
+                if let Order::Attack { target } = survivor.order {
+                    let target_fighter = if let Some(first) = dense {
+                        target
+                            .checked_sub(first)
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .and_then(|index| fight.fighters.get(index))
+                    } else if let Some(rows) = &ordered {
+                        rows.binary_search_by_key(&target, |fighter| fighter.person)
+                            .ok()
+                            .map(|index| rows[index])
+                    } else {
+                        fight
+                            .fighters
+                            .binary_search_by_key(&target, |fighter| fighter.person)
+                            .ok()
+                            .map(|index| &fight.fighters[index])
+                    };
+                    if target_fighter.is_none_or(|fighter| {
+                        matches!(fighter.order, Order::Retreat) || !alive(target)
+                    }) {
+                        survivor.order = Order::Defend;
+                    }
+                }
+                survivor
+            })
+            .collect();
+        fight.fighters = survivors;
+    });
+    let keep: Vec<_> = conflict
+        .encounters
+        .par_iter()
+        .map(|fight| {
+            fight.fighters.first().is_some_and(|first| {
+                fight
+                    .fighters
+                    .par_iter()
+                    .any(|other| other.side != first.side)
+            })
+        })
+        .collect();
+    let mut index = 0;
+    conflict.encounters.retain(|_| {
+        let result = keep[index];
+        index += 1;
+        result
+    });
+}
+
+/// Validate active combatants are living, local, and free of unfinished work.
+pub fn validate_physical(
+    conflict: &Conflict,
+    regions: &[game_people::Region],
+    jobs: &[game_production_model::Job],
+) -> Result<(), String> {
+    let actors: HashSet<_> = conflict.actors().into_iter().collect();
+    let local: HashMap<_, _> = regions
+        .par_iter()
+        .flat_map_iter(|region| {
+            region
+                .people
+                .iter()
+                .filter(|person| actors.contains(&person.id))
+                .map(move |person| (person.id, (region.id, person.health)))
+        })
+        .collect();
+    let busy: HashSet<_> = jobs
+        .par_iter()
+        .filter(|job| job.phase == game_production_model::JobPhase::Working)
+        .map(|job| job.worker)
+        .collect();
+    if conflict.encounters.par_iter().any(|fight| {
+        fight.fighters.par_iter().any(|fighter| {
+            busy.contains(&fighter.person)
+                || !local
+                    .get(&fighter.person)
+                    .is_some_and(|&(region, health)| region == fight.region && health > 0)
+        })
+    }) {
+        return Err("combat participant must be living, local, and free of work".into());
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests;

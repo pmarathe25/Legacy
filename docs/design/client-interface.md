@@ -1,5 +1,7 @@
 # Headless play and the future graphics interface
 
+The package names in this design predate the current workspace. See the [workspace README](../../README.md) for the actual host and CLI.
+
 **Scope:** Implement the complete game mechanics without a graphics engine. The CLI and scenario runner exercise the same public commands, choices, and observations that a graphical client will use. Graphics is a later consumer of an already playable simulation.
 
 ## Dependency boundaries

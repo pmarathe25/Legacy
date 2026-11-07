@@ -1,0 +1,17 @@
+[package]
+name = "game-market-auto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-property = { path = "../game-property" }
+game-market = { path = "../game-market" }
+game-market-proposals = { path = "../game-market-proposals" }
+game-opinions = { path = "../game-opinions" }
+game-goods-cargo = { path = "../game-goods-cargo" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true
+game-production = { path = "../game-production" }
+game-people = { path = "../game-people" }
+game-transport = { path = "../game-transport" }
+game-autowork = { path = "../game-autowork" }

@@ -1,0 +1,15 @@
+[package]
+name = "game-goods-cargo"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-people = { path = "../game-people" }
+game-transport = { path = "../game-transport" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true
+serde.workspace = true
+smallvec = { version = "1.16", features = ["serde"] }
+
+game-index = { path = "../game-index" }

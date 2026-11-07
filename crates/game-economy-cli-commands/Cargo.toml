@@ -1,0 +1,10 @@
+[package]
+name = "game-economy-cli-commands"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-player = { path = "../game-economy-player" }
+game-economy-combat = { path = "../game-economy-combat" }
+game-economy = { path = "../game-economy" }

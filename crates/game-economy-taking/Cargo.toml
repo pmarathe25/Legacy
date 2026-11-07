@@ -1,0 +1,23 @@
+[package]
+name = "game-economy-taking"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+profile = ["dep:game-diagnostics"]
+
+[dependencies]
+game-diagnostics = { path = "../game-diagnostics", optional = true }
+game-economy-person = { path = "../game-economy-person" }
+game-genetics = { path = "../game-genetics" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lot-allocation = { path = "../game-lot-allocation" }
+game-lots = { path = "../game-lots" }
+game-opinions = { path = "../game-opinions" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-production-model = { path = "../game-production-model" }
+serde_json.workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "game-economy-player"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy = { path = "../game-economy" }
+game-economy-campaign = { path = "../game-economy-campaign" }
+game-economy-knowledge = { path = "../game-economy-knowledge" }
+game-lots = { path = "../game-lots" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-missions = { path = "../game-missions" }
+game-agreements = { path = "../game-agreements" }
+game-autowork = { path = "../game-autowork" }
+game-economy-combat = { path = "../game-economy-combat" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true

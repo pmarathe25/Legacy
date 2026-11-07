@@ -1,0 +1,67 @@
+[package]
+name = "game-economy"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+profile = ["dep:game-diagnostics", "game-families/profile", "game-lot-runtime/profile", "game-economy-taking/profile"]
+
+[dependencies]
+game-economy-taking = { path = "../game-economy-taking" }
+game-animal-restraint = { path = "../game-animal-restraint" }
+game-economy-confinement = { path = "../game-economy-confinement" }
+game-fauna = { path = "../game-fauna" }
+game-practices = { path = "../game-practices" }
+game-diagnostics = { path = "../game-diagnostics", optional = true }
+game-economy-building = { path = "../game-economy-building" }
+game-economy-local-transport = { path = "../game-economy-local-transport" }
+game-disease = { path = "../game-disease" }
+game-lot-content = { path = "../game-lot-content" }
+game-genetics = { path = "../game-genetics" }
+game-purpose = { path = "../game-purpose" }
+game-environment = { path = "../game-environment" }
+game-economy-read = { path = "../game-economy-read" }
+game-economy-fatigue = { path = "../game-economy-fatigue" }
+game-economy-combat = { path = "../game-economy-combat" }
+game-economy-exchange = { path = "../game-economy-exchange" }
+game-economy-agriculture = { path = "../game-economy-agriculture" }
+game-economy-goals = { path = "../game-economy-goals" }
+game-economy-promises = { path = "../game-economy-promises" }
+game-economy-family = { path = "../game-economy-family" }
+game-lots = { path = "../game-lots" }
+game-economy-work = { path = "../game-economy-work" }
+game-economy-person = { path = "../game-economy-person" }
+game-economy-dynamics = { path = "../game-economy-dynamics" }
+game-economy-claims = { path = "../game-economy-claims" }
+game-economy-claims-output = { path = "../game-economy-claims-output" }
+game-economy-exposure = { path = "../game-economy-exposure" }
+game-economy-interaction = { path = "../game-economy-interaction" }
+game-economy-expeditions = { path = "../game-economy-expeditions" }
+game-economy-campaign = { path = "../game-economy-campaign" }
+game-economy-skills = { path = "../game-economy-skills" }
+game-economy-knowledge = { path = "../game-economy-knowledge" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lot-projection = { path = "../game-lot-projection" }
+game-lot-diet = { path = "../game-lot-diet" }
+game-production-model = { path = "../game-production-model" }
+game-production = { path = "../game-production" }
+game-goods-cargo = { path = "../game-goods-cargo" }
+game-market = { path = "../game-market" }
+game-agreements = { path = "../game-agreements" }
+game-opinions = { path = "../game-opinions" }
+game-goals = { path = "../game-goals" }
+game-autowork = { path = "../game-autowork" }
+game-nutrition = { path = "../game-nutrition" }
+game-social = { path = "../game-social" }
+rayon.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+game-fatigue = { path = "../game-fatigue" }
+game-conflict = { path = "../game-conflict" }
+game-tactics = { path = "../game-tactics" }
+game-dreams = { path = "../game-dreams" }
+game-dependent-care = { path = "../game-dependent-care" }
+game-families = { path = "../game-families" }
+serde_json.workspace = true

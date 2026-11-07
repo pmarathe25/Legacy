@@ -1,0 +1,83 @@
+tick = 0
+seed = 1
+
+[rules]
+food_growth = 0
+food_capacity = 100
+food_per_meal = 2
+hunger_per_tick = 1
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 1
+max_health = 100
+
+[[regions]]
+id = 1
+food = 0
+people = [{ id = 1, hunger = 0, health = 100 }, { id = 2, hunger = 3, health = 100 }]
+
+[[regions]]
+id = 2
+food = 0
+people = [{ id = 3, hunger = 0, health = 100 }]
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 2
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 2
+
+[cargo]
+capacity = 10
+auto_eat_local = true
+personal_food_access = true
+acquire_when_hungry = [2]
+
+[[cargo.food_stores]]
+id = 10
+region = 1
+food = 4
+capacity = 10
+claimant = 1
+object_to_taking = true
+
+[[cargo.food_store_choices]]
+person = 2
+store = 10
+
+[opinions.rules]
+minimum = -5
+maximum = 5
+initial = 0
+fulfilled_gain = 0
+default_loss = 0
+theft_loss = 2
+
+[[cargo.holdings]]
+person = 1
+food = 2
+
+[[cargo.food_depositors]]
+person = 1
+store = 10
+retain = 0
+interval = 1
+enabled = true
+
+[[opinions.sensitivities]]
+person = 1
+
+[opinions.sensitivities.confrontation]
+trust_at_most = -2
+fear_at_most = 0
+interval = 1
+enabled = true
+
+[conflict]
+damage = 5
+next_id = 1

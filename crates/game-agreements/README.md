@@ -1,33 +1,11 @@
-# game-agreements
+# Agreements
 
-Negotiated multi-party promises, acceptance/refusal, outstanding duties, physical fulfillment, and default.
+Explicit, mutually accepted promises for future delivery of physically carried goods. Proposals and acceptance are distinct. Delivery plans become fulfilled only when the host has successfully transferred the goods; expired active promises default. The owner is data-defined and uses stable identities and generation-local events.
 
-**Why it matters:** Trade, credit, and social contracts depend on explicit promises between consenting parties—where signing an agreement never magically teleports goods and missing a deadline is a real default rather than an automatic seizure.
+`content/scenarios/agreements.toml` demonstrates manual proposals, recipient decisions, and partial delivery. Set `[[agreements.policies]] person = ...` and `honor = true` to let the fused host attempt a debtor's accepted agreements. `content/scenarios/agreements_auto.toml` demonstrates this policy. Candidates use the goods actually carried at the start of a tick; each available person can participate in at most one selected exchange. Deadlines are indexed, and unfinished accepted agreements default after the due tick.
 
-## Responsibilities
+`minimum_honor_trust` optionally makes the debtor assess their own directed trust in each creditor before ordinary automatic fulfillment. An observed change in trust can therefore lead them to withhold one promise while fulfilling another. An optional `fear_honor_threshold` lets their personally experienced fear motivate fulfillment even if ordinary honoring is disabled; neither fear nor compliance grants approval. These choices require the opinions owner. The person can later withhold delivery as their fear subsides, and neither the promise nor the policy physically forces delivery.
 
-- **Agreement Lifecycle:** Tracks proposed, accepted, refused, fulfilled, and defaulted multi-party agreements.
-- **Explicit Consent:** Requires each named counterparty to accept an agreement before its duties become active.
-- **Physical Fulfillment:** Validates and executes promised cargo transfers (`game-cargo`) and property claim updates (`game-property`) when a party performs their duty.
-- **Deadline & Default Tracking:** Records unfulfilled obligations past their maturity timestamp as defaults without automatically editing inventories.
+`content/scenarios/agreement_pressure.toml` demonstrates a person delivering a carried good because of their directed fear while ordinary honoring is disabled.
 
-## Boundaries
-
-- **No Automatic Inventory Edits:** Neither accepting a promise nor missing a deadline moves physical goods without an explicit fulfillment action.
-- **No Offer Valuation:** Does not search for trade partners or score marginal utility (owned by `game-exchange` and `game-credit`).
-
-## How It Works
-
-- **Transactional Fulfillment:** When a party fulfills a term, `game-agreements` verifies current possession and permissions, performs the `game-cargo` and `game-property` mutations atomically, and emits settlement events consumed by `game-demand`.
-- **Inspectable Duty Records:** Stores outstanding obligations and past settlements so participants and observers can evaluate reliability.
-
-## Game Integration
-
-- **Plugin / Entry Point:** `Plugin` registers agreement state, proposal/acceptance handlers, and fulfillment/default logic in `game-assembly`.
-- **Requests & Events:** Exposes agreement creation, acceptance, refusal, and fulfillment requests; emits settlement and default events.
-- **Callers:** Used by `game-exchange`, `game-credit`, `game-demand`, and scenario fixtures.
-
-## Dependencies & Testing
-
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-property`, `game-cargo`.
-- **Testing:** Integration tests in `tests/` (`cargo test -p game-agreements`) cover multi-party consent, partial and full fulfillment, atomic rollback on missing stock, and deadline defaults.
+An eligible recipient may opt in to automatically accepting proposals by setting `accept = true` in their policy. The proposal must still be current, both people must be available together, and fulfillment uses a later committed tick. `content/scenarios/agreements_negotiation.toml` shows acceptance followed by delivery.

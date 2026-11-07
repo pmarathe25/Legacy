@@ -1,0 +1,9 @@
+[package]
+name = "game-personality"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-genetics = { path = "../game-genetics" }
+rayon.workspace = true
+serde.workspace = true

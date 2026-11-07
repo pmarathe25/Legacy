@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/*", "tools/performance", "tools/compute", "tools/history", "tools/settlement-history"]
+members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
@@ -8,180 +8,12 @@ license = "MIT"
 version = "0.2.0"
 
 [workspace.dependencies]
-game-mechanics-state = { path = "crates/game-mechanics-state" }
-game-mechanics-sessions = { path = "crates/game-mechanics-sessions" }
-game-body-effort = { path = "crates/game-body-effort" }
-game-rest-activities = { path = "crates/game-rest-activities" }
-game-character-activities = { path = "crates/game-character-activities" }
-game-local-interactions = { path = "crates/game-local-interactions" }
-game-memory-state = { path = "crates/game-memory-state" }
-game-memory = { path = "crates/game-memory" }
-
-game-autonomy-policy = { path = "crates/game-autonomy-policy" }
-game-attention = { path = "crates/game-attention" }
-game-drafting = { path = "crates/game-drafting" }
-game-offers = { path = "crates/game-offers" }
-game-decision-frames = { path = "crates/game-decision-frames" }
-game-frame-tuning = { path = "crates/game-frame-tuning" }
-game-frame-arbitration = { path = "crates/game-frame-arbitration" }
-game-decision-clock = { path = "crates/game-decision-clock" }
-game-decision-food = { path = "crates/game-decision-food" }
-game-decision-intents = { path = "crates/game-decision-intents" }
-game-character-clock = { path = "crates/game-character-clock" }
-game-character-attention = { path = "crates/game-character-attention" }
-game-character-pause = { path = "crates/game-character-pause" }
-game-character-choices = { path = "crates/game-character-choices" }
-game-autonomy-frames = { path = "crates/game-autonomy-frames" }
-game-care-perception = { path = "crates/game-care-perception" }
-game-character-state = { path = "crates/game-character-state" }
-game-household-state = { path = "crates/game-household-state" }
-game-food-care-execution = { path = "crates/game-food-care-execution" }
-game-physiology-eating = { path = "crates/game-physiology-eating" }
-game-causality = { path = "crates/game-causality" }
-game-expression = { path = "crates/game-expression" }
-game-anticipation = { path = "crates/game-anticipation" }
-game-deliberation = { path = "crates/game-deliberation" }
-game-simple-machines = { path = "crates/game-simple-machines" }
-game-inscription = { path = "crates/game-inscription" }
-game-violence = { path = "crates/game-violence" }
-game-orthography = { path = "crates/game-orthography" }
-game-recollection = { path = "crates/game-recollection" }
-game-attraction = { path = "crates/game-attraction" }
-game-phonology = { path = "crates/game-phonology" }
-game-identity = { path = "crates/game-identity" }
-game-grammar = { path = "crates/game-grammar" }
-game-syntax = { path = "crates/game-syntax" }
-game-work-planning = { path = "crates/game-work-planning" }
-game-diet = { path = "crates/game-diet" }
-game-contracts = { path = "crates/game-contracts" }
-game-lexicon = { path = "crates/game-lexicon" }
-game-snapshot = { path = "crates/game-snapshot" }
-game-information = { path = "crates/game-information" }
-game-search = { path = "crates/game-search" }
-game-physics = { path = "crates/game-physics" }
-game-invention = { path = "crates/game-invention" }
-game-mechanics = { path = "crates/game-mechanics" }
-game-save-compat = { path = "crates/game-save-compat" }
-game-food-inquiry = { path = "crates/game-food-inquiry" }
-game-companionship = { path = "crates/game-companionship" }
-game-digestion = { path = "crates/game-digestion" }
-game-animal-species = { path = "crates/game-animal-species" }
-game-scenario-assets = { path = "crates/game-scenario-assets" }
-game-attachments = { path = "crates/game-attachments" }
-game-fauna = { path = "crates/game-fauna" }
-game-credit = { path = "crates/game-credit" }
-game-poetics = { path = "crates/game-poetics" }
-game-testimony = { path = "crates/game-testimony" }
-game-observations = { path = "crates/game-observations" }
-game-reasoning = { path = "crates/game-reasoning" }
-game-literacy = { path = "crates/game-literacy" }
-game-inquiry = { path = "crates/game-inquiry" }
-game-crop-cohorts = { path = "crates/game-crop-cohorts" }
-game-family-life = { path = "crates/game-family-life" }
-game-signals = { path = "crates/game-signals" }
-game-comfort = { path = "crates/game-comfort" }
-game-craft-planning = { path = "crates/game-craft-planning" }
-game-choice = { path = "crates/game-choice" }
-game-communication = { path = "crates/game-communication" }
-game-discourse = { path = "crates/game-discourse" }
-game-nurture = { path = "crates/game-nurture" }
-game-food-actions = { path = "crates/game-food-actions" }
-game-metabolism = { path = "crates/game-metabolism" }
-game-utility = { path = "crates/game-utility" }
-game-parenthood = { path = "crates/game-parenthood" }
-game-names = { path = "crates/game-names" }
-game-naming = { path = "crates/game-naming" }
-game-items = { path = "crates/game-items" }
-game-sentiment = { path = "crates/game-sentiment" }
-game-demand = { path = "crates/game-demand" }
-game-exposure = { path = "crates/game-exposure" }
-game-shelter = { path = "crates/game-shelter" }
-game-botany = { path = "crates/game-botany" }
-game-crops = { path = "crates/game-crops" }
-game-cultivars = { path = "crates/game-cultivars" }
-game-maturation = { path = "crates/game-maturation" }
-game-food-storage = { path = "crates/game-food-storage" }
-game-nutrition = { path = "crates/game-nutrition" }
-game-soma = { path = "crates/game-soma" }
-game-wellbeing = { path = "crates/game-wellbeing" }
-game-vitality = { path = "crates/game-vitality" }
-game-body = { path = "crates/game-body" }
-game-food-memory = { path = "crates/game-food-memory" }
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["raw_value"] }
 rayon = "1"
 mimalloc = "0.1.52"
 toml = { version = "1.1.3", default-features = false, features = ["std", "serde", "parse"] }
-game-agreements = { path = "crates/game-agreements" }
-game-agriculture = { path = "crates/game-agriculture" }
-game-api = { path = "crates/game-api" }
-game-armies = { path = "crates/game-armies" }
-game-assembly = { path = "crates/game-assembly" }
-game-cargo = { path = "crates/game-cargo" }
-game-cargo-planning = { path = "crates/game-cargo-planning" }
-game-characters = { path = "crates/game-characters" }
-game-communities = { path = "crates/game-communities" }
-game-cli = { path = "crates/game-cli" }
-game-confinement = { path = "crates/game-confinement" }
-game-conflict = { path = "crates/game-conflict" }
-game-content = { path = "crates/game-content" }
-game-core = { path = "crates/game-core" }
-game-ecology = { path = "crates/game-ecology" }
-game-environment = { path = "crates/game-environment" }
-game-facts = { path = "crates/game-facts" }
-game-genetics = { path = "crates/game-genetics" }
-game-guardians = { path = "crates/game-guardians" }
-game-health = { path = "crates/game-health" }
-game-institutions = { path = "crates/game-institutions" }
-game-invocation = { path = "crates/game-invocation" }
-game-justice = { path = "crates/game-justice" }
-game-knowledge = { path = "crates/game-knowledge" }
-game-land = { path = "crates/game-land" }
-game-lifecycle = { path = "crates/game-lifecycle" }
-game-lineage = { path = "crates/game-lineage" }
-game-logistics = { path = "crates/game-logistics" }
-game-missions = { path = "crates/game-missions" }
-game-objects = { path = "crates/game-objects" }
-game-openings = { path = "crates/game-openings" }
-game-packed = { path = "crates/game-packed" }
-game-physiology = { path = "crates/game-physiology" }
-game-provisioning = { path = "crates/game-provisioning" }
-game-projects = { path = "crates/game-projects" }
-game-property = { path = "crates/game-property" }
-game-pressure = { path = "crates/game-pressure" }
-game-realm = { path = "crates/game-realm" }
-game-relationships = { path = "crates/game-relationships" }
-game-scenarios = { path = "crates/game-scenarios" }
-game-session = { path = "crates/game-session" }
-game-sim = { path = "crates/game-sim" }
-game-social-life = { path = "crates/game-social-life" }
-game-storage = { path = "crates/game-storage" }
-game-skills = { path = "crates/game-skills" }
-game-spatial = { path = "crates/game-spatial" }
-game-traits = { path = "crates/game-traits" }
-game-transport = { path = "crates/game-transport" }
-game-workshop = { path = "crates/game-workshop" }
-game-worldgen = { path = "crates/game-worldgen" }
-game-wayfaring = { path = "crates/game-wayfaring" }
-game-stockpiles = { path = "crates/game-stockpiles" }
-game-horticulture = { path = "crates/game-horticulture" }
-game-care = { path = "crates/game-care" }
-game-pastimes = { path = "crates/game-pastimes" }
-game-livelihoods = { path = "crates/game-livelihoods" }
-
-game-heredity = { path = "crates/game-heredity" }
-game-households = { path = "crates/game-households" }
-game-exchange = { path = "crates/game-exchange" }
-game-works = { path = "crates/game-works" }
-game-preservation = { path = "crates/game-preservation" }
-game-equipment = { path = "crates/game-equipment" }
-game-affiliation = { path = "crates/game-affiliation" }
-
-game-campaign = { path = "crates/game-campaign" }
-
 game-diagnostics = { path = "crates/game-diagnostics" }
-
-game-grievances = { path = "crates/game-grievances" }
 
 [profile.dev]
 debug = 1

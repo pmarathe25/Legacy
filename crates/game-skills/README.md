@@ -1,30 +1,15 @@
-# game-skills
+# Personal production skills
 
-`game-skills` tracks per-person learned skill levels with diminishing returns and deduplicated work attribution IDs.
+Optional personal skills improve a person's work rate after actual completed jobs. A rule can apply to one recipe or to several recipes in an authored craft category; related work and lessons contribute to the same personal record. Successive levels require increasing numbers of completed jobs: with `completions_per_level = 2`, levels one, two, and three require cumulative totals of 2, 6, and 12 jobs. Work advances by `1 + level * work_per_level` units per tick, capped by `max_level`.
 
-**Why it matters:** Characters improve at gathering, farming, crafting, construction, and music through actual completed work, while work-ID deduplication prevents double-counting practice from the same task.
+An authored rule (or `catalog_training`) may instead set `practice_each_tick = true`. In the lot-based economy, each boundary that actually reduces a job's remaining work counts as one practice credit, even if the job is later abandoned or interrupted. A paused job grants no credit, and its completion does not grant a second credit for the same work. With this option, `completions_per_level` measures practice credits instead of completed jobs. Old data defaults to completion-based learning. The older experimental fused host rejects this option until it can account for partial work.
 
-## Responsibilities
+The host reads committed rates before advancing work, credits only newly finished jobs, and publishes the prepared skills state with the rest of the transaction. Learning therefore affects subsequent ticks. Jobs waiting for output storage do not grant additional experience. Each `(person, recipe, finished_at, job)` attribution is idempotent, including after save/load. The completion time distinguishes new work that reuses an external job ID. Credit belongs to the worker finishing the job; partial work before reassignment is not credited in this initial model. Attribution IDs are discarded at mastery, where all further credit is inert. Training is personal. While a ruler actively invokes past lives, the fused host can use their practiced work rate without copying their training into the current person.
 
-- **Skills resource (`Skills`):** Stores each person's named skill levels and compact set of attributed work IDs (`skills.levels`).
-- **Diminishing-return practice (`Practice`):** Increases a person's skill level when a new `work_id` is credited, scaling gains by expressed learning capability from [`game-vitality`](../game-vitality/README.md) and diminishing as the skill level rises.
+`validate` checks authored/imported state. `index` builds an immutable concurrent rate lookup. `prepare` accepts host-validated completion identities and returns a private next state; unknown recipes without training rules are ignored. Untrained people and unconfigured recipes retain rate one. The catalog importer groups recipes by their authored `skill` field using `[skills.catalog_training]` rates, while explicit per-recipe rules remain distinct. This model covers production skills; genetics modifiers, forgetting, and non-production practice remain open.
 
-## Boundaries
+Lessons are explicit encounters that consume a tick. A teacher with a higher applicable rate grants one lesson credit; lessons and completed work both contribute to the student's own skill. A teacher may decide to help because of their own fear or felt obligation, even when their normal teaching preference is off. Each lesson records its teacher, student, recipe, tick, and (when used) the invoked past life that supplied the teaching ability. Lesson credit survives dismissal and save/load and does not copy the teacher's skill records.
 
-- **Personal learned levels only:** Tracks practice earned during a person's own lifetime; borrowed past-life memories in [`game-invocation`](../game-invocation/README.md) remain separate and never overwrite personal skill records.
+Enabled `teachers` policies let NPCs teach a weaker person during an already-consenting social encounter. Each encounter produces at most one lesson and uses committed skill levels; a controlled ruler is excluded from automatic teaching choices. The composed campaign includes teachable crafts.
 
-## How It Works
-
-- **Compact attribution bitmap:** Stores seen `work_id`s using sparse offsets or dense bitmap pages so thousands of completed work intervals compress cleanly in memory while serializing to the canonical ordered format.
-- **Idempotent work credit:** Submitting `Practice` twice with the same `(person, skill, work_id)` is a no-op on the second call.
-
-## Game Integration
-
-- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`skills`, resource `skills.levels`).
-- **Requests & Events:** Handles `Practice`; emits `Practiced`.
-- **Callers:** Credited by [`game-ecology`](../game-ecology/README.md), [`game-agriculture`](../game-agriculture/README.md), [`game-workshop`](../game-workshop/README.md), [`game-projects`](../game-projects/README.md), [`game-pastimes`](../game-pastimes/README.md), and [`game-guardians`](../game-guardians/README.md).
-
-## Dependencies & Testing
-
-- **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-sim`](../game-sim/README.md), [`game-traits`](../game-traits/README.md), [`game-vitality`](../game-vitality/README.md).
-- **Testing:** `cargo test -p game-skills` verifies diminishing practice curves, duplicate `work_id` rejection, bitmap page compaction, and save/load round-trips.
+When `inherit_teachers = true`, children of opted-in teachers inherit those teaching roles but no skill. An inherited role becomes eligible at the authored adult age; the child must still learn a higher skill before teaching anyone.

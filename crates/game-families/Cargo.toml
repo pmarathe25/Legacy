@@ -1,0 +1,18 @@
+[package]
+name="game-families"
+version.workspace=true
+edition.workspace=true
+license.workspace=true
+[features]
+profile = ["dep:game-diagnostics"]
+[dependencies]
+game-diagnostics = { path = "../game-diagnostics", optional = true }
+game-genetics = { path = "../game-genetics" }
+game-matching = { path = "../game-matching" }
+rayon.workspace=true
+serde.workspace=true
+
+
+game-family-model = { path = "../game-family-model" }
+
+game-family-index = { path = "../game-family-index" }

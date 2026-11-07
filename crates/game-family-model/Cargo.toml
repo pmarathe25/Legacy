@@ -1,0 +1,9 @@
+[package]
+name = "game-family-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-genetics = { path = "../game-genetics" }
+serde.workspace = true
+smallvec = { version = "1.16", features = ["serde"] }

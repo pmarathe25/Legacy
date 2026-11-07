@@ -1,0 +1,73 @@
+# Simulation content
+
+The `economy*.toml` starts are for the current runner. Some other files in this directory are retained reference inputs for removed experimental hosts and are not necessarily compatible with it.
+
+`economy.toml` and `economy-campaign.toml` are authored starts for the dated-goods simulation. Goods, recipes and crops are loaded by name from the existing object, workshop and agriculture content directories. `food_relief_divisor` converts authored food relief to this scenario's hunger scale; it should be tuned alongside the per-tick hunger rate and meal threshold.
+
+Optional `environment`, `medical`, `giving`, `food_search`, `gathering`, `hauling`, `recovery`, `purpose`, `knowledge`, `skills`, `fatigue`, `family`, `care`, `cultivation`, `missions`, `campaign`, `agreements`, `work_requests`, `opinions` and `dynamics` sections configure separate owners. Work preferences and directed feelings describe individuals: an agreement records a promise but does not compel delivery, and fear or obligation can influence a response without granting an organization authority.
+
+`giving.learning` defines an individual's bounded experience of receiving food. Accepted food gifts increase only the recipient's experience; once their threshold is met, they may choose to give under their own existing preference, still subject to trust and pressure. An explicit choice to stop giving disables that personal inclination. With `reciprocate_hunger`, they may also offer food to a remembered helper who is locally hungry, without waiting for a request. An optional `ask_helper` rule lets a hungry person construct a new, expiring request to that remembered helper; it remains the helper's choice whether to respond. No promise or institution is created.
+
+`hauling.policies` describes an individual's willingness to carry a named good between two regions with directed paths in both directions. The carrier takes real stock, travels with it, and deposits it into real destination capacity. `requires_request` lets an individual act only after a personal request; `request_pressure_threshold` lets fear or obligation toward that requester motivate action. `hauling.asking` configures an individual's own time-limited requests and retry interval, and the player can request help with `ask-haul PERSON SOURCE DEST GOOD LIFETIME`. Their inclination and feelings are reconsidered at each local step; the request does not bind them or prove a delivery occurred. Stock claims and spoilage still apply.
+
+`fatigue.rules.travel_gain` adds exertion for each boundary spent traveling. It defaults to zero when omitted; people cannot recover by stationary rest during a journey and may suffer exhaustion before arriving.
+
+The optional `combat` section contains damage, per-person reactions and map-generation rules. `combat.weapons` names carried goods and their strike bonuses; the largest carried bonus applies. `combat.protection` names carried goods and the amount by which they reduce each incoming strike; the most protective carried item applies after a defend order's reduction. Maps are generated once per region from the scenario seed and persisted in saves. Each `remedies` entry names an existing good, identifies a disease strain, and gives the quantity and personal treatment preferences for the listed people. Unknown goods, invalid strains and conflicting personal treatment definitions are rejected during loading.
+
+Run `cargo run -p game-economy-cli -- --player` for the ruler-bound campaign interface, or omit `--player` for administrative inspection. These starts exercise the implemented economic and campaign slice; they do not yet represent the complete game.
+
+The `environment` section defines hazards, physical shelter capacity, and a repeating calendar. Stored units of a configured `shelter_good` add spaces; scenario files may identify that good by its content name. Available shelter rotates deterministically among residents; travelers remain exposed to their route source. Seasons scale exposure and crop growth and may prohibit planting, growth, or harvest.
+
+`dynamics.personality` gives individual sociability values; `dynamics.social.needs` tracks isolation from actual encounters. Isolation increases the motivation to seek company. A person who does not seek a voluntary meeting can still respond to fear or obligation. Newborn dispositions are inherited only when configured. Diligence influences whether an individual starts self-directed work, without automatically canceling work already underway; personal reasons such as fear or obligation can still motivate requested work.
+
+`purpose` tracks each configured person’s sense of agency: completed work relieves deprivation and blocked goal attempts increase it; prolonged deprivation may harm health. When family birth enrollment is enabled, actual newborns join this need at biological adulthood.
+
+`recovery` configures periodic healing for living people who are not too hungry; an actual rest action adds its configured bonus. Healing cannot revive someone.
+
+`gathering.nodes` describes local finite stocks of raw material, the quantity gathered per action, and per-tick regrowth. Zero regrowth represents an exhaustible deposit. `gathering.policies` are individual inclinations and may include pressure from a named person. The loader resolves good names against authored object content; admitted harvests enter physical local stock and cannot exceed the site or storage capacity.
+
+`food_search` lets configured hungry individuals travel along connected routes based on their own recent food reports when they lack carried food and accessible local stock. Each person remembers their destination across intermediate legs and may stop when they find food en route. Reports can be stale, and actual arrival, food access, and consumption still use physical rules. A retry interval limits repeated searches. When birth enrollment and `inherit_births` are enabled, children inherit a parent’s inclination but never their reports or social pressure.
+
+`giving` contains individual preferences to share carried goods with a specific nearby person when they are hungry. `asking` configures a person’s inclination to ask someone nearby, their hunger threshold, retry interval, and request lifetime. An optional bounded `alternatives` list contains other known people the requester can try when a request expires unanswered. A giving preference can set `requires_request`; alternatively, `responses` lets an individual consider requests from different nearby people using their own willingness, trust, fear, and obligation. Each helper selects at most one request per boundary. Requests are personal communications, and the recipient may decline. The player can use `ask-food PERSON LIFETIME` and see their own incoming and outgoing requests. Successful transfers consume actual custody and carrying capacity.
+
+An individual's `dynamics.claims.preferences` may specify `desperate_hunger`. At that personal threshold they can consider food claimed by someone else, after considering available food they already regard as accessible. Any taking still goes through stock arbitration and may be witnessed by claimants.
+
+`medical.policies` describe one individual’s willingness to treat a nearby patient with named medicine they carry; fear or obligation can motivate care. Actual supplies are consumed, only an appropriate treatment clears the infection, and contact can transmit disease.
+
+`opinions.rules.affinity` configures bounded directed liking, separate from trust, fear, and felt obligation. Signed per-person sensitivity overrides determine how each person interprets received help, harm, voluntary encounters, and pressured encounters; an experience can raise, lower, or leave affinity unchanged. Optional `relationship_cases` on a person's sensitivity override those interpretations and felt obligation for particular other people. A food response's optional `affinity_threshold` lets affection motivate help, and when several requests qualify a giver prefers someone they like more. Fear or obligation can still motivate a response independently. `opinions.sensitivities.gratitude_gain = 0` means that person does not develop felt obligation from help, regardless of the default rate. A personal or relationship-specific `promise_obligation_gain` can make a person feel obligation when they make a promise; it defaults to no change. Agreements never compel behavior.
+
+A person's optional `obligation_development` sensitivity can change their future tendency to feel obligation from help during childhood, based on actual caregiving or unattended periods. Its signed changes, age limit and bounds are personal, so the same upbringing can have different effects on different people; it never creates an obligation by itself.
+
+An agreement policy may set `obligation_honor_threshold` to let that individual's felt obligation toward a recipient motivate physical delivery. The person can change this inclination, and the agreement itself neither generates a compulsory action nor guarantees payment.
+
+`promise_offering` configures a person's own recurring inclination to propose a future delivery, with the good resolved by content name. An optional `after_work_recipe` names a recipe and makes this individual consider an offer only after personally observing a new successful completion by the recipient of work they requested. Bounded `work_requests` memories must be enabled; a refusal or an unseen completion does not trigger an offer, and an old success does not repeatedly trigger offers. The recipient separately chooses whether to accept, and the maker can refuse delivery later. An individual `accept_pressure_threshold` can also produce outward acceptance from fear or felt obligation without implying private approval. A `pressure_threshold` can motivate a proposal through that person's directed fear or obligation; no organization or payroll entity is created.
+
+Optional `opinions.rules.newborn_obligation_development` supplies a developmental disposition to actual newborns when family enrollment is enabled. It copies no other person's relationship records or felt obligations. The optional `cared_promise_change` and `unattended_promise_change` can independently change the child's tendency to feel obligation when making promises.
+
+`[[work_tools]]` can name a recipe, a required good, and its quantity. A worker must carry each required tool to start or continue that work; the tool is not consumed, and work pauses if it is lost or expires. Equipped workers are considered before competing for inputs. An idle person pursuing a personal work preference or goal may first take a missing tool from local stock; someone choosing to continue an existing job can similarly replace a missing tool. A person may also fetch tools to respond to a request when their own willingness, fear, or felt obligation motivates that response. These are physical actions using shared arbitration and the person's own choice about competing claims, and work resumes on a later boundary.
+
+`[work_sites]` can define physical sites with a region, named kind and finite capacity, plus recipe requirements in slots. Active jobs retain their slots through pauses; only a physically accepted start acquires a slot, and completion, abandonment or interruption releases it. Site and input arbitration are conservative, so a boundary can leave capacity unused. Sites may also be assembled by an individual from an actual local or carried kit using an authored construction blueprint. A ruler can choose `destroy-site SITE`; personal demolition preferences can also motivate other individuals to attempt to destroy particular sites. A site used or provisionally reserved during the boundary survives, and destruction produces no salvage. Intra-region transport is not yet modeled.
+
+`[construction]` defines named building blueprints and optional personal builder preferences. Each successful build consumes the specified kit and creates one physical site; willingness, fear, obligation, and personal claim choices remain independent. A ruler can inspect blueprints in `catalog` and choose `build-site BLUEPRINT`.
+
+Optional `[[construction.demolition]]` entries name a `person` and `site`, with `willing` and optional paired `pressured_by` and `pressure_threshold` fields. Each entry is one individual's changeable preference; no authority can force an action, and a removed site's identity is never reused.
+
+`[dynamics.claims]` can also contain `[[dynamics.claims.site_claims]]` entries with `person` and `site`. Each is an individual's assertion, not a title enforced by the simulation. Workers and demolishers decide whether to respect it, and a ruler can use `claim-site SITE` or `withdraw-site-claim SITE`. Demolition preferences can set `disregard_claims = true` independently of their willingness or pressure.
+
+An individual's `[[dynamics.claims.preferences]]` row can set `assert_built_sites = true` to claim sites they actually build. The ruler can change this preference with `claim-built-sites on|off`; it defaults to false and does not alter other people's choices.
+
+When affinity is enabled, an `[[opinions.sensitivities]]` row can set signed `affinity_site_use` and `affinity_site_destruction` values for its person. Optional `relationship_cases` can override them for a particular target with `site_use` and `site_destruction`. Only locally witnessed events affect affinity; absent settings impose no change and do not create obligation.
+
+Optional `[[construction.goal_builders]]` entries contain `person`, `enabled`, and optional `disregard_claims`. A person can choose an available blueprint and physical kit when their active planned work needs a site that does not yet exist locally. With goal input planning enabled, they may also produce missing kits and build prerequisite sites through bounded recipe and site planning.
+
+For example:
+
+```toml
+[work_sites]
+sites = []
+requirements = [{ recipe = "fixture-tool", kind = "workshop", slots = 1 }]
+
+[construction]
+blueprints = [{ id = 1, name = "workshop", kind = "workshop", capacity = 2, kit = "tool", quantity = 1 }]
+policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
+```

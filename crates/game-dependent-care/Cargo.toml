@@ -1,0 +1,12 @@
+[package]
+name = "game-dependent-care"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-family-columns = { path = "../game-family-columns" }
+game-family-model = { path = "../game-family-model" }
+game-production-model = { path = "../game-production-model" }
+game-genetics = { path = "../game-genetics" }
+rayon.workspace = true
+serde.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "game-disease"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+rayon.workspace = true
+serde.workspace = true
+game-genetics = { path = "../game-genetics" }
+game-social = { path = "../game-social" }
+[dev-dependencies]
+serde_json.workspace = true

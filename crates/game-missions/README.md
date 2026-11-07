@@ -1,31 +1,13 @@
-# game-missions
+# Personal expeditions
 
-Consenting expedition parties, supply preparation, shared strategic travel, arrival, return, and mortality handling.
+An expedition sends one real person along a deterministic shortest path over authored directed routes to a destination, keeps them there for a configured visit, and returns them home. Each leg uses the normal physical departure, provisions, hunger, and arrival rules, and can be observed at intermediate regions. Outbound and return paths may differ. Departure may be rejected or the person may become unavailable; a mission does not teleport them or manufacture supplies. Participants can link matching, ready journeys into a party. Parties wait for all living, active participants to be available for each departure, while independent journeys continue. Participants may cancel their own journey; survivors can continue.
+To start and inspect an individual expedition use `mission-start PERSON DESTINATION VISIT_TICKS` and `missions PERSON`. `mission-cancel PERSON ID` stops the plan without relocating a traveler. `content/scenarios/mission_start.toml` is an interactive fixture.
+When the knowledge owner is enabled, an explorer learns through the normal local observation rules after arriving; the mission does not reveal remote state in advance.
 
-**Why it matters:** Long-distance scouting, diplomacy, and military expeditions require assembling consenting companions, packing real supplies, and marching together across the map while the rest of the world continues in real time.
+Each participant opts in with `mission-consent PERSON ID accept` (or withdraws before a party is formed). `mission-candidates PERSON` lists nearby consenting travelers with matching ready journeys; `mission-party ID ID...` links at least two of them. Player mode requires the current ruler to be a participant. `content/scenarios/mission_party.toml` includes an already-consenting companion.
 
-## Responsibilities
+For an invitation, optional `[missions] pressure_threshold` allows an otherwise unwilling local person to participate when their own directed fear plus obligation toward the inviter reaches that threshold. The saved journey marks `party_compliant = true` and `party_opt_in = false`; compliance does not imply approval, trust, or permanent obedience. The person can still cancel their own journey, and all ordinary travel and availability checks apply. No pressure response occurs without this setting and the opinions owner.
 
-- **Party Formation & Consent:** Assembles multi-person expedition parties from consenting, available characters.
-- **Preparation & Shared Travel:** Coordinates supply loading (`game-cargo`) and synchronized leg-by-leg strategic travel (`game-transport`, `game-land`, `game-spatial`).
-- **Lifecycle & Mortality:** Handles destination arrival, mission completion, return journeys, and mid-expedition injury or death (`game-physiology`).
+In `content/scenarios/invitation.toml`, person 3 is unwilling but fears person 1; an invitation can therefore result in outward participation. The inviter sees that the person joined, while each person's private response remains in their own mission view.
 
-## Boundaries
-
-- **No Time Freeze:** Mission members occupy their real action clocks while home settlements and distant regions continue simulating normally.
-- **No Military Recruitment Rules:** Unit muster and army upkeep belong to `game-armies`, which delegates actual expedition movement here.
-
-## How It Works
-
-- **Synchronized Party Legs:** Advances party members along shared road routes, keeping the group together across waypoints and updating member states if a participant dies or becomes incapacitated en route.
-
-## Game Integration
-
-- **Plugin / Entry Point:** `Plugin` registers mission rosters, party travel state, and expedition request handlers in `game-assembly`.
-- **Requests & Events:** Exposes mission creation, member recruitment, departure, and return requests; emits arrival and completion events.
-- **Callers:** Used by `game-armies`, `game-realm`, `game-api`, and scenario fixtures.
-
-## Dependencies & Testing
-
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-physiology`, `game-transport`, `game-land`, `game-spatial`, `game-cargo`.
-- **Testing:** Integration tests in `tests/` (`cargo test -p game-missions`) verify party consent, synchronized multi-leg travel, supply carrying, mid-journey mortality, and return completion.
+Before departure, `mission-meet PERSON ID TARGET` sets a goal to meet a specific person at the destination. The meeting counts only through an actual consenting encounter; the traveler must still return. If the traveler returns without the meeting, the mission fails. `missions PERSON` shows the goal and its progress. Try the administrative fixture `content/scenarios/mission_meeting.toml` or the player scenario `--player --scenario meeting-expedition`, where the ruler must initiate the conversation.

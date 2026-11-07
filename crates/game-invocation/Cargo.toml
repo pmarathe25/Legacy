@@ -3,24 +3,5 @@ name = "game-invocation"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-
 [dependencies]
-game-content.workspace = true
-
-game-conflict.workspace = true
-game-core.workspace = true
-game-sim.workspace = true
-game-lineage.workspace = true
-game-physiology.workspace = true
 serde.workspace = true
-
-[dev-dependencies]
-game-testimony.workspace = true
-game-objects.workspace = true
-game-land.workspace = true
-game-transport.workspace = true
-game-cargo.workspace = true
-game-property.workspace = true
-game-skills.workspace = true
-game-knowledge.workspace = true
-game-lifecycle.workspace = true

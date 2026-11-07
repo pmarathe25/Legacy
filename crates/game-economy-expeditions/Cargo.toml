@@ -1,0 +1,19 @@
+[package]
+name = "game-economy-expeditions"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-person = { path = "../game-economy-person" }
+game-economy-claims = { path = "../game-economy-claims" }
+game-economy-local-transport = { path = "../game-economy-local-transport" }
+game-missions = { path = "../game-missions" }
+game-mission-objectives = { path = "../game-mission-objectives" }
+game-social = { path = "../game-social" }
+game-opinions = { path = "../game-opinions" }
+game-transport = { path = "../game-transport" }
+game-production-model = { path = "../game-production-model" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lots = { path = "../game-lots" }
+rayon.workspace = true

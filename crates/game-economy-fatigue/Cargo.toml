@@ -1,0 +1,12 @@
+[package]
+name = "game-economy-fatigue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-person = { path = "../game-economy-person" }
+game-fatigue = { path = "../game-fatigue" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true

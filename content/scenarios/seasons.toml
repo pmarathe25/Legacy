@@ -1,0 +1,54 @@
+tick = 0
+seed = 1
+
+[rules]
+food_growth = 3
+food_capacity = 100
+food_per_meal = 2
+hunger_per_tick = 0
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 0
+max_health = 100
+
+[[regions]]
+id = 1
+food = 10
+people = [{ id = 1, hunger = 0, health = 100 }, { id = 2, hunger = 2, health = 100 }]
+
+[[regions]]
+id = 2
+food = 4
+people = [{ id = 3, hunger = 3, health = 100 }]
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 2
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 2
+
+[[environment.regions]]
+region = 1
+damage = 10
+shelter = 1
+shelter_reduction = 10
+
+[[environment.seasons]]
+name = "warm"
+duration = 2
+food_growth_per_thousand = 2000
+exposure_per_thousand = 0
+
+[[environment.seasons]]
+name = "cold"
+planting_allowed = false
+tending_allowed = false
+harvest_allowed = true
+duration = 2
+food_growth_per_thousand = 0
+exposure_per_thousand = 2000

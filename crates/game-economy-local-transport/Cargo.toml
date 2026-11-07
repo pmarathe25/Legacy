@@ -1,0 +1,15 @@
+[package]
+name = "game-economy-local-transport"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-claims = { path = "../game-economy-claims" }
+game-economy-person = { path = "../game-economy-person" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lots = { path = "../game-lots" }
+game-opinions = { path = "../game-opinions" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true
+serde.workspace = true

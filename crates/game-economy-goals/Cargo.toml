@@ -1,0 +1,15 @@
+[package]
+name = "game-economy-goals"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-dreams = { path = "../game-dreams" }
+game-goals = { path = "../game-goals" }
+game-economy-person = { path = "../game-economy-person" }
+game-economy-work = { path = "../game-economy-work" }
+game-autowork = { path = "../game-autowork" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true

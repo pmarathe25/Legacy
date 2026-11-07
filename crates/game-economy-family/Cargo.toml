@@ -1,0 +1,13 @@
+[package]
+name = "game-economy-family"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-person = { path = "../game-economy-person" }
+game-economy-dynamics = { path = "../game-economy-dynamics" }
+game-families = { path = "../game-families" }
+game-family-model = { path = "../game-family-model" }
+game-family-index = { path = "../game-family-index" }
+rayon.workspace = true

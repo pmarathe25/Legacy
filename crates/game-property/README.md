@@ -1,32 +1,11 @@
-# game-property
+# Parallel property
 
-`game-property` manages ownership claims, claim recognition, revocable per-person access permissions, and authorized or unauthorized taking of goods and plots.
+An optional property owner assigns a regional nonfood stock to a person and can delegate use to other local people. Unclaimed stocks remain public. Production inputs and outputs and local goods transfers require the worker or holder to have access. Permission checks read an immutable index in parallel; reservations already accepted remain valid if permissions later change.
 
-**Why it matters:** Property in Legacy is a social relationship rather than a physical lock—people can hold competing claims, grant or revoke access to stores, and physically take contested goods at the risk of witnesses and grievances.
+A title transfer requires an owner proposal and a separate recipient decision while both are living and local. Acceptance changes ownership and clears delegated access. Without an inheritance policy, a deceased owner retains the claim; titles do not pass to a reincarnation automatically. This is a limited stock-rights model, not a complete land, inheritance, legal, or political system.
 
-## Responsibilities
+The fused host also supports `steal-good PERSON GOOD QUANTITY`: an unauthorized actor can physically take a claimed stock without receiving permission. The stock owner remains unchanged. A living owner in the same region witnesses the incident; with configured `theft_loss`, that owner loses directed trust in the actor. The actor sees their own taking, while an absent owner does not receive a witnessed incident.
 
-- **Claims & permissions (`Property`):** Stores competing ownership claims on inventories and plots, recognition sets, and per-inventory access lists (`property.state`), backed by a dense `game-packed` reverse index per person.
-- **Physical taking (`Take`):** Transfers goods via `game-cargo`, checking whether the actor has standing permission or is explicitly acting `unauthorized`.
-- **Contested use (`Use`):** Records whether an action on an inventory or plot defied a recognized claim and identifies awake, living local witnesses via `game-physiology`.
-- **Conscience cost (`reluctance`):** Computes a person's internal reluctance to take or use contested property from honesty, independence, claim recognition, fear, and grievance.
+`work-unpermitted ID PERSON REGION RECIPE UNITS` similarly lets a person use claimed materials for production without permission. The material is physically reserved, the claim remains, and a present owner can witness unauthorized input use and update their opinion. The action is still subject to ordinary work, age, capacity, and material constraints; it does not imply agreement or physical enforcement by an institution.
 
-## Boundaries
-
-- **Social claims vs. physical movement:** Tracks who claims and permits access; [`game-cargo`](../game-cargo/README.md) enforces physical quantities and [`game-grievances`](../game-grievances/README.md) / [`game-justice`](../game-justice/README.md) handle reactions to witnessed interference.
-
-## How It Works
-
-- **Dual permission indexing:** Maintains both forward (`InventoryId -> permitted people`) snapshots and a journaled reverse (`PersonId -> accessible inventories`) index rebuilt on load for fast autonomous foraging lookups.
-- **Witnessed interference:** When `Take { unauthorized: true }` or contested `Use` executes, `game-property` does not block the physical action; instead it emits `Taken` / `Interference` containing only co-located awake witnesses.
-
-## Game Integration
-
-- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`property`, resource `property.state`).
-- **Requests & Events:** Handles `ClaimInventory`, `ClaimPlot`, `Recognize`, `Permit`, `Revoke`, `Take`, `Use`; emits `Taken` and `Interference`.
-- **Callers:** Bound to `Command::Take` in `game-assembly` and queried by `game-provisioning`, `game-horticulture`, `game-livelihoods`, `game-institutions`, and `game-grievances`.
-
-## Dependencies & Testing
-
-- **Dependencies:** [`game-core`](../game-core/README.md), [`game-storage`](../game-storage/README.md), [`game-packed`](../game-packed/README.md), [`game-sim`](../game-sim/README.md), [`game-cargo`](../game-cargo/README.md), [`game-transport`](../game-transport/README.md), [`game-traits`](../game-traits/README.md), [`game-vitality`](../game-vitality/README.md), [`game-relationships`](../game-relationships/README.md).
-- **Testing:** `cargo test -p game-property` verifies competing claims, permission revocation, authorized vs. unauthorized taking, witness filtering, and rollback.
+Optional `[property.inheritance]` rules specify `minimum_age` and `prefer_partner`. A living eligible partner at the death boundary takes priority when configured; otherwise the lowest-ID living eligible child inherits. An estate stays with the deceased if no eligible heir exists and is reconsidered as children mature. Inheritance clears delegated access and pending title offers, preserves the physical stock, and records the transfer for the heir.

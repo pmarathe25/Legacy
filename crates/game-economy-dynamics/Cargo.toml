@@ -1,0 +1,20 @@
+[package]
+name = "game-economy-dynamics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-personality = { path = "../game-personality" }
+game-economy-treatment = { path = "../game-economy-treatment" }
+game-economy-person = { path = "../game-economy-person" }
+game-social = { path = "../game-social" }
+game-disease = { path = "../game-disease" }
+game-lots = { path = "../game-lots" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-opinions = { path = "../game-opinions" }
+game-genetics = { path = "../game-genetics" }
+game-missions = { path = "../game-missions" }
+game-economy-claims = { path = "../game-economy-claims" }
+rayon.workspace = true
+serde.workspace = true

@@ -5,21 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
-game-diagnostics.workspace = true
-game-vitality.workspace = true
-game-storage.workspace = true
-game-packed.workspace = true
-game-core.workspace = true
-game-contracts.workspace = true
-game-sim.workspace = true
-game-land.workspace = true
+game-people = { path = "../game-people" }
+game-cargo = { path = "../game-cargo" }
+rayon.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-
-[dev-dependencies]
-game-signals.workspace=true
-game-objects.workspace = true
-game-cargo.workspace = true
-game-property.workspace = true
-game-physiology.workspace = true
-game-skills.workspace = true

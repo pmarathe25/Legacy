@@ -1,32 +1,9 @@
-# game-guardians
+# Parallel guardians
 
-Immortal guardian identities, innate successor sensing, route-by-route search, and mentorship of new rulers.
+Persistent guardian bodies sense the current incarnation's local region, follow directed routes over time, recover in place without hunger or aging, and count local mentorship ticks against an authored readiness threshold. Confinement prevents departure and does not interrupt recovery. A traveling incarnation is sensed without a current local destination; guardians wait until a region is available. Guardians share a shortest-route table only when a departure is possible, and each selected leg is looked up directly.
 
-**Why it matters:** Across generations and interregnum gaps, guardians act as enduring anchors who sense when a new dynastic successor is born, travel across the physical road network to find them, and offer mentorship.
+The compiled CLI's `request-release GUARDIAN` lets the current incarnation ask a guardian to end mentorship. The guardian refuses if not present or if the authored mentorship threshold has not been met; acceptance is saved on that guardian and resets for the next incarnation. The decision does not confer political office, property, or legal adulthood.
 
-## Responsibilities
+Each guardian may set `mentorship_required` to express their own readiness judgment; otherwise the scenario's `mentorship_ticks` is used. Guardians can therefore reach different decisions after the same period, and their experience with a previous incarnation does not count toward the next one.
 
-- **Guardian Identity & Sensing:** Tracks persistent guardian characters and their innate awareness of the current `game-lineage` successor.
-- **Route-by-Route Search:** Moves guardians step by step across the physical `game-land` / `game-transport` network toward the successor without teleporting.
-- **Mentorship & Refusal:** Assesses and mentors the successor in `game-skills` upon contact, handling player or successor refusal without permanently abandoning the dynasty.
-
-## Boundaries
-
-- **No Teleportation or Instant Healing:** Bodily recovery remains governed by `game-physiology` (and restraint by `game-confinement`) without moving the guardian across the map.
-- **No Forced Tutelage:** Mentorship requires co-location and respects refusal.
-
-## How It Works
-
-- **Stepwise Pathing:** Queries spatial and road topology (`game-land`, `game-spatial`) to schedule real `game-transport` travel legs as the successor's location changes.
-- **Mentorship Transfer:** When co-located with an eligible ruler, conducts training interactions that boost skill acquisition in `game-skills`.
-
-## Game Integration
-
-- **Plugin / Entry Point:** `Plugin` registers guardian records, search scheduling, and mentorship handlers in `game-assembly`.
-- **Requests & Events:** Exposes guardian registration, search updates, and mentorship requests.
-- **Callers:** Coordinates with `game-lineage`, `game-confinement`, `game-transport`, `game-physiology`, and `game-skills`.
-
-## Dependencies & Testing
-
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-lineage`, `game-transport`, `game-land`, `game-spatial`, `game-physiology`, `game-skills`.
-- **Testing:** Integration tests in `tests/` (`cargo test -p game-guardians`) verify successor sensing after reincarnation, multi-hop road travel, mentorship skill transfer, refusal handling, and recovery in place.
+These bodies are a separate prototype owner and do not yet interact with ordinary equipment, imprisonment, injury, other player requests, or the shared character action system. Sensing creates no ordinary personal knowledge. Guardians cannot teleport or inherit an incarnation's property or office.

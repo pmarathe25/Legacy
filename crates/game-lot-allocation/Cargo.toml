@@ -1,0 +1,9 @@
+[package]
+name = "game-lot-allocation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rayon.workspace = true
+game-lot-model = { path = "../game-lot-model" }

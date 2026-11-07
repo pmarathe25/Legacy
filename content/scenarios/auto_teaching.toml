@@ -1,0 +1,170 @@
+# Accelerated generational fixture: ages, gestation and lifespan are in simulation ticks.
+# This is a testable authored model, not a claim that one tick is one real year.
+tick = 0
+seed = 42
+[rules]
+food_growth = 100
+food_capacity = 10000
+food_per_meal = 2
+hunger_per_tick = 1
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 1
+max_health = 100
+[[regions]]
+id = 1
+food = 100
+people = [{ id=1, hunger=0, health=100 }, { id=2, hunger=0, health=0 }, { id=3, hunger=0, health=100 }, { id=4, hunger=0, health=100 }]
+[[regions]]
+id = 2
+food = 100
+people = [{ id=5, hunger=0, health=100 }, { id=6, hunger=0, health=100 }, { id=7, hunger=0, health=100 }, { id=8, hunger=0, health=100 }]
+[[routes]]
+source=1
+destination=2
+ticks=5
+[[routes]]
+source=2
+destination=1
+ticks=5
+[families]
+next_id = 9
+last_tick = 0
+[families.rules]
+adult_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 8
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+
+[[families.members]]
+id = 1
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 2
+age = 18
+alive = false
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 3
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 4
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 5
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 6
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 7
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 8
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[lineage]
+current = 1
+started = 0
+
+[[lineage.history]]
+person = 2
+started = 0
+ended = 0
+
+[lineage.invocation]
+owner = 1
+[lineage.invocation.rules]
+rate_per_life = 2
+recovery_per_tick = 1
+strain_threshold = 4
+loss_threshold = 8
+strain_consent_ticks = 5
+control_loss_ticks = 3
+
+
+[production]
+max_work_hunger = 10
+
+[[production.goods]]
+id = 1
+name = "timber"
+
+[[production.goods]]
+id = 2
+name = "planks"
+
+[[production.recipes]]
+id = 1
+name = "saw planks"
+ticks = 4
+inputs = [{ good = 1, quantity = 1 }]
+outputs = [{ good = 2, quantity = 1 }]
+
+[[production.inventories]]
+region = 1
+stocks = [{ good = 1, quantity = 100, capacity = 100 }, { good = 2, quantity = 0, capacity = 100 }]
+
+
+[skills]
+rules = [{ recipe = 1, completions_per_level = 1, max_level = 3, work_per_level = 1 }]
+records = [{ person = 2, recipe = 1, completions = 6, credited_jobs = [] }, { person = 3, recipe = 1, completions = 6, credited_jobs = [] }]
+teachers = [{ person = 3, recipe = 1, enabled = true }]
+
+[social.rules]
+interval = 1
+min_health = 1
+max_hunger = 10
+familiarity_gain = 2
+familiarity_max = 100
+
+[[social.participants]]
+person = 1
+willing = true
+
+[[social.participants]]
+person = 3
+willing = true
+
+[[social.participants]]
+person = 4
+willing = true

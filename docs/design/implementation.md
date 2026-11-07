@@ -1,5 +1,7 @@
 # Implementation stages and verification
 
+The package names and initial commands in the first coding task describe a superseded implementation. The current host and commands are documented in the [workspace README](../../README.md); the behavioral goals below remain design targets, not a completion ledger.
+
 The deliverable is the complete game mechanics running headlessly, with a CLI and public API that a graphics engine can use later. Graphics is excluded from this implementation scope; combat, player interactions, saves, and campaign rules are included. Optional GPU acceleration can follow measurement later, but the architecture must allow it now.
 
 Build through small, testable stages. Expose each player-facing behavior through the API and CLI when it is added. A stage can use explicitly named fixtures to isolate behavior; fixtures must not become hidden universal social rules. A placeholder resolver does not implement the final mechanic.

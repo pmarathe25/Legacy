@@ -1,0 +1,13 @@
+[package]
+name = "game-economy-exposure"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-person = { path = "../game-economy-person" }
+game-economy-work = { path = "../game-economy-work" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lots = { path = "../game-lots" }
+game-social = { path = "../game-social" }
+rayon.workspace = true

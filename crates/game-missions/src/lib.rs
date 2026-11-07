@@ -1,220 +1,155 @@
-//! Parties travel through the same world as workers and return with persistent consequences.
-use game_core::*;
-use game_sim::*;
-use game_storage::Records;
+//! Accepted personal expeditions over physical journeys.
+mod draft;
+mod party;
+mod phase;
+pub use draft::Draft;
+pub mod routing;
+pub use game_missions_model::{
+    DeliveryAcquisition, DeliveryPreference, Departure, Event, EventKind, Mission, Objective,
+    Phase, Start,
+};
+use game_production_model::{PersonSnapshot, person_index};
+use game_transport::Route;
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeSet;
+use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Phase {
-    Preparing,
-    Outbound,
-    AtSite,
-    Returning,
-    Complete,
-    Failed,
+#[serde(deny_unknown_fields)]
+pub struct Missions {
+    pub next_id: u64,
+    /// Minimum experienced fear plus obligation that can motivate a non-willing companion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_threshold: Option<u64>,
+    pub entries: Vec<Mission>,
+    #[serde(default)]
+    pub events: Vec<Event>,
 }
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Mission {
-    pub leader: PersonId,
-    pub members: BTreeSet<PersonId>,
-    pub accepted: BTreeSet<PersonId>,
-    pub home: AreaId,
-    pub destination: AreaId,
-    pub arrived: BTreeSet<PersonId>,
-    pub phase: Phase,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Missions(pub Records<MissionId, Mission>);
-impl Resource for Missions {
-    fn allocated_ids(&self) -> Vec<u64> {
-        self.0.keys().map(|id| id.0).collect()
+/// Copy independent expedition rows in parallel when staging a world boundary.
+pub fn clone_parallel(owner: &Missions) -> Missions {
+    Missions {
+        next_id: owner.next_id,
+        pressure_threshold: owner.pressure_threshold,
+        entries: owner.entries.par_iter().cloned().collect(),
+        events: owner.events.par_iter().cloned().collect(),
     }
-    const KEY: &'static str = "missions.parties";
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Prepare {
-    pub leader: PersonId,
-    pub members: BTreeSet<PersonId>,
-    pub destination: AreaId,
-}
-impl Request for Prepare {
-    const KEY: &'static str = "missions.prepare";
-    type Response = MissionId;
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Join {
-    pub person: PersonId,
-    pub mission: MissionId,
-}
-impl Request for Join {
-    const KEY: &'static str = "missions.join";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Depart {
-    pub person: PersonId,
-    pub mission: MissionId,
-}
-impl Request for Depart {
-    const KEY: &'static str = "missions.depart";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Return {
-    pub person: PersonId,
-    pub mission: MissionId,
-}
-impl Request for Return {
-    const KEY: &'static str = "missions.return";
-    type Response = ();
-}
-fn onward(tx: &mut Transaction<'_>, person: PersonId, mission: MissionId) -> Result<()> {
-    let m = tx.get::<Missions>()?.0[&mission].clone();
-    let to = if m.phase == Phase::Returning {
-        m.home
-    } else {
-        m.destination
-    };
-    let from = game_transport::area(tx.get()?, person)?;
-    if from == to {
-        let m = tx.edit::<Missions>()?.0.get_mut(&mission).unwrap();
-        m.arrived.insert(person);
-        if m.arrived == m.accepted {
-            m.phase = if m.phase == Phase::Returning {
-                Phase::Complete
-            } else {
-                Phase::AtSite
-            };
-        }
-    } else {
-        let route = game_spatial::route(tx.get::<game_land::Land>()?, from, to)?;
-        tx.call(game_transport::Move {
-            person,
-            destination: route.areas[1],
-        })?;
-    }
-    Ok(())
-}
-#[derive(Clone, Serialize, Deserialize)]
-struct Continue {
-    person: PersonId,
-    mission: MissionId,
-}
-impl Request for Continue {
-    const KEY: &'static str = "missions.continue";
-    type Response = ();
-}
-pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("missions", 1)?;
-    b.resource::<Missions>()?;
-    b.request::<Prepare>(|tx, r| {
-        game_physiology::capable(tx, r.leader)?;
-        require(r.members.contains(&r.leader), "leader not in party")?;
-        let home = game_transport::area(tx.get()?, r.leader)?;
-        game_spatial::route(tx.get::<game_land::Land>()?, home, r.destination)?;
-        let id = MissionId(tx.allocate()?);
-        tx.edit::<Missions>()?.0.insert(
-            id,
-            Mission {
-                leader: r.leader,
-                members: r.members,
-                accepted: BTreeSet::from([r.leader]),
-                home,
-                destination: r.destination,
-                arrived: BTreeSet::new(),
-                phase: Phase::Preparing,
-            },
-        );
-        Ok(id)
-    })?;
-    b.request::<Join>(|tx, r| {
-        let m = tx
-            .edit::<Missions>()?
-            .0
-            .get_mut(&r.mission)
-            .ok_or_else(|| Error::Missing("mission".into()))?;
-        require(
-            m.phase == Phase::Preparing && m.members.contains(&r.person),
-            "cannot join mission",
-        )?;
-        m.accepted.insert(r.person);
-        Ok(())
-    })?;
-    b.request::<Depart>(|tx, r| {
-        let m = tx
-            .get::<Missions>()?
-            .0
-            .get(&r.mission)
-            .ok_or_else(|| Error::Missing("mission".into()))?
-            .clone();
-        require(
-            m.leader == r.person && m.phase == Phase::Preparing && m.accepted == m.members,
-            "party not ready",
-        )?;
-        tx.edit::<Missions>()?.0.get_mut(&r.mission).unwrap().phase = Phase::Outbound;
-        for p in m.accepted {
-            onward(tx, p, r.mission)?;
-        }
-        Ok(())
-    })?;
-    b.request::<Return>(|tx, r| {
-        let m = tx
-            .get::<Missions>()?
-            .0
-            .get(&r.mission)
-            .ok_or_else(|| Error::Missing("mission".into()))?
-            .clone();
-        require(
-            m.leader == r.person && m.phase == Phase::AtSite,
-            "cannot return",
-        )?;
-        let state = tx.edit::<Missions>()?.0.get_mut(&r.mission).unwrap();
-        state.phase = Phase::Returning;
-        state.arrived.clear();
-        for p in m.accepted {
-            onward(tx, p, r.mission)?;
-        }
-        Ok(())
-    })?;
-    b.request::<Continue>(|tx, r| onward(tx, r.person, r.mission))?;
-    b.subscribe::<game_transport::Arrived>("missions.progress", |tx, e| {
-        let ids: Vec<_> = tx
-            .get::<Missions>()?
-            .0
+impl Missions {
+    pub fn validate(
+        &self,
+        people: &HashSet<u64>,
+        regions: &HashSet<u64>,
+        routes: &[Route],
+        tick: u64,
+    ) -> Result<(), &'static str> {
+        let mut ids: Vec<_> = self.entries.par_iter().map(|mission| mission.id).collect();
+        ids.par_sort_unstable();
+        let mut actors: Vec<_> = self
+            .entries
+            .par_iter()
+            .filter(|mission| !matches!(mission.phase, Phase::Completed | Phase::Failed))
+            .map(|mission| mission.person)
+            .collect();
+        actors.par_sort_unstable();
+        let targets = routing::targets(&self.entries, false);
+        let paths = routing::Routing::new(routes, &targets);
+        let people_by_mission: HashMap<_, _> = self
+            .entries
             .iter()
-            .filter(|(_, m)| {
-                m.accepted.contains(&e.person)
-                    && matches!(m.phase, Phase::Outbound | Phase::Returning)
+            .map(|mission| (mission.id, mission.person))
+            .collect();
+        if self.pressure_threshold == Some(0)
+            || !party::valid(&self.entries)
+            || ids.par_windows(2).any(|pair| pair[0] == pair[1])
+            || actors.par_windows(2).any(|pair| pair[0] == pair[1])
+            || self.entries.par_iter().any(|mission| {
+                (mission.party_opt_in && mission.party_compliant)
+                    || (mission.party_compliant && mission.party.is_none())
+                    || mission.objective.is_some_and(|objective| match objective {
+                        Objective::Meet { person } => {
+                            person == mission.person || !people.contains(&person)
+                        }
+                        Objective::Deliver {
+                            person,
+                            good,
+                            quantity,
+                            delivered,
+                        } => {
+                            person == mission.person
+                                || !people.contains(&person)
+                                || good == 0
+                                || quantity == 0
+                                || delivered > quantity
+                                || mission.objective_met != (delivered == quantity)
+                        }
+                    })
+                    || (mission.objective.is_none() && mission.objective_met)
+                    || (mission.delivery_preference.is_some()
+                        && !matches!(mission.objective, Some(Objective::Deliver { .. })))
+                    || mission.delivery_preference.is_some_and(|preference| {
+                        preference.pressure_threshold == Some(0)
+                            || preference
+                                .acquisition
+                                .is_some_and(|choice| choice.pressure_threshold == Some(0))
+                    })
+                    || mission.id >= self.next_id
+                    || !people.contains(&mission.person)
+                    || mission.origin == mission.destination
+                    || !regions.contains(&mission.origin)
+                    || !regions.contains(&mission.destination)
+                    || paths.next(mission.origin, mission.destination).is_none()
+                    || paths.next(mission.destination, mission.origin).is_none()
+                    || mission.visit_ticks == 0
+                    || mission.remaining > mission.visit_ticks
+                    || (mission.phase != Phase::Visiting && mission.remaining != 0)
+                    || (mission.phase == Phase::Visiting && mission.remaining == 0)
             })
-            .map(|(id, _)| *id)
-            .collect();
-        for mission in ids {
-            if tx
-                .attempt(Continue {
-                    person: e.person,
-                    mission,
-                })
-                .is_err()
-            {
-                tx.edit::<Missions>()?.0.get_mut(&mission).unwrap().phase = Phase::Failed;
-            }
+            || self.events.par_iter().any(|event| {
+                event.tick > tick
+                    || event.mission >= self.next_id
+                    || !people.contains(&event.person)
+                    || people_by_mission.get(&event.mission) != Some(&event.person)
+            })
+        {
+            return Err("invalid expedition state");
         }
         Ok(())
-    })?;
-    b.subscribe::<game_physiology::Died>("missions.casualty", |tx, e| {
-        let affected: Vec<_> = tx
-            .get::<Missions>()?
-            .0
-            .iter()
-            .filter(|(_, m)| m.accepted.contains(&e.person) && m.phase != Phase::Complete)
-            .map(|(id, _)| *id)
-            .collect();
-        for id in affected {
-            let m = tx.edit::<Missions>()?.0.get_mut(&id).unwrap();
-            if m.accepted.contains(&e.person) && m.phase != Phase::Complete {
-                m.phase = Phase::Failed;
-            }
+    }
+    /// Unaccompanied personal expeditions require biological adulthood when ages are modeled.
+    pub fn validate_adults(&self, adults: &HashSet<u64>) -> Result<(), &'static str> {
+        if self.entries.par_iter().any(|mission| {
+            !matches!(mission.phase, Phase::Completed | Phase::Failed)
+                && !adults.contains(&mission.person)
+        }) {
+            return Err("a child cannot undertake an unaccompanied expedition");
         }
         Ok(())
-    })
+    }
+    /// Decisions read the tick-start location and reserve only an attempted departure.
+    pub fn prepare(
+        &self,
+        people: &[PersonSnapshot],
+        busy: &[u64],
+        routes: &[Route],
+        tick: u64,
+    ) -> Option<Draft> {
+        self.prepare_with(
+            |person| person_index(people, person).map(|i| people[i]),
+            busy,
+            routes,
+            tick,
+        )
+    }
+    /// Read only requested actors from a committed physical view.
+    pub fn prepare_with(
+        &self,
+        person_view: impl Fn(u64) -> Option<PersonSnapshot> + Sync,
+        busy: &[u64],
+        routes: &[Route],
+        tick: u64,
+    ) -> Option<Draft> {
+        phase::prepare(self, &person_view, busy, routes, tick)
+    }
 }
+#[cfg(test)]
+#[path = "../tests/support/owner.rs"]
+mod tests;

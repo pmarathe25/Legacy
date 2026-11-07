@@ -1,0 +1,13 @@
+[package]
+name = "game-tactics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-tactical-map = { path = "../game-tactical-map" }
+serde.workspace = true
+rayon.workspace = true
+game-conflict = { path = "../game-conflict" }
+
+[dev-dependencies]
+serde_json.workspace = true

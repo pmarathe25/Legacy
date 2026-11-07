@@ -1,311 +1,352 @@
-//! Active past-life access, scoped consent, and binding control-loss intervals.
-mod costs;
-pub use costs::{Cost, CostAt, apply};
-use game_core::*;
-use game_sim::*;
+//! Player-authorized, tick-boundary access to previous lives.
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::HashSet;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Active {
-    pub person: PersonId,
-    pub lives: BTreeSet<LifeId>,
-    pub began: SimTime,
-    pub step: usize,
-    pub job: ScheduleId,
-}
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Warning {
-    pub explanation: String,
-    pub cost: Cost,
-    pub amount: u64,
-    pub duration: SimDuration,
-    pub step: usize,
-}
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Invocation {
-    pub costs: Vec<CostAt>,
-    pub repeat: SimDuration,
-    pub active: Option<Active>,
-    pub warning: Option<Warning>,
-    pub control_until: Option<SimTime>,
-    pub identity: u64,
-    pub instability: u64,
-    pub lifespan_lost: SimDuration,
-}
-impl Resource for Invocation {
-    const KEY: &'static str = "invocation.session";
-    fn validate(&self) -> Result<()> {
-        require(
-            self.costs.windows(2).all(|s| s[0].after < s[1].after)
-                && self.costs.iter().all(|s| s.after.0 > 0 && s.amount > 0),
-            "invalid invocation costs",
-        )?;
-        require(
-            self.active.as_ref().is_none_or(|a| !a.lives.is_empty()),
-            "no selected lives",
-        )
-    }
-}
-#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Configure {
-    pub costs: Vec<CostAt>,
-    pub repeat: SimDuration,
+pub struct Rules {
+    pub rate_per_life: u64,
+    pub recovery_per_tick: u64,
+    pub strain_threshold: u64,
+    pub loss_threshold: u64,
+    pub strain_consent_ticks: u64,
+    pub control_loss_ticks: u64,
+    /// Physical health lost per strained interval; zero disables direct injury.
+    #[serde(default)]
+    pub strain_damage_per_tick: u32,
+    /// Protracted active intervals required before permanent lifespan costs begin.
+    #[serde(default)]
+    pub permanent_exposure_threshold: u64,
+    #[serde(default)]
+    pub lifespan_loss_per_tick: u64,
 }
-impl Request for Configure {
-    const KEY: &'static str = "invocation.configure";
-    type Response = ();
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Invocation {
+    pub rules: Rules,
+    pub owner: Option<u64>,
+    #[serde(default)]
+    pub active: Vec<u64>,
+    #[serde(default)]
+    pub burden: u64,
+    #[serde(default)]
+    pub exposure: u64,
+    #[serde(default)]
+    pub strain_accepted_until: Option<u64>,
+    #[serde(default)]
+    pub lifespan_accepted_until: Option<u64>,
+    #[serde(default)]
+    pub loss_approved: bool,
+    #[serde(default)]
+    pub loss_triggered: bool,
+    #[serde(default)]
+    pub control_until: Option<u64>,
+    #[serde(default)]
+    pub pending: Option<Warning>,
+    #[serde(default)]
+    pub revision: u64,
 }
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Invoke {
-    pub person: PersonId,
-    pub lives: BTreeSet<LifeId>,
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Warning {
+    pub revision: u64,
+    pub owner: u64,
+    pub tick: u64,
+    pub rate: u64,
+    pub projected_burden: u64,
+    pub kind: WarningKind,
+    pub duration: u64,
+    #[serde(default)]
+    pub strain_damage_per_tick: u32,
+    #[serde(default)]
+    pub lifespan_loss_per_tick: u64,
 }
-impl Request for Invoke {
-    const KEY: &'static str = "invocation.invoke";
-    type Response = ();
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarningKind {
+    Strain,
+    Lifespan,
+    ControlLoss,
 }
-#[derive(Clone, Serialize, Deserialize)]
-struct Expose;
-impl Request for Expose {
-    const KEY: &'static str = "invocation.expose";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Consent {
-    pub step: usize,
-    pub accept: bool,
-}
-impl Request for Consent {
-    const KEY: &'static str = "invocation.consent";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub struct Dismiss;
-impl Request for Dismiss {
-    const KEY: &'static str = "invocation.dismiss";
-    type Response = ();
-}
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct ControlEnd {
-    pub until: SimTime,
-}
-impl Request for ControlEnd {
-    const KEY: &'static str = "invocation.control_end";
-    type Response = ();
-}
-pub fn controlled(state: &Invocation, now: SimTime) -> bool {
-    state.control_until.is_none_or(|until| until <= now)
-}
-fn schedule(tx: &mut Transaction<'_>) -> Result<()> {
-    let s = tx.get::<Invocation>()?;
-    let a = s.active.as_ref().unwrap();
-    let index = a.step.min(s.costs.len() - 1);
-    let cycles = a.step.saturating_sub(s.costs.len() - 1) as u64;
-    let elapsed = s.costs[index]
-        .after
-        .0
-        .checked_add(s.repeat.0.checked_mul(cycles).ok_or(Error::Overflow)?)
-        .ok_or(Error::Overflow)?
-        / (a.lives.len() as u64);
-    let at = a.began.after(SimDuration(elapsed))?.max(tx.now());
-    let job = tx.schedule(at, 45, Expose)?;
-    tx.edit::<Invocation>()?.active.as_mut().unwrap().job = job;
-    Ok(())
-}
-fn pay_and_continue(tx: &mut Transaction<'_>, w: Warning) -> Result<()> {
-    apply(tx, &w)?;
-    let current = tx.get::<game_lineage::Lineage>()?.current;
-    if tx
-        .get::<Invocation>()?
-        .active
-        .as_ref()
-        .is_some_and(|a| Some(a.person) == current)
-    {
-        let s = tx.edit::<Invocation>()?;
-        s.warning = None;
-        s.active.as_mut().unwrap().step += 1;
-        schedule(tx)?;
-    } else {
-        tx.edit::<Invocation>()?.active = None;
-        tx.edit::<Invocation>()?.warning = None;
-    }
-    Ok(())
-}
-pub fn memories(host: &Host) -> Result<BTreeMap<String, game_lineage::Life>> {
-    let s = host.get::<Invocation>()?;
-    let history = &host.get::<game_lineage::Lineage>()?.history;
-    Ok(s.active
-        .as_ref()
-        .map(|a| {
-            a.lives
+impl Invocation {
+    pub fn validate(&self, current: Option<u64>, history: &[u64], now: u64) -> Result<(), String> {
+        let mut unique = HashSet::new();
+        if self.rules.rate_per_life == 0
+            || self.rules.recovery_per_tick == 0
+            || self.rules.strain_threshold == 0
+            || self.rules.loss_threshold <= self.rules.strain_threshold
+            || self.rules.strain_consent_ticks == 0
+            || self.rules.control_loss_ticks == 0
+            || ((self.rules.permanent_exposure_threshold == 0)
+                != (self.rules.lifespan_loss_per_tick == 0))
+            || self.owner != current
+            || self
+                .active
                 .iter()
-                .map(|id| (id.0.to_string(), history[id].clone()))
-                .collect()
-        })
-        .unwrap_or_default())
-}
-pub fn load(store: &mut game_content::Store, key: &str) -> Result<Configure> {
-    let doc: game_content::Document<Configure> = store.load(&format!("invocation/{key}.toml"))?;
-    let check = Invocation {
-        costs: doc.data.costs.clone(),
-        repeat: doc.data.repeat,
-        ..Default::default()
-    };
-    check.validate()?;
-    require(
-        check.repeat.0 > 0
-            && !check.costs.is_empty()
-            && check
-                .costs
-                .iter()
-                .all(|c| c.cost != Cost::ControlLoss || c.duration.0 > 0),
-        "invalid invocation profile",
-    )?;
-    Ok(doc.data)
-}
-pub fn plugin(b: &mut Builder) -> Result<()> {
-    b.plugin("invocation", 1)?;
-    b.resource::<Invocation>()?;
-    b.validate_save(|h| {
-        if let Some(active) = &h.get::<Invocation>()?.active {
-            require(
-                active.lives.iter().all(|id| {
-                    h.get::<game_lineage::Lineage>()
-                        .unwrap()
-                        .history
-                        .contains_key(id)
-                }),
-                "invocation references unknown life",
-            )?;
-            require(
-                h.get::<game_lineage::Lineage>()?.current == Some(active.person),
-                "invocation belongs to wrong ruler",
-            )?;
-        }
-        Ok(())
-    });
-    b.request::<game_conflict::HasPlayerControl>(|tx, r| {
-        let s = tx.get::<Invocation>()?;
-        Ok(s.active.as_ref().is_none_or(|a| a.person != r.person) || controlled(s, tx.now()))
-    })?;
-    b.guard(|h, _| require(controlled(h.get()?, h.now()), "player control is suspended"));
-    b.stop(|h| {
-        Ok(h.get::<Invocation>()?
-            .warning
-            .as_ref()
-            .map(|w| format!("invocation:{}", w.step)))
-    });
-    b.request::<Configure>(|tx, r| {
-        require(
-            tx.get::<Invocation>()?.active.is_none(),
-            "invocation is active",
-        )?;
-        require(
-            r.repeat.0 > 0 && !r.costs.is_empty(),
-            "cost rules are required",
-        )?;
-        let s = tx.edit::<Invocation>()?;
-        s.costs = r.costs;
-        s.repeat = r.repeat;
-        Ok(())
-    })?;
-    b.request::<Invoke>(|tx, r| {
-        game_physiology::capable(tx, r.person)?;
-        let lineage = tx.get::<game_lineage::Lineage>()?;
-        require(
-            lineage.current == Some(r.person),
-            "only the current ruler invokes",
-        )?;
-        require(
-            !r.lives.is_empty() && r.lives.iter().all(|id| lineage.history.contains_key(id)),
-            "unknown past life",
-        )?;
-        let now = tx.now();
-        let s = tx.edit::<Invocation>()?;
-        require(
-            s.active.is_none() && !s.costs.is_empty(),
-            "invocation unavailable",
-        )?;
-        s.active = Some(Active {
-            person: r.person,
-            lives: r.lives,
-            began: now,
-            step: 0,
-            job: ScheduleId(0),
-        });
-        schedule(tx)
-    })?;
-    b.request::<Expose>(|tx, _| {
-        let s = tx.get::<Invocation>()?;
-        let a = s
-            .active
-            .as_ref()
-            .ok_or_else(|| Error::Rejected("no invocation".into()))?;
-        let cost = &s.costs[a.step.min(s.costs.len() - 1)];
-        let amount = cost
-            .amount
-            .checked_mul(a.lives.len() as u64)
-            .and_then(|q| q.checked_mul(1 + a.step.saturating_sub(s.costs.len() - 1) as u64))
-            .ok_or(Error::Overflow)?;
-        let explanation=if cost.cost==Cost::ControlLoss {format!("Accepting suspends player control for {} ms. Autonomous actions and subsequent costs proceed during that interval. Dismissal is unavailable until control returns.",cost.duration.0)}else{format!("Accept {:?}, or dismiss to prevent this new cost.",cost.cost)};
-        let w = Warning {
-            explanation,
-            cost: cost.cost.clone(),
-            amount,
-            duration: cost.duration,
-            step: a.step,
-        };
-        if controlled(s, tx.now()) {
-            tx.edit::<Invocation>()?.warning = Some(w);
-            Ok(())
-        } else {
-            pay_and_continue(tx, w)
-        }
-    })?;
-    b.request::<Consent>(|tx, r| {
-        let warning = tx
-            .get::<Invocation>()?
-            .warning
-            .clone()
-            .ok_or_else(|| Error::Rejected("no pending warning".into()))?;
-        require(warning.step == r.step, "stale warning")?;
-        if r.accept {
-            pay_and_continue(tx, warning)
-        } else {
-            tx.call(Dismiss)
-        }
-    })?;
-    b.request::<Dismiss>(|tx, _| {
-        require(
-            controlled(tx.get()?, tx.now()),
-            "cannot dismiss during control loss",
-        )?;
-        if let Some(a) = tx.edit::<Invocation>()?.active.take() {
-            tx.unschedule(a.job);
-        }
-        tx.edit::<Invocation>()?.warning = None;
-        tx.edit::<Invocation>()?.control_until = None;
-        Ok(())
-    })?;
-    b.request::<ControlEnd>(|tx, r| {
-        if tx.get::<Invocation>()?.control_until == Some(r.until) {
-            tx.edit::<Invocation>()?.control_until = None;
-        }
-        Ok(())
-    })?;
-    b.subscribe::<game_physiology::Died>("invocation.end_life", |tx, e| {
-        if tx
-            .get::<Invocation>()?
-            .active
-            .as_ref()
-            .is_some_and(|a| a.person == e.person)
+                .any(|id| !unique.insert(*id) || !history.contains(id))
+            || (current.is_none()
+                && (!self.active.is_empty()
+                    || self.control_until.is_some()
+                    || self.pending.is_some()))
+            || self.control_until.is_some_and(|until| until <= now)
+            || self.pending.as_ref().is_some_and(|warning| {
+                Some(warning.owner) != current
+                    || warning.tick != now
+                    || warning.revision != self.revision
+            })
         {
-            let a = tx.edit::<Invocation>()?.active.take().unwrap();
-            tx.unschedule(a.job);
-            tx.edit::<Invocation>()?.warning = None;
-            tx.edit::<Invocation>()?.control_until = None;
+            return Err("invalid invocation state".into());
+        }
+        if let Some(warning) = &self.pending {
+            let rate = self.rate()?;
+            let projected = self
+                .burden
+                .checked_add(rate)
+                .ok_or("invocation burden overflow")?;
+            let duration = match warning.kind {
+                WarningKind::Strain | WarningKind::Lifespan => self.rules.strain_consent_ticks,
+                WarningKind::ControlLoss => self.rules.control_loss_ticks,
+            };
+            if rate == 0
+                || warning.rate != rate
+                || warning.projected_burden != projected
+                || warning.duration != duration
+                || warning.strain_damage_per_tick != self.rules.strain_damage_per_tick
+                || warning.lifespan_loss_per_tick != self.rules.lifespan_loss_per_tick
+                || self.control_until.is_some()
+                || match warning.kind {
+                    WarningKind::Strain => {
+                        projected < self.rules.strain_threshold
+                            || self.strain_accepted_until.is_some_and(|until| {
+                                now.checked_add(1).is_some_and(|next| next <= until)
+                            })
+                    }
+                    WarningKind::Lifespan => {
+                        self.rules.lifespan_loss_per_tick == 0
+                            || self.exposure.checked_add(1).is_none_or(|exposure| {
+                                exposure < self.rules.permanent_exposure_threshold
+                            })
+                            || self.lifespan_accepted_until.is_some_and(|until| {
+                                now.checked_add(1).is_some_and(|next| next <= until)
+                            })
+                    }
+                    WarningKind::ControlLoss => {
+                        projected < self.rules.loss_threshold
+                            || self.loss_approved
+                            || self.loss_triggered
+                            || self.strain_accepted_until.is_none_or(|until| {
+                                now.checked_add(1).is_none_or(|next| next > until)
+                            })
+                    }
+                }
+            {
+                return Err("invalid invocation warning".into());
+            }
         }
         Ok(())
-    })
+    }
+    pub fn activate(&mut self, lives: &[u64], history: &[u64], now: u64) -> Result<(), String> {
+        self.require_control(now)?;
+        if self.owner.is_none() {
+            return Err("there is no current ruler".into());
+        }
+        let mut unique = HashSet::new();
+        if lives.is_empty()
+            || lives
+                .iter()
+                .any(|id| !unique.insert(*id) || !history.contains(id))
+        {
+            return Err("unknown or duplicate past life".into());
+        }
+        let revision = self
+            .revision
+            .checked_add(1)
+            .ok_or("invocation revision overflow")?;
+        self.active = lives.to_vec();
+        self.active.sort_unstable();
+        self.revision = revision;
+        self.pending = None;
+        self.strain_accepted_until = None;
+        self.lifespan_accepted_until = None;
+        self.loss_approved = false;
+        Ok(())
+    }
+    pub fn dismiss(&mut self, now: u64) -> Result<(), String> {
+        self.require_control(now)?;
+        self.revision = self
+            .revision
+            .checked_add(1)
+            .ok_or("invocation revision overflow")?;
+        self.active.clear();
+        self.pending = None;
+        self.strain_accepted_until = None;
+        self.lifespan_accepted_until = None;
+        self.loss_approved = false;
+        Ok(())
+    }
+    pub fn require_control(&self, now: u64) -> Result<(), String> {
+        if self.control_until.is_some_and(|until| now < until) {
+            Err("player control is suspended".into())
+        } else {
+            Ok(())
+        }
+    }
+    fn rate(&self) -> Result<u64, String> {
+        let count = u64::try_from(self.active.len()).map_err(|_| "invocation rate overflow")?;
+        count
+            .checked_mul(count)
+            .and_then(|n| n.checked_mul(self.rules.rate_per_life))
+            .ok_or_else(|| "invocation rate overflow".into())
+    }
+    /// Whether the next prepared interval starts an already accepted episode.
+    pub fn will_lose_control(&self) -> bool {
+        self.loss_approved
+            && !self.loss_triggered
+            && self
+                .rate()
+                .ok()
+                .and_then(|rate| self.burden.checked_add(rate))
+                .is_some_and(|burden| burden >= self.rules.loss_threshold)
+    }
+    /// Creates a persisted warning before an unaccepted cost, without advancing time.
+    pub fn prepare(&mut self, now: u64) -> Result<bool, String> {
+        if self.pending.is_some() {
+            return Ok(false);
+        }
+        let next = now.checked_add(1).ok_or("tick overflow")?;
+        let rate = self.rate()?;
+        let burden = self
+            .burden
+            .checked_add(rate)
+            .ok_or("invocation burden overflow")?;
+        let autonomous = self.control_until.is_some_and(|until| now < until);
+        let warning = if !autonomous
+            && !self.active.is_empty()
+            && burden >= self.rules.strain_threshold
+            && self.strain_accepted_until.is_none_or(|until| next > until)
+        {
+            Some((WarningKind::Strain, self.rules.strain_consent_ticks))
+        } else if !autonomous
+            && !self.active.is_empty()
+            && self.rules.lifespan_loss_per_tick > 0
+            && self
+                .exposure
+                .checked_add(1)
+                .ok_or("invocation exposure overflow")?
+                >= self.rules.permanent_exposure_threshold
+            && self
+                .lifespan_accepted_until
+                .is_none_or(|until| next > until)
+        {
+            Some((WarningKind::Lifespan, self.rules.strain_consent_ticks))
+        } else if !autonomous
+            && !self.active.is_empty()
+            && burden >= self.rules.loss_threshold
+            && !self.loss_triggered
+            && !self.loss_approved
+        {
+            Some((WarningKind::ControlLoss, self.rules.control_loss_ticks))
+        } else {
+            None
+        };
+        if let Some((kind, duration)) = warning {
+            self.revision = self
+                .revision
+                .checked_add(1)
+                .ok_or("invocation revision overflow")?;
+            self.pending = Some(Warning {
+                revision: self.revision,
+                owner: self.owner.ok_or("there is no current ruler")?,
+                tick: now,
+                rate,
+                projected_burden: burden,
+                kind,
+                duration,
+                strain_damage_per_tick: self.rules.strain_damage_per_tick,
+                lifespan_loss_per_tick: self.rules.lifespan_loss_per_tick,
+            });
+            Ok(false)
+        } else {
+            Ok(true)
+        }
+    }
+    /// Accept precisely the currently displayed warning, never a stale projection.
+    pub fn accept(&mut self, revision: u64, now: u64) -> Result<(), String> {
+        self.require_control(now)?;
+        let warning = self
+            .pending
+            .as_ref()
+            .filter(|w| w.revision == revision && w.tick == now)
+            .ok_or("stale invocation warning")?;
+        match warning.kind {
+            WarningKind::Strain => {
+                self.strain_accepted_until = Some(
+                    now.checked_add(warning.duration)
+                        .ok_or("consent deadline overflow")?,
+                )
+            }
+            WarningKind::Lifespan => {
+                self.lifespan_accepted_until = Some(
+                    now.checked_add(warning.duration)
+                        .ok_or("consent deadline overflow")?,
+                )
+            }
+            WarningKind::ControlLoss => self.loss_approved = true,
+        }
+        self.pending = None;
+        Ok(())
+    }
+    /// Called only on a staged copy after prepare succeeds.
+    pub fn advance(&mut self, now: u64) -> Result<(), String> {
+        if !self.prepare(now)? {
+            return Err("invocation warning needs a choice".into());
+        }
+        let next = now.checked_add(1).ok_or("tick overflow")?;
+        let rate = self.rate()?;
+        if rate == 0 {
+            self.burden = self.burden.saturating_sub(self.rules.recovery_per_tick);
+        } else {
+            self.burden = self
+                .burden
+                .checked_add(rate)
+                .ok_or("invocation burden overflow")?;
+            self.exposure = self
+                .exposure
+                .checked_add(1)
+                .ok_or("invocation exposure overflow")?;
+        }
+        if self.loss_approved && !self.loss_triggered && self.burden >= self.rules.loss_threshold {
+            self.control_until = Some(
+                now.checked_add(self.rules.control_loss_ticks)
+                    .ok_or("control deadline overflow")?,
+            );
+            self.loss_approved = false;
+            self.loss_triggered = true;
+        }
+        if self.control_until.is_some_and(|until| next >= until) {
+            self.control_until = None;
+            self.loss_triggered = false;
+        }
+        if self.burden < self.rules.loss_threshold {
+            self.loss_triggered = false;
+        }
+        Ok(())
+    }
+    pub fn bind(&mut self, owner: Option<u64>) {
+        self.owner = owner;
+        self.active.clear();
+        self.pending = None;
+        self.burden = 0;
+        self.exposure = 0;
+        self.strain_accepted_until = None;
+        self.lifespan_accepted_until = None;
+        self.loss_approved = false;
+        self.loss_triggered = false;
+        self.control_until = None;
+        self.revision = self.revision.saturating_add(1);
+    }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/behavior.rs"]
+mod integration_tests;

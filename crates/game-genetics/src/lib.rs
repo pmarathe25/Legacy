@@ -1,120 +1,65 @@
-//! Pure inherited trait calculations; interpretation belongs to consumers.
-mod gene_name;
-mod genome;
-pub use genome::Genome;
-mod shared;
-use game_core::*;
-pub use gene_name::GeneName;
+//! Deterministic diploid inheritance for the parallel engine.
 use serde::{Deserialize, Serialize};
-pub use shared::deserialize_genome;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Alleles(pub [u16; 2]);
-pub fn mutate(seed: u64, identity: u64, parent: Alleles, mutation: u16) -> Alleles {
-    let width = u64::from(mutation) * 2 + 1;
-    Alleles(std::array::from_fn(|i| {
-        let delta = (random(seed, identity, i as u64 + 10) % width) as i64 - i64::from(mutation);
-        (i64::from(parent.0[i]) + delta).clamp(0, 65535) as u16
-    }))
+pub enum Sex {
+    Female,
+    Male,
 }
-/// Preserve the expressed starting value while varying the two inherited copies.
-pub fn founder(seed: u64, person: PersonId, value: u16, spread: u16) -> Alleles {
-    let width = value.min(u16::MAX - value).min(spread);
-    let delta = (random(seed, person.0, 7) % (u64::from(width) + 1)) as u16;
-    let pair = [value - delta, value + delta];
-    Alleles(if random(seed, person.0, 8) & 1 == 0 {
-        pair
-    } else {
-        [pair[1], pair[0]]
-    })
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Genome {
+    pub sex: Sex,
+    /// Four diploid quantitative loci: fertility, vigor, sociability, longevity.
+    pub alleles: [[u16; 2]; 4],
 }
-pub fn inherit_bounded(
-    seed: u64,
-    child: PersonId,
-    mother: Alleles,
-    father: Alleles,
-    mutation: u16,
-    maximum: u16,
-) -> Alleles {
-    let mut result = inherit(seed, child, mother, father, mutation);
-    result.0.iter_mut().for_each(|v| *v = (*v).min(maximum));
-    result
+impl Genome {
+    pub fn expressed(&self, locus: usize) -> u16 {
+        ((u32::from(self.alleles[locus][0]) + u32::from(self.alleles[locus][1])) / 2) as u16
+    }
 }
-pub fn inherit(
-    seed: u64,
-    child: PersonId,
-    mother: Alleles,
-    father: Alleles,
-    mutation: u16,
-) -> Alleles {
-    let m = mother.0[(random(seed, child.0, 0) & 1) as usize];
-    let f = father.0[(random(seed, child.0, 1) & 1) as usize];
-    let change = |value: u16, counter: u64| {
-        let width = u64::from(mutation) * 2 + 1;
-        let delta = (random(seed, child.0, counter) % width) as i64 - i64::from(mutation);
-        (i64::from(value) + delta).clamp(0, i64::from(u16::MAX)) as u16
-    };
-    Alleles([change(m, 2), change(f, 3)])
-}
-pub fn expression(alleles: Alleles) -> u16 {
-    ((u32::from(alleles.0[0]) + u32::from(alleles.0[1])) / 2) as u16
+pub fn random(seed: u64, id: u64, tick: u64) -> u64 {
+    let mut n = seed ^ id.wrapping_mul(0x9e3779b97f4a7c15) ^ tick.wrapping_mul(0xbf58476d1ce4e5b9);
+    n = (n ^ (n >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
+    n = (n ^ (n >> 27)).wrapping_mul(0x94d049bb133111eb);
+    n ^ (n >> 31)
 }
 
-/// Independent named founding loci do not change when unrelated loci are added.
-pub fn founder_genome<'a>(
+pub fn inherit(
+    mother: &Genome,
+    father: &Genome,
     seed: u64,
-    identity: u64,
-    loci: impl IntoIterator<Item = &'a str>,
-    minimum: u16,
-    maximum: u16,
-) -> game_core::Result<std::collections::BTreeMap<String, Alleles>> {
-    game_core::require(minimum <= maximum, "invalid founding allele range")?;
-    let span = u64::from(maximum) - u64::from(minimum) + 1;
-    Ok(loci
-        .into_iter()
-        .map(|key| {
-            let stream = key
-                .bytes()
-                .fold(0u64, |h, b| h.wrapping_mul(31).wrapping_add(u64::from(b)));
-            (
-                key.to_owned(),
-                Alleles([
-                    (u64::from(minimum) + game_core::random(seed, identity, stream) % span) as u16,
-                    (u64::from(minimum)
-                        + game_core::random(seed, identity, stream.wrapping_add(1)) % span)
-                        as u16,
-                ]),
-            )
-        })
-        .collect())
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn founder_diversity_preserves_expression_and_exposes_inherited_variation() {
-        for value in [0, 1, 1000, 32767, 65534, 65535] {
-            for id in 1..100 {
-                let a = founder(1, PersonId(id), value, 65535);
-                assert_eq!(expression(a), value);
-                assert_eq!(a, founder(1, PersonId(id), value, 65535));
-                assert_eq!(founder(1, PersonId(id), value, 0), Alleles([value, value]));
-            }
+    mother_id: u64,
+    tick: u64,
+    mutation_per_million: u32,
+    mutation_step: u16,
+) -> Genome {
+    let mut alleles = [[0; 2]; 4];
+    for (locus, pair) in alleles.iter_mut().enumerate() {
+        for (side, parent) in [mother, father].into_iter().enumerate() {
+            let n = random(
+                seed ^ (locus as u64 * 2 + side as u64 + 101),
+                mother_id,
+                tick,
+            );
+            let allele = parent.alleles[locus][(n & 1) as usize];
+            pair[side] = if n.rotate_left(23) % 1_000_000 < u64::from(mutation_per_million) {
+                if n & 2 == 0 {
+                    allele.saturating_sub(mutation_step)
+                } else {
+                    allele.saturating_add(mutation_step).min(1000)
+                }
+            } else {
+                allele
+            };
         }
-        let diverse = founder(1, PersonId(1), 32767, 65535);
-        assert_ne!(diverse.0[0], diverse.0[1]);
-        let expressions: std::collections::BTreeSet<_> = (1..100)
-            .map(|p| expression(inherit(2, PersonId(p), diverse, diverse, 0)))
-            .collect();
-        assert!(expressions.len() > 1);
     }
-    #[test]
-    fn inheritance_uses_both_parents_and_is_repeatable() {
-        let m = Alleles([100, 200]);
-        let f = Alleles([800, 900]);
-        let a = inherit(4, PersonId(2), m, f, 0);
-        assert!(m.0.contains(&a.0[0]));
-        assert!(f.0.contains(&a.0[1]));
-        assert_eq!(a, inherit(4, PersonId(2), m, f, 0));
-        assert!(expression(a) <= 1000);
+    Genome {
+        sex: if random(seed ^ 73, mother_id, tick) & 1 == 0 {
+            Sex::Female
+        } else {
+            Sex::Male
+        },
+        alleles,
     }
 }

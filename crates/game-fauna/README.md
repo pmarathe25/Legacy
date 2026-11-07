@@ -1,33 +1,21 @@
-# game-fauna
+# Individual wildlife
 
-`game-fauna` simulates individual animals with diploid genomes, growth, foraging, climate stress, reproduction, and human familiarity or caregiving.
+This owner stages individual animals with data-defined species, diploid inherited traits, hunger, health, aging and gestation. Animals graze finite, local patches supplied by the physical resource owner; deterministic parallel allocation prevents competing animals from consuming the same food. Births use actual local parents and deterministic IDs. The host must validate the committed population and atomically publish both the returned animal generation and patch consumption.
 
-**Why it matters:** Animals are living entities that graze finite local patches, reproduce with inherited traits, and can be fed, tamed, or cared for by characters rather than acting as static resource nodes.
+The economic host runs wildlife after successfully staged human gathering and patch renewal, then deducts actual grazing from the same remaining patches before the tick commits. People can offer a local animal real carried food, either by a controlled action or an autonomous personal preference. Only consumed food matching its diet affects its hunger and subsequent grazing; the action reports food used, not its nutritional effect. `content/scenarios/economy-wildlife.toml` supplies a playable example using named food content. Physical restraint is modeled separately from handling and does not imply ownership.
 
-## Responsibilities
+The host stages changing physical fields, feeding, grazing, hunts, births, pregnancies, and individual experiences without copying every animal's personal history. Finite grazing patches are arbitrated deterministically, and their actual deductions commit with the animal updates and other owners; newly dead animals release holds in the same boundary. An unsorted imported population uses the complete lifecycle until its order has been normalized.
 
-- **Animal population (`Fauna`):** Stores installed [`game-animal-species`](../game-animal-species/README.md) definitions, individual `Animal` records (location, age, health, hunger, diploid genome, pregnancy, familiarity, and assigned caregiver), and daily update schedules (`fauna.state`).
-- **Ecological & biological ticks:** Advances animal growth, consumes finite edible patch stock (`game-ecology`), applies seasonal climate stress (`game-environment`), and handles diploid reproduction (`game-genetics`) and natural mortality.
-- **Human interaction (`Feed`, `Tame`, `Capture`):** Validates co-location, food availability, and animal familiarity when characters feed or handle animals.
+For each grazing patch, claimants are ordered by animal ID and a seeded starting position rotates from one boundary to the next. A parallel prefix allocates the finite stock in that circular order, including partial portions. Independent patches resolve separately, and sorting is skipped when claims are already grouped.
 
-## Boundaries
+`cargo test -p game-fauna staged_reproduction_benchmark -- --ignored --nocapture` measures preparation and publication for a concentrated population. Set `LEGACY_WORKERS` and `LEGACY_ANIMALS` to compare worker and population counts; set `LEGACY_BIRTHS` to measure births rather than conception. `staged_feeding_benchmark` measures individual feeding and subjective reactions; `concentrated_grazing_benchmark` with `LEGACY_STAGED` measures contested grazing. These isolated timings are not whole-simulation scaling results.
 
-- **Physical animal state vs. human motives:** Owns animal physiology, genetics, and interaction validation; [`game-animal-species`](../game-animal-species/README.md) owns species catalogs and [`game-attachments`](../game-attachments/README.md) / [`game-sentiment`](../game-sentiment/README.md) own human emotional bonds and autonomous care offers.
+A species may define `hunting` with a named output `good`, `quantity`, and `success_per_thousand`. Contenders select at most one hunter per animal deterministically. The animal dies only if the fresh yield is admitted to that person's physical possessions; a full container leaves it alive. Accepted kills precede grazing, climate, and reproduction. A proposed feeding takes precedence over hunting the same animal for that boundary, even if the food transfer later fails.
 
-## How It Works
+Species may define a `climate` table with `tolerance`, `inherited_tolerance`, `hardiness_locus` (0 through 3), and `damage_per_excess`. The current region's exposure is scaled by the current season. The animal's mean inherited alleles at that locus, divided by 1000, determine the fraction of additional tolerance it expresses. Exposure above total tolerance causes the configured health damage per excess unit. A species without this optional table has no modeled exposure damage; no shelter for animals is assumed.
 
-- **Real patch grazing:** Animals eat from actual local `game-ecology` patches rather than abstract ambient food, competing with or depending on local plant abundance and human feeding.
-- **Diploid trait inheritance:** Offspring inherit growth, size, hardiness, and temperament alleles from their parents via `game-genetics`.
+An animal may have an individual `social_response` with a signed `feed_affinity`, `minimum`, `maximum`, and a `capacity` of at most 64 personal opinions. When an actual offering is consumed, that animal applies its own response toward the giver; a positive, negative, or zero response is allowed regardless of the food's dietary value. Existing opinions are retained when capacity is full, and new opinions are admitted deterministically. These opinions are private to the animal. Species can optionally supply newborn response templates; newborns never inherit another animal's opinions.
 
-## Game Integration
+An animal may also define its own `handling_response`: `willing`, optional `affinity_at_least` and `affinity_at_most`, and signed `on_accept` and `on_refuse` reactions. A response can become more or less likely after experiences; it does not assign an owner, caregiver, or permanent obedience. Handling updates the animal's bounded private opinions only when its own `social_response` provides memory capacity. An animal without a configured handling response refuses.
 
-- **Plugin / Entry Point:** Registers `plugin(&mut Builder)` (`fauna`, resource `fauna.state`) and re-exports `load`.
-- **Requests & Events:** Handles `Install`, `Spawn`, `Feed`, `Tame`, `Capture`, and daily biological tick requests; emits animal birth, death, and interaction events.
-- **Callers:** Installed by [`game-scenario-assets`](../game-scenario-assets/README.md) and called by [`game-attachments`](../game-attachments/README.md) and [`game-openings`](../game-openings/README.md).
-
-## Dependencies & Testing
-
-- **Dependencies:** [`game-core`](../game-core/README.md), [`game-sim`](../game-sim/README.md), [`game-storage`](../game-storage/README.md), [`game-content`](../game-content/README.md), [`game-animal-species`](../game-animal-species/README.md), [`game-genetics`](../game-genetics/README.md), [`game-ecology`](../game-ecology/README.md), [`game-objects`](../game-objects/README.md), [`game-cargo`](../game-cargo/README.md), [`game-land`](../game-land/README.md), [`game-property`](../game-property/README.md), [`game-physiology`](../game-physiology/README.md), [`game-transport`](../game-transport/README.md), [`game-environment`](../game-environment/README.md), [`game-vitality`](../game-vitality/README.md).
-- **Testing:** `cargo test -p game-fauna` verifies grazing, climate stress, diploid breeding, human feeding/taming, and save/load state.
-
-Deliberate animal handling requires expressed motor readiness; pursuit also requires independent locomotion. Hunting invitations check readiness before occupying attention, and physical catch requests validate it again. Passive encounters and attachment can still occur before those capabilities develop.
+An optional `restraint_response` separately describes willingness to yield, resistance, escape effort, and signed personal reactions to capture or release. An animal may resist handling yet yield to restraint, or the reverse. A restrained animal remains alive, continues ordinary biology and can graze locally. A person's departure releases the physical hold and leaves the animal at its actual location.

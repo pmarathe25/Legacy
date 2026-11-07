@@ -1,0 +1,26 @@
+[package]
+name = "game-economy-read"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-confinement = { path = "../game-economy-confinement" }
+game-goals = { path = "../game-goals" }
+game-economy-building = { path = "../game-economy-building" }
+game-economy-local-transport = { path = "../game-economy-local-transport" }
+game-economy-work = { path = "../game-economy-work" }
+game-purpose = { path = "../game-purpose" }
+game-environment = { path = "../game-environment" }
+game-agreements = { path = "../game-agreements" }
+game-autowork = { path = "../game-autowork" }
+game-economy-campaign = { path = "../game-economy-campaign" }
+game-economy-agriculture = { path = "../game-economy-agriculture" }
+game-economy-combat = { path = "../game-economy-combat" }
+game-economy-dynamics = { path = "../game-economy-dynamics" }
+game-economy-fatigue = { path = "../game-economy-fatigue" }
+game-economy-expeditions = { path = "../game-economy-expeditions" }
+game-economy-knowledge = { path = "../game-economy-knowledge" }
+game-economy-person = { path = "../game-economy-person" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-skills = { path = "../game-skills" }

@@ -1,0 +1,18 @@
+[package]
+name = "game-lots"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+profile = ["game-lot-batches/profile"]
+
+[dependencies]
+game-lot-batches = { path = "../game-lot-batches" }
+game-lot-allocation = { path = "../game-lot-allocation" }
+game-lot-model = { path = "../game-lot-model" }
+game-lot-planning = { path = "../game-lot-planning" }
+rayon.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

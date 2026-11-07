@@ -1,0 +1,15 @@
+[package]
+name = "game-lot-content"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-lot-model = { path = "../game-lot-model" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true
+
+[dev-dependencies]
+game-content-import = { path = "../game-content-import" }
+game-production = { path = "../game-production" }
+game-lots = { path = "../game-lots" }

@@ -1,0 +1,15 @@
+[package]
+name = "game-lot-diet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-lots = { path = "../game-lots" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-production-model = { path = "../game-production-model" }
+game-nutrition = { path = "../game-nutrition" }
+rayon.workspace = true
+
+[dev-dependencies]
+game-lot-content = { path = "../game-lot-content" }

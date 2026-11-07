@@ -1,0 +1,91 @@
+tick = 0
+seed = 1
+
+[rules]
+food_growth = 3
+food_capacity = 100
+food_per_meal = 2
+hunger_per_tick = 1
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 1
+max_health = 100
+
+[[regions]]
+id = 1
+food = 10
+people = [{ id = 1, hunger = 0, health = 100 }, { id = 2, hunger = 2, health = 60 }]
+
+[[regions]]
+id = 2
+food = 4
+people = [{ id = 3, hunger = 3, health = 100 }]
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 2
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 2
+
+[production]
+max_work_hunger = 10
+
+[[production.goods]]
+id = 1
+name = "timber"
+
+[[production.goods]]
+id = 2
+name = "planks"
+
+[[production.recipes]]
+id = 1
+name = "saw planks"
+ticks = 2
+inputs = [{ good = 1, quantity = 3 }]
+outputs = [{ good = 2, quantity = 2 }]
+
+[[production.inventories]]
+region = 1
+stocks = [{ good = 1, quantity = 9, capacity = 20 }, { good = 2, quantity = 0, capacity = 4 }]
+
+[[production.inventories]]
+region = 2
+stocks = [{ good = 1, quantity = 0, capacity = 20 }, { good = 2, quantity = 0, capacity = 20 }]
+
+[goods_cargo]
+capacity = 10
+
+[market]
+next_id = 1
+
+
+[[goods_cargo.holdings]]
+person = 1
+items = [{ good = 1, quantity = 5 }]
+
+[agreements]
+next_id = 2
+
+[[agreements.policies]]
+person = 1
+honor = true
+
+[[agreements.contracts]]
+id = 1
+debtor = 1
+creditor = 2
+good = 1
+quantity = 2
+delivered = 0
+due = 3
+status = "proposed"
+
+[[agreements.policies]]
+person = 2
+accept = true

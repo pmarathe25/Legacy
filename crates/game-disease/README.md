@@ -1,0 +1,12 @@
+# Disease
+
+Data-defined infections spread through actual contacts supplied by the host. Incubation, infectious duration, damage, transmission probability and immunity are authored rules. Every distinct contact is evaluated against the committed generation, so one person can expose several others and newly infected people cannot transmit until a later tick. When several sources successfully expose the same person at one boundary, a deterministic seeded choice selects one infection. The host applies damage and publishes disease state transactionally with other health and lifecycle effects.
+
+Each strain may independently set `combat_transmission_per_million` for actual resolved strikes. Its default is zero, so adding combat to a scenario does not imply that every disease spreads that way. Ordinary-contact and combat-contact probabilities are separate.
+
+The experimental fused host accepts `[disease]` data as illustrated by `content/scenarios/disease.toml`. Cases are validated on import; the host stores committed and scratch infection columns with each person, routes encounter exposures in parallel, and commits exposure, damage, and events only after the entire tick succeeds. The administrative block CLI has a `disease` inspection command. The player view reports noticeable symptoms of the current ruler without revealing incubation, infection sources, or another person's condition. The reference and persistent-block hosts reject this owner until they implement it.
+
+Optional `[[disease.treatments]]` entries pair an infection strain with a production good used as medicine. A completed local care course that consumes the matching medicine clears that patient's active case; interrupted treatment does not. Exposure uses the tick-start state, so treatment does not undo encounters already made in that generation. `content/scenarios/illness_care.toml` is a runnable example.
+
+Each strain can independently set `birth_transmission_per_million`. Actual births are tested against the mother's contagious infection at the start of the boundary, even if treatment occurs later in that boundary. A successful exposure creates a newborn case at birth; it causes no disease damage or onward transmission in that same boundary. The default is zero, and birth cases commit with the family and physical world.
+The experimental fused host rejects strains with this route enabled until it supports birth exposure.

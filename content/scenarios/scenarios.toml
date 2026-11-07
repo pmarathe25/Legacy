@@ -1,0 +1,49 @@
+[[scenarios]]
+id = "campaign"
+name = "A living settlement"
+world = "campaign.toml"
+
+[[scenarios]]
+id = "conversation"
+name = "Meeting the community"
+world = "conversation.toml"
+
+[[scenarios]]
+id = "mission-party"
+name = "A shared expedition"
+world = "mission_party.toml"
+
+[[scenarios]]
+id = "estate"
+name = "A family inheritance"
+world = "estate.toml"
+
+[[scenarios]]
+id = "invitation"
+name = "An invitation to travel"
+world = "invitation.toml"
+
+[[scenarios]]
+id = "invoked-skills"
+name = "Skills of an earlier life"
+world = "invoked_skills.toml"
+
+[[scenarios]]
+id = "teaching"
+name = "Passing on an earlier life’s craft"
+world = "teaching.toml"
+
+[[scenarios]]
+id = "auto-teaching"
+name = "Neighbors sharing craft"
+world = "auto_teaching.toml"
+
+[[scenarios]]
+id = "meeting-expedition"
+name = "A meeting abroad"
+world = "mission_meeting_player.toml"
+
+[[scenarios]]
+id = "social-pressure"
+name = "A difficult conversation"
+world = "social_pressure.toml"

@@ -1,0 +1,15 @@
+[package]
+name = "game-economy-skills"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-skills = { path = "../game-skills" }
+game-economy-person = { path = "../game-economy-person" }
+game-economy-campaign = { path = "../game-economy-campaign" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-social = { path = "../game-social" }
+game-opinions = { path = "../game-opinions" }
+game-families = { path = "../game-families" }
+rayon.workspace = true

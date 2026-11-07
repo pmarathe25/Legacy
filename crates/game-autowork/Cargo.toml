@@ -1,0 +1,13 @@
+[package]
+name = "game-autowork"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+[dependencies]
+game-work-requests = { path = "../game-work-requests" }
+game-production = { path = "../game-production" }
+game-production-admission = { path = "../game-production-admission" }
+game-property = { path = "../game-property" }
+game-production-model = { path = "../game-production-model" }
+rayon.workspace = true
+serde.workspace = true

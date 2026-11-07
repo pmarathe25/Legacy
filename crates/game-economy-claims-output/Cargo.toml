@@ -1,0 +1,13 @@
+[package]
+name = "game-economy-claims-output"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-claims = { path = "../game-economy-claims" }
+game-economy-agriculture = { path = "../game-economy-agriculture" }
+game-economy-person = { path = "../game-economy-person" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lots = { path = "../game-lots" }
+rayon.workspace = true

@@ -1,0 +1,15 @@
+[package]
+name = "game-economy-campaign"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+game-economy-person = { path = "../game-economy-person" }
+game-families = { path = "../game-families" }
+game-lineage = { path = "../game-lineage" }
+game-guardians = { path = "../game-guardians" }
+game-transport = { path = "../game-transport" }
+game-lots = { path = "../game-lots" }
+rayon.workspace = true
+serde.workspace = true

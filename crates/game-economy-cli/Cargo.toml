@@ -1,0 +1,42 @@
+[package]
+name = "game-economy-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+profile = ["game-economy/profile", "game-families/profile"]
+
+[dependencies]
+game-economy-taking = { path = "../game-economy-taking" }
+game-fauna = { path = "../game-fauna" }
+game-economy-combat = { path = "../game-economy-combat" }
+game-economy-dynamics = { path = "../game-economy-dynamics" }
+game-opinions = { path = "../game-opinions" }
+game-economy-agriculture = { path = "../game-economy-agriculture" }
+game-economy = { path = "../game-economy" }
+game-economy-cli-commands = { path = "../game-economy-cli-commands" }
+game-autowork = { path = "../game-autowork" }
+game-content-import = { path = "../game-content-import" }
+game-skill-catalog = { path = "../game-skill-catalog" }
+game-lot-content = { path = "../game-lot-content" }
+game-lot-runtime = { path = "../game-lot-runtime" }
+game-lots = { path = "../game-lots" }
+game-persistence = { path = "../game-persistence" }
+game-production = { path = "../game-production" }
+game-genetics = { path = "../game-genetics" }
+game-families = { path = "../game-families" }
+game-social = { path = "../game-social" }
+rayon.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+
+[dev-dependencies]
+game-economy-skills = { path = "../game-economy-skills" }
+game-diagnostics = { path = "../game-diagnostics" }
+game-economy-player = { path = "../game-economy-player" }
+game-economy-knowledge = { path = "../game-economy-knowledge" }
+game-agreements = { path = "../game-agreements" }
+game-disease = { path = "../game-disease" }
+game-fatigue = { path = "../game-fatigue" }

@@ -1,0 +1,375 @@
+# A small composed sandbox for the parallel host.
+# Accelerated generational fixture: ages, gestation and lifespan are in simulation ticks.
+# This is a testable authored model, not a claim that one tick is one real year.
+tick = 0
+seed = 42
+[rules]
+food_growth = 2
+food_capacity = 10000
+food_per_meal = 2
+hunger_per_tick = 1
+hunger_satisfied = 4
+starvation_threshold = 12
+starvation_damage = 2
+recovery = 1
+max_health = 100
+[[regions]]
+id = 1
+food = 100
+people = [{ id=1, hunger=0, health=100 }, { id=2, hunger=0, health=100 }, { id=3, hunger=0, health=100 }, { id=4, hunger=0, health=100 }]
+[[regions]]
+id = 2
+food = 100
+people = [{ id=5, hunger=0, health=100 }, { id=6, hunger=0, health=100 }, { id=7, hunger=0, health=100 }, { id=8, hunger=0, health=100 }]
+[[routes]]
+source=1
+destination=2
+ticks=5
+[[routes]]
+source=2
+destination=1
+ticks=5
+[families]
+next_id = 9
+last_tick = 0
+[families.rules]
+enroll_births = true
+min_work_age = 12
+adult_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 8
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+
+[[families.members]]
+id = 1
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 2
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 3
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 4
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 5
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 6
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 7
+age = 18
+[families.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[families.members]]
+id = 8
+age = 18
+[families.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[lineage]
+current = 1
+started = 0
+
+[guardians]
+recovery_per_tick = 10
+max_health = 100
+mentorship_ticks = 3
+
+[[guardians.guardians]]
+id = 1
+region = 2
+health = 100
+
+[[guardians.guardians]]
+id = 2
+region = 2
+health = 0
+confined = true
+
+[production]
+max_work_hunger = 10
+
+[[production.goods]]
+id = 1
+name = "timber"
+
+[[production.goods]]
+id = 2
+name = "planks"
+
+[[production.recipes]]
+id = 1
+name = "saw planks"
+ticks = 2
+inputs = [{ good = 1, quantity = 3 }]
+outputs = [{ good = 2, quantity = 2 }]
+
+[[production.inventories]]
+region = 1
+stocks = [{ good = 1, quantity = 0, capacity = 20 }, { good = 2, quantity = 0, capacity = 4 }, { good = 3, quantity = 9, capacity = 20 }]
+
+[[production.inventories]]
+region = 2
+stocks = [{ good = 1, quantity = 0, capacity = 20 }, { good = 2, quantity = 0, capacity = 20 }]
+
+[goods_cargo]
+capacity = 10
+
+[market]
+next_id = 1
+
+[autowork]
+next_id = 100
+policies = []
+
+[goals]
+plan_inputs = true
+people = [{ person = 2, recipe = 1, priority = 10, target = 2 }]
+
+[[production.goods]]
+id = 3
+name = "logs"
+
+[[production.recipes]]
+id = 2
+name = "cut timber"
+ticks = 1
+inputs = [{ good = 3, quantity = 1 }]
+outputs = [{ good = 1, quantity = 3 }]
+
+[skills]
+inherit_teachers = true
+rules = [{ recipe = 1, completions_per_level = 2, max_level = 3, work_per_level = 1 }, { recipe = 2, completions_per_level = 2, max_level = 3, work_per_level = 1 }]
+teachers = [{ person = 2, recipe = 1, enabled = true }, { person = 2, recipe = 2, enabled = true }]
+
+[social.rules]
+interval = 2
+min_health = 1
+max_hunger = 10
+familiarity_gain = 2
+familiarity_max = 100
+relationship_retention = 64
+
+[[social.participants]]
+person = 1
+willing = true
+
+[[social.participants]]
+person = 2
+willing = true
+
+[[social.participants]]
+person = 3
+willing = true
+
+[knowledge]
+max_records = 4
+
+[[knowledge.minds]]
+person = 1
+records = [{ region = 2, food = 4, observed_at = 0, witness = 3 }]
+
+[[knowledge.minds]]
+person = 2
+
+[[knowledge.minds]]
+person = 3
+
+
+[[knowledge.minds]]
+person = 4
+
+[[knowledge.minds]]
+person = 5
+
+[[knowledge.minds]]
+person = 6
+
+[[knowledge.minds]]
+person = 7
+
+[[knowledge.minds]]
+person = 8
+
+[autonomy.rules]
+review_interval = 3
+min_health = 1
+min_hunger = 5
+min_destination_food = 1
+min_food_gain = 1
+max_observation_age = 20
+
+[[autonomy.actors]]
+person = 2
+enabled = true
+
+[[autonomy.actors]]
+person = 3
+enabled = true
+
+[[autonomy.actors]]
+person = 4
+enabled = true
+
+[[autonomy.actors]]
+person = 5
+enabled = true
+
+[[autonomy.actors]]
+person = 6
+enabled = true
+
+[[autonomy.actors]]
+person = 7
+enabled = true
+
+[[autonomy.actors]]
+person = 8
+enabled = true
+
+[agriculture]
+volunteers = [2, 3, 4, 5, 6, 7, 8]
+
+[agriculture.recruitment]
+interval = 3
+one_in = 4
+leave_one_in = 100
+
+[agriculture.rules]
+seed_food = 2
+growing_work = 2
+harvest_food = 6
+min_health = 20
+max_hunger = 10
+
+[[agriculture.farms]]
+region = 1
+fields = [{ id = 1, phase = "fallow", work = 0 }, { id = 2, phase = "fallow", work = 0 }]
+
+[social.needs.rules]
+capacity = 12
+isolation_gain = 2
+encounter_relief = 3
+
+[cargo]
+capacity = 20
+auto_eat_travel = true
+auto_eat_local = true
+auto_pack_travel = true
+
+[agreements]
+next_id = 1
+
+[personality]
+social_urgency_per_isolation = 200
+inherit_births = true
+people = [{ person = 1, sociability = 500, diligence = 800 }, { person = 2, sociability = 500, diligence = 1000 }, { person = 3, sociability = 900, diligence = 800 }, { person = 4, sociability = 700, diligence = 700 }]
+
+[opinions.rules]
+minimum = -5
+maximum = 5
+initial = 0
+fulfilled_gain = 2
+default_loss = 2
+theft_loss = 1
+encounter_gain = 1
+fear_per_damage = 1
+fear_decay_per_tick = 1
+gratitude_gain = 1
+obligation_relief = 1
+minimum_report_trust = 0
+
+[purpose]
+people = [{ person = 2, deprivation = 2 }]
+[purpose.rules]
+max = 20
+per_tick = 1
+blocked_increase = 2
+completion_relief = 6
+damage_threshold = 12
+damage = 1
+
+[dreams]
+people = [{ person = 2, recipe = 1, priority = 10, batch = 1, review_interval = 5 }]
+
+[caregiving]
+policies = [{ person = 1, willing = true }, { person = 2, willing = true }]
+[caregiving.rules]
+dependent_until = 5
+max_caregiver_hunger = 10
+neglect_damage = 3
+
+[missions]
+next_id = 2
+pressure_threshold = 3
+entries = [{ id = 1, person = 4, party_opt_in = true, origin = 1, destination = 2, visit_ticks = 2, phase = "ready" }]
+
+[[disease.strains]]
+id = 1
+name = "fever"
+incubation = 1
+infectious_ticks = 3
+immunity_ticks = 4
+damage_per_tick = 2
+transmission_per_million = 250000
+[[disease.cases]]
+person = 3
+strain = 1
+infected_at = 0
+
+[[environment.regions]]
+region = 1
+damage = 2
+shelter = 2
+shelter_reduction = 2
+[[environment.seasons]]
+name = "warm"
+duration = 10
+food_growth_per_thousand = 1500
+exposure_per_thousand = 0
+[[environment.seasons]]
+name = "cold"
+planting_allowed = false
+tending_allowed = false
+harvest_allowed = true
+duration = 10
+food_growth_per_thousand = 250
+exposure_per_thousand = 1000

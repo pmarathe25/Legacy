@@ -1,44 +1,11 @@
-# game-knowledge
+# Parallel knowledge owner
 
-Per-person belief tables, active local inspection, stale-stock disproof, and belief-based route planning.
+Each configured mind keeps at most `max_records` observations of regional food. At a tick boundary, a living person observes the stock in their current region from the committed pre-tick state. A traveler receives no local observation. At an actual consenting local encounter, each party with a mind can pass at most one useful remote observation from their pre-tick memory; a report keeps the original witness and observation time and records its immediate sender. A report does not become current truth simply because it was heard. Direct observation takes precedence for the current region. When capacity is full, older unprotected records are evicted only for a newer report; the current local observation is protected.
 
-**Why it matters:** Characters act on what they personally remember or have been told—not global truth. Storing individual facts with provenance and staleness makes exploration, scouting, and communication genuinely meaningful.
+Knowledge prepares against immutable state and publishes only after the physical and family phases succeed. A mind may privately configure `misreport = { food_delta = 50, target = 1 }` to change the quantity it tells one listener; omit `target` to address everyone. Negative offsets understate stock, and quantities saturate at zero and the maximum representable amount. This changes a statement, not the speaker's memory or the stock. Observation time and witness are claims carried from the remembered record, not independently verified provenance. The recipient sees the claim and immediate speaker, never an objective label identifying a lie. Honest reporting is the default. If `[opinions.rules]` sets `minimum_report_trust`, recipients ignore reports from a sender they distrust; direct observations remain available. The threshold is directed and uses committed trust, including trust changed by previous agreements. See `content/scenarios/trust_reports.toml`.
 
-## Responsibilities
+An individual's opinion sensitivity may override the shared report threshold with `report_reception = "always"`, `"never"`, or `{ trust_at_least = 0 }`. This is a personal judgment about whether to accept a statement, independent of whether it is true. The information model is deliberately limited to food stock. It does not model forgetting over time, perception errors, or private-property access. The fused host can enroll newborn minds and can use observations for travel decisions. Player observation exposes only the ruler's records.
 
-- **Personal Fact Tables:** Stores per-person facts with source, observation timestamp, confidence, and revision across namespace-indexed tables.
-- **Active Inspection Actions:** Executes `ObserveSurroundings` (local roads, exposed patches, and accessible containers), `ObserveStore` (container stock, capacity, and mass), and `ObservePatch` (local resource state).
-- **Absence Recording:** Records `{"absent_from": area}` when a remembered store is missing from its expected location so planning stops targeting vanished supplies.
-- **Belief-Based Routing & Forecasting:** Builds travel routes (`route`) strictly from remembered roads and projects outcomes (`forecast`) under changed conditions using learned claims.
+When a person directly observes a region and the amount differs from a report they remember, they can interpret that experience with a signed `affinity_report_discrepancy` in their own opinion sensitivity. A `report_discrepancy` in a target-specific relationship case overrides it. The change is applied once, toward the immediate speaker, and defaults to zero. A difference is not evidence of a lie: stock may have changed since an honest or mistaken report.
 
-## Boundaries
-
-- **No Passive Omniscience:** Read queries return only recorded personal beliefs; passive inspection never teaches new facts.
-- **No Spoken Delivery Rules:** Delegates contact validation and testimony comprehension to `game-testimony` and `game-communication`.
-
-## How It Works
-
-`ObserveFrame` is an experimental phased cohort operation: it updates personal
-scene memories as a batch before inspecting each person's accessible and carried
-stores in order. Per-observation or per-patch hooks force the ordinary path.
-This changes cross-person observation and scheduling order, so it is a separate
-behavioral model rather than an exact upgrade to individual observations.
-
-- **Shared Immutable Scenes:** Shares immutable road and exposed-patch snapshots across local observers via `game-facts` while maintaining separate per-person evidence timestamps. Moving to a new area freezes prior scene evidence into cold history.
-- **Versioned Discovery Caches:** Tracks weak permission-version tokens per person to skip redundant container discovery scans until property access changes.
-
-## Game Integration
-
-- **Plugin / Entry Point:** `Plugin` registers personal fact storage, scene caches, and observation request handlers in `game-assembly`.
-- **Requests & Events:** Handles `Initialize`, `ObserveSurroundings`, `ObserveStore`, and `ObservePatch`; exposes belief queries, `route`, and `forecast`.
-- **Callers:** Queried by almost all decision and planning crates (`game-provisioning`, `game-livelihoods`, `game-characters`, `game-inquiry`, `game-testimony`, `game-exchange`, `game-conflict`, etc.).
-
-## Dependencies & Testing
-
-- **Dependencies:** `game-core`, `game-sim`, `game-storage`, `game-facts`, `game-objects`, `game-cargo`, `game-property`, `game-transport`, `game-ecology`, `game-physiology`, `game-reasoning`.
-- **Testing:** Integration tests in `tests/` (`cargo test -p game-knowledge`) cover local discovery, stale stock disproof, report delivery, spoken locality, and routing across partially known road networks.
-
-Personal retention is now owned by `game-memory`. `Knowledge`, `Facts`, `Receive`
-and `Initialize` are compatible names for that same evidence store and its
-requests. Perception caches belong here but cannot bypass personal forgetting.
-There is no permanent second copy of a character's remembered facts.
+The listener may separately set `trust_report_discrepancy`, with a target-specific `report_discrepancy_trust` override. This signed personal change can alter later acceptance of that person's reports. It also defaults to no change and does not depend on the speaker's actual intent.
