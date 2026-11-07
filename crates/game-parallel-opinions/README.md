@@ -2,6 +2,8 @@
 
 Each observer's trust in another person is separate. Authored rules define the initial and bounded trust values and how directly experienced fulfilled or defaulted promises update them. The creditor learns from the debtor's outcome; no omniscient global reputation is created.
 
+An optional `teaching_reaction` lets a person independently interpret lessons they give and receive. Each `given` or `received` reaction contains signed trust, affinity, fear, and obligation changes; a relationship case can override either role for a particular person. No reaction or obligation is automatic. Only actual lessons produce these experiences, including lessons given under personal pressure.
+
 An agreement recipient may set `minimum_trust` in their automatic acceptance policy. Authored defaults can make an observed unfulfilled promise lower trust and a fulfilled promise rebuild it. A person's signed `trust_promise_fulfilled` and `trust_promise_unfulfilled` override those defaults, and a target-specific relationship case can override either again. Positive, negative, and zero reactions are all possible; none proves intent or dishonesty. The ruler's ordinary view exposes only their own opinions. `content/parallel/distrust.toml` starts with a proposal that the recipient's configured threshold causes them not to automatically accept. Manual decisions remain possible.
 
 For example, a scenario can configure an individual and one relationship:

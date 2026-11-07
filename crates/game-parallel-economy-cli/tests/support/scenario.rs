@@ -2377,6 +2377,31 @@ fn player_can_offer_and_request_lessons() {
             game_parallel_economy_cli_commands::player::handle(&mut world, &["skills"]).unwrap()
         );
         assert_eq!(world.snapshot(), before);
+        assert!(
+            game_parallel_economy_cli_commands::player::handle(
+                &mut world,
+                &["teaching-feeling", "received", "-1", "2", "0", "0"]
+            )
+            .unwrap()
+        );
+        let reaction = Player::new(&mut world)
+            .teaching_reaction()
+            .unwrap()
+            .unwrap();
+        assert_eq!(reaction.received.unwrap().affinity, 2);
+        assert!(
+            game_parallel_economy_cli_commands::player::handle(
+                &mut world,
+                &["teaching-feeling", "received", "off"]
+            )
+            .unwrap()
+        );
+        assert!(
+            Player::new(&mut world)
+                .teaching_reaction()
+                .unwrap()
+                .is_none()
+        );
         let recipe_text = recipe.to_string();
         assert!(
             game_parallel_economy_cli_commands::player::handle(
@@ -2409,6 +2434,62 @@ fn player_can_offer_and_request_lessons() {
             );
         }
     }
+}
+
+#[test]
+fn authored_teaching_reactions_remain_individual_and_directional() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let source =
+        std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
+    let configured = format!(
+        "{source}\n[[opinions.sensitivities]]\nperson = 1\nteaching_reaction = {{ received = {{ affinity = 3, obligation = 0 }} }}\n[[opinions.sensitivities.relationship_cases]]\ntarget = 2\nteaching_reaction = {{ received = {{ affinity = -4 }} }}\n"
+    );
+    let path = std::env::temp_dir().join(format!(
+        "legacy-teaching-reaction-{}.toml",
+        std::process::id()
+    ));
+    std::fs::write(&path, configured).unwrap();
+    let world = scenario(&path, &root.join("content")).unwrap();
+    std::fs::remove_file(path).unwrap();
+    let state = world.snapshot();
+    let sensitivity = state
+        .opinions
+        .as_ref()
+        .unwrap()
+        .sensitivities
+        .iter()
+        .find(|row| row.person == 1)
+        .unwrap();
+    assert_eq!(
+        sensitivity
+            .teaching_reaction
+            .as_ref()
+            .unwrap()
+            .received
+            .unwrap()
+            .affinity,
+        3
+    );
+    assert_eq!(
+        sensitivity
+            .teaching_reaction
+            .as_ref()
+            .unwrap()
+            .received
+            .unwrap()
+            .obligation,
+        0
+    );
+    assert_eq!(
+        sensitivity.relationship_cases[0]
+            .teaching_reaction
+            .as_ref()
+            .unwrap()
+            .received
+            .unwrap()
+            .affinity,
+        -4
+    );
 }
 
 #[test]

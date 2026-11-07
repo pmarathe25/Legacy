@@ -14,6 +14,14 @@ fn confinement_kind(
     }
 }
 
+fn teaching_role(value: &str) -> Result<game_parallel_economy::TeachingRole, String> {
+    match value {
+        "given" => Ok(game_parallel_economy::TeachingRole::Gave),
+        "received" => Ok(game_parallel_economy::TeachingRole::Received),
+        _ => Err("expected given or received".into()),
+    }
+}
+
 pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
     let mut player = Player::new(world);
     match words {
@@ -21,7 +29,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
         ["quit"] | ["exit"] => return Ok(false),
         ["help"] => {
             println!(
-                "view | catalog | skills | guardians | past-knowledge LIFE | meet PERSON | teach PERSON RECIPE | learn PERSON RECIPE | ask-work PERSON RECIPE LIFETIME | respond-work REQUEST accept|decline | goal-help RECIPE on|off | practice-decide AUTHOR SEQUENCE accept|decline | work-practice-propose WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice FIELD on|off | work-practice-reserve AMOUNT | work-practice-evaluation off|BASE AFFINITY TRUST THRESHOLD | work-outcome-feelings missing|received|partial FEAR|default OBLIGATION|default | work-outcome off|WAIT MISSING_TRUST MISSING_AFFINITY [RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST|default PARTIAL_AFFINITY|default] | work-practice-decide AUTHOR SEQUENCE accept|decline | practice-withdraw AUTHOR SEQUENCE | practice-report PERSON SEQUENCE ready|unready | practice-belief PERSON SEQUENCE believe|doubt|unassessed | practice-require-report on|off | practice-unanswered retain|believe|doubt|unassessed | practice-value off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport off|DELTA [TARGET] | food-report-reception default|all|none|MIN | promise-trust default|FULFILLED UNFULFILLED | practice-willing on|off | practice-ask on|off | practice-invent on|off | practice-approve on|off | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | feed-animal ANIMAL GOOD QUANTITY | hunt-animal ANIMAL | handle-animal ANIMAL | capture-animal ANIMAL | release-animal ANIMAL | defend-animal ANIMAL | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | salvage-site SITE GOOD QUANTITY | take-store STORE GOOD QUANTITY | put-store STORE GOOD QUANTITY | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | claim-built-sites on|off | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | take-from PERSON GOOD QUANTITY escalate|withdraw | taking-response notice|unaware resist|no-default | store GOOD QUANTITY | escape | guard SITE | capture-yield on|off | confinement-feeling [captured|resisted|released off|TRUST AFFINITY FEAR OBLIGATION] | confine PERSON SITE | release-held PERSON | recover PERSON GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
+                "view | catalog | skills | guardians | past-knowledge LIFE | meet PERSON | teach PERSON RECIPE | learn PERSON RECIPE | teaching-feeling [given|received off|TRUST AFFINITY FEAR OBLIGATION] | ask-work PERSON RECIPE LIFETIME | respond-work REQUEST accept|decline | goal-help RECIPE on|off | practice-decide AUTHOR SEQUENCE accept|decline | work-practice-propose WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice FIELD on|off | work-practice-reserve AMOUNT | work-practice-evaluation off|BASE AFFINITY TRUST THRESHOLD | work-outcome-feelings missing|received|partial FEAR|default OBLIGATION|default | work-outcome off|WAIT MISSING_TRUST MISSING_AFFINITY [RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST|default PARTIAL_AFFINITY|default] | work-practice-decide AUTHOR SEQUENCE accept|decline | practice-withdraw AUTHOR SEQUENCE | practice-report PERSON SEQUENCE ready|unready | practice-belief PERSON SEQUENCE believe|doubt|unassessed | practice-require-report on|off | practice-unanswered retain|believe|doubt|unassessed | practice-value off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport off|DELTA [TARGET] | food-report-reception default|all|none|MIN | promise-trust default|FULFILLED UNFULFILLED | practice-willing on|off | practice-ask on|off | practice-invent on|off | practice-approve on|off | ask-food PERSON LIFETIME | ask-haul PERSON SOURCE DEST GOOD LIFETIME | attack PERSON | combat-order attack PERSON|defend|retreat | combat-move X Y | eat GOOD | treat | treat-other PERSON MEDICINE QUANTITY | feed-animal ANIMAL GOOD QUANTITY | hunt-animal ANIMAL | handle-animal ANIMAL | capture-animal ANIMAL | release-animal ANIMAL | defend-animal ANIMAL | rest | farm FIELD | build-site BLUEPRINT | destroy-site SITE | salvage-site SITE GOOD QUANTITY | take-store STORE GOOD QUANTITY | put-store STORE GOOD QUANTITY | claim GOOD | withdraw-claim REGION GOOD | claim-site SITE | withdraw-site-claim SITE | claim-built-sites on|off | gather SITE | give PERSON GOOD QUANTITY | take GOOD QUANTITY | take-from PERSON GOOD QUANTITY escalate|withdraw | taking-response notice|unaware resist|no-default | store GOOD QUANTITY | escape | guard SITE | capture-yield on|off | confinement-feeling [captured|resisted|released off|TRUST AFFINITY FEAR OBLIGATION] | confine PERSON SITE | release-held PERSON | recover PERSON GOOD QUANTITY | promise PERSON GOOD QUANTITY DUE | decide-promise ID accept|decline | fulfill-promise ID | start-work RECIPE UNITS | continue-work | go REGION | expedition REGION VISIT | invite-expedition ID PERSON | meet-expedition ID PERSON | cancel-expedition ID | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | step [TICKS] | save PATH | load PATH | quit"
             );
             println!(
                 "taking-watch PERSON [on|off] | taking-report|taking-relay RECIPIENT ACTOR truthful|transferred|unavailable|resisted|conflict|off | taking-details RECIPIENT ACTOR TARGET|same GOOD|same QUANTITY|same | taking-belief unassessed|believe|doubt | taking-compare match|different off|TRUST AFFINITY FEAR OBLIGATION | taking-reports"
@@ -492,6 +500,22 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 .map_err(|_| "invalid unfulfilled reaction")?,
         )))?,
         ["confinement-feeling"] => println!("{:?}", player.confinement_reaction()?),
+        ["teaching-feeling"] => println!("{:?}", player.teaching_reaction()?),
+        ["teaching-feeling", role, "off"] => {
+            player.set_teaching_reaction(teaching_role(role)?, None)?
+        }
+        ["teaching-feeling", role, trust, affinity, fear, obligation] => player
+            .set_teaching_reaction(
+                teaching_role(role)?,
+                Some(game_parallel_economy::SubjectiveReaction {
+                    trust: trust.parse().map_err(|_| "invalid trust change")?,
+                    affinity: affinity.parse().map_err(|_| "invalid affinity change")?,
+                    fear: fear.parse().map_err(|_| "invalid fear change")?,
+                    obligation: obligation
+                        .parse()
+                        .map_err(|_| "invalid obligation change")?,
+                }),
+            )?,
         ["confinement-feeling", kind, "off"] => {
             player.set_confinement_reaction(confinement_kind(kind)?, None)?
         }

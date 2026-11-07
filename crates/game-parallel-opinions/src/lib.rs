@@ -9,11 +9,13 @@ mod harm;
 mod opposed_action;
 mod personal_change;
 mod report_trust;
+mod teaching;
 pub use confinement::{
     Experience as ConfinementExperience, ExperienceKind as ConfinementExperienceKind,
 };
 pub use opposed_action::{Experience as OpposedActionExperience, Outcome as OpposedActionOutcome};
 pub use personal_change::PersonalChange;
+pub use teaching::{Experience as TeachingExperience, Role as TeachingRole};
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Opinions {
@@ -38,7 +40,7 @@ impl Clone for Opinions {
 pub use game_parallel_opinions_model::{
     AffinityRules, ConfinementReaction, Confrontation, Event, ObligationDevelopment, Opinion,
     OpposedActionReaction, RelationshipCase, ReportReception, Rules, Sensitivity,
-    SubjectiveReaction,
+    SubjectiveReaction, TeachingReaction,
 };
 
 pub struct Index<'a> {
@@ -116,6 +118,19 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    pub fn tracks_teaching_reactions(&self) -> bool {
+        self.sensitivities.par_iter().any(|row| {
+            row.teaching_reaction.is_some()
+                || row
+                    .relationship_cases
+                    .iter()
+                    .any(|case| case.teaching_reaction.is_some())
+        })
+    }
+    /// Apply the observer's own signed interpretation of an actual lesson.
+    pub fn learn_teaching(&mut self, experiences: &[TeachingExperience], tick: u64) {
+        teaching::apply(self, experiences, tick);
+    }
     pub fn tracks_opposed_action_reactions(&self) -> bool {
         self.sensitivities.par_iter().any(|row| {
             row.opposed_action_reaction.is_some()
@@ -322,6 +337,7 @@ impl Opinions {
                 affinity_work_success: None,
                 affinity_work_refusal: None,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: Some(rule.clone()),

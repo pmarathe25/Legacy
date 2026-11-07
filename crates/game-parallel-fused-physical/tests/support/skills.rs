@@ -38,6 +38,29 @@ fn fused_host_rejects_unsupported_work_practice() {
 }
 
 #[test]
+fn fused_host_rejects_unsupported_teaching_reactions() {
+    let mut state = World::from_toml(include_str!(
+        "../../../../content/parallel/social_trust.toml"
+    ))
+    .unwrap();
+    let sensitivity =
+        serde_json::from_str(r#"{"person":1,"teaching_reaction":{"received":{"trust":1}}}"#)
+            .unwrap();
+    state
+        .opinions
+        .as_mut()
+        .unwrap()
+        .sensitivities_mut()
+        .push(sensitivity);
+    assert!(
+        Kernel::compile(state)
+            .err()
+            .unwrap()
+            .contains("teaching reactions")
+    );
+}
+
+#[test]
 fn finished_work_trains_only_its_worker_and_next_job_uses_committed_rate() {
     let mut kernel = Kernel::compile(world()).unwrap();
     start(&mut kernel, 1, 1, 1);

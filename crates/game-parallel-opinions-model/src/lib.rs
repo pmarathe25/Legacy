@@ -68,6 +68,9 @@ pub struct Sensitivity {
     /// Personal interpretations of directly opposed actions; absent outcomes do nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opposed_action_reaction: Option<Arc<OpposedActionReaction>>,
+    /// Signed personal interpretations of giving or receiving a lesson.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teaching_reaction: Option<Arc<TeachingReaction>>,
     /// Optional interpretations of experiences with particular people.
     #[serde(default)]
     pub relationship_cases: Vec<RelationshipCase>,
@@ -134,6 +137,9 @@ pub struct RelationshipCase {
     /// Per-outcome overrides for this particular person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opposed_action_reaction: Option<Arc<OpposedActionReaction>>,
+    /// Per-person lesson interpretations override the general disposition.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub teaching_reaction: Option<Arc<TeachingReaction>>,
     #[serde(default)]
     pub obligation_gain: Option<u64>,
     #[serde(default)]
@@ -153,6 +159,15 @@ pub struct SubjectiveReaction {
     pub fear: i64,
     #[serde(default)]
     pub obligation: i64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TeachingReaction {
+    #[serde(default)]
+    pub given: Option<SubjectiveReaction>,
+    #[serde(default)]
+    pub received: Option<SubjectiveReaction>,
 }
 
 /// An observer's signed interpretations of an action opposed by another person.

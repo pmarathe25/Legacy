@@ -56,6 +56,7 @@ pub use game_parallel_fauna::{
 pub use game_parallel_opinions::{
     ConfinementExperienceKind, ConfinementReaction, ObligationDevelopment, Opinion,
     RelationshipCase, ReportReception, Sensitivity as OpinionSensitivity, SubjectiveReaction,
+    TeachingReaction, TeachingRole,
 };
 pub use game_parallel_practices::work::Evaluation as WorkPracticeEvaluation;
 pub use game_parallel_practices::work::outcome::Policy as WorkOutcomePolicy;
@@ -5431,6 +5432,18 @@ impl Economy {
                 })
                 .collect();
             opinions.apply_personal_changes(&changes, tick);
+        }
+        if let (Some(opinions), Some(previous), Some(next)) =
+            (&mut next_opinions, self.skills.as_ref(), skills.as_ref())
+            && let Some(lessons) = next.lessons.get(previous.lessons.len()..)
+            && !lessons.is_empty()
+            && opinions.tracks_teaching_reactions()
+        {
+            let pairs: Vec<_> = lessons
+                .par_iter()
+                .map(|lesson| (lesson.teacher, lesson.student))
+                .collect();
+            teaching::interpret(opinions, &pairs, tick);
         }
         if let (Some(opinions), Some(confinement)) = (&mut next_opinions, &next_confinement)
             && confinement.events.par_iter().any(|event| {

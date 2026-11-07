@@ -7157,6 +7157,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -14845,16 +14846,19 @@ fn people_interpret_capture_and_release_in_their_own_way() {
         OpinionSensitivity {
             person: 2,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: Some(general),
             ..Default::default()
         },
         OpinionSensitivity {
             person: 3,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: Some(general),
             relationship_cases: vec![RelationshipCase {
                 target: 1,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: Some(special),
                 ..Default::default()
             }],
@@ -14863,6 +14867,7 @@ fn people_interpret_capture_and_release_in_their_own_way() {
         OpinionSensitivity {
             person: 4,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: Some(general),
             ..Default::default()
         },
@@ -16200,6 +16205,43 @@ fn skilled_person_can_teach_from_fear_despite_not_volunteering() {
         obligation: 0,
         affinity: 0,
     }];
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = vec![
+        OpinionSensitivity {
+            person: 1,
+            teaching_reaction: Some(std::sync::Arc::new(TeachingReaction {
+                received: Some(SubjectiveReaction {
+                    trust: -1,
+                    affinity: 3,
+                    fear: 0,
+                    obligation: 0,
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+        OpinionSensitivity {
+            person: 2,
+            teaching_reaction: Some(std::sync::Arc::new(TeachingReaction {
+                given: Some(SubjectiveReaction {
+                    trust: 1,
+                    affinity: -2,
+                    fear: 1,
+                    obligation: 0,
+                }),
+                ..Default::default()
+            })),
+            ..Default::default()
+        },
+    ]
+    .into();
     initial.dynamics = Some(Dynamics {
         personality: None,
         social: Some(Social {
@@ -16276,6 +16318,26 @@ fn skilled_person_can_teach_from_fear_despite_not_volunteering() {
                     );
                     assert!(!skills.teachers[0].enabled);
                     assert_eq!(skills.index().rate(1, 1), 3);
+                    let index = state.opinions.as_ref().unwrap().index();
+                    assert_eq!(
+                        (
+                            index.trust(1, 2),
+                            index.affinity(1, 2),
+                            index.feelings(1, 2)
+                        ),
+                        (-1, 3, (0, 0))
+                    );
+                    assert_eq!(
+                        (
+                            index.trust(2, 1),
+                            index.affinity(2, 1),
+                            index.feelings(2, 1)
+                        ),
+                        (1, -2, (6, 0))
+                    );
+                    let records = state.opinions.as_ref().unwrap().records.clone();
+                    world.advance().unwrap();
+                    assert_eq!(world.snapshot().opinions.unwrap().records, records);
                     Economy::compile(state.clone()).unwrap();
                     state
                 })
@@ -16305,6 +16367,53 @@ fn controlled_lessons_use_real_meetings_and_personal_pressure() {
             obligation,
             affinity: 0,
         }];
+        let opinions = initial.opinions.as_mut().unwrap();
+        opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+            limit: 10,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        opinions.sensitivities = vec![
+            OpinionSensitivity {
+                person: 1,
+                teaching_reaction: Some(std::sync::Arc::new(TeachingReaction {
+                    given: Some(SubjectiveReaction {
+                        trust: 2,
+                        affinity: -3,
+                        fear: 0,
+                        obligation: 0,
+                    }),
+                    received: Some(SubjectiveReaction {
+                        trust: -2,
+                        affinity: 4,
+                        fear: 1,
+                        obligation: 0,
+                    }),
+                })),
+                ..Default::default()
+            },
+            OpinionSensitivity {
+                person: 2,
+                teaching_reaction: Some(std::sync::Arc::new(TeachingReaction {
+                    given: Some(SubjectiveReaction {
+                        trust: 1,
+                        affinity: -2,
+                        fear: 0,
+                        obligation: -2,
+                    }),
+                    received: Some(SubjectiveReaction {
+                        trust: -1,
+                        affinity: 2,
+                        fear: 3,
+                        obligation: 0,
+                    }),
+                })),
+                ..Default::default()
+            },
+        ]
+        .into();
         initial.dynamics = Some(Dynamics {
             personality: None,
             social: Some(Social {
@@ -16390,6 +16499,60 @@ fn controlled_lessons_use_real_meetings_and_personal_pressure() {
                         assert_eq!(
                             (lessons[0].teacher, lessons[0].student),
                             if actor_teaches { (1, 2) } else { (2, 1) }
+                        );
+                        let opinions = state.opinions.as_ref().unwrap().index();
+                        if actor_teaches {
+                            assert_eq!(
+                                (
+                                    opinions.trust(1, 2),
+                                    opinions.affinity(1, 2),
+                                    opinions.feelings(1, 2)
+                                ),
+                                (2, -3, (0, 0))
+                            );
+                            assert_eq!(
+                                (
+                                    opinions.trust(2, 1),
+                                    opinions.affinity(2, 1),
+                                    opinions.feelings(2, 1)
+                                ),
+                                (-1, 2, (fear + 3, obligation))
+                            );
+                        } else {
+                            assert_eq!(
+                                (
+                                    opinions.trust(1, 2),
+                                    opinions.affinity(1, 2),
+                                    opinions.feelings(1, 2)
+                                ),
+                                (-2, 4, (1, 0))
+                            );
+                            assert_eq!(
+                                (
+                                    opinions.trust(2, 1),
+                                    opinions.affinity(2, 1),
+                                    opinions.feelings(2, 1)
+                                ),
+                                (1, -2, (fear, obligation.saturating_sub(2)))
+                            );
+                        }
+                    } else {
+                        let opinions = state.opinions.as_ref().unwrap().index();
+                        assert_eq!(
+                            (
+                                opinions.trust(1, 2),
+                                opinions.affinity(1, 2),
+                                opinions.feelings(1, 2)
+                            ),
+                            (0, 0, (0, 0))
+                        );
+                        assert_eq!(
+                            (
+                                opinions.trust(2, 1),
+                                opinions.affinity(2, 1),
+                                opinions.feelings(2, 1)
+                            ),
+                            (0, 0, (fear, obligation))
                         );
                     }
                     let restored = Economy::compile(
@@ -28453,6 +28616,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -28629,6 +28793,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -28810,6 +28975,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -28832,6 +28998,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         work_success: None,
         work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         obligation_gain: None,
         obligation_relief: None,
@@ -28894,6 +29061,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -28989,6 +29157,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: Some(ObligationDevelopment {
@@ -29172,6 +29341,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_work_success: None,
             affinity_work_refusal: None,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: Some(ObligationDevelopment {
@@ -29425,6 +29595,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -29582,6 +29753,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -29800,6 +29972,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_work_success: None,
             affinity_work_refusal: None,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
@@ -30679,6 +30852,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             affinity_work_success: Some(-3),
             affinity_work_refusal: Some(5),
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             relationship_cases: if override_case {
                 vec![RelationshipCase {
@@ -30697,6 +30871,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     work_success: Some(4),
                     work_refusal: Some(-2),
                     opposed_action_reaction: None,
+                    teaching_reaction: None,
                     confinement_reaction: None,
                     obligation_gain: None,
                     promise_obligation_gain: None,
@@ -31186,6 +31361,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             affinity_work_success: None,
             affinity_work_refusal: Some(2),
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
@@ -34741,6 +34917,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -34762,6 +34939,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         work_success: None,
         work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         obligation_gain: None,
         promise_obligation_gain: None,
@@ -35063,6 +35241,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -36315,6 +36494,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -36336,6 +36516,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         work_success: None,
         work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         obligation_gain: None,
         promise_obligation_gain: None,
@@ -37166,6 +37347,7 @@ fn concentrated_site_salvage_benchmark() {
                 affinity_work_success: None,
                 affinity_work_refusal: None,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,

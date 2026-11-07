@@ -424,6 +424,190 @@ fn opposed_actions_use_each_observers_signed_reactions_and_per_outcome_overrides
 }
 
 #[test]
+#[ignore = "manual teaching reaction benchmark"]
+fn teaching_reactions_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000u64);
+    let reaction = std::sync::Arc::new(TeachingReaction {
+        received: Some(SubjectiveReaction {
+            trust: 1,
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let initial = Opinions {
+        rules: rules(),
+        sensitivities: (1..=count)
+            .map(|person| Sensitivity {
+                person,
+                teaching_reaction: Some(reaction.clone()),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        records: vec![],
+        events: vec![],
+    };
+    let experiences: Vec<_> = (1..=count)
+        .map(|observer| TeachingExperience {
+            observer,
+            other: count + 1,
+            role: TeachingRole::Received,
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..5 {
+                let mut state = initial.clone();
+                let start = std::time::Instant::now();
+                state.learn_teaching(&experiences, 1);
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(state.records.len(), count as usize);
+                assert_eq!(state.index().trust(1, count + 1), 1);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!("workers={workers} people={count} elapsed={:.6}", samples[1]);
+        });
+}
+
+#[test]
+fn lessons_use_personal_signed_reactions_and_relationship_overrides() {
+    let mut rules = rules();
+    rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let shared = std::sync::Arc::new(TeachingReaction {
+        given: Some(SubjectiveReaction {
+            trust: -1,
+            affinity: 2,
+            fear: 0,
+            obligation: 0,
+        }),
+        received: Some(SubjectiveReaction {
+            trust: 2,
+            affinity: -3,
+            fear: 4,
+            obligation: 0,
+        }),
+    });
+    let mut sensitivities: Vec<_> = (1..=4096)
+        .map(|person| Sensitivity {
+            person,
+            teaching_reaction: Some(shared.clone()),
+            ..Default::default()
+        })
+        .collect();
+    sensitivities[0].relationship_cases.push(RelationshipCase {
+        target: 9000,
+        teaching_reaction: Some(std::sync::Arc::new(TeachingReaction {
+            received: Some(SubjectiveReaction {
+                trust: -2,
+                affinity: 5,
+                fear: 0,
+                obligation: 3,
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    sensitivities[1].relationship_cases.push(RelationshipCase {
+        target: 9000,
+        teaching_reaction: Some(std::sync::Arc::new(TeachingReaction {
+            received: Some(SubjectiveReaction::default()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    });
+    let initial = Opinions {
+        rules,
+        sensitivities: sensitivities.into(),
+        records: vec![],
+        events: vec![],
+    };
+    let mut experiences: Vec<_> = (1..=4096)
+        .map(|observer| TeachingExperience {
+            observer,
+            other: 9000,
+            role: TeachingRole::Received,
+        })
+        .collect();
+    experiences.push(TeachingExperience {
+        observer: 2,
+        other: 9000,
+        role: TeachingRole::Gave,
+    });
+    experiences.push(TeachingExperience {
+        observer: 4097,
+        other: 9000,
+        role: TeachingRole::Received,
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut owner = initial.clone();
+                owner.learn_teaching(&experiences, 1);
+                owner
+            })
+    };
+    let result = run(1);
+    assert_eq!(result, run(4));
+    let index = result.index();
+    assert_eq!(
+        (
+            index.trust(1, 9000),
+            index.affinity(1, 9000),
+            index.feelings(1, 9000)
+        ),
+        (-2, 5, (0, 3))
+    );
+    assert_eq!(
+        (
+            index.trust(2, 9000),
+            index.affinity(2, 9000),
+            index.feelings(2, 9000)
+        ),
+        (-1, 2, (0, 0))
+    );
+    assert_eq!(
+        (
+            index.trust(3, 9000),
+            index.affinity(3, 9000),
+            index.feelings(3, 9000)
+        ),
+        (2, -3, (4, 0))
+    );
+    assert!(!result.records.iter().any(|row| row.observer == 4097));
+}
+
+#[test]
+fn older_opinion_data_has_no_teaching_reaction() {
+    let sensitivity: Sensitivity = serde_json::from_str(r#"{"person":1}"#).unwrap();
+    let relationship: RelationshipCase = serde_json::from_str(r#"{"target":2}"#).unwrap();
+    assert!(sensitivity.teaching_reaction.is_none());
+    assert!(relationship.teaching_reaction.is_none());
+}
+
+#[test]
 fn confinement_experiences_use_personal_signed_reactions_and_case_overrides() {
     let mut rules = rules();
     rules.affinity = Some(AffinityRules {
@@ -446,6 +630,7 @@ fn confinement_experiences_use_personal_signed_reactions_and_case_overrides() {
         .map(|person| Sensitivity {
             person,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: Some(reaction),
             ..Default::default()
         })
@@ -453,6 +638,7 @@ fn confinement_experiences_use_personal_signed_reactions_and_case_overrides() {
     sensitivities[0].relationship_cases.push(RelationshipCase {
         target: 9000,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: Some(ConfinementReaction {
             captured: SubjectiveReaction {
                 trust: -1,
@@ -888,6 +1074,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_work_success: None,
                 affinity_work_refusal: None,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -915,6 +1102,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_work_success: None,
                 affinity_work_refusal: None,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -956,6 +1144,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             affinity_work_success: None,
             affinity_work_refusal: None,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             relationship_cases: vec![],
             obligation_development: None,
@@ -1033,6 +1222,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_work_success: None,
                 affinity_work_refusal: None,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -1060,6 +1250,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_work_success: None,
                 affinity_work_refusal: None,
                 opposed_action_reaction: None,
+                teaching_reaction: None,
                 confinement_reaction: None,
                 relationship_cases: vec![],
                 obligation_development: None,
@@ -1490,6 +1681,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![],
         obligation_development: None,
@@ -1559,6 +1751,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
@@ -1576,6 +1769,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
             work_success: None,
             work_refusal: None,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             obligation_gain: None,
             obligation_relief: None,
@@ -1632,6 +1826,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         affinity_work_success: None,
         affinity_work_refusal: None,
         opposed_action_reaction: None,
+        teaching_reaction: None,
         confinement_reaction: None,
         relationship_cases: vec![RelationshipCase {
             target: 4,
@@ -1649,6 +1844,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
             work_success: None,
             work_refusal: None,
             opposed_action_reaction: None,
+            teaching_reaction: None,
             confinement_reaction: None,
             obligation_gain: Some(4),
             obligation_relief: Some(2),

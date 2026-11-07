@@ -1154,6 +1154,19 @@ impl<'a> Player<'a> {
     ) -> Result<Option<game_parallel_economy::ConfinementReaction>, String> {
         self.world.confinement_reaction(self.current()?)
     }
+    pub fn set_teaching_reaction(
+        &mut self,
+        role: game_parallel_economy::TeachingRole,
+        value: Option<game_parallel_economy::SubjectiveReaction>,
+    ) -> Result<(), String> {
+        self.world
+            .set_teaching_reaction(self.current()?, role, value)
+    }
+    pub fn teaching_reaction(
+        &self,
+    ) -> Result<Option<game_parallel_economy::TeachingReaction>, String> {
+        self.world.teaching_reaction(self.current()?)
+    }
     pub fn set_practice_willingness(&mut self, enabled: bool) -> Result<(), String> {
         self.world
             .set_practice_willingness(self.current()?, enabled)

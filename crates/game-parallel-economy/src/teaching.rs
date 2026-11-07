@@ -1,8 +1,77 @@
 //! Explicit lessons use real meetings and individual teaching choices.
-use crate::Economy;
+use crate::{Economy, OpinionSensitivity, SubjectiveReaction, TeachingReaction, TeachingRole};
 use game_parallel_economy_interaction::Request;
+use game_parallel_opinions::{Opinions, TeachingExperience};
+use rayon::prelude::*;
+use std::sync::Arc;
+
+pub(crate) fn interpret(opinions: &mut Opinions, pairs: &[(u64, u64)], tick: u64) {
+    let experiences: Vec<_> = pairs
+        .par_iter()
+        .flat_map_iter(|&(teacher, student)| {
+            [
+                TeachingExperience {
+                    observer: teacher,
+                    other: student,
+                    role: TeachingRole::Gave,
+                },
+                TeachingExperience {
+                    observer: student,
+                    other: teacher,
+                    role: TeachingRole::Received,
+                },
+            ]
+        })
+        .collect();
+    opinions.learn_teaching(&experiences, tick);
+}
 
 impl Economy {
+    /// Set this person's own interpretation of giving or receiving a lesson.
+    pub fn set_teaching_reaction(
+        &mut self,
+        person: u64,
+        role: TeachingRole,
+        value: Option<SubjectiveReaction>,
+    ) -> Result<(), String> {
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        let mut sensitivity = owner
+            .sensitivities
+            .iter()
+            .find(|row| row.person == person)
+            .cloned()
+            .unwrap_or_else(|| OpinionSensitivity {
+                person,
+                ..Default::default()
+            });
+        let mut reaction = sensitivity
+            .teaching_reaction
+            .as_deref()
+            .copied()
+            .unwrap_or_default();
+        match role {
+            TeachingRole::Gave => reaction.given = value,
+            TeachingRole::Received => reaction.received = value,
+        }
+        sensitivity.teaching_reaction =
+            (reaction != TeachingReaction::default()).then(|| Arc::new(reaction));
+        self.set_opinion_sensitivity(sensitivity)
+    }
+    pub fn teaching_reaction(&self, person: u64) -> Result<Option<TeachingReaction>, String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .is_err()
+        {
+            return Err("unknown person".into());
+        }
+        let owner = self.opinions.as_ref().ok_or("opinions are disabled")?;
+        Ok(owner
+            .sensitivities
+            .iter()
+            .find(|row| row.person == person)
+            .and_then(|row| row.teaching_reaction.as_deref().copied()))
+    }
     /// Offer a lesson to another person during a real meeting.
     pub fn teach(&mut self, teacher: u64, student: u64, recipe: u32) -> Result<bool, String> {
         self.lesson(teacher, student, recipe, true)
@@ -94,19 +163,30 @@ impl Economy {
                     .iter()
                     .any(|event| event.a == actor.min(target) && event.b == actor.max(target))
             });
+        let mut inserted = false;
         let learned = met
             && willing
             && can_teach
             && draft.skills.as_mut().is_some_and(|skills| {
-                skills.lessons.iter().any(|lesson| {
+                let existing = skills.lessons.iter().any(|lesson| {
                     lesson.teacher == teacher
                         && lesson.student == student
                         && lesson.recipe == recipe
                         && lesson.tick == tick
-                }) || skills
-                    .teach(teacher, student, recipe, tick, teacher_rate, source_life)
-                    .is_ok()
+                });
+                if !existing {
+                    inserted = skills
+                        .teach(teacher, student, recipe, tick, teacher_rate, source_life)
+                        .is_ok();
+                }
+                existing || inserted
             });
+        if inserted
+            && let Some(opinions) = &mut draft.opinions
+            && opinions.tracks_teaching_reactions()
+        {
+            interpret(opinions, &[(teacher, student)], tick);
+        }
         self.commit(draft)?;
         Ok(learned)
     }
