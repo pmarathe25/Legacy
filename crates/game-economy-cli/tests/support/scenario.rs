@@ -4310,7 +4310,7 @@ fn authored_food_misreport_is_personal_and_player_can_change_it() {
         std::fs::read_to_string(root.join("content/scenarios/economy-campaign.toml")).unwrap();
     let configured = source.replace("\r\n", "\n").replace(
         "[[knowledge.minds]]\nperson = 1",
-        "[[knowledge.minds]]\nperson = 1\nmisreport = { target = 2, food_delta = -7 }",
+        "[[knowledge.minds]]\nperson = 1\nmisreport = { target = 2, food_delta = -7 }\nreporting = { willing = false, pressure_threshold = 5 }",
     );
     let configured = format!(
         "{configured}\n[[opinions.sensitivities]]\nperson = 1\nreport_reception = \"never\"\ntrust_report_discrepancy = -2\n[[opinions.sensitivities.relationship_cases]]\ntarget = 2\nreport_discrepancy_trust = 3\n"
@@ -4333,6 +4333,26 @@ fn authored_food_misreport_is_personal_and_player_can_change_it() {
     assert_eq!(own.relationship_cases[0].report_discrepancy_trust, Some(3));
     let mut player = game_economy_player::Player::new(&mut world);
     assert_eq!(
+        player.food_reporting().unwrap(),
+        Some(game_economy::Reporting {
+            willing: false,
+            pressure_threshold: Some(5),
+        })
+    );
+    player
+        .set_food_reporting(Some(game_economy::Reporting {
+            willing: true,
+            pressure_threshold: None,
+        }))
+        .unwrap();
+    assert_eq!(
+        player.food_reporting().unwrap(),
+        Some(game_economy::Reporting {
+            willing: true,
+            pressure_threshold: None,
+        })
+    );
+    assert_eq!(
         player.food_misreport().unwrap(),
         Some(game_economy::Misreport {
             target: Some(2),
@@ -4352,6 +4372,14 @@ fn authored_food_misreport_is_personal_and_player_can_change_it() {
     );
     player.set_food_misreport(None).unwrap();
     assert_eq!(player.food_misreport().unwrap(), None);
+    game_economy_cli_commands::player::handle(&mut world, &["food-reporting", "off", "3"]).unwrap();
+    assert_eq!(
+        world.food_reporting(1).unwrap(),
+        Some(game_economy::Reporting {
+            willing: false,
+            pressure_threshold: Some(3),
+        })
+    );
     assert_eq!(world.food_misreport(2).unwrap(), None);
 }
 

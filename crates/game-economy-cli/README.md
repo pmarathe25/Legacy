@@ -4,6 +4,8 @@ Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path. Th
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
+`food-reporting on|off PRESSURE|none` sets the current person's willingness to send remembered food reports and their optional fear-plus-obligation threshold. `food-reporting default` restores the default. The administrative runner adds a person ID after the command. Scenario knowledge minds may set the same `reporting` fields; listeners still decide independently whether to accept a statement.
+
 Use `deliver-expedition ID PERSON GOOD QUANTITY` before departure to set a personal delivery objective. Give real goods to that person at the destination; accepted partial gifts and fulfilled promise transfers accumulate toward the target. The objective does not compel the traveler or create goods.
 
 In player mode, `delivery-choice ID on|off RESERVE PRESSURE|none` sets the person's own delivery preference, and `delivery-choice ID clear` removes it. The administrative forms are `deliver-expedition PERSON ID RECIPIENT GOOD QUANTITY` and `expedition-delivery-choice PERSON ID on|off RESERVE PRESSURE|none` (or `clear`). A configured autonomous person gives only what remains above their reserve and may act from their own fear or felt obligation toward the recipient; willingness can change while traveling.

@@ -23,7 +23,7 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
     match words.as_slice() {
         [] => {}
         ["help"] => println!(
-            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | teach PERSON TARGET RECIPE | learn PERSON TEACHER RECIPE | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | handle-animal PERSON ANIMAL | capture-animal PERSON ANIMAL | release-animal PERSON ANIMAL | defend-animal PERSON ANIMAL | animal-handle PERSON on|off | animal-capture PERSON on|off | animal-release-choice PERSON on|off | animal-defense PERSON on|off | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | capture-choice PERSON on|off | guard-choice PERSON on|off | guard-opening PERSON on|off | release-choice PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice PERSON FIELD on|off | work-practice-reserve PERSON AMOUNT | work-practice-evaluation PERSON off|BASE AFFINITY TRUST THRESHOLD | work-outcome-feelings PERSON missing|received|partial FEAR|default OBLIGATION|default | work-outcome PERSON off|WAIT MISSING_TRUST MISSING_AFFINITY [RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST|default PARTIAL_AFFINITY|default] | work-practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON ignore|trust|doubt|min THRESHOLD | practice-unanswered PERSON MODE | practice-value PERSON off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent PERSON off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport PERSON off|DELTA [TARGET] | food-report-reception PERSON default|all|none|MIN | social-affinity PERSON [TARGET] WEIGHT|default | social-affinity-for PERSON TARGET | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | deliver-expedition PERSON ID RECIPIENT GOOD QUANTITY | expedition-delivery-choice PERSON ID on|off RESERVE PRESSURE|none | expedition-acquisition PERSON ID on|off respect|ignore PRESSURE|none | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
+            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | teach PERSON TARGET RECIPE | learn PERSON TEACHER RECIPE | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | handle-animal PERSON ANIMAL | capture-animal PERSON ANIMAL | release-animal PERSON ANIMAL | defend-animal PERSON ANIMAL | animal-handle PERSON on|off | animal-capture PERSON on|off | animal-release-choice PERSON on|off | animal-defense PERSON on|off | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | capture-choice PERSON on|off | guard-choice PERSON on|off | guard-opening PERSON on|off | release-choice PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice PERSON FIELD on|off | work-practice-reserve PERSON AMOUNT | work-practice-evaluation PERSON off|BASE AFFINITY TRUST THRESHOLD | work-outcome-feelings PERSON missing|received|partial FEAR|default OBLIGATION|default | work-outcome PERSON off|WAIT MISSING_TRUST MISSING_AFFINITY [RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST|default PARTIAL_AFFINITY|default] | work-practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON ignore|trust|doubt|min THRESHOLD | practice-unanswered PERSON MODE | practice-value PERSON off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent PERSON off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-reporting PERSON default|on|off PRESSURE|none | food-misreport PERSON off|DELTA [TARGET] | food-report-reception PERSON default|all|none|MIN | social-affinity PERSON [TARGET] WEIGHT|default | social-affinity-for PERSON TARGET | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | deliver-expedition PERSON ID RECIPIENT GOOD QUANTITY | expedition-delivery-choice PERSON ID on|off RESERVE PRESSURE|none | expedition-acquisition PERSON ID on|off respect|ignore PRESSURE|none | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["status"] => {
@@ -508,6 +508,28 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
                 unanswered: unanswered
                     .parse()
                     .map_err(|_| "invalid unanswered change")?,
+            }),
+        )?,
+        ["food-reporting", person] => println!(
+            "{:?}",
+            world.food_reporting(person.parse().map_err(|_| "invalid person")?)?
+        ),
+        ["food-reporting", person, "default"] => {
+            world.set_food_reporting(person.parse().map_err(|_| "invalid person")?, None)?
+        }
+        ["food-reporting", person, willing, pressure] => world.set_food_reporting(
+            person.parse().map_err(|_| "invalid person")?,
+            Some(game_economy::Reporting {
+                willing: match *willing {
+                    "on" => true,
+                    "off" => false,
+                    _ => return Err("expected on or off".into()),
+                },
+                pressure_threshold: if *pressure == "none" {
+                    None
+                } else {
+                    Some(pressure.parse().map_err(|_| "invalid pressure")?)
+                },
             }),
         )?,
         ["food-misreport", person] => println!(

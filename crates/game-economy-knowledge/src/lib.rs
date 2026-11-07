@@ -2,7 +2,7 @@
 use game_economy_person::Person;
 use game_families::Families;
 use game_knowledge::Observation;
-pub use game_knowledge::{Knowledge, Mind, Misreport, Record};
+pub use game_knowledge::{Knowledge, Mind, Misreport, Record, Reporting};
 use game_lots::{Place, View};
 use game_opinions::Opinions;
 use game_production_model::Good;
@@ -98,9 +98,18 @@ pub fn advance(
         .collect::<Result<_, &str>>()
         .map_err(str::to_owned)?;
     let trust = opinions.and_then(Opinions::report_filter);
+    let pressure = owner
+        .minds
+        .par_iter()
+        .any(|mind| {
+            mind.reporting
+                .is_some_and(|policy| !policy.willing && policy.pressure_threshold.is_some())
+        })
+        .then(|| opinions.map(Opinions::index))
+        .flatten();
     let events = social.map_or(&[][..], |s| s.events.as_slice());
     owner
-        .prepare_validated_with(
+        .prepare_validated_with_pressure(
             &observations,
             &regions(view),
             events,
@@ -109,6 +118,12 @@ pub fn advance(
                 trust
                     .as_ref()
                     .is_none_or(|filter| filter.accepts(receiver, sender))
+            },
+            |speaker, listener| {
+                pressure.as_ref().map_or(0, |index| {
+                    let (fear, obligation) = index.feelings(speaker, listener);
+                    fear.saturating_add(obligation)
+                })
             },
         )
         .map(Some)
@@ -125,6 +140,7 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
         .minds
         .par_extend(births.par_iter().map(|&person| Mind {
             person,
+            reporting: None,
             misreport: None,
             records: vec![],
         }));
@@ -194,6 +210,39 @@ macro_rules! prepare_world {
 #[macro_export]
 macro_rules! knowledge_methods {
     () => {
+        /// Set this person's own willingness and pressure response for future reports.
+        pub fn set_food_reporting(
+            &mut self,
+            person: u64,
+            choice: Option<$crate::Reporting>,
+        ) -> Result<(), String> {
+            if !self.people.iter().any(|p| p.id == person && p.health > 0) {
+                return Err("unknown or deceased person".into());
+            }
+            let owner = self.knowledge.as_mut().ok_or("knowledge is disabled")?;
+            let mind = owner
+                .minds
+                .iter_mut()
+                .find(|m| m.person == person)
+                .ok_or("person has no mind")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mind.reporting = choice;
+            self.epoch = epoch;
+            Ok(())
+        }
+        pub fn food_reporting(&self, person: u64) -> Result<Option<$crate::Reporting>, String> {
+            self.knowledge
+                .as_ref()
+                .ok_or("knowledge is disabled")?
+                .minds
+                .iter()
+                .find(|mind| mind.person == person)
+                .map(|mind| mind.reporting)
+                .ok_or("person has no mind".into())
+        }
         /// Change only this person's future statements; their own memories stay intact.
         pub fn set_food_misreport(
             &mut self,

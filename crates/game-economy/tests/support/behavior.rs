@@ -16368,6 +16368,7 @@ fn knowledge_workload(count: u64) -> State {
         minds: (1..=count)
             .map(|person| Mind {
                 person,
+                reporting: None,
                 misreport: None,
                 records: vec![],
             })
@@ -22092,6 +22093,7 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         max_records: 4,
         minds: vec![Mind {
             person: 2,
+            reporting: None,
             misreport: None,
             records: vec![Record {
                 region: 2,
@@ -22252,6 +22254,7 @@ fn food_search_workload(count: u64) -> State {
         minds: (1..=count)
             .map(|person| Mind {
                 person,
+                reporting: None,
                 misreport: None,
                 records: vec![Record {
                     region: 2,
@@ -28606,6 +28609,96 @@ fn a_persons_goal_progresses_only_after_their_actual_work_finishes() {
 }
 
 #[test]
+fn personal_food_reporting_can_be_withheld_or_motivated_by_pressure() {
+    use game_economy_knowledge::{Knowledge, Mind, Record, Reporting};
+    let mut initial = expedition_fixture();
+    initial.people[0].controlled = true;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = true;
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 2,
+        obligation: 3,
+        affinity: 0,
+    }];
+    initial.knowledge = Some(Knowledge {
+        max_records: 4,
+        minds: vec![
+            Mind {
+                person: 1,
+                reporting: None,
+                misreport: None,
+                records: vec![],
+            },
+            Mind {
+                person: 2,
+                reporting: Some(Reporting {
+                    willing: false,
+                    pressure_threshold: None,
+                }),
+                misreport: None,
+                records: vec![Record {
+                    region: 2,
+                    food: 7,
+                    observed_at: 0,
+                    witness: 2,
+                    learned_from: None,
+                }],
+            },
+        ],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.meet(1, 2).unwrap());
+                assert!(
+                    !world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.region == 2)
+                );
+                world
+                    .set_food_reporting(
+                        2,
+                        Some(Reporting {
+                            willing: false,
+                            pressure_threshold: Some(5),
+                        }),
+                    )
+                    .unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(world.meet(1, 2).unwrap());
+                assert!(restored.meet(1, 2).unwrap());
+                assert!(
+                    world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .any(|row| row.region == 2 && row.food == 7)
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
     use game_economy_knowledge::{Knowledge, Mind, Record};
     let mut initial = expedition_fixture();
@@ -28643,11 +28736,13 @@ fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
         minds: vec![
             Mind {
                 person: 1,
+                reporting: None,
                 misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 2,
+                reporting: None,
                 misreport: None,
                 records: vec![Record {
                     region: 2,
@@ -28753,11 +28848,13 @@ fn false_food_reports_are_personal_statements_not_physical_stock() {
         minds: vec![
             Mind {
                 person: 1,
+                reporting: None,
                 misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 2,
+                reporting: None,
                 misreport: None,
                 records: vec![remembered.clone()],
             },
@@ -28884,6 +28981,7 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
         minds: vec![
             Mind {
                 person: 1,
+                reporting: None,
                 misreport: Some(Misreport {
                     target: Some(2),
                     food_delta: 10,
@@ -28898,6 +28996,7 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
             },
             Mind {
                 person: 2,
+                reporting: None,
                 misreport: None,
                 records: vec![],
             },
@@ -29028,6 +29127,7 @@ fn stale_draft_does_not_publish_a_report_discrepancy_reaction() {
         max_records: 4,
         minds: vec![Mind {
             person: 2,
+            reporting: None,
             misreport: None,
             records: vec![Record {
                 region: 1,
@@ -29101,11 +29201,13 @@ fn invoked_memory_remains_in_the_past_mind_and_requires_control() {
         minds: vec![
             Mind {
                 person: 3,
+                reporting: None,
                 misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 4,
+                reporting: None,
                 misreport: None,
                 records: vec![record.clone()],
             },

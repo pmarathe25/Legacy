@@ -1115,6 +1115,15 @@ impl<'a> Player<'a> {
     pub fn food_misreport(&self) -> Result<Option<game_economy::Misreport>, String> {
         self.world.food_misreport(self.current()?)
     }
+    pub fn set_food_reporting(
+        &mut self,
+        choice: Option<game_economy::Reporting>,
+    ) -> Result<(), String> {
+        self.world.set_food_reporting(self.current()?, choice)
+    }
+    pub fn food_reporting(&self) -> Result<Option<game_economy::Reporting>, String> {
+        self.world.food_reporting(self.current()?)
+    }
     pub fn set_food_report_reception(
         &mut self,
         reception: Option<game_economy::ReportReception>,

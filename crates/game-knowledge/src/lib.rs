@@ -16,11 +16,21 @@ pub struct Knowledge {
 #[serde(deny_unknown_fields)]
 pub struct Mind {
     pub person: u64,
+    /// A private choice to share, optionally motivated by pressure from the listener.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reporting: Option<Reporting>,
     /// A private choice about what to tell a particular listener, or everyone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub misreport: Option<Misreport>,
     #[serde(default)]
     pub records: Vec<Record>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Reporting {
+    pub willing: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pressure_threshold: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -113,7 +123,14 @@ impl Knowledge {
         encounters: &[Encounter],
         now: u64,
     ) -> Result<Self, &'static str> {
-        self.prepare_inner(observations, regions, encounters, now, false, |_, _| true)
+        self.prepare_inner(
+            observations,
+            regions,
+            encounters,
+            now,
+            false,
+            (|_, _| true, |_, _| 0),
+        )
     }
     /// The compiled host has validated all owner identities and generated encounters.
     pub fn prepare_validated(
@@ -123,7 +140,14 @@ impl Knowledge {
         encounters: &[Encounter],
         now: u64,
     ) -> Result<Self, &'static str> {
-        self.prepare_inner(observations, regions, encounters, now, true, |_, _| true)
+        self.prepare_inner(
+            observations,
+            regions,
+            encounters,
+            now,
+            true,
+            (|_, _| true, |_, _| 0),
+        )
     }
     /// Apply each receiver's personal judgment to a report, preserving direct observation.
     pub fn prepare_validated_with(
@@ -134,7 +158,33 @@ impl Knowledge {
         now: u64,
         accept: impl Fn(u64, u64) -> bool + Sync,
     ) -> Result<Self, &'static str> {
-        self.prepare_inner(observations, regions, encounters, now, true, accept)
+        self.prepare_inner(
+            observations,
+            regions,
+            encounters,
+            now,
+            true,
+            (accept, |_, _| 0),
+        )
+    }
+    /// Apply the speaker's own fear and obligation separately from the listener's judgment.
+    pub fn prepare_validated_with_pressure(
+        &self,
+        observations: &[Observation],
+        regions: &HashSet<u64>,
+        encounters: &[Encounter],
+        now: u64,
+        accept: impl Fn(u64, u64) -> bool + Sync,
+        pressure: impl Fn(u64, u64) -> u64 + Sync,
+    ) -> Result<Self, &'static str> {
+        self.prepare_inner(
+            observations,
+            regions,
+            encounters,
+            now,
+            true,
+            (accept, pressure),
+        )
     }
     fn prepare_inner(
         &self,
@@ -143,8 +193,12 @@ impl Knowledge {
         encounters: &[Encounter],
         now: u64,
         validated: bool,
-        accept: impl Fn(u64, u64) -> bool + Sync,
+        policies: (
+            impl Fn(u64, u64) -> bool + Sync,
+            impl Fn(u64, u64) -> u64 + Sync,
+        ),
     ) -> Result<Self, &'static str> {
+        let (accept, pressure) = policies;
         if self.max_records == 0 {
             return Err("invalid knowledge capacity");
         }
@@ -366,6 +420,12 @@ impl Knowledge {
                 };
                 if let Some(partner) = partner
                     && let Some(j) = mind_index(partner)
+                    && minds[j].reporting.is_none_or(|choice| {
+                        choice.willing
+                            || choice.pressure_threshold.is_some_and(|threshold| {
+                                pressure(partner, mind.person) >= threshold
+                            })
+                    })
                 {
                     let local_region = observation.local.map(|(region, _)| region);
                     let report = minds[j]
