@@ -1,5 +1,6 @@
 //! Personal encounters and persistent, undirected familiarity.
 pub mod adapter;
+mod history;
 pub mod wellbeing;
 use game_social_pressure::priority;
 pub use game_social_pressure::{Contact, Encounter, Policy as PressurePolicy};
@@ -229,63 +230,7 @@ impl Social {
         }) {
             return Err("social encounter counter overflow");
         }
-        // Partition the sorted event stream into disjoint key ranges. Each
-        // worker merges its existing relationships and new meetings directly,
-        // so a crowded region does not funnel the graph through a serial map.
-        next.relationships = if events.is_empty() {
-            relationships.par_iter().cloned().collect()
-        } else {
-            events
-                .par_chunks(4096)
-                .enumerate()
-                .flat_map_iter(|(chunk_index, chunk)| {
-                    let start = if chunk_index == 0 {
-                        0
-                    } else {
-                        relationships.partition_point(|r| (r.a, r.b) < (chunk[0].a, chunk[0].b))
-                    };
-                    let end = if (chunk_index + 1) * 4096 >= events.len() {
-                        relationships.len()
-                    } else {
-                        let boundary = &events[(chunk_index + 1) * 4096];
-                        relationships.partition_point(|r| (r.a, r.b) < (boundary.a, boundary.b))
-                    };
-                    let mut merged = Vec::with_capacity(end - start + chunk.len());
-                    let mut old = start;
-                    for event in chunk {
-                        let key = (event.a, event.b);
-                        while old < end && (relationships[old].a, relationships[old].b) < key {
-                            merged.push(relationships[old].clone());
-                            old += 1;
-                        }
-                        if old < end && (relationships[old].a, relationships[old].b) == key {
-                            let mut relationship = relationships[old].clone();
-                            relationship.familiarity = relationship
-                                .familiarity
-                                .saturating_add(self.rules.familiarity_gain)
-                                .min(self.rules.familiarity_max);
-                            relationship.encounters += 1;
-                            relationship.last_met = tick;
-                            merged.push(relationship);
-                            old += 1;
-                        } else {
-                            merged.push(Relationship {
-                                a: event.a,
-                                b: event.b,
-                                familiarity: self
-                                    .rules
-                                    .familiarity_gain
-                                    .min(self.rules.familiarity_max),
-                                encounters: 1,
-                                last_met: tick,
-                            });
-                        }
-                    }
-                    merged.extend_from_slice(&relationships[old..end]);
-                    merged
-                })
-                .collect()
-        };
+        next.relationships = history::merge(relationships, &events, &self.rules, tick);
         next.events = events;
         Ok(next)
     }
