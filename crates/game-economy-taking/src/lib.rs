@@ -32,6 +32,9 @@ pub struct Policy {
     pub quantity: u64,
     pub willing: bool,
     pub interval: u64,
+    /// Also attempt this action when the holder is incapacitated or dead.
+    #[serde(default)]
+    pub recover_incapacitated: bool,
     #[serde(default)]
     pub escalate: bool,
     #[serde(default)]
@@ -336,7 +339,7 @@ impl Context<'_> {
         if responses.par_windows(2).any(|p| p[0].person > p[1].person) {
             responses.par_sort_unstable_by_key(|p| p.person);
         }
-        let available = |intent: Intent, controlled: bool| {
+        let available = |intent: Intent, controlled: bool, recover_incapacitated: bool| {
             let actor = person(intent.actor)?;
             let target = person(intent.target)?;
             let region = self
@@ -344,7 +347,7 @@ impl Context<'_> {
                 .region((actor.id, actor.region), (target.id, target.region))?;
             (actor.controlled == controlled
                 && actor.health > 0
-                && target.health > 0
+                && (target.health > 0 || recover_incapacitated)
                 && actor.id != target.id
                 && intent.quantity > 0
                 && actor.hunger <= self.max_hunger
@@ -369,7 +372,7 @@ impl Context<'_> {
                     quantity: policy.quantity,
                     escalate: policy.escalate,
                 };
-                let region = available(intent, false)?;
+                let region = available(intent, false, policy.recover_incapacitated)?;
                 let affinity = || {
                     feelings
                         .as_ref()
@@ -396,7 +399,7 @@ impl Context<'_> {
             })
             .collect();
         if let Some(intent) = self.manual {
-            let region = available(intent, true).ok_or(
+            let region = available(intent, true, false).ok_or(
                 "taking requires distinct living, reachable people and an available actor",
             )?;
             choices.push((true, 0, intent, region));
@@ -463,10 +466,14 @@ impl Context<'_> {
         let mut pending: Vec<_> = selected
             .into_par_iter()
             .map(|(_, _, intent, region)| {
-                let response = responses
-                    .binary_search_by_key(&intent.target, |p| p.person)
-                    .ok()
-                    .map(|i| responses[i]);
+                let response = person(intent.target)
+                    .filter(|target| target.health > 0)
+                    .and_then(|_| {
+                        responses
+                            .binary_search_by_key(&intent.target, |p| p.person)
+                            .ok()
+                            .map(|i| responses[i])
+                    });
                 let noticed = response.is_some_and(|p| p.notices);
                 let opposed = noticed
                     && response.is_some_and(|p| {

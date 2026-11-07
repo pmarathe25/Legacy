@@ -37,6 +37,7 @@ fn policy(person: u64, target: u64) -> Policy {
         quantity: 1,
         willing: true,
         interval: 1,
+        recover_incapacitated: false,
         escalate: true,
         pressured_by: None,
         pressure_threshold: None,
@@ -181,6 +182,65 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
         blocked.custody(Place::Person(2)).unwrap().lots[0].quantity,
         1
     );
+}
+
+#[test]
+fn autonomous_recovery_requires_personal_choice_and_moves_real_possessions() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut people = people(2);
+                people[1].health = 0;
+                let mut chosen = policy(1, 2);
+                let mut owner = Taking {
+                    policies: vec![chosen.clone()].into(),
+                    responses: vec![Response {
+                        person: 2,
+                        notices: true,
+                        resist: true,
+                        resist_if_fear_at_least: None,
+                        resist_if_affinity_at_least: None,
+                        resist_if_affinity_at_most: None,
+                    }]
+                    .into(),
+                    ..Default::default()
+                };
+                let mut physical = runtime(5, 1);
+                let initial = physical.snapshot();
+                assert!(plan(&owner, &people, None).actions.is_empty());
+                assert_eq!(physical.snapshot(), initial);
+                chosen.recover_incapacitated = true;
+                owner.policies = vec![chosen].into();
+                let attempt = plan(&owner, &people, None);
+                assert!(attempt.contests.is_empty());
+                let draft = physical
+                    .prepare_with_choices(&[], &transactions(&attempt.actions), &[], &[], 7)
+                    .unwrap();
+                let events = attempt.publish(draft.events(), &[]);
+                assert_eq!(events[0].outcome, Outcome::Transferred);
+                assert!(!events[0].noticed);
+                physical.commit_advance(draft).unwrap();
+                assert_eq!(
+                    physical.custody(Place::Person(1)).unwrap().lots[0].quantity,
+                    1
+                );
+                assert!(physical.custody(Place::Person(2)).unwrap().lots.is_empty());
+                physical.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn authored_policy_can_enable_incapacitated_recovery() {
+    let config: game_economy_taking::content::Config = serde_json::from_str(
+        r#"{"policies":[{"person":1,"target":2,"good":"goods","quantity":1,"willing":true,"recover_incapacitated":true}]}"#,
+    ).unwrap();
+    let owner = config.build(|good| (good == "goods").then_some(1)).unwrap();
+    assert!(owner.policies[0].recover_incapacitated);
 }
 
 #[test]

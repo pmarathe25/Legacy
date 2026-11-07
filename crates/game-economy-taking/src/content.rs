@@ -75,6 +75,8 @@ pub struct PolicyConfig {
     #[serde(default = "one")]
     pub interval: u64,
     #[serde(default)]
+    pub recover_incapacitated: bool,
+    #[serde(default)]
     pub escalate: bool,
     #[serde(default)]
     pub pressured_by: Option<u64>,
@@ -99,6 +101,7 @@ impl Config {
                     quantity: p.quantity,
                     willing: p.willing,
                     interval: p.interval,
+                    recover_incapacitated: p.recover_incapacitated,
                     escalate: p.escalate,
                     pressured_by: p.pressured_by,
                     pressure_threshold: p.pressure_threshold,

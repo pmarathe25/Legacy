@@ -138,7 +138,7 @@ fn main() {
                 groups.extend(ids.as_chunks::<3>().0.iter().map(|&[a, b, c]| (a, b, c)));
             }
             let policies = groups.iter().map(|&(actor, target, _)| Policy {
-                person: actor, target, good: bread, quantity: 1, willing: true, interval: 1,
+                person: actor, target, good: bread, quantity: 1, willing: true, interval: 1, recover_incapacitated: false,
                 escalate: false, pressured_by: None, pressure_threshold: None,
                 affinity_at_least: None, affinity_at_most: None,
             }).collect::<Vec<_>>();

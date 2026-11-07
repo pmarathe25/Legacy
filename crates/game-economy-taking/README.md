@@ -4,6 +4,14 @@ People can independently attempt to take a particular quantity from another pers
 
 Policies and responses are data, not roles or institutions. An unsuccessful attempt creates no goods. Outcomes impose no moral judgment or automatic feelings. Optional `reactions` let each participant interpret each outcome with their own signed changes, including person-specific overrides; an unaware target has no direct experience. Controlled targets use their own saved standing preference.
 
+An individual taking policy may opt into `recover_incapacitated`, allowing its
+person to attempt to recover possessions from their specified holder when that
+holder has zero health. The holder cannot notice or resist while incapacitated;
+other witnesses may still observe. Real location, access, custody, capacity,
+and contention still apply. Death transfers nothing by itself and this choice
+does not establish an heir or authority. The existing player `recover` action
+continues to handle controlled recovery separately.
+
 Optional `[[taking.witnesses]]` entries describe a person's attention to a particular actor, an optional target filter, and their separate `toward_actor` and `toward_target` interpretations for each outcome. A witness must notice and be physically co-located and accessible; their reaction may be positive, negative, or absent regardless of the participants' views. These observations do not imply legal authority or automatically obligate anyone.
 
 Each witness retains their most recent directly noticed taking by that actor. The observation belongs to that person, persists across saves, and is recorded even when relationship tracking is disabled. Changing attention cannot fabricate or rewrite it.

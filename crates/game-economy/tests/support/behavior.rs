@@ -24061,6 +24061,7 @@ fn a_controlled_target_can_change_their_standing_response_without_publishing_a_s
             quantity: 1,
             willing: true,
             interval: 1,
+            recover_incapacitated: false,
             escalate: false,
             pressured_by: None,
             pressure_threshold: None,
@@ -24119,6 +24120,7 @@ fn taking_workload(count: u64, shared: bool) -> State {
                 quantity: 1,
                 willing: true,
                 interval: 1,
+                recover_incapacitated: false,
                 escalate: false,
                 pressured_by: None,
                 pressure_threshold: None,
@@ -24169,6 +24171,77 @@ fn autonomous_takings_conserve_possessions_for_shared_and_independent_targets() 
         };
         assert_eq!(run(1), run(4));
     }
+}
+
+#[test]
+fn autonomous_recovery_from_an_incapacitated_holder_shares_the_economic_boundary() {
+    let mut initial = taking_workload(2, false);
+    initial.people[0].health = 0;
+    initial.taking.as_mut().unwrap().policies_mut()[0].recover_incapacitated = true;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                let events = &saved.taking.as_ref().unwrap().events;
+                assert_eq!(events.len(), 2);
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| event.outcome == TakingOutcome::Transferred)
+                );
+                let recovered = events.iter().find(|event| event.target == 1).unwrap();
+                assert_eq!(recovered.actor, 3);
+                assert!(!recovered.noticed);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn many_independent_recoveries_preserve_worker_independent_results() {
+    let count = 4096;
+    let mut initial = taking_workload(count, false);
+    for person in initial.people.iter_mut().take(count as usize) {
+        person.health = 0;
+    }
+    for policy in initial.taking.as_mut().unwrap().policies_mut() {
+        policy.recover_incapacitated = true;
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.taking.as_ref().unwrap().events;
+                assert_eq!(events.len(), count as usize);
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| !event.noticed && event.outcome == TakingOutcome::Transferred)
+                );
+                state
+            })
+    };
+    let expected = run(1);
+    assert_eq!(expected, run(4));
+    assert_eq!(expected, run(6));
 }
 
 #[test]
