@@ -21438,6 +21438,7 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
                 claimed_outcome: Some(TakingOutcome::Resisted),
                 source: Default::default(),
                 heard_from: None,
+                details: None,
             },
             ReportPolicy {
                 person: 2,
@@ -21448,6 +21449,7 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
                 claimed_outcome: None,
                 source: ReportSource::Heard,
                 heard_from: Some(3),
+                details: None,
             },
         ]
         .into(),
@@ -21583,6 +21585,7 @@ fn a_target_can_report_an_attempt_they_noticed() {
             claimed_outcome: None,
             source: Default::default(),
             heard_from: None,
+            details: None,
         }]
         .into(),
         receptions: vec![Reception {

@@ -14,7 +14,7 @@ pub use report_store::ReportStore;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 pub use testimony::{
-    Belief as ReportBelief, Reception, Report, ReportPolicy, ReportSource, Stance,
+    Belief as ReportBelief, Reception, Report, ReportDetails, ReportPolicy, ReportSource, Stance,
 };
 
 /// An individual's possible action; no policy obliges anyone to act.

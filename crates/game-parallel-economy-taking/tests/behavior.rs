@@ -613,6 +613,7 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
             claimed_outcome: Some(Outcome::Resisted),
             source: Default::default(),
             heard_from: None,
+            details: None,
         }]
         .into(),
         receptions: vec![Reception {
@@ -732,6 +733,7 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
         claimed_outcome: None,
         source: game_parallel_economy_taking::ReportSource::Heard,
         heard_from: Some(3),
+        details: None,
     });
     let mut forwarded = source.clone();
     assert!(
@@ -806,6 +808,149 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
 }
 
 #[test]
+fn fabricated_details_remain_personal_statements_and_can_be_relayed() {
+    use game_parallel_economy_taking::{
+        Event, Interpretation, Reception, ReportDetails, ReportPolicy, ReportSource, Stance,
+        Witness,
+    };
+    use game_parallel_opinions::SubjectiveReaction;
+    use std::collections::HashSet;
+    let mut previous = Taking {
+        witnesses: vec![Witness {
+            person: 3,
+            actor: 1,
+            notices: true,
+            ..Default::default()
+        }]
+        .into(),
+        report_policies: vec![ReportPolicy {
+            person: 3,
+            recipient: 4,
+            actor: 1,
+            willing: true,
+            pressure_threshold: None,
+            claimed_outcome: None,
+            source: ReportSource::Observed,
+            heard_from: None,
+            details: Some(ReportDetails {
+                target: Some(5),
+                good: Some(2),
+                quantity: Some(99),
+            }),
+        }]
+        .into(),
+        receptions: vec![Reception {
+            person: 4,
+            stance: Stance::Believe,
+            toward_target: Interpretation {
+                transferred: Some(SubjectiveReaction {
+                    affinity: 7,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    };
+    previous.observe_witnesses(
+        &[Event {
+            tick: 1,
+            actor: 1,
+            target: 2,
+            good: 1,
+            quantity: 3,
+            noticed: false,
+            outcome: Outcome::Transferred,
+        }],
+        &|_, _| true,
+    );
+    let mut heard = previous.clone();
+    let changes = heard.receive_reports(&previous, &[(3, 4)], 2, &|_, _| (0, 0, 0));
+    assert_eq!(
+        (changes[0].observer, changes[0].target, changes[0].affinity),
+        (4, 5, 7)
+    );
+    let memory = previous.witnesses[0].last_seen.unwrap();
+    assert_eq!((memory.target, memory.good, memory.quantity), (2, 1, 3));
+    let statement = &heard.reports.get(4)[0];
+    assert_eq!(
+        (statement.target, statement.good, statement.quantity),
+        (5, 2, 99)
+    );
+    let mut source = heard.clone();
+    source.report_policies_mut().push(ReportPolicy {
+        person: 4,
+        recipient: 6,
+        actor: 1,
+        willing: true,
+        pressure_threshold: None,
+        claimed_outcome: None,
+        source: ReportSource::Heard,
+        heard_from: Some(3),
+        details: Some(ReportDetails {
+            target: None,
+            good: None,
+            quantity: Some(7),
+        }),
+    });
+    let mut forwarded = source.clone();
+    forwarded.receive_reports(&source, &[(4, 6)], 3, &|_, _| (0, 0, 0));
+    let statement = &forwarded.reports.get(6)[0];
+    assert_eq!(
+        (
+            statement.target,
+            statement.good,
+            statement.quantity,
+            statement.source_speaker
+        ),
+        (5, 2, 7, Some(3))
+    );
+    assert!(
+        forwarded
+            .validate(
+                &HashSet::from([1, 2, 3, 4, 5, 6]),
+                &HashSet::from([1, 2]),
+                3
+            )
+            .is_ok()
+    );
+    let restored: Taking =
+        serde_json::from_str(&serde_json::to_string(&forwarded).unwrap()).unwrap();
+    assert_eq!(restored, forwarded);
+    for invalid in [
+        ReportDetails {
+            target: Some(1),
+            ..Default::default()
+        },
+        ReportDetails {
+            target: Some(99),
+            ..Default::default()
+        },
+        ReportDetails {
+            good: Some(99),
+            ..Default::default()
+        },
+        ReportDetails {
+            quantity: Some(0),
+            ..Default::default()
+        },
+    ] {
+        let mut bad = source.clone();
+        bad.report_policies_mut()[0].details = Some(invalid);
+        assert!(
+            bad.validate(
+                &HashSet::from([1, 2, 3, 4, 5, 6]),
+                &HashSet::from([1, 2]),
+                3
+            )
+            .is_err()
+        );
+    }
+}
+
+#[test]
 fn concentrated_reports_are_bounded_and_deterministic() {
     use game_parallel_economy_taking::{
         Interpretation, ObservedTaking, Reception, ReportPolicy, Stance, Witness,
@@ -841,6 +986,7 @@ fn concentrated_reports_are_bounded_and_deterministic() {
                 claimed_outcome: None,
                 source: Default::default(),
                 heard_from: None,
+                details: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -922,6 +1068,7 @@ fn sparse_and_multiple_witness_keys_match_reversed_contacts() {
                 claimed_outcome: None,
                 source: Default::default(),
                 heard_from: None,
+                details: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -982,6 +1129,7 @@ fn participants_can_report_their_own_experiences_only_if_noticed() {
                 claimed_outcome: None,
                 source: Default::default(),
                 heard_from: None,
+                details: None,
             },
             ReportPolicy {
                 person: 2,
@@ -992,6 +1140,7 @@ fn participants_can_report_their_own_experiences_only_if_noticed() {
                 claimed_outcome: None,
                 source: Default::default(),
                 heard_from: None,
+                details: None,
             },
         ]
         .into(),
@@ -1082,6 +1231,7 @@ fn testimony_benchmark() {
                 claimed_outcome: None,
                 source: Default::default(),
                 heard_from: None,
+                details: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -1161,6 +1311,7 @@ fn relayed_testimony_benchmark() {
                 claimed_outcome: None,
                 source: ReportSource::Heard,
                 heard_from: None,
+                details: None,
             })
             .collect::<Vec<_>>()
             .into(),

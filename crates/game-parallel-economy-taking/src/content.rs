@@ -1,5 +1,8 @@
 //! Authored names are resolved before the physical simulation starts.
-use crate::{Policy, Reaction, Reception, ReportPolicy, Response, Taking, Witness};
+use crate::{
+    Outcome, Policy, Reaction, Reception, ReportDetails, ReportPolicy, ReportSource, Response,
+    Taking, Witness,
+};
 use serde::Deserialize;
 
 fn one() -> u64 {
@@ -18,9 +21,40 @@ pub struct Config {
     #[serde(default)]
     pub witnesses: Vec<Witness>,
     #[serde(default)]
-    pub report_policies: Vec<ReportPolicy>,
+    pub report_policies: Vec<ReportPolicyConfig>,
     #[serde(default)]
     pub receptions: Vec<Reception>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportPolicyConfig {
+    pub person: u64,
+    pub recipient: u64,
+    pub actor: u64,
+    #[serde(default)]
+    pub willing: bool,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pub claimed_outcome: Option<Outcome>,
+    #[serde(default)]
+    pub source: ReportSource,
+    #[serde(default)]
+    pub heard_from: Option<u64>,
+    #[serde(default)]
+    pub details: Option<ReportDetailsConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportDetailsConfig {
+    #[serde(default)]
+    pub target: Option<u64>,
+    #[serde(default)]
+    pub good: Option<String>,
+    #[serde(default)]
+    pub quantity: Option<u64>,
 }
 
 #[derive(Deserialize)]
@@ -67,12 +101,45 @@ impl Config {
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
+        let report_policies = self
+            .report_policies
+            .into_iter()
+            .map(|p| {
+                let details = p
+                    .details
+                    .map(|d| {
+                        Ok::<_, String>(ReportDetails {
+                            target: d.target,
+                            good: d
+                                .good
+                                .map(|name| {
+                                    good(&name)
+                                        .ok_or_else(|| format!("unknown reported good {name}"))
+                                })
+                                .transpose()?,
+                            quantity: d.quantity,
+                        })
+                    })
+                    .transpose()?;
+                Ok::<_, String>(ReportPolicy {
+                    person: p.person,
+                    recipient: p.recipient,
+                    actor: p.actor,
+                    willing: p.willing,
+                    pressure_threshold: p.pressure_threshold,
+                    claimed_outcome: p.claimed_outcome,
+                    source: p.source,
+                    heard_from: p.heard_from,
+                    details,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Taking {
             policies: policies.into(),
             responses: self.responses.into(),
             reactions: self.reactions.into(),
             witnesses: self.witnesses.into(),
-            report_policies: self.report_policies.into(),
+            report_policies: report_policies.into(),
             receptions: self.receptions.into(),
             reports: Default::default(),
             events: vec![],

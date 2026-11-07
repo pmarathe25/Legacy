@@ -1369,6 +1369,7 @@ impl<'a> Player<'a> {
                 claimed_outcome,
                 source: game_parallel_economy::TakingReportSource::Observed,
                 heard_from: None,
+                details: None,
             }),
         )
     }
@@ -1392,8 +1393,25 @@ impl<'a> Player<'a> {
                 claimed_outcome,
                 source: game_parallel_economy::TakingReportSource::Heard,
                 heard_from: None,
+                details: None,
             }),
         )
+    }
+    pub fn set_taking_report_details(
+        &mut self,
+        recipient: u64,
+        actor: u64,
+        details: game_parallel_economy::TakingReportDetails,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        let mut policy = self
+            .world
+            .taking_report_policy(person, recipient, actor)
+            .cloned()
+            .ok_or("configure a report or relay first")?;
+        policy.details = Some(details);
+        self.world
+            .set_taking_report_policy(person, recipient, actor, Some(policy))
     }
     pub fn set_taking_report_stance(
         &mut self,

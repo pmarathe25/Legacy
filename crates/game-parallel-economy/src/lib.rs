@@ -40,8 +40,9 @@ pub use game_parallel_economy_taking::{
     Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
     Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
     Reception as TakingReception, Report as TakingReport, ReportBelief as TakingReportBelief,
-    ReportPolicy as TakingReportPolicy, ReportSource as TakingReportSource,
-    Response as TakingResponse, Stance as TakingReportStance, Taking, Witness as TakingWitness,
+    ReportDetails as TakingReportDetails, ReportPolicy as TakingReportPolicy,
+    ReportSource as TakingReportSource, Response as TakingResponse, Stance as TakingReportStance,
+    Taking, Witness as TakingWitness,
 };
 pub use game_parallel_economy_work::care::DependentCare;
 pub use game_parallel_economy_work::sites::{
@@ -1221,6 +1222,18 @@ impl Economy {
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.reports.get(person).iter().collect())
     }
+    pub fn taking_report_policy(
+        &self,
+        person: u64,
+        recipient: u64,
+        actor: u64,
+    ) -> Option<&TakingReportPolicy> {
+        self.taking
+            .as_ref()?
+            .report_policies
+            .iter()
+            .find(|p| (p.person, p.recipient, p.actor) == (person, recipient, actor))
+    }
     pub fn set_taking_report_policy(
         &mut self,
         person: u64,
@@ -1239,6 +1252,12 @@ impl Economy {
                 .is_none_or(|i| self.people[i].health == 0)
             || policy.as_ref().is_some_and(|p| {
                 (p.person, p.recipient, p.actor) != (person, recipient, actor)
+                    || p.details.as_ref().is_some_and(|d| {
+                        d.target.is_some_and(|id| id == actor || !exists(id))
+                            || d.good
+                                .is_some_and(|id| !self.physical.goods().iter().any(|g| g.id == id))
+                            || d.quantity == Some(0)
+                    })
                     || p.pressure_threshold == Some(0)
                     || p.heard_from.is_some_and(|id| id == person || !exists(id))
                     || (p.source == TakingReportSource::Observed && p.heard_from.is_some())

@@ -25,6 +25,20 @@ pub struct ReportPolicy {
     /// Optional immediate speaker to select when forwarding a received account.
     #[serde(default)]
     pub heard_from: Option<u64>,
+    /// Optional changes to the account, whether observed or relayed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<ReportDetails>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportDetails {
+    #[serde(default)]
+    pub target: Option<u64>,
+    #[serde(default)]
+    pub good: Option<u32>,
+    #[serde(default)]
+    pub quantity: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +132,12 @@ pub fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>, now: u
                 || p.heard_from
                     .is_some_and(|id| id == p.person || !people.contains(&id))
                 || (p.source == ReportSource::Observed && p.heard_from.is_some())
+                || p.details.as_ref().is_some_and(|d| {
+                    d.target
+                        .is_some_and(|id| id == p.actor || !people.contains(&id))
+                        || d.good.is_some_and(|id| !goods.contains(&id))
+                        || d.quantity == Some(0)
+                })
                 || p.pressure_threshold == Some(0)
         })
         && !owner
@@ -268,6 +288,17 @@ impl Taking {
                     )
                 }
             };
+            let target = policy
+                .details
+                .as_ref()
+                .and_then(|d| d.target)
+                .unwrap_or(target);
+            let good = policy.details.as_ref().and_then(|d| d.good).unwrap_or(good);
+            let quantity = policy
+                .details
+                .as_ref()
+                .and_then(|d| d.quantity)
+                .unwrap_or(quantity);
             let claimed_outcome = policy.claimed_outcome.unwrap_or(outcome);
             let prior = reports_for(policy.recipient);
             if prior
