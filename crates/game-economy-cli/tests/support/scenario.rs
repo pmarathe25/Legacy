@@ -324,6 +324,84 @@ fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
 }
 
 #[test]
+fn playable_successor_invokes_their_actual_previous_life() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-succession.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                for _ in 0..10 {
+                    world.advance().unwrap();
+                    if world
+                        .snapshot()
+                        .campaign
+                        .as_ref()
+                        .unwrap()
+                        .lineage
+                        .current
+                        .is_some_and(|id| id != 1)
+                    {
+                        break;
+                    }
+                }
+                let state = world.snapshot();
+                let lineage = &state.campaign.as_ref().unwrap().lineage;
+                assert_ne!(lineage.current, None);
+                assert_eq!(lineage.history.len(), 1);
+                assert_eq!(lineage.history[0].person, 1);
+                assert!(Player::new(&mut world).past_knowledge(1).is_err());
+                Player::new(&mut world).invoke(&[1]).unwrap();
+                let remembered = Player::new(&mut world).past_knowledge(1).unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(
+                    Player::new(&mut restored).past_knowledge(1).unwrap(),
+                    remembered
+                );
+                let mut warned = false;
+                for _ in 0..10 {
+                    let before = world.tick();
+                    let result = Player::new(&mut world).advance();
+                    let restored_result = Player::new(&mut restored).advance();
+                    assert_eq!(result.is_ok(), restored_result.is_ok());
+                    if result.is_err() {
+                        assert_eq!(world.tick(), before);
+                        warned = world
+                            .snapshot()
+                            .campaign
+                            .unwrap()
+                            .lineage
+                            .invocation
+                            .unwrap()
+                            .pending
+                            .is_some();
+                        break;
+                    }
+                }
+                assert!(warned, "the ongoing invocation should warn before its cost");
+                assert_eq!(world.snapshot(), restored.snapshot());
+                Player::new(&mut world).dismiss_invocation().unwrap();
+                Player::new(&mut restored).dismiss_invocation().unwrap();
+                assert!(Player::new(&mut world).past_knowledge(1).is_err());
+                Player::new(&mut world).advance().unwrap();
+                Player::new(&mut restored).advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_conflict_does_not_stop_other_peoples_project() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
