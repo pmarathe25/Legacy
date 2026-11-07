@@ -336,6 +336,86 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
 }
 
 #[test]
+fn ordered_disjoint_ranges_and_interleaved_endpoints_match_general_arbitration() {
+    for destination_first in [false, true] {
+        let mut holders = Vec::new();
+        let mut transfers = Vec::new();
+        for id in 1..=256 {
+            let (source, destination) = if destination_first {
+                (id + 1000, id)
+            } else {
+                (2 * id - 1, 2 * id)
+            };
+            holders.push(container(
+                Place::Person(source),
+                10,
+                vec![lot(1, 1, Some(1)), lot(1, 3, Some(4))],
+            ));
+            holders.push(container(Place::Person(destination), 10, vec![]));
+            transfers.push(crate::SimpleTransfer {
+                action: id,
+                movement: Movement {
+                    id: 1000 - id,
+                    from: Place::Person(source),
+                    to: Some(Place::Person(destination)),
+                    good: 1,
+                    quantity: 2,
+                },
+            });
+        }
+        holders.sort_unstable_by_key(|row| row.place);
+        let actions: Vec<_> = transfers
+            .iter()
+            .map(|row| Transaction {
+                id: row.action,
+                movements: vec![row.movement],
+                creations: vec![],
+            })
+            .collect();
+        let run = |workers, reverse| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut transfers = transfers.clone();
+                    let mut actions = actions.clone();
+                    if reverse {
+                        transfers.reverse();
+                        actions.reverse();
+                    }
+                    let mut fast = store(holders.clone());
+                    let mut general = store(holders.clone());
+                    let draft = fast
+                        .prepare_flat_transfers(&transfers, true)
+                        .unwrap()
+                        .unwrap();
+                    let reference = general
+                        .prepare_with_empty(
+                            7,
+                            &actions,
+                            vec![container(Place::Inventory(99999), 10, vec![])],
+                            true,
+                        )
+                        .unwrap();
+                    assert_eq!(draft.transactions(), reference.transactions());
+                    assert_eq!(draft.outcomes(), reference.outcomes());
+                    assert_eq!(draft.spoiled(), reference.spoiled());
+                    fast.commit(draft).unwrap();
+                    general.commit(reference).unwrap();
+                    let mut expected = general.export();
+                    expected
+                        .containers
+                        .retain(|row| row.place != Place::Inventory(99999));
+                    assert_eq!(fast.export(), expected);
+                    fast.export()
+                })
+        };
+        assert_eq!(run(1, false), run(4, true));
+    }
+}
+
+#[test]
 fn late_empty_holders_do_not_shift_planned_physical_changes() {
     let mut store = store(vec![
         container(Place::Person(1), 10, vec![lot(1, 3, Some(5))]),

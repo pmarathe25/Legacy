@@ -177,14 +177,45 @@ fn prepare_rows(
         drop(phase);
         phase = game_diagnostics::span("physical.independent.validate");
     }
-    let mut endpoints: Vec<_> = rows
-        .par_iter()
-        .flat_map_iter(|r| [r.source, r.destination])
-        .collect();
-    endpoints.par_sort_unstable();
-    if endpoints.par_windows(2).any(|p| p[0] == p[1]) {
-        return Ok(None);
-    }
+    // When both ordered endpoint ranges are disjoint, their concatenation is
+    // already canonical and proves exclusivity without a global sort.
+    let separated = rows.first().zip(rows.last()).and_then(|(first, last)| {
+        let source_first = if last.source < first.destination {
+            Some(true)
+        } else if last.destination < first.source {
+            Some(false)
+        } else {
+            None
+        }?;
+        rows.par_windows(2)
+            .all(|pair| {
+                pair[0].source < pair[1].source && pair[0].destination < pair[1].destination
+            })
+            .then_some(source_first)
+    });
+    let endpoints: Vec<_> = if let Some(source_first) = separated {
+        if source_first {
+            rows.par_iter()
+                .map(|row| row.source)
+                .chain(rows.par_iter().map(|row| row.destination))
+                .collect()
+        } else {
+            rows.par_iter()
+                .map(|row| row.destination)
+                .chain(rows.par_iter().map(|row| row.source))
+                .collect()
+        }
+    } else {
+        let mut endpoints: Vec<_> = rows
+            .par_iter()
+            .flat_map_iter(|r| [r.source, r.destination])
+            .collect();
+        endpoints.par_sort_unstable();
+        if endpoints.par_windows(2).any(|p| p[0] == p[1]) {
+            return Ok(None);
+        }
+        endpoints
+    };
     let mut movement_ids: Vec<_> = rows.par_iter().map(|r| r.movement.id).collect();
     if movement_ids.par_windows(2).any(|p| p[0] > p[1]) {
         movement_ids.par_sort_unstable();
@@ -228,7 +259,8 @@ fn prepare_rows(
             let mut lots = Vec::with_capacity(chunk.len());
             let mut headers = Vec::with_capacity(chunk.len());
             let mut transactions = Vec::with_capacity(chunk.len());
-            let mut changes = Vec::with_capacity(chunk.len() * 2);
+            let mut sources = Vec::with_capacity(chunk.len());
+            let mut destinations = Vec::with_capacity(chunk.len());
             for row in chunk {
                 let source = &state.containers[row.source];
                 let destination = &state.containers[row.destination];
@@ -267,7 +299,7 @@ fn prepare_rows(
                 debug_assert_eq!(remaining, 0);
                 let end = lots.len();
                 if accepted || source.next_expiry.is_some_and(|at| at <= next) {
-                    changes.push((
+                    sources.push((
                         row.source,
                         after(
                             source,
@@ -279,7 +311,7 @@ fn prepare_rows(
                     ));
                 }
                 if accepted || destination.next_expiry.is_some_and(|at| at <= next) {
-                    changes.push((
+                    destinations.push((
                         row.destination,
                         after(destination, next, 0, 0, &lots[begin..end]),
                     ));
@@ -306,7 +338,7 @@ fn prepare_rows(
                     },
                 })
                 .collect::<Vec<_>>();
-            (outcomes, transactions, changes)
+            (outcomes, transactions, sources, destinations)
         })
         .collect();
     #[cfg(feature = "profile")]
@@ -316,25 +348,47 @@ fn prepare_rows(
     }
     let (outcome_parts, rest): (Vec<_>, Vec<_>) = parts
         .into_par_iter()
-        .map(|(outcomes, transactions, changes)| (outcomes, (transactions, changes)))
+        .map(|(outcomes, transactions, sources, destinations)| {
+            (outcomes, (transactions, sources, destinations))
+        })
         .unzip();
-    let (transaction_parts, change_parts): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
-    let (mut outcomes, (mut transaction_outcomes, mut changes)): (Vec<_>, (Vec<_>, Vec<_>)) =
-        rayon::join(
-            || outcome_parts.into_par_iter().flatten().collect(),
-            || {
-                rayon::join(
-                    || transaction_parts.into_par_iter().flatten().collect(),
-                    || change_parts.into_par_iter().flatten().collect(),
-                )
-            },
-        );
+    let (transaction_parts, rest): (Vec<_>, Vec<_>) = rest
+        .into_par_iter()
+        .map(|(transactions, sources, destinations)| (transactions, (sources, destinations)))
+        .unzip();
+    let (source_parts, destination_parts): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
+    let (mut outcomes, (mut transaction_outcomes, (mut sources, mut destinations))): (
+        Vec<_>,
+        (Vec<_>, (Vec<_>, Vec<_>)),
+    ) = rayon::join(
+        || outcome_parts.into_par_iter().flatten().collect(),
+        || {
+            rayon::join(
+                || transaction_parts.into_par_iter().flatten().collect(),
+                || {
+                    rayon::join(
+                        || source_parts.into_par_iter().flatten().collect(),
+                        || destination_parts.into_par_iter().flatten().collect(),
+                    )
+                },
+            )
+        },
+    );
+    let mut changes = if separated == Some(false) {
+        destinations.append(&mut sources);
+        destinations
+    } else {
+        sources.append(&mut destinations);
+        sources
+    };
     #[cfg(feature = "profile")]
     {
         drop(phase);
         phase = game_diagnostics::span("physical.independent.untouched_expiry");
     }
-    changes.par_extend(
+    let extra: Vec<_> = if spoiled.is_empty() {
+        Vec::new()
+    } else {
         state
             .containers
             .par_iter()
@@ -343,14 +397,19 @@ fn prepare_rows(
                 (container.next_expiry.is_some_and(|at| at <= next)
                     && endpoints.binary_search(&index).is_err())
                 .then(|| (index, after(container, next, 0, 0, &[])))
-            }),
-    );
+            })
+            .collect()
+    };
+    let already_ordered = separated.is_some() && extra.is_empty();
+    changes.par_extend(extra);
     #[cfg(feature = "profile")]
     {
         drop(phase);
         phase = game_diagnostics::span("physical.independent.sort");
     }
-    changes.par_sort_unstable_by_key(|row| row.0);
+    if !already_ordered {
+        changes.par_sort_unstable_by_key(|row| row.0);
+    }
     if outcomes.par_windows(2).any(|p| p[0].id > p[1].id) {
         outcomes.par_sort_unstable_by_key(|row| row.id);
     }
