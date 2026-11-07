@@ -14,6 +14,10 @@ fn main() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(12);
+    let sample_count: usize = std::env::var("LEGACY_SAMPLES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(3);
     let reproduction: u8 = std::env::var("LEGACY_REPRODUCTION")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -24,9 +28,10 @@ fn main() {
         .unwrap_or(20);
     let encounter_reports = std::env::var_os("LEGACY_ENCOUNTER_REPORTS").is_some();
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
+    let history_stress = std::env::var_os("LEGACY_SOCIAL_HISTORY_STRESS").is_some();
     let inquiry_pursuit =
         taking_inquiries && std::env::var_os("LEGACY_DISABLE_INQUIRY_PURSUIT").is_none();
-    assert!(people > 4 && ticks > 0 && reproduction <= 100);
+    assert!(people > 4 && ticks > 0 && sample_count > 0 && reproduction <= 100);
     let profile =
         std::fs::read_to_string(root.join("content/scenarios/campaign-population.toml")).unwrap();
     assert!(profile.contains("count = 128"));
@@ -44,6 +49,30 @@ fn main() {
     std::fs::write(&path, profile).unwrap();
     let mut scenario_source =
         std::fs::read_to_string(root.join("content/scenarios/economy-campaign.toml")).unwrap();
+    if history_stress {
+        for (original, replacement) in [
+            ("lifespan_min = 50", "lifespan_min = 1000"),
+            ("lifespan_max = 70", "lifespan_max = 1000"),
+            ("hunger_per_tick = 1", "hunger_per_tick = 0"),
+            ("exposure_per_thousand = 1000", "exposure_per_thousand = 0"),
+            ("exposure_per_thousand = 2000", "exposure_per_thousand = 0"),
+            ("exhaustion_damage = 1", "exhaustion_damage = 0"),
+        ] {
+            assert!(
+                scenario_source.contains(original),
+                "history stress setting missing: {original}"
+            );
+            scenario_source = scenario_source.replacen(original, replacement, 1);
+        }
+        let purpose = scenario_source
+            .find("[purpose.rules]")
+            .expect("purpose rules");
+        let damage = purpose
+            + scenario_source[purpose..]
+                .find("damage = 1")
+                .expect("purpose damage");
+        scenario_source.replace_range(damage..damage + "damage = 1".len(), "damage = 0");
+    }
     if grain_per_person > 0 {
         let grain = people
             .checked_mul(grain_per_person)
@@ -123,9 +152,10 @@ fn main() {
                 person: target, recipient, actor, willing: true, pressure_threshold: None,
                 claimed_outcome: None, source: Default::default(), heard_from: None, details: None,
             }).collect::<Vec<_>>();
-            let complaint_preferences = groups.iter().map(|&(_, _, recipient)| ComplaintPreference {
+            let mut complaint_preferences = groups.iter().map(|&(_, _, recipient)| ComplaintPreference {
                 person: recipient, willing: true, pressure_threshold: None,
             }).collect::<Vec<_>>();
+            complaint_preferences.sort_unstable_by_key(|preference| preference.person);
             let mut pursuing = if inquiry_pursuit { groups.iter().flat_map(|&(_, author, recipient)| [author, recipient]).collect::<Vec<_>>() } else { Vec::new() };
             pursuing.sort_unstable();
             initial.taking = Some(Taking { policies: policies.into(), responses: responses.into(), witnesses: witnesses.into(), report_policies: report_policies.into(), complaint_preferences: complaint_preferences.into(), inquiry_pursuit: pursuing.into(), ..Default::default() });
@@ -150,6 +180,7 @@ fn main() {
         let mut samples = Vec::new();
         let mut expected = None;
         let mut final_population = 0;
+        let mut living_people = 0;
         let mut started_jobs = 0;
         let mut delivered_jobs = 0;
         let mut remembered_encounters = 0;
@@ -160,7 +191,10 @@ fn main() {
         let mut inquiry_declined = 0;
         let mut inquiry_expired = 0;
         let mut inquiry_answers = 0;
-        for round in 0..4 {
+        let mut social_relationships = 0;
+        let mut directed_opinions = 0;
+        let mut taking_reports = 0;
+        for round in 0..=sample_count {
             let mut world = game_economy::Economy::compile(initial.clone()).unwrap();
             let started = std::time::Instant::now();
             started_jobs = 0;
@@ -173,6 +207,10 @@ fn main() {
             let elapsed = started.elapsed().as_secs_f64();
             let state = world.snapshot();
             final_population = state.people.len();
+            living_people = state.people.iter().filter(|person| person.health > 0).count();
+            social_relationships = state.dynamics.as_ref().and_then(|d| d.social.as_ref()).map_or(0, |s| s.relationships.len());
+            directed_opinions = state.opinions.as_ref().map_or(0, |owner| owner.records.len());
+            taking_reports = state.taking.as_ref().map_or(0, |owner| owner.reports.len());
             if encounter_reports {
                 let minds = &state.knowledge.as_ref().unwrap().minds;
                 remembered_encounters = minds.iter().map(|mind| mind.people_seen.len()).sum::<usize>();
@@ -193,7 +231,9 @@ fn main() {
             if round > 0 { samples.push(elapsed); }
         }
         samples.sort_by(f64::total_cmp);
-        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_pursuit={inquiry_pursuit} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
+        let middle = samples.len() / 2;
+        let median = if samples.len() % 2 == 0 { (samples[middle - 1] + samples[middle]) / 2.0 } else { samples[middle] };
+        println!("workers={workers} initial_people={people} final_people={final_population} living_people={living_people} history_stress={history_stress} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} samples={sample_count} started_jobs={started_jobs} delivered_jobs={delivered_jobs} social_relationships={social_relationships} directed_opinions={directed_opinions} taking_reports={taking_reports} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_pursuit={inquiry_pursuit} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={median:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[samples.len()-1], expected.unwrap());
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {
             for (name, measurement) in game_diagnostics::snapshot() {

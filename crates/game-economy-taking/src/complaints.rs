@@ -159,8 +159,18 @@ impl Taking {
             rows
         });
         let pairs = ordered.as_deref().unwrap_or(contacts);
-        let mut preferences: Vec<_> = previous.complaint_preferences.par_iter().collect();
-        preferences.par_sort_unstable_by_key(|row| row.person);
+        let ordered_preferences = previous
+            .complaint_preferences
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+            .then(|| {
+                let mut rows: Vec<_> = previous.complaint_preferences.par_iter().copied().collect();
+                rows.par_sort_unstable_by_key(|row| row.person);
+                rows
+            });
+        let preferences = ordered_preferences
+            .as_deref()
+            .unwrap_or(previous.complaint_preferences.as_slice());
         let reports = &self.reports;
         let mut updates: Vec<_> = previous
             .complaints

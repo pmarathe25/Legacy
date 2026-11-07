@@ -224,6 +224,17 @@ fn many_independent_inquiry_requests_replay_across_workers() {
     );
     assert_eq!(one, run(4));
     assert_eq!(one, run(6));
+    let mut unordered = initial.clone();
+    unordered.complaint_preferences = initial
+        .complaint_preferences
+        .iter()
+        .rev()
+        .copied()
+        .collect::<Vec<_>>()
+        .into();
+    let mut unordered_next = unordered.clone();
+    unordered_next.advance_complaints(&unordered, &contacts, 3, &|_, _| 0);
+    assert_eq!(one.complaints, unordered_next.complaints);
     let reports: Vec<_> = one
         .complaints
         .iter()

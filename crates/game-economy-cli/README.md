@@ -34,6 +34,8 @@ Set `LEGACY_TAKING_INQUIRIES=1` to stage a boundary of real takings, create pers
 
 For a sparse-update comparison, also set `LEGACY_DISABLE_INQUIRY_PURSUIT=1`; people then do not deliberately seek these contacts, though incidental encounters can still occur. The benchmark reports whether pursuit is enabled.
 
+`LEGACY_SOCIAL_HISTORY_STRESS=1` creates an artificial longevity workload by extending lifespans and disabling hunger growth, exposure damage, purpose damage, and exhaustion damage. It reports living people, retained social relationships, directed opinions, and taking reports. This isolates growing history costs; it is not a balanced or mature economy. `LEGACY_SAMPLES` sets the number of timed samples after one warm-up (default three).
+
 `content/scenarios/economy-regional-project.toml` moves the timber to a second region. Use `catalog` to find its good ID, then `ask-haul 2 2 1 GOOD 40` to request ongoing help for forty ticks. The carrier's own choices govern the journey and transfer; the request creates neither a contract nor goods. After finding the source empty, this person chooses to return and wait before retrying, leaving time to pursue their own project.
 
 A hauling policy can set `empty_backoff` to a positive number of ticks. When that person actually finds their source empty, they may return toward the destination and wait before another attempt. Omit it to leave that response unconfigured. `haul-empty off|TICKS` changes the current person's preference; the administrative form is `haul-empty PERSON off|TICKS`. An already-started physical journey continues.
