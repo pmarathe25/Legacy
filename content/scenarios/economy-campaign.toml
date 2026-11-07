@@ -149,6 +149,7 @@ exhaustion_damage = 1
 
 [[knowledge.minds]]
 person = 1
+remember_people = true
 
 [[knowledge.minds]]
 person = 2

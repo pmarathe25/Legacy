@@ -1124,6 +1124,12 @@ impl<'a> Player<'a> {
     pub fn food_reporting(&self) -> Result<Option<game_economy::Reporting>, String> {
         self.world.food_reporting(self.current()?)
     }
+    pub fn set_remember_people(&mut self, enabled: bool) -> Result<(), String> {
+        self.world.set_remember_people(self.current()?, enabled)
+    }
+    pub fn known_people(&self) -> Result<Vec<game_economy::SeenPerson>, String> {
+        self.world.known_people(self.current()?)
+    }
     pub fn set_food_report_reception(
         &mut self,
         reception: Option<game_economy::ReportReception>,

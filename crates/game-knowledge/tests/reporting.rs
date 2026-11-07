@@ -13,6 +13,8 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
                     willing: false,
                     pressure_threshold: Some(4),
                 }),
+                remember_people: false,
+                people_seen: vec![],
                 misreport: Some(Misreport {
                     target: Some(2),
                     food_delta: 5,
@@ -28,6 +30,8 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
             Mind {
                 person: 2,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             },

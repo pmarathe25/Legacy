@@ -2,7 +2,7 @@
 use game_economy_person::Person;
 use game_families::Families;
 use game_knowledge::Observation;
-pub use game_knowledge::{Knowledge, Mind, Misreport, Record, Reporting};
+pub use game_knowledge::{Knowledge, Mind, Misreport, Record, Reporting, SeenPerson};
 use game_lots::{Place, View};
 use game_opinions::Opinions;
 use game_production_model::Good;
@@ -141,6 +141,8 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
         .par_extend(births.par_iter().map(|&person| Mind {
             person,
             reporting: None,
+            remember_people: false,
+            people_seen: vec![],
             misreport: None,
             records: vec![],
         }));
@@ -210,6 +212,35 @@ macro_rules! prepare_world {
 #[macro_export]
 macro_rules! knowledge_methods {
     () => {
+        /// Set only this person's inclination to remember new local encounters.
+        pub fn set_remember_people(&mut self, person: u64, enabled: bool) -> Result<(), String> {
+            if !self.people.iter().any(|p| p.id == person && p.health > 0) {
+                return Err("unknown or deceased person".into());
+            }
+            let owner = self.knowledge.as_mut().ok_or("knowledge is disabled")?;
+            let mind = owner
+                .minds
+                .iter_mut()
+                .find(|mind| mind.person == person)
+                .ok_or("person has no mind")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mind.remember_people = enabled;
+            self.epoch = epoch;
+            Ok(())
+        }
+        pub fn known_people(&self, person: u64) -> Result<Vec<$crate::SeenPerson>, String> {
+            self.knowledge
+                .as_ref()
+                .ok_or("knowledge is disabled")?
+                .minds
+                .iter()
+                .find(|mind| mind.person == person)
+                .map(|mind| mind.people_seen.clone())
+                .ok_or("person has no mind".into())
+        }
         /// Set this person's own willingness and pressure response for future reports.
         pub fn set_food_reporting(
             &mut self,

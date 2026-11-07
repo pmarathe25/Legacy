@@ -10818,6 +10818,8 @@ fn expedition_observation_requires_personal_fresh_evidence_at_destination() {
         minds: vec![Mind {
             person: 1,
             reporting: None,
+            remember_people: false,
+            people_seen: vec![],
             misreport: None,
             records: vec![Record {
                 region: 2,
@@ -16566,6 +16568,8 @@ fn knowledge_workload(count: u64) -> State {
             .map(|person| Mind {
                 person,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             })
@@ -22291,6 +22295,8 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         minds: vec![Mind {
             person: 2,
             reporting: None,
+            remember_people: false,
+            people_seen: vec![],
             misreport: None,
             records: vec![Record {
                 region: 2,
@@ -22452,6 +22458,8 @@ fn food_search_workload(count: u64) -> State {
             .map(|person| Mind {
                 person,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![Record {
                     region: 2,
@@ -28806,6 +28814,88 @@ fn a_persons_goal_progresses_only_after_their_actual_work_finishes() {
 }
 
 #[test]
+fn personal_encounter_memory_is_local_bounded_and_not_a_live_location() {
+    use game_economy_knowledge::{Knowledge, Mind};
+    let mut initial = expedition_fixture();
+    initial.people[0].controlled = true;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = true;
+    initial.knowledge = Some(Knowledge {
+        max_records: 2,
+        minds: vec![
+            Mind {
+                person: 1,
+                remember_people: true,
+                people_seen: vec![],
+                reporting: None,
+                misreport: None,
+                records: vec![],
+            },
+            Mind {
+                person: 2,
+                remember_people: false,
+                people_seen: vec![],
+                reporting: None,
+                misreport: None,
+                records: vec![],
+            },
+        ],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.known_people(1).unwrap().is_empty());
+                assert!(world.meet(1, 2).unwrap());
+                let seen = world.known_people(1).unwrap();
+                assert_eq!(
+                    seen,
+                    vec![SeenPerson {
+                        person: 2,
+                        region: 1,
+                        observed_at: 1
+                    }]
+                );
+                assert!(world.known_people(2).unwrap().is_empty());
+                world
+                    .depart(&[Departure {
+                        person: 2,
+                        destination: 2,
+                    }])
+                    .unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                assert_eq!(world.snapshot().people[1].region, Some(2));
+                assert_eq!(
+                    world.known_people(1).unwrap(),
+                    seen,
+                    "the memory is not a live location"
+                );
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(restored.known_people(1).unwrap(), seen);
+                let stale = world.prepare().unwrap();
+                world.set_remember_people(1, false).unwrap();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.known_people(1).unwrap(), seen);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn personal_food_reporting_can_be_withheld_or_motivated_by_pressure() {
     use game_economy_knowledge::{Knowledge, Mind, Record, Reporting};
     let mut initial = expedition_fixture();
@@ -28833,6 +28923,8 @@ fn personal_food_reporting_can_be_withheld_or_motivated_by_pressure() {
             Mind {
                 person: 1,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             },
@@ -28842,6 +28934,8 @@ fn personal_food_reporting_can_be_withheld_or_motivated_by_pressure() {
                     willing: false,
                     pressure_threshold: None,
                 }),
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![Record {
                     region: 2,
@@ -28934,12 +29028,16 @@ fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
             Mind {
                 person: 1,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 2,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![Record {
                     region: 2,
@@ -29046,12 +29144,16 @@ fn false_food_reports_are_personal_statements_not_physical_stock() {
             Mind {
                 person: 1,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 2,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![remembered.clone()],
             },
@@ -29179,6 +29281,8 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
             Mind {
                 person: 1,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: Some(Misreport {
                     target: Some(2),
                     food_delta: 10,
@@ -29194,6 +29298,8 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
             Mind {
                 person: 2,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             },
@@ -29325,6 +29431,8 @@ fn stale_draft_does_not_publish_a_report_discrepancy_reaction() {
         minds: vec![Mind {
             person: 2,
             reporting: None,
+            remember_people: false,
+            people_seen: vec![],
             misreport: None,
             records: vec![Record {
                 region: 1,
@@ -29399,12 +29507,16 @@ fn invoked_memory_remains_in_the_past_mind_and_requires_control() {
             Mind {
                 person: 3,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![],
             },
             Mind {
                 person: 4,
                 reporting: None,
+                remember_people: false,
+                people_seen: vec![],
                 misreport: None,
                 records: vec![record.clone()],
             },

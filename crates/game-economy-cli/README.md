@@ -4,6 +4,8 @@ Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path. Th
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
+`remember-people on|off` changes whether the current person records new local encounters; `known-people` displays their own bounded memories of who they met, where, and when. A memory is not a live location. The administrative forms take a person ID; scenarios can set `remember_people` on an individual knowledge mind.
+
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
 
 `content/scenarios/economy-regional-project.toml` moves the timber to a second region. Use `catalog` to find its good ID, then `ask-haul 2 2 1 GOOD 40` to request ongoing help for forty ticks. The carrier's own choices govern the journey and transfer; the request creates neither a contract nor goods. After finding the source empty, this person chooses to return and wait before retrying, leaving time to pursue their own project.

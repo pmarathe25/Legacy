@@ -417,6 +417,46 @@ fn playable_campaign_supports_an_observation_expedition() {
 }
 
 #[test]
+fn playable_campaign_exposes_only_the_rulers_encounter_memories() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert!(
+        game_economy_player::Player::new(&mut world)
+            .known_people()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        game_economy_player::Player::new(&mut world)
+            .meet(2)
+            .unwrap()
+    );
+    let seen = game_economy_player::Player::new(&mut world)
+        .known_people()
+        .unwrap();
+    assert_eq!(
+        seen,
+        vec![game_economy::SeenPerson {
+            person: 2,
+            region: 1,
+            observed_at: 1
+        }]
+    );
+    assert!(game_economy_cli_commands::player::handle(&mut world, &["known-people", "2"]).is_err());
+    game_economy_cli_commands::player::handle(&mut world, &["remember-people", "off"]).unwrap();
+    assert_eq!(
+        game_economy_player::Player::new(&mut world)
+            .known_people()
+            .unwrap(),
+        seen
+    );
+}
+
+#[test]
 fn playable_campaign_advances_consistently_across_workers_and_reload() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

@@ -16,6 +16,11 @@ pub struct Knowledge {
 #[serde(deny_unknown_fields)]
 pub struct Mind {
     pub person: u64,
+    /// This person chooses to remember where they met other people.
+    #[serde(default)]
+    pub remember_people: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub people_seen: Vec<SeenPerson>,
     /// A private choice to share, optionally motivated by pressure from the listener.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reporting: Option<Reporting>,
@@ -24,6 +29,14 @@ pub struct Mind {
     pub misreport: Option<Misreport>,
     #[serde(default)]
     pub records: Vec<Record>,
+}
+/// A personal memory of an actual local encounter, not a current location claim.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SeenPerson {
+    pub person: u64,
+    pub region: u64,
+    pub observed_at: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -92,12 +105,23 @@ impl Knowledge {
             if !people.contains(&mind.person)
                 || !minds.insert(mind.person)
                 || mind.records.len() > self.max_records
+                || mind.people_seen.len() > self.max_records
                 || mind
                     .misreport
                     .and_then(|p| p.target)
                     .is_some_and(|id| id == mind.person || !people.contains(&id))
             {
                 return Err("invalid personal mind");
+            }
+            let mut seen_people = HashSet::new();
+            if mind.people_seen.iter().any(|seen| {
+                seen.person == mind.person
+                    || !people.contains(&seen.person)
+                    || !regions.contains(&seen.region)
+                    || seen.observed_at > now
+                    || !seen_people.insert(seen.person)
+            }) {
+                return Err("invalid personal encounter memory");
             }
             let mut recorded = HashSet::new();
             for r in &mind.records {
@@ -234,6 +258,7 @@ impl Knowledge {
                         .binary_search_by_key(&m.person, |o| o.person)
                         .is_err()
                         || m.records.len() > self.max_records
+                        || m.people_seen.len() > self.max_records
                         || m.misreport.and_then(|p| p.target).is_some_and(|id| {
                             id == m.person
                                 || observations
@@ -246,7 +271,17 @@ impl Knowledge {
         }
         if !validated
             && minds.par_iter().any(|mind| {
-                mind.records.iter().enumerate().any(|(i, r)| {
+                mind.people_seen.iter().enumerate().any(|(i, seen)| {
+                    seen.person == mind.person
+                        || !regions.contains(&seen.region)
+                        || seen.observed_at > now
+                        || observations
+                            .binary_search_by_key(&seen.person, |o| o.person)
+                            .is_err()
+                        || mind.people_seen[..i]
+                            .iter()
+                            .any(|old| old.person == seen.person)
+                }) || mind.records.iter().enumerate().any(|(i, r)| {
                     !regions.contains(&r.region)
                         || observations
                             .binary_search_by_key(&r.witness, |o| o.person)
@@ -388,6 +423,22 @@ impl Knowledge {
                 })
                 .collect()
         };
+        let mut seen_contacts: Vec<(u64, u64, u64, u64)> =
+            if !encounters.is_empty() && minds.par_iter().any(|mind| mind.remember_people) {
+                encounters
+                    .par_iter()
+                    .filter(|event| event.tick == now.saturating_add(1))
+                    .flat_map_iter(|event| {
+                        [
+                            (event.a, event.b, event.region, event.tick),
+                            (event.b, event.a, event.region, event.tick),
+                        ]
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+        seen_contacts.par_sort_unstable();
         let next: Vec<Mind> = self
             .minds
             .par_iter()
@@ -397,6 +448,46 @@ impl Knowledge {
                 let observation = observations[position];
                 if observation.health == 0 {
                     return mind;
+                }
+                if mind.remember_people {
+                    let start = seen_contacts.partition_point(|row| row.0 < mind.person);
+                    let end = seen_contacts.partition_point(|row| row.0 <= mind.person);
+                    if let Some(&(_, other, region, observed_at)) = seen_contacts[start..end]
+                        .iter()
+                        .find(|&&(_, other, region, _)| {
+                            observation.local.is_some_and(|(here, _)| here == region)
+                                && observation_index(other).is_some_and(|i| {
+                                    observations[i].health > 0
+                                        && observations[i]
+                                            .local
+                                            .is_some_and(|(here, _)| here == region)
+                                })
+                        })
+                    {
+                        let seen = SeenPerson {
+                            person: other,
+                            region,
+                            observed_at,
+                        };
+                        if let Some(previous) =
+                            mind.people_seen.iter_mut().find(|row| row.person == other)
+                        {
+                            *previous = seen;
+                        } else {
+                            if mind.people_seen.len() == self.max_records {
+                                let oldest = mind
+                                    .people_seen
+                                    .iter()
+                                    .enumerate()
+                                    .min_by_key(|(_, row)| (row.observed_at, row.person))
+                                    .map(|(i, _)| i)
+                                    .expect("positive memory capacity");
+                                mind.people_seen.remove(oldest);
+                            }
+                            mind.people_seen.push(seen);
+                        }
+                        mind.people_seen.sort_unstable_by_key(|row| row.person);
+                    }
                 }
                 if let Some((region, food)) = observation.local {
                     let record = Record {
