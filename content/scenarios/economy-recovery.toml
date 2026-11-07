@@ -1,0 +1,99 @@
+# A living person chooses to recover goods from an incapacitated holder.
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 0
+hunger = 0
+willing_to_work = false
+seek_meals = false
+goods = { bread = 2 }
+
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+
+[family]
+next_id = 4
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+[[family.members]]
+id = 2
+age = 18
+alive = false
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+[[family.members]]
+id = 3
+age = 18
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[campaign.lineage]
+current = 3
+started = 0
+
+[[taking.policies]]
+person = 1
+target = 2
+good = "bread"
+quantity = 1
+willing = true
+interval = 1
+recover_incapacitated = true
+
+[[taking.witnesses]]
+person = 3
+actor = 1
+notices = true

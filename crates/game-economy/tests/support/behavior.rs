@@ -24303,7 +24303,16 @@ fn taking_world_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     let shared = std::env::var_os("LEGACY_SHARED").is_some();
-    let initial = taking_workload(count, shared);
+    let recovery = std::env::var_os("LEGACY_RECOVERY").is_some();
+    let mut initial = taking_workload(count, shared);
+    if recovery {
+        for person in initial.people.iter_mut().take(count as usize) {
+            person.health = 0;
+        }
+        for policy in initial.taking.as_mut().unwrap().policies_mut() {
+            policy.recover_incapacitated = true;
+        }
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -24329,7 +24338,7 @@ fn taking_world_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} attempts={count} people={} shared={shared} elapsed={:.6}",
+                "workers={workers} attempts={count} people={} shared={shared} recovery={recovery} elapsed={:.6}",
                 count * 2,
                 samples[1]
             );

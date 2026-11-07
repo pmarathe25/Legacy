@@ -16,7 +16,7 @@ People can ask for food, give supplies, or provide medical care through real loc
 
 People may attempt to take goods from another living person's custody. The target's own standing preferences determine whether they notice and resist; not resisting does not imply approval. A resisted attempt moves no goods, and the actor may separately choose to escalate into a real tactical encounter. Actual transfers compete for the same finite lots and capacity as other actions. Participants can configure independent signed interpretations of outcomes, and an unaware target gains no direct experience. Taking does not create a universal theft label or automatic obligation.
 
-The ignored `taking_world_benchmark` measures the complete boundary for `LEGACY_ATTEMPTS` attempts and twice as many people. Set `LEGACY_SHARED` for one target and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings.
+The ignored `taking_world_benchmark` measures the complete boundary for `LEGACY_ATTEMPTS` attempts and twice as many people. Set `LEGACY_SHARED` for one target, `LEGACY_RECOVERY` to make targets incapacitated and enable personal recovery, and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings. The benchmark is an isolated synthetic boundary rather than a complete campaign.
 
 The ignored `concentrated_autonomous_delivery_benchmark` measures a full boundary with `LEGACY_PEOPLE` travelers giving to one recipient. Set `LEGACY_CAPACITY` below the population to exercise capacity contention and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings.
 

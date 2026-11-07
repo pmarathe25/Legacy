@@ -180,6 +180,50 @@ fn playable_community_forms_personal_proposals_without_compelling_acceptance() {
 }
 
 #[test]
+fn authored_recovery_scenario_has_a_real_observer_and_physical_transfer() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-recovery.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let before = world.snapshot();
+                assert!(before.taking.as_ref().unwrap().policies[0].recover_incapacitated);
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                let taking = saved.taking.as_ref().unwrap();
+                let event = taking
+                    .events
+                    .iter()
+                    .find(|event| event.actor == 1 && event.target == 2)
+                    .unwrap();
+                assert_eq!(event.outcome, game_economy::TakingOutcome::Transferred);
+                assert!(
+                    taking
+                        .witnesses
+                        .iter()
+                        .any(|w| w.person == 3 && w.last_seen.is_some())
+                );
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_victim_reports_a_taking_without_deciding_what_the_listener_believes() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
