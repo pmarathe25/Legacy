@@ -226,6 +226,9 @@ pub fn prepare(
     if movement_ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
         return Ok(None);
     }
+    if let Some(draft) = super::fan_out::prepare_flat(state, instance, seed, transfers, advance)? {
+        return Ok(Some(draft));
+    }
     let mut endpoints: Vec<(Place, usize)> = transfers
         .par_iter()
         .enumerate()

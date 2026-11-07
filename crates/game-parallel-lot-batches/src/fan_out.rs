@@ -1,7 +1,7 @@
 //! Resolve one contested source feeding distinct destinations in parallel.
 use crate::independent_transfer::after;
 use game_parallel_lot_model::{
-    Lot, Movement, OutcomeBatch, OutcomeChunk, Place, Spoilage, State, Transaction,
+    Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State, Transaction,
     TransactionOutcome,
 };
 use game_parallel_lot_planning::Draft;
@@ -50,6 +50,61 @@ pub fn prepare(
     {
         return Ok(None);
     }
+    prepare_rows(
+        state,
+        instance,
+        seed,
+        transactions.len(),
+        |index| {
+            let transaction = &transactions[index];
+            (transaction.id, transaction.movements[0])
+        },
+        advance,
+    )
+}
+
+/// Action and movement identities have already been validated by the flat planner.
+pub fn prepare_flat(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    if transfers.len() < 128 {
+        return Ok(None);
+    }
+    let first = transfers[0].movement;
+    if transfers[1].movement.from != first.from
+        || transfers[1].movement.good != first.good
+        || transfers
+            .par_iter()
+            .any(|row| row.movement.from != first.from || row.movement.good != first.good)
+    {
+        return Ok(None);
+    }
+    prepare_rows(
+        state,
+        instance,
+        seed,
+        transfers.len(),
+        |index| {
+            let row = transfers[index];
+            (row.action, row.movement)
+        },
+        advance,
+    )
+}
+
+fn prepare_rows(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    len: usize,
+    row_at: impl Fn(usize) -> (u64, Movement) + Sync,
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    let first = row_at(0).1;
     let next = if advance {
         state.tick.checked_add(1).ok_or("lot tick overflow")?
     } else {
@@ -87,17 +142,16 @@ pub fn prepare(
             .binary_search_by_key(&place, |c| c.place)
             .ok()
     };
-    let rows: Option<Vec<_>> = transactions
-        .par_iter()
-        .enumerate()
-        .map(|(original, transaction)| {
-            let movement = transaction.movements[0];
+    let rows: Option<Vec<_>> = (0..len)
+        .into_par_iter()
+        .map(|original| {
+            let (transaction, movement) = row_at(original);
             Some(Row {
                 original,
-                transaction: transaction.id,
+                transaction,
                 movement,
                 destination: find(movement.to?)?,
-                rank: game_parallel_genetics::random(seed, transaction.id, next),
+                rank: game_parallel_genetics::random(seed, transaction, next),
             })
         })
         .collect();
