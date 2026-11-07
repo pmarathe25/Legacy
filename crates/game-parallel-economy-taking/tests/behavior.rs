@@ -811,7 +811,7 @@ fn concentrated_reports_are_bounded_and_deterministic() {
         Interpretation, ObservedTaking, Reception, ReportPolicy, Stance, Witness,
     };
     use game_parallel_opinions::SubjectiveReaction;
-    let observers = 3..=1026;
+    let observers = 3..=8194;
     let previous = Taking {
         witnesses: observers
             .clone()
@@ -834,9 +834,9 @@ fn concentrated_reports_are_bounded_and_deterministic() {
             .clone()
             .map(|person| ReportPolicy {
                 person,
-                recipient: 5000,
+                recipient: 10_000,
                 actor: 1,
-                willing: true,
+                willing: person >= 2100 && person % 3 != 0,
                 pressure_threshold: None,
                 claimed_outcome: None,
                 source: Default::default(),
@@ -845,7 +845,7 @@ fn concentrated_reports_are_bounded_and_deterministic() {
             .collect::<Vec<_>>()
             .into(),
         receptions: vec![Reception {
-            person: 5000,
+            person: 10_000,
             stance: Stance::Believe,
             toward_actor: Interpretation {
                 transferred: Some(SubjectiveReaction {
@@ -859,26 +859,34 @@ fn concentrated_reports_are_bounded_and_deterministic() {
         .into(),
         ..Default::default()
     };
-    let contacts: Vec<_> = observers.map(|person| (person, 5000)).collect();
-    let run = |workers| {
+    let contacts: Vec<_> = observers
+        .filter(|person| *person % 5 != 0)
+        .map(|person| (person, 10_000))
+        .collect();
+    let run = |workers, reverse| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
+                let mut previous = previous.clone();
+                if reverse {
+                    previous.report_policies_mut().reverse();
+                }
                 let mut next = previous.clone();
                 let changes = next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0));
                 assert_eq!(changes.len(), 64);
-                assert!(changes.iter().all(|change| change.observer == 5000
+                assert!(changes.iter().all(|change| change.observer == 10_000
                     && change.target == 1
                     && change.affinity == 1));
                 assert_eq!(next.reports.len(), 64);
-                assert_eq!(next.reports.first().unwrap().speaker, 3);
-                assert_eq!(next.reports.last().unwrap().speaker, 66);
-                next
+                assert_eq!(next.reports.first().unwrap().speaker, 2101);
+
+                (next.reports, changes)
             })
     };
-    assert_eq!(run(1), run(4));
+    assert_eq!(run(1, false), run(4, false));
+    assert_eq!(run(1, false), run(4, true));
 }
 
 #[test]

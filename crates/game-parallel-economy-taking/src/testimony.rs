@@ -201,134 +201,168 @@ impl Taking {
             drop(phase);
             phase = game_diagnostics::span("taking.reports.select");
         }
-        let incoming: Vec<_> = previous
-            .report_policies
-            .par_iter()
-            .filter_map(|policy| {
-                let pair = (
-                    policy.person.min(policy.recipient),
-                    policy.person.max(policy.recipient),
-                );
-                let contact_found = contact_base
-                    .and_then(|base| policy.person.checked_sub(base))
-                    .and_then(|offset| usize::try_from(offset).ok())
-                    .and_then(|index| contacts.get(index))
-                    .is_some_and(|contact| *contact == pair)
-                    || contacts.binary_search(&pair).is_ok();
-                if !contact_found {
-                    return None;
+        let make_report = |policy: &ReportPolicy| {
+            let pair = (
+                policy.person.min(policy.recipient),
+                policy.person.max(policy.recipient),
+            );
+            let contact_found = contact_base
+                .and_then(|base| policy.person.checked_sub(base))
+                .and_then(|offset| usize::try_from(offset).ok())
+                .and_then(|index| contacts.get(index))
+                .is_some_and(|contact| *contact == pair)
+                || contacts.binary_search(&pair).is_ok();
+            if !contact_found {
+                return None;
+            }
+            let (trust, fear, obligation) = feelings(policy.recipient, policy.person);
+            if !policy.willing
+                && !policy
+                    .pressure_threshold
+                    .is_some_and(|v| fear.saturating_add(obligation) >= v)
+            {
+                return None;
+            }
+            let (target, good, quantity, observed_at, outcome, source_speaker) = match policy.source
+            {
+                ReportSource::Observed => {
+                    let witness = witness_base
+                        .and_then(|base| policy.person.checked_sub(base))
+                        .and_then(|offset| usize::try_from(offset).ok())
+                        .and_then(|index| witnesses.get(index).copied())
+                        .filter(|w| (w.person, w.actor) == (policy.person, policy.actor))
+                        .or_else(|| {
+                            witnesses
+                                .binary_search_by_key(&(policy.person, policy.actor), |w| {
+                                    (w.person, w.actor)
+                                })
+                                .ok()
+                                .map(|i| witnesses[i])
+                        })?;
+                    let seen = witness.last_seen.filter(|seen| seen.tick < tick)?;
+                    (
+                        seen.target,
+                        seen.good,
+                        seen.quantity,
+                        seen.tick,
+                        seen.outcome,
+                        None,
+                    )
                 }
-                let (trust, fear, obligation) = feelings(policy.recipient, policy.person);
-                if !policy.willing
-                    && !policy
-                        .pressure_threshold
-                        .is_some_and(|v| fear.saturating_add(obligation) >= v)
-                {
-                    return None;
+                ReportSource::Heard => {
+                    let report = reports_for(policy.person)
+                        .iter()
+                        .filter(|r| {
+                            r.actor == policy.actor
+                                && r.received_at < tick
+                                && policy.heard_from.is_none_or(|speaker| speaker == r.speaker)
+                        })
+                        .max_by_key(|r| (r.received_at, Reverse(r.speaker)))?;
+                    (
+                        report.target,
+                        report.good,
+                        report.quantity,
+                        report.observed_at,
+                        report.claimed_outcome,
+                        Some(report.speaker),
+                    )
                 }
-                let (target, good, quantity, observed_at, outcome, source_speaker) = match policy
-                    .source
-                {
-                    ReportSource::Observed => {
-                        let witness = witness_base
-                            .and_then(|base| policy.person.checked_sub(base))
-                            .and_then(|offset| usize::try_from(offset).ok())
-                            .and_then(|index| witnesses.get(index).copied())
-                            .filter(|w| (w.person, w.actor) == (policy.person, policy.actor))
-                            .or_else(|| {
-                                witnesses
-                                    .binary_search_by_key(&(policy.person, policy.actor), |w| {
-                                        (w.person, w.actor)
-                                    })
-                                    .ok()
-                                    .map(|i| witnesses[i])
-                            })?;
-                        let seen = witness.last_seen.filter(|seen| seen.tick < tick)?;
-                        (
-                            seen.target,
-                            seen.good,
-                            seen.quantity,
-                            seen.tick,
-                            seen.outcome,
-                            None,
-                        )
-                    }
-                    ReportSource::Heard => {
-                        let report = reports_for(policy.person)
-                            .iter()
-                            .filter(|r| {
-                                r.actor == policy.actor
-                                    && r.received_at < tick
-                                    && policy.heard_from.is_none_or(|speaker| speaker == r.speaker)
-                            })
-                            .max_by_key(|r| (r.received_at, Reverse(r.speaker)))?;
-                        (
-                            report.target,
-                            report.good,
-                            report.quantity,
-                            report.observed_at,
-                            report.claimed_outcome,
-                            Some(report.speaker),
-                        )
-                    }
-                };
-                let claimed_outcome = policy.claimed_outcome.unwrap_or(outcome);
-                let prior = reports_for(policy.recipient);
-                if prior
-                    .binary_search_by_key(&(policy.person, policy.actor), |r| (r.speaker, r.actor))
-                    .ok()
-                    .is_some_and(|i| {
-                        let old = &prior[i];
-                        (
-                            old.target,
-                            old.good,
-                            old.quantity,
-                            old.observed_at,
-                            old.claimed_outcome,
-                            old.source_speaker,
-                        ) == (
-                            target,
-                            good,
-                            quantity,
-                            observed_at,
-                            claimed_outcome,
-                            source_speaker,
-                        )
-                    })
-                {
-                    return None;
-                }
-                let stance = receptions
-                    .binary_search_by_key(&policy.recipient, |r| r.person)
-                    .ok()
-                    .map_or(Stance::Unassessed, |i| receptions[i].stance);
-                let belief = match stance {
-                    Stance::Unassessed => Belief::Unassessed,
-                    Stance::Believe => Belief::Believes,
-                    Stance::Doubt => Belief::Doubts,
-                    Stance::TrustAtLeast(v) => {
-                        if trust >= v {
-                            Belief::Believes
-                        } else {
-                            Belief::Doubts
-                        }
-                    }
-                };
-                Some(Report {
-                    speaker: policy.person,
-                    recipient: policy.recipient,
-                    actor: policy.actor,
-                    target,
-                    good,
-                    quantity,
-                    observed_at,
-                    received_at: tick,
-                    claimed_outcome,
-                    belief,
-                    source_speaker,
+            };
+            let claimed_outcome = policy.claimed_outcome.unwrap_or(outcome);
+            let prior = reports_for(policy.recipient);
+            if prior
+                .binary_search_by_key(&(policy.person, policy.actor), |r| (r.speaker, r.actor))
+                .ok()
+                .is_some_and(|i| {
+                    let old = &prior[i];
+                    (
+                        old.target,
+                        old.good,
+                        old.quantity,
+                        old.observed_at,
+                        old.claimed_outcome,
+                        old.source_speaker,
+                    ) == (
+                        target,
+                        good,
+                        quantity,
+                        observed_at,
+                        claimed_outcome,
+                        source_speaker,
+                    )
                 })
+            {
+                return None;
+            }
+            let stance = receptions
+                .binary_search_by_key(&policy.recipient, |r| r.person)
+                .ok()
+                .map_or(Stance::Unassessed, |i| receptions[i].stance);
+            let belief = match stance {
+                Stance::Unassessed => Belief::Unassessed,
+                Stance::Believe => Belief::Believes,
+                Stance::Doubt => Belief::Doubts,
+                Stance::TrustAtLeast(v) => {
+                    if trust >= v {
+                        Belief::Believes
+                    } else {
+                        Belief::Doubts
+                    }
+                }
+            };
+            Some(Report {
+                speaker: policy.person,
+                recipient: policy.recipient,
+                actor: policy.actor,
+                target,
+                good,
+                quantity,
+                observed_at,
+                received_at: tick,
+                claimed_outcome,
+                belief,
+                source_speaker,
             })
-            .collect();
+        };
+        let policies = &previous.report_policies;
+        // A large ordered group can retain at most 64 identities. Evaluate
+        // chunks in parallel and discard candidates dominated within each
+        // chunk before allocating the complete incoming batch.
+        let grouped = policies.len() >= 4096
+            && policies
+                .windows(2)
+                .take(64)
+                .filter(|p| p[0].recipient == p[1].recipient)
+                .count()
+                >= 32
+            && policies.par_windows(2).all(|p| {
+                (p[0].recipient, p[0].person, p[0].actor)
+                    < (p[1].recipient, p[1].person, p[1].actor)
+            });
+        let incoming: Vec<_> = if grouped {
+            policies
+                .par_chunk_by(|a, b| a.recipient == b.recipient)
+                .flat_map_iter(|group| {
+                    let chunks: Vec<Vec<_>> = group
+                        .par_chunks(2048)
+                        .map(|chunk| {
+                            chunk
+                                .iter()
+                                .filter_map(&make_report)
+                                .take(MAX_REPORTS)
+                                .collect()
+                        })
+                        .collect();
+                    chunks
+                        .into_iter()
+                        .flatten()
+                        .take(MAX_REPORTS)
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        } else {
+            policies.par_iter().filter_map(&make_report).collect()
+        };
         if incoming.is_empty() {
             return Vec::new();
         }
