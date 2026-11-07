@@ -12,7 +12,7 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
     match words.as_slice() {
         [] => {}
         ["help"] => println!(
-            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | handle-animal PERSON ANIMAL | capture-animal PERSON ANIMAL | release-animal PERSON ANIMAL | defend-animal PERSON ANIMAL | animal-handle PERSON on|off | animal-capture PERSON on|off | animal-release-choice PERSON on|off | animal-defense PERSON on|off | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | capture-choice PERSON on|off | guard-choice PERSON on|off | guard-opening PERSON on|off | release-choice PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice PERSON FIELD on|off | work-practice-reserve PERSON AMOUNT | work-practice-evaluation PERSON off|BASE AFFINITY TRUST THRESHOLD | work-outcome PERSON off|WAIT TRUST AFFINITY | work-practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON ignore|trust|doubt|min THRESHOLD | practice-unanswered PERSON MODE | practice-value PERSON off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent PERSON off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport PERSON off|DELTA [TARGET] | food-report-reception PERSON default|all|none|MIN | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
+            "status | people | knowledge PERSON | past-knowledge LIFE | meet PERSON TARGET | eat PERSON GOOD | start-work PERSON RECIPE UNITS | continue-work PERSON | ruler | invoke LIFE... | dismiss-invocation | accept-warning REVISION | guardian-release ID | health | handle-animal PERSON ANIMAL | capture-animal PERSON ANIMAL | release-animal PERSON ANIMAL | defend-animal PERSON ANIMAL | animal-handle PERSON on|off | animal-capture PERSON on|off | animal-release-choice PERSON on|off | animal-defense PERSON on|off | skills PERSON | catalog | fields | claims | claim PERSON REGION GOOD | unclaim PERSON REGION GOOD | take-claimed PERSON on|off | claim-output PERSON on|off | goods PERSON | stock REGION | work PERSON on|off | haul PERSON on|off | carry-local PERSON on|off | capture-choice PERSON on|off | guard-choice PERSON on|off | guard-opening PERSON on|off | release-choice PERSON on|off | fetch-goal PERSON on|off | goal-help PERSON RECIPE on|off | work-offer PERSON on|off | practices PERSON | practice-choice PERSON FIELD on|off | work-practice-propose AUTHOR WORKER RECIPE GOOD QUANTITY LIFETIME | work-practice-choice PERSON FIELD on|off | work-practice-reserve PERSON AMOUNT | work-practice-evaluation PERSON off|BASE AFFINITY TRUST THRESHOLD | work-outcome PERSON off|WAIT MISSING_TRUST MISSING_AFFINITY [RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST|default PARTIAL_AFFINITY|default] | work-practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-decide PERSON AUTHOR SEQUENCE accept|decline | practice-withdraw PERSON AUTHOR SEQUENCE | practice-report SPEAKER LISTENER SEQUENCE ready|unready | practice-belief PERSON SPEAKER SEQUENCE believe|doubt|unassessed | practice-reporting PERSON MODE | practice-attitude PERSON ignore|trust|doubt|min THRESHOLD | practice-unanswered PERSON MODE | practice-value PERSON off|VALUE MIN MAX RECEIVED GAVE UNANSWERED | practice-precedent PERSON off|PERSON GOOD DIST RECEIVED GAVE UNANSWERED SHORTAGE | food-misreport PERSON off|DELTA [TARGET] | food-report-reception PERSON default|all|none|MIN | work-value PERSON GOOD VALUE MAX | farm PERSON on|off | social PERSON on|off | yield PERSON on|off | treat PERSON on|off | go PERSON REGION | expeditions | expedition PERSON REGION VISIT | meet-expedition PERSON ID TARGET | invite-expedition PERSON ID TARGET | cancel-expedition PERSON ID | promises | promise DEBTOR CREDITOR GOOD QUANTITY DUE | decide ID PERSON accept|decline | honor PERSON on|off | step [TICKS] | save PATH | load PATH | quit"
         ),
         ["quit"] | ["exit"] => return Ok(false),
         ["status"] => {
@@ -296,8 +296,47 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
                 wait_ticks: wait.parse().map_err(|_| "invalid wait")?,
                 missing_trust: trust.parse().map_err(|_| "invalid trust change")?,
                 missing_affinity: affinity.parse().map_err(|_| "invalid affinity change")?,
+                ..Default::default()
             }),
         )?,
+        [
+            "work-outcome",
+            person,
+            wait,
+            missing_trust,
+            missing_affinity,
+            received_trust,
+            received_affinity,
+            partial_trust,
+            partial_affinity,
+        ] => {
+            let partial = |value: &str| -> Result<Option<i32>, String> {
+                if value == "default" {
+                    Ok(None)
+                } else {
+                    value
+                        .parse()
+                        .map(Some)
+                        .map_err(|_| "invalid partial reaction".into())
+                }
+            };
+            world.set_work_outcome_policy(
+                person.parse().map_err(|_| "invalid person")?,
+                Some(game_parallel_economy::WorkOutcomePolicy {
+                    wait_ticks: wait.parse().map_err(|_| "invalid wait")?,
+                    missing_trust: missing_trust.parse().map_err(|_| "invalid trust change")?,
+                    missing_affinity: missing_affinity
+                        .parse()
+                        .map_err(|_| "invalid affinity change")?,
+                    received_trust: received_trust.parse().map_err(|_| "invalid trust change")?,
+                    received_affinity: received_affinity
+                        .parse()
+                        .map_err(|_| "invalid affinity change")?,
+                    partial_trust: partial(partial_trust)?,
+                    partial_affinity: partial(partial_affinity)?,
+                }),
+            )?;
+        }
         [
             "work-practice-evaluation",
             person,

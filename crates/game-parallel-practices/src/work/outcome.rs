@@ -4,7 +4,7 @@ use crate::{Decision, MAX_PROPOSALS, Practices};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Policy {
     pub wait_ticks: u64,
@@ -12,6 +12,16 @@ pub struct Policy {
     pub missing_trust: i32,
     #[serde(default)]
     pub missing_affinity: i32,
+    /// Signed personal reactions after the full quantity was received.
+    #[serde(default)]
+    pub received_trust: i32,
+    #[serde(default)]
+    pub received_affinity: i32,
+    /// Optional overrides when some, but not all, of the expected quantity arrived.
+    #[serde(default)]
+    pub partial_trust: Option<i32>,
+    #[serde(default)]
+    pub partial_affinity: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -266,20 +276,34 @@ pub fn advance(
                 if experience.assessed {
                     continue;
                 }
-                if experience.received >= experience.proposal.quantity {
+                let reaction = if experience.received >= experience.proposal.quantity {
                     experience.assessed = true;
+                    work.outcome_policy
+                        .map(|policy| (policy.received_trust, policy.received_affinity))
                 } else if let Some(policy) = work.outcome_policy.filter(|policy| {
                     tick > experience.started && tick.saturating_sub(completed) >= policy.wait_ticks
                 }) {
                     experience.assessed = true;
-                    if policy.missing_trust != 0 || policy.missing_affinity != 0 {
-                        reactions.push(Reaction {
-                            observer: person.person,
-                            target: experience.proposal.author,
-                            trust: policy.missing_trust,
-                            affinity: policy.missing_affinity,
-                        });
-                    }
+                    Some(if experience.received > 0 {
+                        (
+                            policy.partial_trust.unwrap_or(policy.missing_trust),
+                            policy.partial_affinity.unwrap_or(policy.missing_affinity),
+                        )
+                    } else {
+                        (policy.missing_trust, policy.missing_affinity)
+                    })
+                } else {
+                    None
+                };
+                if let Some((trust, affinity)) =
+                    reaction.filter(|&(trust, affinity)| trust != 0 || affinity != 0)
+                {
+                    reactions.push(Reaction {
+                        observer: person.person,
+                        target: experience.proposal.author,
+                        trust,
+                        affinity,
+                    });
                 }
             }
             reactions

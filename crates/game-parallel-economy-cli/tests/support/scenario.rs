@@ -2701,12 +2701,36 @@ fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
         &root.join("content"),
     )
     .unwrap();
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["work-outcome", "2", "-1", "2", "4", "-5", "6", "default"],
+    )
+    .unwrap();
     let mut player = Player::new(&mut world);
+    let configured = player
+        .view()
+        .unwrap()
+        .practices
+        .unwrap()
+        .work
+        .unwrap()
+        .outcome_policy
+        .unwrap();
+    assert_eq!(
+        (
+            configured.missing_trust,
+            configured.received_affinity,
+            configured.partial_trust,
+            configured.partial_affinity
+        ),
+        (-1, -5, Some(6), None)
+    );
     player
         .set_work_outcome_policy(Some(game_parallel_economy::WorkOutcomePolicy {
             wait_ticks: 2,
             missing_trust: 1,
             missing_affinity: -2,
+            ..Default::default()
         }))
         .unwrap();
     assert_eq!(

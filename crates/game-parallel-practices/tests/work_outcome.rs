@@ -48,6 +48,7 @@ fn fixture() -> Practices {
             wait_ticks: 2,
             missing_trust: -3,
             missing_affinity: 2,
+            ..Default::default()
         }),
         willing: false,
         ask_willing: false,
@@ -214,6 +215,113 @@ fn personally_expected_gifts_are_reviewed_once_without_asserting_dishonesty() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn individuals_interpret_full_partial_and_missing_receipts_independently() {
+    use game_parallel_practices::work::{Gift, GiftObservation, outcome::Start};
+    let mut initial = fixture();
+    let work = std::sync::Arc::make_mut(initial.minds[1].work.as_mut().unwrap());
+    let policy = work.outcome_policy.as_mut().unwrap();
+    policy.received_trust = 4;
+    policy.received_affinity = -5;
+    policy.partial_trust = Some(6);
+    policy.partial_affinity = Some(-7);
+    let start = Start {
+        requester: 1,
+        worker: 2,
+        recipe: 7,
+        request: 10,
+        job: 20,
+    };
+    let gift = |action, quantity, tick| GiftObservation {
+        person: 2,
+        action,
+        gift: Gift {
+            tick,
+            other: 1,
+            good: 4,
+            quantity,
+            given: false,
+        },
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let (started, _) = advance(&initial, &[start], &[], &[], 2);
+                let (completed, _) = advance(&started, &[], &[20], &[], 3);
+                let (partial, reactions) = advance(&completed, &[], &[], &[gift(11, 1, 4)], 4);
+                assert!(reactions.is_empty());
+                let (partial_reviewed, reactions) = advance(&partial, &[], &[], &[], 5);
+                assert_eq!(
+                    reactions
+                        .iter()
+                        .map(|r| (r.observer, r.target, r.trust, r.affinity))
+                        .collect::<Vec<_>>(),
+                    [(2, 1, 6, -7)]
+                );
+                assert!(advance(&partial_reviewed, &[], &[], &[], 6).1.is_empty());
+                let (full_reviewed, reactions) = advance(&partial, &[], &[], &[gift(12, 1, 5)], 5);
+                assert_eq!(
+                    reactions
+                        .iter()
+                        .map(|r| (r.observer, r.target, r.trust, r.affinity))
+                        .collect::<Vec<_>>(),
+                    [(2, 1, 4, -5)]
+                );
+                assert!(advance(&full_reviewed, &[], &[], &[], 6).1.is_empty());
+                let (waiting, _) = advance(&completed, &[], &[], &[], 4);
+                let (missing, reactions) = advance(&waiting, &[], &[], &[], 5);
+                assert_eq!(
+                    reactions
+                        .iter()
+                        .map(|r| (r.observer, r.target, r.trust, r.affinity))
+                        .collect::<Vec<_>>(),
+                    [(2, 1, -3, 2)]
+                );
+                assert!(
+                    advance(&missing, &[], &[], &[gift(13, 2, 6)], 6)
+                        .1
+                        .is_empty()
+                );
+                let restored: Practices =
+                    serde_json::from_str(&serde_json::to_string(&full_reviewed).unwrap()).unwrap();
+                assert_eq!(restored, full_reviewed);
+                (partial_reviewed, full_reviewed, missing)
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut old = serde_json::to_value(&initial).unwrap();
+    let policy = old["minds"][1]["work"]["outcome_policy"]
+        .as_object_mut()
+        .unwrap();
+    for key in [
+        "received_trust",
+        "received_affinity",
+        "partial_trust",
+        "partial_affinity",
+    ] {
+        policy.remove(key);
+    }
+    let loaded: Practices = serde_json::from_value(old).unwrap();
+    let policy = loaded.minds[1]
+        .work
+        .as_ref()
+        .unwrap()
+        .outcome_policy
+        .unwrap();
+    assert_eq!(
+        (
+            policy.received_trust,
+            policy.received_affinity,
+            policy.partial_trust,
+            policy.partial_affinity
+        ),
+        (0, 0, None, None)
+    );
 }
 
 #[test]

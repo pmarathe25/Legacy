@@ -62,6 +62,7 @@ fn workload(
                     wait_ticks: 1,
                     missing_trust: -1,
                     missing_affinity: 1,
+                    ..Default::default()
                 }),
                 willing: false,
                 ask_willing: false,

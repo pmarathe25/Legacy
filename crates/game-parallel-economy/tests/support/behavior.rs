@@ -17100,6 +17100,9 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                 wait_ticks: 2,
                 missing_trust: trust_change,
                 missing_affinity: affinity_change,
+                received_trust: -trust_change,
+                received_affinity: -affinity_change,
+                ..Default::default()
             });
         state.opinions.as_mut().unwrap().rules.affinity =
             Some(game_parallel_opinions::AffinityRules {
@@ -17240,7 +17243,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                 assert_eq!(
                     actual,
                     if funded {
-                        (0, 0)
+                        (-trust_change, -affinity_change)
                     } else {
                         (trust_change, affinity_change)
                     }
@@ -17288,6 +17291,7 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
             wait_ticks: 1,
             missing_trust: -1,
             missing_affinity: 0,
+            ..Default::default()
         });
     let mut absent = Economy::compile(absent).unwrap();
     assert!(absent.propose_work_practice(1, 2, 1, 1, 1, 8).unwrap());
