@@ -88,6 +88,18 @@ pub fn prepare(
     {
         return Ok((draft, additions));
     }
+    if additions.is_empty()
+        && let Some(draft) = partitioned::prepare_transactions(
+            state,
+            instance,
+            seed,
+            transactions,
+            &compact,
+            advance,
+        )?
+    {
+        return Ok((draft, additions));
+    }
     let moves: Vec<_> = transactions
         .par_iter()
         .flat_map_iter(|row| row.movements.iter().copied())

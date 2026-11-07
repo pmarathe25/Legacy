@@ -14,6 +14,8 @@ Parallel preparation of physical lot movements and expiry. Claims are arbitrated
 
 `prepare_partitioned_flat` also separates transfers whose endpoints are exclusive from those that share a source or destination. The shared group uses the general arbiter with the original action identities and seed. Both groups remain one atomic draft, with expiry applied once. Unsupported layouts still return no specialized draft.
 
+The normal transaction path can similarly isolate exclusive single-leg transfers when other actions consume goods, create lots, or contain multiple legs. An entire complex transaction stays in the general arbiter, and every source and destination it touches excludes overlapping transfers from the fast group. Newly created custody still uses the general path. The ignored `mixed_atomic_action_benchmark` compares both paths; `LEGACY_ATTEMPTS` and `LEGACY_WORKERS` select the workload and worker count.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

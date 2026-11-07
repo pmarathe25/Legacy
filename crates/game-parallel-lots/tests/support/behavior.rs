@@ -506,6 +506,236 @@ fn many_interleaved_dated_cohorts_match_the_general_arbiter() {
 }
 
 #[test]
+fn mixed_atomic_actions_match_general_arbitration() {
+    let (mut initial, transfers) = many_cohort_transfers(256, 8);
+    initial.extend([
+        container(Place::Person(600), 10, vec![lot(1, 2, None)]),
+        container(Place::Person(601), 10, vec![]),
+        container(Place::Person(602), 10, vec![]),
+    ]);
+    let mut actions: Vec<_> = transfers
+        .iter()
+        .map(|row| Transaction {
+            id: row.action,
+            movements: vec![row.movement],
+            creations: vec![],
+        })
+        .collect();
+    actions.push(Transaction {
+        id: 1000,
+        movements: vec![
+            Movement {
+                id: 1000,
+                from: Place::Person(1),
+                to: Some(Place::Person(2)),
+                good: 1,
+                quantity: 2,
+            },
+            Movement {
+                id: 1001,
+                from: Place::Person(3),
+                to: Some(Place::Person(4)),
+                good: 1,
+                quantity: 100,
+            },
+        ],
+        creations: vec![Creation {
+            id: 1002,
+            to: Place::Person(5),
+            lot: lot(1, 2, Some(4)),
+        }],
+    });
+    actions.push(Transaction {
+        id: 1003,
+        movements: vec![Movement {
+            id: 1003,
+            from: Place::Person(6),
+            to: None,
+            good: 1,
+            quantity: 1,
+        }],
+        creations: vec![],
+    });
+    actions.push(Transaction {
+        id: 1004,
+        movements: vec![Movement {
+            id: 1004,
+            from: Place::Person(600),
+            to: Some(Place::Person(601)),
+            good: 1,
+            quantity: 1,
+        }],
+        creations: vec![Creation {
+            id: 1005,
+            to: Place::Person(602),
+            lot: lot(1, 2, Some(4)),
+        }],
+    });
+    let run = |workers, reverse: bool, seed, advance| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                if reverse {
+                    actions.reverse();
+                }
+                let mut fast = store(initial.clone());
+                let mut general = store(initial.clone());
+                let staged = fast
+                    .prepare_with_empty_compact(seed, &actions, vec![], &[1003], advance)
+                    .unwrap();
+                let stale = fast
+                    .prepare_with_empty_compact(seed, &actions, vec![], &[1003], advance)
+                    .unwrap();
+                let full = general
+                    .prepare_with_empty_compact(
+                        seed,
+                        &actions,
+                        vec![container(Place::Inventory(99999), 10, vec![])],
+                        &[1003],
+                        advance,
+                    )
+                    .unwrap();
+                assert_eq!(staged.transactions(), full.transactions());
+                assert_eq!(staged.outcomes(), full.outcomes());
+                assert_eq!(staged.creations(), full.creations());
+                assert_eq!(staged.spoiled(), full.spoiled());
+                assert!(
+                    !staged
+                        .transactions()
+                        .iter()
+                        .find(|row| row.id == 1000)
+                        .unwrap()
+                        .accepted
+                );
+                assert!(
+                    staged
+                        .transactions()
+                        .iter()
+                        .find(|row| row.id == 1004)
+                        .unwrap()
+                        .accepted
+                );
+                fast.commit(staged).unwrap();
+                assert!(fast.commit(stale).is_err());
+                general.commit(full).unwrap();
+                let result = fast.export();
+                let mut expected = general.export();
+                expected
+                    .containers
+                    .retain(|row| row.place != Place::Inventory(99999));
+                assert_eq!(result, expected);
+                assert_eq!(Store::compile(result.clone()).unwrap().export(), result);
+                result
+            })
+    };
+    for seed in [1, 13] {
+        for advance in [false, true] {
+            assert_eq!(run(1, false, seed, advance), run(4, true, seed, advance));
+        }
+    }
+    // IDs must still be checked across both partitions.
+    actions.last_mut().unwrap().creations[0].id = 7;
+    assert!(
+        store(initial)
+            .prepare_with_empty_compact(1, &actions, vec![], &[1003], true)
+            .is_err()
+    );
+}
+
+#[test]
+#[ignore = "manual mixed atomic action benchmark"]
+fn mixed_atomic_action_benchmark() {
+    let count = std::env::var("LEGACY_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let mut holders = Vec::new();
+    let mut actions = Vec::new();
+    for id in 1..=count {
+        holders.push(container(Place::Person(id), 10, vec![lot(1, 2, Some(5))]));
+        holders.push(container(Place::Person(count + id), 10, vec![]));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: Place::Person(id),
+                to: Some(Place::Person(count + id)),
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        });
+    }
+    actions.push(Transaction {
+        id: count + 1,
+        movements: vec![Movement {
+            id: count + 1,
+            from: Place::Person(1),
+            to: None,
+            good: 1,
+            quantity: 1,
+        }],
+        creations: vec![Creation {
+            id: count + 2,
+            to: Place::Person(2),
+            lot: lot(1, 1, Some(5)),
+        }],
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let owner = store(holders);
+            let general = owner
+                .prepare_with_empty(
+                    13,
+                    &actions,
+                    vec![container(Place::Inventory(99999), 10, vec![])],
+                    true,
+                )
+                .unwrap();
+            let partitioned = owner
+                .prepare_with_empty(13, &actions, vec![], true)
+                .unwrap();
+            assert_eq!(general.transactions(), partitioned.transactions());
+            assert_eq!(general.outcomes(), partitioned.outcomes());
+            assert_eq!(general.creations(), partitioned.creations());
+            for mode in ["general", "partitioned"] {
+                let mut samples = Vec::new();
+                for round in 0..5 {
+                    let additions = if mode == "general" {
+                        vec![container(Place::Inventory(99999), 10, vec![])]
+                    } else {
+                        vec![]
+                    };
+                    let start = std::time::Instant::now();
+                    let draft = owner
+                        .prepare_with_empty(13, &actions, additions, true)
+                        .unwrap();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    assert_eq!(draft.transactions().len(), actions.len());
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} transfers={count} mode={mode} prepare={:.6}",
+                    samples[2]
+                );
+            }
+        });
+}
+
+#[test]
 #[ignore = "manual many-cohort physical transfer benchmark"]
 fn many_cohort_transfer_benchmark() {
     let count = std::env::var("LEGACY_ATTEMPTS")
@@ -1966,7 +2196,12 @@ fn partitioned_transfer_benchmark() {
         .install(|| {
             let owner = store(initial);
             let general = owner
-                .prepare_with_empty(13, &actions, vec![], true)
+                .prepare_with_empty(
+                    13,
+                    &actions,
+                    vec![container(Place::Inventory(99999), 10, vec![])],
+                    true,
+                )
                 .unwrap();
             let partitioned = owner
                 .prepare_partitioned_flat(13, &transfers, true)
@@ -1980,7 +2215,12 @@ fn partitioned_transfer_benchmark() {
                     let start = std::time::Instant::now();
                     let result = if mode == "general" {
                         owner
-                            .prepare_with_empty(13, &actions, vec![], true)
+                            .prepare_with_empty(
+                                13,
+                                &actions,
+                                vec![container(Place::Inventory(99999), 10, vec![])],
+                                true,
+                            )
                             .unwrap()
                     } else {
                         owner
