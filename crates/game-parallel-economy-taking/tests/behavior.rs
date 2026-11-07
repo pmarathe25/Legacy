@@ -677,7 +677,10 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
         Outcome::Transferred
     );
     assert_eq!(
-        (next.reports[0].claimed_outcome, next.reports[0].belief),
+        (
+            next.reports.get(4)[0].claimed_outcome,
+            next.reports.get(4)[0].belief
+        ),
         (Outcome::Resisted, ReportBelief::Believes)
     );
     assert!(
@@ -703,7 +706,7 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
     let mut skeptical = previous.clone();
     let changes = skeptical.receive_reports(&previous, &[(3, 4)], 2, &|_, _| (-1, 3, 0));
     assert!(changes.is_empty());
-    assert_eq!(skeptical.reports[0].belief, ReportBelief::Doubts);
+    assert_eq!(skeptical.reports.get(4)[0].belief, ReportBelief::Doubts);
     let mut predisposed = previous.clone();
     predisposed.receptions_mut()[0].doubted_toward_actor = Interpretation {
         resisted: Some(SubjectiveReaction {
@@ -767,11 +770,11 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
     none.receive_reports(&wrong_source, &[(4, 5)], 3, &|_, _| (0, 0, 0));
     assert_eq!(none.reports.len(), 1);
     let mut multiple = source.clone();
-    let mut earlier = multiple.reports[0].clone();
+    let mut earlier = multiple.reports.get(4)[0].clone();
     earlier.speaker = 2;
     earlier.received_at = 1;
     earlier.claimed_outcome = Outcome::Unavailable;
-    multiple.reports = vec![earlier, multiple.reports[0].clone()].into();
+    multiple.reports = vec![earlier, multiple.reports.get(4)[0].clone()].into();
     multiple
         .report_policies_mut()
         .last_mut()
@@ -790,7 +793,7 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
         .push(source.report_policies.last().unwrap().clone());
     let mut forwarded = doubtful.clone();
     forwarded.receive_reports(&doubtful, &[(4, 5)], 3, &|_, _| (0, 0, 0));
-    assert_eq!(doubtful.reports[0].belief, ReportBelief::Doubts);
+    assert_eq!(doubtful.reports.get(4)[0].belief, ReportBelief::Doubts);
     assert_eq!(
         forwarded
             .reports
@@ -804,7 +807,10 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
 
 #[test]
 fn concentrated_reports_are_bounded_and_deterministic() {
-    use game_parallel_economy_taking::{ObservedTaking, ReportPolicy, Witness};
+    use game_parallel_economy_taking::{
+        Interpretation, ObservedTaking, Reception, ReportPolicy, Stance, Witness,
+    };
+    use game_parallel_opinions::SubjectiveReaction;
     let observers = 3..=1026;
     let previous = Taking {
         witnesses: observers
@@ -838,6 +844,19 @@ fn concentrated_reports_are_bounded_and_deterministic() {
             })
             .collect::<Vec<_>>()
             .into(),
+        receptions: vec![Reception {
+            person: 5000,
+            stance: Stance::Believe,
+            toward_actor: Interpretation {
+                transferred: Some(SubjectiveReaction {
+                    affinity: 1,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]
+        .into(),
         ..Default::default()
     };
     let contacts: Vec<_> = observers.map(|person| (person, 5000)).collect();
@@ -848,10 +867,11 @@ fn concentrated_reports_are_bounded_and_deterministic() {
             .unwrap()
             .install(|| {
                 let mut next = previous.clone();
-                assert!(
-                    next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0))
-                        .is_empty()
-                );
+                let changes = next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0));
+                assert_eq!(changes.len(), 64);
+                assert!(changes.iter().all(|change| change.observer == 5000
+                    && change.target == 1
+                    && change.affinity == 1));
                 assert_eq!(next.reports.len(), 64);
                 assert_eq!(next.reports.first().unwrap().speaker, 3);
                 assert_eq!(next.reports.last().unwrap().speaker, 66);
@@ -991,7 +1011,13 @@ fn participants_can_report_their_own_experiences_only_if_noticed() {
     let mut next = previous.clone();
     next.receive_reports(&previous, &[(1, 3), (2, 3)], 2, &|_, _| (0, 0, 0));
     assert_eq!(next.reports.len(), 2);
-    assert_eq!((next.reports[0].speaker, next.reports[1].speaker), (1, 2));
+    assert_eq!(
+        (
+            next.reports.get(3)[0].speaker,
+            next.reports.get(3)[1].speaker
+        ),
+        (1, 2)
+    );
     assert!(
         next.validate(&HashSet::from([1, 2, 3]), &HashSet::from([1]), 2)
             .is_ok()
@@ -1087,6 +1113,11 @@ fn relayed_testimony_benchmark() {
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(100_000);
+    let active = std::env::var("LEGACY_ACTIVE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(count)
+        .min(count);
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -1112,6 +1143,7 @@ fn relayed_testimony_benchmark() {
             .into(),
         report_policies: speakers
             .clone()
+            .take(active as usize)
             .map(|person| ReportPolicy {
                 person,
                 recipient: count + person,
@@ -1126,7 +1158,10 @@ fn relayed_testimony_benchmark() {
             .into(),
         ..Default::default()
     };
-    let contacts: Vec<_> = speakers.map(|person| (person, count + person)).collect();
+    let contacts: Vec<_> = speakers
+        .take(active as usize)
+        .map(|person| (person, count + person))
+        .collect();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -1139,20 +1174,30 @@ fn relayed_testimony_benchmark() {
                 let changes = next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0));
                 let elapsed = start.elapsed().as_secs_f64();
                 assert!(changes.is_empty());
-                assert_eq!(next.reports.len(), 2 * count as usize);
+                assert_eq!(next.reports.len(), (count + active) as usize);
                 assert_eq!(
                     next.reports
                         .iter()
                         .filter(|r| r.source_speaker.is_some())
                         .count(),
-                    count as usize
+                    active as usize
                 );
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
-            println!("workers={workers} relays={count} elapsed={:.6}", samples[2]);
+            println!(
+                "workers={workers} history={count} relays={active} elapsed={:.6}",
+                samples[2]
+            );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!(
+                    "{name}: {:.3} ms/call",
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
         });
 }
 

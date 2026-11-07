@@ -103,7 +103,7 @@ pub fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>, now: u
     receptions.par_sort_unstable();
     let mut reports: Vec<_> = owner
         .reports
-        .par_iter()
+        .iter()
         .map(|r| (r.recipient, r.speaker, r.actor))
         .collect();
     reports.par_sort_unstable();
@@ -124,7 +124,7 @@ pub fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>, now: u
             .receptions
             .par_iter()
             .any(|p| !people.contains(&p.person))
-        && !owner.reports.par_iter().any(|r| {
+        && !owner.reports.iter().any(|r| {
             !people.contains(&r.speaker)
                 || !people.contains(&r.recipient)
                 || !people.contains(&r.actor)
@@ -156,6 +156,8 @@ impl Taking {
         if previous.report_policies.is_empty() || contacts.is_empty() {
             return Vec::new();
         }
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("taking.reports.index");
         let mut contacts: Vec<_> = contacts.par_iter().copied().collect();
         contacts.par_iter_mut().for_each(|(a, b)| {
             if *a > *b {
@@ -185,33 +187,20 @@ impl Taking {
         });
         let mut receptions: Vec<_> = previous.receptions.par_iter().collect();
         receptions.par_sort_unstable_by_key(|r| r.person);
-        let mut prior: Vec<_> = previous.reports.par_iter().collect();
-        if prior.par_windows(2).any(|p| {
-            (p[0].recipient, p[0].speaker, p[0].actor) > (p[1].recipient, p[1].speaker, p[1].actor)
-        }) {
-            prior.par_sort_unstable_by_key(|r| (r.recipient, r.speaker, r.actor));
-        }
-        let mut heard: Vec<_> = if previous
-            .report_policies
-            .par_iter()
-            .any(|p| p.source == ReportSource::Heard)
-        {
-            previous.reports.par_iter().collect()
-        } else {
-            Vec::new()
+        let dense = (previous.report_policies.len() >= 4096
+            && previous.report_policies.len().saturating_mul(8) >= previous.reports.len())
+        .then(|| previous.reports.dense_lookup())
+        .flatten();
+        let reports_for = |person| {
+            dense
+                .as_ref()
+                .map_or_else(|| previous.reports.get(person), |index| index.get(person))
         };
-        let heard_key = |r: &&Report| (r.recipient, r.actor, Reverse(r.received_at), r.speaker);
-        if heard
-            .par_windows(2)
-            .any(|p| heard_key(&p[0]) > heard_key(&p[1]))
+        #[cfg(feature = "profile")]
         {
-            heard.par_sort_unstable_by_key(heard_key);
+            drop(phase);
+            phase = game_diagnostics::span("taking.reports.select");
         }
-        let heard_base = heard.first().map(|r| r.recipient).filter(|_| {
-            heard
-                .par_windows(2)
-                .all(|p| p[0].recipient.checked_add(1) == Some(p[1].recipient))
-        });
         let incoming: Vec<_> = previous
             .report_policies
             .par_iter()
@@ -265,25 +254,14 @@ impl Taking {
                         )
                     }
                     ReportSource::Heard => {
-                        let key = (policy.person, policy.actor);
-                        let matches = |r: &&Report| {
-                            (r.recipient, r.actor) == key
-                                && r.received_at < tick
-                                && policy.heard_from.is_none_or(|speaker| speaker == r.speaker)
-                        };
-                        let report = heard_base
-                            .and_then(|base| policy.person.checked_sub(base))
-                            .and_then(|offset| usize::try_from(offset).ok())
-                            .and_then(|index| heard.get(index).copied())
-                            .filter(matches)
-                            .or_else(|| {
-                                let start = heard.partition_point(|r| (r.recipient, r.actor) < key);
-                                let end = heard.partition_point(|r| (r.recipient, r.actor) <= key);
-                                heard[start..end]
-                                    .iter()
-                                    .find(|report| matches(report))
-                                    .copied()
-                            })?;
+                        let report = reports_for(policy.person)
+                            .iter()
+                            .filter(|r| {
+                                r.actor == policy.actor
+                                    && r.received_at < tick
+                                    && policy.heard_from.is_none_or(|speaker| speaker == r.speaker)
+                            })
+                            .max_by_key(|r| (r.received_at, Reverse(r.speaker)))?;
                         (
                             report.target,
                             report.good,
@@ -295,36 +273,28 @@ impl Taking {
                     }
                 };
                 let claimed_outcome = policy.claimed_outcome.unwrap_or(outcome);
-                let key = (policy.recipient, policy.person, policy.actor);
-                let prior_range = prior
-                    .first()
-                    .zip(prior.last())
-                    .is_some_and(|(first, last)| {
-                        (first.recipient, first.speaker, first.actor) <= key
-                            && key <= (last.recipient, last.speaker, last.actor)
-                    });
-                if prior_range
-                    && prior
-                        .binary_search_by_key(&key, |r| (r.recipient, r.speaker, r.actor))
-                        .ok()
-                        .is_some_and(|i| {
-                            let old = prior[i];
-                            (
-                                old.target,
-                                old.good,
-                                old.quantity,
-                                old.observed_at,
-                                old.claimed_outcome,
-                                old.source_speaker,
-                            ) == (
-                                target,
-                                good,
-                                quantity,
-                                observed_at,
-                                claimed_outcome,
-                                source_speaker,
-                            )
-                        })
+                let prior = reports_for(policy.recipient);
+                if prior
+                    .binary_search_by_key(&(policy.person, policy.actor), |r| (r.speaker, r.actor))
+                    .ok()
+                    .is_some_and(|i| {
+                        let old = &prior[i];
+                        (
+                            old.target,
+                            old.good,
+                            old.quantity,
+                            old.observed_at,
+                            old.claimed_outcome,
+                            old.source_speaker,
+                        ) == (
+                            target,
+                            good,
+                            quantity,
+                            observed_at,
+                            claimed_outcome,
+                            source_speaker,
+                        )
+                    })
                 {
                     return None;
                 }
@@ -362,51 +332,35 @@ impl Taking {
         if incoming.is_empty() {
             return Vec::new();
         }
-        let mut combined: Vec<_> = previous
-            .reports
-            .par_iter()
-            .cloned()
-            .chain(incoming.into_par_iter())
-            .collect();
-        let report_key = |r: &Report| (r.recipient, r.speaker, r.actor, Reverse(r.received_at));
-        if combined
-            .par_windows(2)
-            .any(|p| report_key(&p[0]) > report_key(&p[1]))
+        #[cfg(feature = "profile")]
         {
-            combined.par_sort_unstable_by_key(report_key);
+            drop(phase);
+            phase = game_diagnostics::span("taking.reports.update");
         }
-        let mut latest: Vec<_> = if combined.par_windows(2).all(|p| {
-            (p[0].recipient, p[0].speaker, p[0].actor) != (p[1].recipient, p[1].speaker, p[1].actor)
-        }) {
-            combined
-        } else {
-            combined
-                .par_chunk_by(|a, b| {
-                    (a.recipient, a.speaker, a.actor) == (b.recipient, b.speaker, b.actor)
-                })
-                .map(|group| group[0].clone())
-                .collect()
-        };
-        latest.par_sort_unstable_by_key(|r| {
-            (r.recipient, Reverse(r.received_at), r.speaker, r.actor)
-        });
-        let mut admitted: Vec<_> = if latest
-            .par_windows(2)
-            .all(|p| p[0].recipient != p[1].recipient)
+        let (admitted, candidates) = previous.reports.updated(incoming);
+        #[cfg(feature = "profile")]
         {
-            latest
-        } else {
-            latest
-                .par_chunk_by(|a, b| a.recipient == b.recipient)
-                .flat_map_iter(|group| group.iter().take(MAX_REPORTS).cloned())
-                .collect()
-        };
+            drop(phase);
+            phase = game_diagnostics::span("taking.reports.reactions");
+        }
         let changes = if receptions.is_empty() {
             Vec::new()
         } else {
-            admitted
+            candidates
                 .par_iter()
-                .filter(|r| r.received_at == tick)
+                .filter(|r| {
+                    let key = (r.speaker, r.actor);
+                    let before = reports_for(r.recipient);
+                    let after = admitted.get(r.recipient);
+                    let new = before
+                        .binary_search_by_key(&key, |row| (row.speaker, row.actor))
+                        .ok()
+                        .is_none_or(|i| before[i].received_at < r.received_at);
+                    new && after
+                        .binary_search_by_key(&key, |row| (row.speaker, row.actor))
+                        .ok()
+                        .is_some_and(|i| &after[i] == *r)
+                })
                 .flat_map_iter(|report| {
                     let rule = receptions
                         .binary_search_by_key(&report.recipient, |r| r.person)
@@ -447,8 +401,9 @@ impl Taking {
                 })
                 .collect()
         };
-        admitted.par_sort_unstable_by_key(|r| (r.recipient, r.speaker, r.actor));
-        self.reports = admitted.into();
+        self.reports = admitted;
+        #[cfg(feature = "profile")]
+        drop(phase);
         changes
     }
 }

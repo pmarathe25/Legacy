@@ -14,4 +14,6 @@ The actor or target can also use a personal attention entry to retain their own 
 
 With `source = "heard"`, a policy forwards a previously received account instead of claiming direct observation; optional `heard_from` selects a particular prior speaker. The delivered statement names that immediate source, and the new listener forms their own belief. An account received in the current boundary cannot be forwarded until a later one.
 
+Retained reports use immutable recipient-keyed pages, sharing unchanged pages across drafts. Saves still contain the same flat, canonically ordered report list. The owner benchmarks include dense relays, a single update in a large history, and concentrated recipient batches.
+
 `taking_selection_benchmark` exercises independent attempts; set `LEGACY_SHARED` to make all attempts target one person and `LEGACY_WORKERS` or `LEGACY_PEOPLE` to vary execution. It measures proposal selection, not the complete world boundary.

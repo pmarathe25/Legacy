@@ -21487,6 +21487,12 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
                     TakingOutcome::Transferred
                 );
                 assert!(world.taking_reports(2).is_empty());
+                let before = world.snapshot();
+                let stale = world.prepare().unwrap();
+                assert_eq!(world.snapshot(), before);
+                world.set_social_choice(4, false).unwrap();
+                assert!(world.commit(stale).is_err());
+                assert!(world.taking_reports(2).is_empty());
                 world.advance().unwrap();
                 let reports = world.taking_reports(2);
                 assert_eq!(reports.len(), 1);

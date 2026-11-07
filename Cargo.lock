@@ -3660,6 +3660,7 @@ dependencies = [
 name = "game-parallel-economy-taking"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-parallel-economy-person",
  "game-parallel-genetics",
  "game-parallel-lot-allocation",

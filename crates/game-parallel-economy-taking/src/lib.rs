@@ -1,6 +1,7 @@
 //! Individual attempts to take real possessions, with independent resistance.
 pub mod content;
 mod reactions;
+mod report_store;
 mod testimony;
 use game_parallel_economy_person::{Person, travel::Colocation};
 use game_parallel_genetics::random;
@@ -9,6 +10,7 @@ use game_parallel_lots::{Movement, Place, Transaction};
 use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
 pub use reactions::{Interpretation, ObservedTaking, Reaction, Witness};
+pub use report_store::ReportStore;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
 pub use testimony::{
@@ -91,7 +93,7 @@ pub struct Taking {
     #[serde(default)]
     pub receptions: Arc<Vec<Reception>>,
     #[serde(default)]
-    pub reports: Arc<Vec<Report>>,
+    pub reports: ReportStore,
     #[serde(default)]
     pub events: Vec<Event>,
 }

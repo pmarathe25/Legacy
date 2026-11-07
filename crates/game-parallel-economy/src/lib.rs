@@ -1217,13 +1217,9 @@ impl Economy {
     }
     /// Reports are private to their recipient, and contain statements rather than world facts.
     pub fn taking_reports(&self, person: u64) -> Vec<&TakingReport> {
-        self.taking.as_ref().map_or_else(Vec::new, |owner| {
-            owner
-                .reports
-                .iter()
-                .filter(|report| report.recipient == person)
-                .collect()
-        })
+        self.taking
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.reports.get(person).iter().collect())
     }
     pub fn set_taking_report_policy(
         &mut self,
