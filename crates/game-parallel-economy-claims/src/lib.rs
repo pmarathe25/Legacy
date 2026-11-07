@@ -276,11 +276,21 @@ macro_rules! claim_methods {
 #[macro_export]
 macro_rules! prepare_pickup {
     ($world:expr, $view:expr, $busy:expr, $base:expr, $index:expr) => {{
+        let stores: Vec<_> = $world
+            .local_transport
+            .as_ref()
+            .map_or_else(Vec::new, |owner| {
+                owner
+                    .stores
+                    .par_iter()
+                    .map(|store| (store.region, store.id))
+                    .collect()
+            });
         let plan = game_parallel_economy_person::provision::prepare(
             &$world.people,
             &$world.rules,
             $world.physical.goods(),
-            &$view,
+            (&$view, &stores),
             &$busy,
             $base,
             |person, region, good| {

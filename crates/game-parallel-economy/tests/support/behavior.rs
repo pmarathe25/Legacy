@@ -3992,6 +3992,110 @@ fn local_store_fixture() -> State {
 }
 
 #[test]
+fn hungry_people_can_choose_food_from_named_local_custody() {
+    use game_parallel_economy_claims::{Claim, Claims};
+    let mut initial = local_store_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[1].hunger = 5;
+    *initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap() = Container::new(
+        Place::Inventory(1),
+        10,
+        vec![Lot {
+            good: 1,
+            quantity: 2,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            claims: vec![Claim {
+                person: 1,
+                region: 1,
+                good: 1,
+            }],
+            ..Default::default()
+        }),
+    });
+    let run = |workers, seeking| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.people[1].seek_meals = seeking;
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let picked = world.snapshot();
+                let amount = |place| {
+                    picked
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == place)
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == 1)
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>()
+                };
+                assert_eq!(amount(Place::Inventory(1)), if seeking { 1 } else { 2 });
+                assert_eq!(amount(Place::Person(2)), if seeking { 1 } else { 0 });
+                assert!(
+                    picked
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .claims
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&picked).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                if seeking {
+                    let state = world.snapshot();
+                    assert!(state.people[1].hunger < picked.people[1].hunger);
+                    assert!(
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place == Place::Person(2))
+                            .unwrap()
+                            .lots
+                            .is_empty()
+                    );
+                }
+                world.snapshot()
+            })
+    };
+    for seeking in [false, true] {
+        assert_eq!(run(1, seeking), run(4, seeking));
+    }
+}
+
+#[test]
 fn local_carrier_keeps_actual_goods_when_they_change_their_mind() {
     let initial = local_store_fixture();
     let run = |workers| {
@@ -25596,6 +25700,158 @@ fn concentrated(count: u64) -> State {
         requests: None,
     });
     state
+}
+
+fn named_food_workload(count: u64, available: u64, stores: u64) -> State {
+    assert!(stores > 0);
+    let mut state = concentrated(count);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.hunger = 5;
+        person.seek_meals = true;
+    }
+    for container in &mut state.physical.custody.containers {
+        if matches!(container.place, Place::Person(_)) {
+            *container = Container::new(container.place, 10, vec![]).unwrap();
+        }
+    }
+    for id in 1..=stores {
+        let quantity = available / stores + u64::from(id <= available % stores);
+        state.physical.custody.containers.push(
+            Container::new(
+                Place::Inventory(id),
+                count.max(1),
+                if quantity == 0 {
+                    vec![]
+                } else {
+                    vec![Lot {
+                        good: 1,
+                        quantity,
+                        expires_at: None,
+                    }]
+                },
+            )
+            .unwrap(),
+        );
+    }
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    state.local_transport = Some(LocalTransport {
+        stores: (1..=stores)
+            .map(|id| LocalStore {
+                id,
+                region: 1,
+                name: format!("food store {id}"),
+            })
+            .collect(),
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn hungry_people_compete_for_real_named_store_food_deterministically() {
+    let count = 512;
+    let run = |workers, stores| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let initial = named_food_workload(count, count / 2, stores);
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let held: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|row| matches!(row.place, Place::Person(_)))
+                    .flat_map(|row| row.lots.iter())
+                    .filter(|lot| lot.good == 1)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(held, count / 2);
+                assert!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .filter(|row| matches!(row.place, Place::Inventory(_)))
+                        .all(|row| row.used == 0)
+                );
+                state
+            })
+    };
+    for stores in [1, 8] {
+        assert_eq!(run(1, stores), run(4, stores));
+    }
+}
+
+#[test]
+#[ignore = "manual concentrated named food provisioning benchmark"]
+fn concentrated_named_food_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000u64);
+    let stores = std::env::var("LEGACY_STORES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1u64);
+    assert!(
+        count > 0
+            && stores > 0
+            && count.is_multiple_of(stores)
+            && (count / 2).is_multiple_of(stores)
+    );
+    let initial = named_food_workload(count, count / 2, stores);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let started = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                let held: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|row| matches!(row.place, Place::Person(_)))
+                    .flat_map(|row| row.lots.iter())
+                    .filter(|lot| lot.good == 1)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(held, count / 2);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} people={count} stores={stores} food={} elapsed={:.6}",
+                count / 2,
+                samples[1]
+            );
+        });
 }
 
 fn field_workload(count: u64) -> State {
