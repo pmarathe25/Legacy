@@ -103,6 +103,7 @@ pub fn claim_tolerance(
                 gratitude_gain: None,
                 obligation_relief: None,
                 theft_loss: tolerant.then_some(0),
+                trust_stock_use: None,
                 confrontation: confront.then_some(game_parallel::ConfrontationPreference {
                     trust_at_most: settings.confrontation_threshold,
                     fear_at_most: settings.confrontation_fear_limit,

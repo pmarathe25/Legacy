@@ -1987,6 +1987,7 @@ fn a_person_can_confront_a_witnessed_taking_without_the_targets_consent() {
             gratitude_gain: None,
             obligation_relief: None,
             theft_loss: None,
+            trust_stock_use: None,
             confrontation: Some(ConfrontationPreference {
                 trust_at_most: -2,
                 fear_at_most: 0,
@@ -2089,6 +2090,7 @@ fn confrontation_fixture() -> World {
         gratitude_gain: None,
         obligation_relief: None,
         theft_loss: None,
+        trust_stock_use: None,
         confrontation: Some(ConfrontationPreference {
             trust_at_most: -2,
             fear_at_most: 0,
@@ -2185,6 +2187,7 @@ fn concentrated_confrontations_select_disjoint_people_deterministically() {
             gratitude_gain: None,
             obligation_relief: None,
             theft_loss: None,
+            trust_stock_use: None,
             confrontation: Some(ConfrontationPreference {
                 trust_at_most: -2,
                 fear_at_most: 0,

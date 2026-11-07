@@ -22,6 +22,8 @@ relationship_cases = [{ target = 1, promise_unfulfilled_trust = 2 }]
 
 An optional signed `affinity_stock_use` independently controls how a claimant feels about someone they witness using claimed regional stock. A relationship case can override it with `stock_use`, including an explicit zero. The default is no affinity change; no obligation is created.
 
+`trust_stock_use` sets a signed personal trust reaction to the same experience, and `stock_use_trust` overrides it for a particular relationship. An explicit zero suppresses the reaction. When neither is set, the existing individual or scenario `theft_loss` remains the fallback.
+
 `fear_per_damage` optionally increases the victim's directed fear of a person who actually injures them. This is tracked independently of trust and does not require a market. The fused host applies those updates only after the complete tick succeeds. Automatic responses to requests can use the victim's previously committed fear; compliance does not imply approval or increase trust.
 
 Optional `fear_decay_per_tick` reduces existing fear in parallel at each committed tick, before new injuries are recorded. It defaults to zero. Choices read the prior committed fear, so a person can later stop complying as fear subsides without altering trust or obligations.

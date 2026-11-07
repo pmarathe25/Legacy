@@ -19,15 +19,18 @@ fn witnessed_stock_use_has_personal_and_relationship_specific_affinity() {
             Sensitivity {
                 person: 1,
                 affinity_stock_use: Some(-2),
+                trust_stock_use: Some(-1),
                 relationship_cases: vec![
                     RelationshipCase {
                         target: 2,
                         stock_use: Some(3),
+                        stock_use_trust: Some(2),
                         ..Default::default()
                     },
                     RelationshipCase {
                         target: 4,
                         stock_use: Some(0),
+                        stock_use_trust: Some(0),
                         ..Default::default()
                     },
                 ],
@@ -36,6 +39,7 @@ fn witnessed_stock_use_has_personal_and_relationship_specific_affinity() {
             Sensitivity {
                 person: 3,
                 affinity_stock_use: Some(-4),
+                trust_stock_use: Some(-3),
                 ..Default::default()
             },
         ]
@@ -53,12 +57,11 @@ fn witnessed_stock_use_has_personal_and_relationship_specific_affinity() {
                 assert_eq!(state.index().affinity(1, 4), 0);
                 assert_eq!(state.index().affinity(1, 5), -2);
                 assert_eq!(state.index().affinity(3, 2), -4);
-                assert!(
-                    state
-                        .records
-                        .iter()
-                        .all(|row| row.obligation == 0 && row.trust == 0)
-                );
+                assert_eq!(state.index().trust(1, 2), 4);
+                assert_eq!(state.index().trust(1, 4), 0);
+                assert_eq!(state.index().trust(1, 5), -1);
+                assert_eq!(state.index().trust(3, 2), -3);
+                assert!(state.records.iter().all(|row| row.obligation == 0));
                 state
             })
     };
@@ -69,13 +72,19 @@ fn witnessed_stock_use_has_personal_and_relationship_specific_affinity() {
             .as_object_mut()
             .unwrap()
             .remove("affinity_stock_use");
+        sensitivity
+            .as_object_mut()
+            .unwrap()
+            .remove("trust_stock_use");
         for case in sensitivity["relationship_cases"].as_array_mut().unwrap() {
             case.as_object_mut().unwrap().remove("stock_use");
+            case.as_object_mut().unwrap().remove("stock_use_trust");
         }
     }
     let mut older: Opinions = serde_json::from_value(saved).unwrap();
     older.witness_thefts(&[(1, 2)], 1);
     assert_eq!(older.index().affinity(1, 2), 0);
+    assert_eq!(older.index().trust(1, 2), 0);
 }
 
 #[test]
@@ -1214,6 +1223,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 gratitude_gain: None,
                 obligation_relief: None,
                 theft_loss: Some(0),
+                trust_stock_use: None,
                 confrontation: None,
                 affinity_help: None,
                 affinity_harm_per_damage: None,
@@ -1243,6 +1253,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 gratitude_gain: None,
                 obligation_relief: None,
                 theft_loss: Some(3),
+                trust_stock_use: None,
                 confrontation: None,
                 affinity_help: None,
                 affinity_harm_per_damage: None,
@@ -1286,6 +1297,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             gratitude_gain: None,
             obligation_relief: Some(2),
             theft_loss: None,
+            trust_stock_use: None,
             confrontation: None,
             affinity_help: None,
             affinity_harm_per_damage: None,
@@ -1365,6 +1377,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 gratitude_gain: Some(0),
                 obligation_relief: None,
                 theft_loss: None,
+                trust_stock_use: None,
                 confrontation: None,
                 affinity_help: None,
                 affinity_harm_per_damage: None,
@@ -1394,6 +1407,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 gratitude_gain: Some(3),
                 obligation_relief: None,
                 theft_loss: None,
+                trust_stock_use: None,
                 confrontation: None,
                 affinity_help: None,
                 affinity_harm_per_damage: None,
@@ -1826,6 +1840,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         gratitude_gain: None,
         obligation_relief: None,
         theft_loss: None,
+        trust_stock_use: None,
         confrontation: None,
         affinity_help: Some(help),
         affinity_harm_per_damage: Some(harm),
@@ -1897,6 +1912,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         gratitude_gain: Some(0),
         obligation_relief: None,
         theft_loss: None,
+        trust_stock_use: None,
         confrontation: None,
         affinity_help: None,
         affinity_harm_per_damage: Some(3),
@@ -1922,6 +1938,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
             encounter: None,
             pressured_encounter: None,
             stock_use: None,
+            stock_use_trust: None,
             site_use: None,
             site_destruction: None,
             site_salvage: None,
@@ -1974,6 +1991,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         gratitude_gain: Some(0),
         obligation_relief: Some(0),
         theft_loss: None,
+        trust_stock_use: None,
         confrontation: None,
         affinity_help: None,
         affinity_harm_per_damage: None,
@@ -1999,6 +2017,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
             encounter: None,
             pressured_encounter: None,
             stock_use: None,
+            stock_use_trust: None,
             site_use: None,
             site_destruction: None,
             site_salvage: None,

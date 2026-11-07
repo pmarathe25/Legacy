@@ -333,6 +333,7 @@ impl Opinions {
                 promise_obligation_gain: None,
                 obligation_relief: None,
                 theft_loss: None,
+                trust_stock_use: None,
                 confrontation: None,
                 affinity_help: None,
                 affinity_harm_per_damage: None,

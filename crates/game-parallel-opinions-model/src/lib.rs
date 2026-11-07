@@ -36,6 +36,9 @@ pub struct Sensitivity {
     /// Personal trust loss on witnessing another person use a claimed good.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theft_loss: Option<u32>,
+    /// Signed trust reaction to witnessed use of claimed stock; overrides theft_loss.
+    #[serde(default)]
+    pub trust_stock_use: Option<i32>,
     /// An individual tendency to confront people they personally distrust.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confrontation: Option<Confrontation>,
@@ -127,6 +130,9 @@ pub struct RelationshipCase {
     /// Override the observer's general reaction to this person's stock use.
     #[serde(default)]
     pub stock_use: Option<i32>,
+    /// Signed trust override for this person's witnessed stock use.
+    #[serde(default)]
+    pub stock_use_trust: Option<i32>,
     #[serde(default)]
     pub site_use: Option<i32>,
     #[serde(default)]

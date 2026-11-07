@@ -135,10 +135,14 @@ pub fn help(state: &mut Opinions, help: &[(u64, u64)]) {
 pub fn theft(state: &mut Opinions, incidents: &[(u64, u64)], tick: u64) {
     if incidents.is_empty()
         || (state.rules.theft_loss == 0
-            && state
-                .sensitivities
-                .par_iter()
-                .all(|row| row.theft_loss.unwrap_or(0) == 0))
+            && state.sensitivities.par_iter().all(|row| {
+                row.theft_loss.unwrap_or(0) == 0
+                    && row.trust_stock_use.unwrap_or(0) == 0
+                    && row
+                        .relationship_cases
+                        .iter()
+                        .all(|case| case.stock_use_trust.unwrap_or(0) == 0)
+            }))
     {
         return;
     }
@@ -148,6 +152,19 @@ pub fn theft(state: &mut Opinions, incidents: &[(u64, u64)], tick: u64) {
         .any(|pair| pair[0].person > pair[1].person)
     {
         sensitivities.par_sort_unstable_by_key(|row| row.person);
+    }
+    let mut cases: Vec<_> = state
+        .sensitivities
+        .par_iter()
+        .flat_map_iter(|person| {
+            person.relationship_cases.iter().filter_map(move |case| {
+                case.stock_use_trust
+                    .map(|rate| ((person.person, case.target), rate))
+            })
+        })
+        .collect();
+    if cases.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        cases.par_sort_unstable_by_key(|row| row.0);
     }
     let mut rows: Vec<_> = incidents
         .par_iter()
@@ -160,23 +177,40 @@ pub fn theft(state: &mut Opinions, incidents: &[(u64, u64)], tick: u64) {
     let updates: Vec<_> = rows
         .par_chunk_by(|a, b| a == b)
         .filter_map(|group| {
-            let loss = sensitivities
+            let personal = sensitivities
                 .binary_search_by_key(&group[0].0, |row| row.person)
                 .ok()
-                .and_then(|index| sensitivities[index].theft_loss)
-                .unwrap_or(state.rules.theft_loss);
-            (loss > 0).then_some((
+                .map(|index| sensitivities[index]);
+            let rate = cases
+                .binary_search_by_key(&group[0], |row| row.0)
+                .ok()
+                .map(|index| i64::from(cases[index].1))
+                .or_else(|| personal.and_then(|row| row.trust_stock_use).map(i64::from))
+                .unwrap_or_else(|| {
+                    -i64::from(
+                        personal
+                            .and_then(|row| row.theft_loss)
+                            .unwrap_or(state.rules.theft_loss),
+                    )
+                });
+            (rate != 0).then_some((
                 group[0],
-                (group.len() as u64).saturating_mul(u64::from(loss)),
+                (group.len() as u64).saturating_mul(rate.unsigned_abs()),
+                rate > 0,
             ))
         })
         .collect();
     let index = state.index();
     let events: Vec<_> = updates
         .par_iter()
-        .map(|&((observer, target), delta)| {
+        .map(|&((observer, target), delta, positive)| {
             let before = index.trust(observer, target);
-            let after = (i128::from(before) - i128::from(delta)).clamp(
+            let delta = if positive {
+                i128::from(delta)
+            } else {
+                -i128::from(delta)
+            };
+            let after = (i128::from(before) + delta).clamp(
                 i128::from(state.rules.minimum),
                 i128::from(state.rules.maximum),
             ) as i32;
@@ -190,7 +224,16 @@ pub fn theft(state: &mut Opinions, incidents: &[(u64, u64)], tick: u64) {
         })
         .collect();
     state.events.par_extend(events);
-    merge(state, &updates, Change::Theft);
+    let gains: Vec<_> = updates
+        .par_iter()
+        .filter_map(|&(pair, amount, positive)| positive.then_some((pair, amount)))
+        .collect();
+    let losses: Vec<_> = updates
+        .par_iter()
+        .filter_map(|&(pair, amount, positive)| (!positive).then_some((pair, amount)))
+        .collect();
+    merge(state, &gains, Change::TrustGain);
+    merge(state, &losses, Change::Theft);
 }
 
 fn merge(state: &mut Opinions, updates: &[((u64, u64), u64)], kind: Change) {
