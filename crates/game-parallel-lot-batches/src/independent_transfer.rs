@@ -14,7 +14,7 @@ struct Row {
     movement: Movement,
 }
 
-fn after(
+pub(crate) fn after(
     container: &Container,
     tick: u64,
     good: u32,

@@ -2,6 +2,7 @@
 use game_parallel_lot_model::{Container, SimpleTransfer, State, Transaction};
 use game_parallel_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
+mod fan_in;
 mod independent;
 mod independent_transfer;
 mod partitioned;
@@ -133,6 +134,13 @@ fn prepare_impl(
         && additions.is_empty()
         && compact.is_empty()
         && let Some(draft) = independent_transfer::prepare(state, instance, transactions, advance)?
+    {
+        return Ok((draft, additions));
+    }
+    if partition
+        && additions.is_empty()
+        && compact.is_empty()
+        && let Some(draft) = fan_in::prepare(state, instance, transactions, advance)?
     {
         return Ok((draft, additions));
     }

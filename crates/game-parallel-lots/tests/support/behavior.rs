@@ -203,6 +203,104 @@ fn shared_receipt_lots_are_isolated_and_serialize_as_flat_arrays() {
 }
 
 #[test]
+fn shared_destination_transfers_match_general_planning_and_preserve_receipts() {
+    let mut initial = Vec::new();
+    let mut actions = Vec::new();
+    for id in 1..=256u64 {
+        initial.push(container(
+            Place::Person(id),
+            20,
+            vec![
+                lot(1, 1, Some(1)),
+                lot(1, 2, Some(if id % 4 == 0 { 3 + id } else { 3 })),
+                lot(1, 3, None),
+                lot(2, 4, None),
+            ],
+        ));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id: 1000 - id,
+                from: Place::Person(id),
+                to: Some(Place::Person(if id % 2 == 0 { 1000 } else { 1001 })),
+                good: if id % 3 == 0 { 2 } else { 1 },
+                quantity: 3,
+            }],
+            creations: vec![],
+        });
+    }
+    initial.push(container(
+        Place::Person(1000),
+        1000,
+        vec![lot(1, 1, Some(1)), lot(1, 2, Some(3)), lot(2, 2, None)],
+    ));
+    initial.push(container(Place::Person(1001), 1000, vec![lot(1, 2, None)]));
+    initial.push(container(Place::Person(9999), 10, vec![lot(1, 2, Some(1))]));
+    let run =
+        |workers, reverse: bool, advance: bool, limited: bool, overlap: bool, shortage: bool| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut actions = actions.clone();
+                    let mut holders = initial.clone();
+                    if limited {
+                        *holders
+                            .iter_mut()
+                            .find(|row| row.place == Place::Person(1000))
+                            .unwrap() = container(Place::Person(1000), 10, vec![lot(1, 2, None)]);
+                    }
+                    if overlap {
+                        actions[1].movements[0].from = actions[0].movements[0].from;
+                    }
+                    if shortage {
+                        actions[0].movements[0].quantity = 50;
+                    }
+                    if reverse {
+                        actions.reverse();
+                    }
+                    let mut fast = store(holders.clone());
+                    let mut reference = store(holders);
+                    let draft = fast
+                        .prepare_with_empty(17, &actions, vec![], advance)
+                        .unwrap();
+                    let stale = fast
+                        .prepare_with_empty(17, &actions, vec![], advance)
+                        .unwrap();
+                    let general = unpartitioned(&reference, 17, &actions, vec![], &[], advance);
+                    assert_eq!(draft.transactions(), general.transactions());
+                    assert_eq!(draft.outcomes(), general.outcomes());
+                    assert_eq!(draft.spoiled(), general.spoiled());
+                    let receipts = draft.outcomes();
+                    fast.commit(draft).unwrap();
+                    assert!(fast.commit(stale).is_err());
+                    reference.commit(general).unwrap();
+                    assert_eq!(fast.export(), reference.export());
+                    assert_eq!(
+                        Store::compile(fast.export()).unwrap().export(),
+                        fast.export()
+                    );
+                    assert_eq!(receipts.len(), actions.len());
+                    fast.export()
+                })
+        };
+    for advance in [false, true] {
+        for (limited, overlap, shortage) in [
+            (false, false, false),
+            (true, false, false),
+            (false, true, false),
+            (false, false, true),
+        ] {
+            assert_eq!(
+                run(1, false, advance, limited, overlap, shortage),
+                run(4, true, advance, limited, overlap, shortage)
+            );
+        }
+    }
+}
+
+#[test]
 fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
     let mut initial = Vec::new();
     let mut actions = Vec::new();
