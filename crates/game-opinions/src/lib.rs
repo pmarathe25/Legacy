@@ -45,7 +45,11 @@ pub use game_opinions_model::{
 
 pub struct Index<'a> {
     rules: &'a Rules,
-    records: Vec<&'a Opinion>,
+    records: IndexRecords<'a>,
+}
+enum IndexRecords<'a> {
+    Ordered(&'a [Opinion]),
+    Indexed(Vec<&'a Opinion>),
 }
 /// Independent receiver policies over committed directed trust.
 pub struct ReportFilter<'a> {
@@ -82,21 +86,26 @@ impl ReportFilter<'_> {
     }
 }
 impl Index<'_> {
+    fn get(&self, observer: u64, target: u64) -> Option<&Opinion> {
+        let key = (observer, target);
+        match &self.records {
+            IndexRecords::Ordered(rows) => rows
+                .binary_search_by_key(&key, |row| (row.observer, row.target))
+                .ok()
+                .map(|i| &rows[i]),
+            IndexRecords::Indexed(rows) => rows
+                .binary_search_by_key(&key, |row| (row.observer, row.target))
+                .ok()
+                .map(|i| rows[i]),
+        }
+    }
     pub fn assessment(&self, observer: u64, target: u64) -> (i32, u64) {
-        self.records
-            .binary_search_by_key(&(observer, target), |row| (row.observer, row.target))
-            .ok()
-            .map_or((self.rules.initial, 0), |i| {
-                (self.records[i].trust, self.records[i].fear)
-            })
+        self.get(observer, target)
+            .map_or((self.rules.initial, 0), |row| (row.trust, row.fear))
     }
     pub fn feelings(&self, observer: u64, target: u64) -> (u64, u64) {
-        self.records
-            .binary_search_by_key(&(observer, target), |row| (row.observer, row.target))
-            .ok()
-            .map_or((0, 0), |i| {
-                (self.records[i].fear, self.records[i].obligation)
-            })
+        self.get(observer, target)
+            .map_or((0, 0), |row| (row.fear, row.obligation))
     }
     pub fn fear(&self, observer: u64, target: u64) -> u64 {
         self.feelings(observer, target).0
@@ -105,16 +114,11 @@ impl Index<'_> {
         self.feelings(observer, target).1
     }
     pub fn affinity(&self, observer: u64, target: u64) -> i32 {
-        self.records
-            .binary_search_by_key(&(observer, target), |row| (row.observer, row.target))
-            .ok()
-            .map_or(0, |i| self.records[i].affinity)
+        self.get(observer, target).map_or(0, |row| row.affinity)
     }
     pub fn trust(&self, observer: u64, target: u64) -> i32 {
-        self.records
-            .binary_search_by_key(&(observer, target), |row| (row.observer, row.target))
-            .ok()
-            .map_or(self.rules.initial, |i| self.records[i].trust)
+        self.get(observer, target)
+            .map_or(self.rules.initial, |row| row.trust)
     }
 }
 impl Opinions {
@@ -590,13 +594,17 @@ impl Opinions {
         self.witness_thefts(&[(observer, target)], tick);
     }
     pub fn index(&self) -> Index<'_> {
-        let mut records: Vec<_> = self.records.par_iter().collect();
-        if records
+        let records = if self
+            .records
             .par_windows(2)
             .any(|p| (p[0].observer, p[0].target) > (p[1].observer, p[1].target))
         {
+            let mut records: Vec<_> = self.records.par_iter().collect();
             records.par_sort_unstable_by_key(|r| (r.observer, r.target));
-        }
+            IndexRecords::Indexed(records)
+        } else {
+            IndexRecords::Ordered(&self.records)
+        };
         Index {
             rules: &self.rules,
             records,
