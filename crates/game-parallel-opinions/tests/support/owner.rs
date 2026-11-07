@@ -54,6 +54,79 @@ fn ordered_new_relationships_match_shuffled_merge_for_signed_feelings() {
 }
 
 #[test]
+fn ordered_new_relationships_preserve_trust_events_and_clamped_changes() {
+    for affinity_enabled in [false, true] {
+        let mut configured = rules();
+        configured.initial = configured.maximum;
+        configured.affinity = affinity_enabled.then_some(AffinityRules {
+            limit: 3,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        let initial = Opinions {
+            rules: configured,
+            sensitivities: vec![].into(),
+            records: vec![],
+            events: vec![Event {
+                tick: 1,
+                observer: 6000,
+                target: 6001,
+                before: 0,
+                after: 1,
+            }],
+        };
+        let changes: Vec<_> = (1..=4096)
+            .map(|observer| PersonalChange {
+                observer,
+                target: 5000,
+                trust: match observer % 4 {
+                    0 => 5,
+                    1 => -5,
+                    _ => 0,
+                },
+                affinity: if observer % 3 == 0 { -5 } else { 0 },
+                fear: if observer % 5 == 0 { 4 } else { -4 },
+                obligation: if observer % 7 == 0 { 2 } else { -2 },
+            })
+            .collect();
+        let mut reversed = changes.clone();
+        reversed.reverse();
+        let run = |workers, changes: &[PersonalChange]| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut state = initial.clone();
+                    state.apply_personal_changes(changes, 7);
+                    state
+                })
+        };
+        let expected = run(4, &reversed);
+        assert_eq!(expected, run(1, &changes));
+        assert_eq!(expected, run(4, &changes));
+        assert_eq!(expected.events[0], initial.events[0]);
+        assert!(expected.events.iter().skip(1).all(|event| event.tick == 7));
+        assert!(
+            expected
+                .events
+                .iter()
+                .skip(1)
+                .all(|event| event.after < event.before)
+        );
+        assert!(expected.events.len() > 1);
+        let mut all_change = changes.clone();
+        all_change.iter_mut().for_each(|row| row.trust = -1);
+        let mut reversed = all_change.clone();
+        reversed.reverse();
+        assert_eq!(run(4, &reversed), run(1, &all_change));
+        assert_eq!(run(4, &reversed), run(4, &all_change));
+    }
+}
+
+#[test]
 #[ignore = "manual sparse relationship merge benchmark"]
 fn sparse_relationship_merge_benchmark() {
     let workers = std::env::var("LEGACY_WORKERS")

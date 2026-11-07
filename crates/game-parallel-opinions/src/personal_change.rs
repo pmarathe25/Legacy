@@ -84,6 +84,28 @@ pub struct PersonalChange {
     pub obligation: i64,
 }
 
+fn new_opinion(row: PersonalChange, rules: &Rules) -> Opinion {
+    let mut opinion = Opinion {
+        observer: row.observer,
+        target: row.target,
+        trust: rules.initial,
+        fear: 0,
+        obligation: 0,
+        affinity: 0,
+    };
+    apply_update(
+        &mut opinion,
+        (
+            i128::from(row.trust),
+            i128::from(row.affinity),
+            i128::from(row.fear),
+            i128::from(row.obligation),
+        ),
+        rules,
+    );
+    opinion
+}
+
 pub fn apply(state: &mut Opinions, changes: &[PersonalChange], tick: u64) {
     let rows = changes
         .par_iter()
@@ -116,42 +138,72 @@ fn apply_filtered(state: &mut Opinions, mut rows: Vec<PersonalChange>, tick: u64
         return;
     }
     if state.records.is_empty()
-        && rows.par_iter().all(|row| row.trust == 0)
         && rows
             .par_windows(2)
             .all(|pair| (pair[0].observer, pair[0].target) < (pair[1].observer, pair[1].target))
     {
         let rules = &state.rules;
+        let all_trust_changes = rows.par_iter().all(|row| {
+            (row.trust > 0 && rules.initial < rules.maximum)
+                || (row.trust < 0 && rules.initial > rules.minimum)
+        });
+        if all_trust_changes {
+            let events: Vec<_> = rows
+                .par_iter()
+                .map(|row| Event {
+                    tick,
+                    observer: row.observer,
+                    target: row.target,
+                    before: rules.initial,
+                    after: (i128::from(rules.initial) + i128::from(row.trust))
+                        .clamp(i128::from(rules.minimum), i128::from(rules.maximum))
+                        as i32,
+                })
+                .collect();
+            state.records = rows
+                .into_par_iter()
+                .map(|row| new_opinion(row, rules))
+                .collect();
+            if state.events.is_empty() {
+                state.events = events;
+            } else {
+                state.events.par_extend(events);
+            }
+            return;
+        }
+        let events: Vec<_> = rows
+            .par_iter()
+            .filter_map(|row| {
+                let after = (i128::from(rules.initial) + i128::from(row.trust))
+                    .clamp(i128::from(rules.minimum), i128::from(rules.maximum))
+                    as i32;
+                (after != rules.initial).then_some(Event {
+                    tick,
+                    observer: row.observer,
+                    target: row.target,
+                    before: rules.initial,
+                    after,
+                })
+            })
+            .collect();
         state.records = rows
             .into_par_iter()
             .filter_map(|row| {
-                if (row.affinity == 0 || rules.affinity.is_none())
+                if row.trust == 0
+                    && (row.affinity == 0 || rules.affinity.is_none())
                     && row.fear <= 0
                     && row.obligation <= 0
                 {
                     return None;
                 }
-                let mut opinion = Opinion {
-                    observer: row.observer,
-                    target: row.target,
-                    trust: rules.initial,
-                    fear: 0,
-                    obligation: 0,
-                    affinity: 0,
-                };
-                apply_update(
-                    &mut opinion,
-                    (
-                        0,
-                        i128::from(row.affinity),
-                        i128::from(row.fear),
-                        i128::from(row.obligation),
-                    ),
-                    rules,
-                );
-                Some(opinion)
+                Some(new_opinion(row, rules))
             })
             .collect();
+        if state.events.is_empty() {
+            state.events = events;
+        } else {
+            state.events.par_extend(events);
+        }
         return;
     }
     if rows
