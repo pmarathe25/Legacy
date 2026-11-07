@@ -203,6 +203,152 @@ fn shared_receipt_lots_are_isolated_and_serialize_as_flat_arrays() {
 }
 
 #[test]
+fn shared_source_keeps_many_distinct_expiry_cohorts() {
+    let source = Place::Stock { region: 1, good: 1 };
+    let mut holders = vec![container(
+        source,
+        5000,
+        (2..4098).map(|at| lot(1, 1, Some(at))).collect(),
+    )];
+    holders.extend((1..=128).map(|id| container(Place::Person(id), 30, vec![])));
+    let actions: Vec<_> = (1..=128)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: source,
+                to: Some(Place::Person(id)),
+                good: 1,
+                quantity: 16,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut fast = store(holders.clone());
+                let mut reference = store(holders.clone());
+                let draft = fast.prepare_with_empty(17, &actions, vec![], true).unwrap();
+                let general = unpartitioned(&reference, 17, &actions, vec![], &[], true);
+                assert_eq!(draft.transactions(), general.transactions());
+                assert_eq!(draft.outcomes(), general.outcomes());
+                fast.commit(draft).unwrap();
+                reference.commit(general).unwrap();
+                assert_eq!(fast.export(), reference.export());
+                fast.export()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn shared_source_transfers_match_general_fefo_and_capacity_arbitration() {
+    let source = Place::Stock { region: 1, good: 1 };
+    let mut holders = vec![container(
+        source,
+        1000,
+        vec![
+            lot(1, 50, Some(1)),
+            lot(1, 120, Some(3)),
+            lot(1, 150, Some(5)),
+            lot(1, 150, None),
+        ],
+    )];
+    let mut actions = Vec::new();
+    for id in 1..=256u64 {
+        holders.push(container(
+            Place::Person(id),
+            if id % 7 == 0 { 3 } else { 20 },
+            if id % 7 == 0 {
+                vec![lot(1, 2, None)]
+            } else {
+                vec![lot(1, 1, Some(1)), lot(2, 1, None)]
+            },
+        ));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id: 1000 - id,
+                from: source,
+                to: Some(Place::Person(id)),
+                good: 1,
+                quantity: if id % 5 == 0 {
+                    4
+                } else if id % 7 == 0 {
+                    1
+                } else {
+                    2
+                },
+            }],
+            creations: vec![],
+        });
+    }
+    holders.push(container(Place::Person(9999), 10, vec![lot(1, 2, Some(1))]));
+    let run = |workers,
+               seed,
+               reverse: bool,
+               advance: bool,
+               expired_only: bool,
+               duplicate_destination: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut holders = holders.clone();
+                let mut actions = actions.clone();
+                if expired_only {
+                    holders[0] = container(source, 1000, vec![lot(1, 50, Some(1))]);
+                }
+                if duplicate_destination {
+                    actions[1].movements[0].to = actions[0].movements[0].to;
+                }
+                if reverse {
+                    actions.reverse();
+                }
+                let mut fast = store(holders.clone());
+                let mut reference = store(holders);
+                let draft = fast
+                    .prepare_with_empty(seed, &actions, vec![], advance)
+                    .unwrap();
+                let stale = fast
+                    .prepare_with_empty(seed, &actions, vec![], advance)
+                    .unwrap();
+                let general = unpartitioned(&reference, seed, &actions, vec![], &[], advance);
+                assert_eq!(draft.transactions(), general.transactions());
+                assert_eq!(draft.outcomes(), general.outcomes());
+                assert_eq!(draft.spoiled(), general.spoiled());
+                let receipts = draft.outcomes();
+                fast.commit(draft).unwrap();
+                assert!(fast.commit(stale).is_err());
+                reference.commit(general).unwrap();
+                assert_eq!(fast.export(), reference.export());
+                assert_eq!(
+                    Store::compile(fast.export()).unwrap().export(),
+                    fast.export()
+                );
+                assert_eq!(receipts.len(), actions.len());
+                fast.export()
+            })
+    };
+    for advance in [false, true] {
+        for (expired_only, duplicate_destination) in [(false, false), (true, false), (false, true)]
+        {
+            for seed in [1, 17, 919] {
+                assert_eq!(
+                    run(1, seed, false, advance, expired_only, duplicate_destination),
+                    run(4, seed, true, advance, expired_only, duplicate_destination)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn shared_destination_transfers_match_general_planning_and_preserve_receipts() {
     let mut initial = Vec::new();
     let mut actions = Vec::new();
@@ -317,6 +463,71 @@ fn shared_destination_transfers_match_general_planning_and_preserve_receipts() {
             }
         }
     }
+}
+
+#[test]
+#[ignore = "manual shared source arbitration benchmark"]
+fn shared_source_arbitration_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000u64);
+    assert!(count > 1);
+    let source = Place::Stock { region: 1, good: 1 };
+    let mut holders = vec![container(source, count, vec![lot(1, count / 2, None)])];
+    holders.extend((1..=count).map(|id| container(Place::Person(id), 1, vec![])));
+    let actions: Vec<_> = (1..=count)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: source,
+                to: Some(Place::Person(id)),
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut fast_samples = Vec::new();
+            let mut general_samples = Vec::new();
+            for round in 0..4 {
+                let mut fast = store(holders.clone());
+                let mut general = store(holders.clone());
+                let start = std::time::Instant::now();
+                let draft = fast.prepare_with_empty(17, &actions, vec![], true).unwrap();
+                let fast_time = start.elapsed().as_secs_f64();
+                let start = std::time::Instant::now();
+                let reference = unpartitioned(&general, 17, &actions, vec![], &[], true);
+                let general_time = start.elapsed().as_secs_f64();
+                assert_eq!(draft.transactions(), reference.transactions());
+                assert_eq!(draft.outcomes(), reference.outcomes());
+                fast.commit(draft).unwrap();
+                general.commit(reference).unwrap();
+                assert_eq!(fast.export(), general.export());
+                if round > 0 {
+                    fast_samples.push(fast_time);
+                    general_samples.push(general_time);
+                }
+            }
+            fast_samples.sort_by(f64::total_cmp);
+            general_samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} transfers={count} stock={} optimized={:.6} general={:.6}",
+                count / 2,
+                fast_samples[1],
+                general_samples[1]
+            );
+        });
 }
 
 #[test]

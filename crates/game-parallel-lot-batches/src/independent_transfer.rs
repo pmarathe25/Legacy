@@ -162,14 +162,18 @@ fn prepare_rows(
         .revision
         .checked_add(1)
         .ok_or("lot revision overflow")?;
-    // A single shared destination cannot satisfy the disjoint-endpoint path.
-    // Detect it before locating and sorting every endpoint; another planner
-    // still performs all identity, capacity, and transaction checks.
-    let first_destination = action(0).1.to;
-    if action(1).1.to == first_destination
+    // A batch with one shared endpoint cannot use the disjoint path. Detect it
+    // before locating endpoints; another planner validates and resolves it.
+    let first = action(0).1;
+    let second = action(1).1;
+    if (first.to == second.to
         && (2..length)
             .into_par_iter()
-            .all(|index| action(index).1.to == first_destination)
+            .all(|index| action(index).1.to == first.to))
+        || (first.from == second.from
+            && (2..length)
+                .into_par_iter()
+                .all(|index| action(index).1.from == first.from))
     {
         return Ok(None);
     }

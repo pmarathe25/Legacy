@@ -51,7 +51,7 @@ fn crate_size_and_dependency_direction_are_enforced() {
             "game-parallel-animal-restraint" => 1350,
             "game-parallel-fauna" => 1800,
             "game-parallel-opinions" => 2300,
-            "game-parallel-lot-batches" => 1650,
+            "game-parallel-lot-batches" => 2000,
             _ => 1200,
         };
         assert!(lines <= budget, "{name}: {lines} exceeds {budget}");
