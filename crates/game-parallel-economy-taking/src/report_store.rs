@@ -22,6 +22,30 @@ pub struct ReportStore {
     len: usize,
 }
 
+// A dense generation may own tens of thousands of retired pages. Release
+// independent branches on the worker pool; shared subtrees are only decremented.
+fn release(node: Arc<Node>) {
+    if let Ok(Node::Branch(children)) = Arc::try_unwrap(node) {
+        if children.len() >= 16 {
+            children
+                .into_par_iter()
+                .for_each(|(_, child)| release(child));
+        } else {
+            for (_, child) in children {
+                release(child);
+            }
+        }
+    }
+}
+
+impl Drop for ReportStore {
+    fn drop(&mut self) {
+        if let Some(root) = self.root.take() {
+            release(root);
+        }
+    }
+}
+
 fn digit(recipient: u64, depth: usize) -> u8 {
     let page = recipient >> PAGE_BITS;
     ((page >> (8 * (DEPTH - depth - 1))) & 0xff) as u8

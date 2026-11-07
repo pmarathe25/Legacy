@@ -144,6 +144,28 @@ fn sparse_updates_share_untouched_pages_and_dense_lookup_checks_gaps() {
 }
 
 #[test]
+fn retiring_generations_preserves_shared_and_updated_pages() {
+    let original = ReportStore::from(
+        (1..=100_000)
+            .map(|recipient| report(recipient, 1, 2, 1, 1))
+            .collect::<Vec<_>>(),
+    );
+    let shared = original.clone();
+    let incoming = (1..=100_000)
+        .step_by(3)
+        .map(|recipient| report(recipient, 1, 2, 2, 2))
+        .collect();
+    let (next, _) = original.updated(incoming);
+    drop(original);
+    assert_eq!(shared.get(1)[0].quantity, 1);
+    assert_eq!(next.get(1)[0].quantity, 2);
+    drop(shared);
+    assert_eq!(next.get(1)[0].quantity, 2);
+    assert_eq!(next.get(2)[0].quantity, 1);
+    assert_eq!(next.len(), 100_000);
+}
+
+#[test]
 fn single_updates_match_retention_at_full_capacity_and_reuse_noop_roots() {
     for count in [0, 1, 63, 64] {
         let mut old: Vec<_> = (1..=count)
@@ -262,4 +284,44 @@ fn full_report_page_benchmark() {
         original.len(),
         samples[25]
     );
+}
+
+#[test]
+#[ignore = "manual dense report-generation retirement benchmark"]
+fn dense_report_retirement_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let rows: Vec<_> = (1..=count).map(|id| report(id, 1, 2, 1, 1)).collect();
+                let original = ReportStore::from(rows);
+                let incoming = (1..=count).map(|id| report(id, 1, 2, 2, 2)).collect();
+                let (next, candidates) = original.updated(incoming);
+                drop(candidates);
+                let start = std::time::Instant::now();
+                drop(original);
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(next.len(), count as usize);
+                assert_eq!(next.get(count)[0].received_at, 2);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} recipients={count} retirement={:.6}",
+                samples[2]
+            );
+        });
 }
