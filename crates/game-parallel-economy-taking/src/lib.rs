@@ -225,6 +225,19 @@ struct Pending {
     action: Option<u64>,
     region: u64,
 }
+fn physical_action(pending: &mut Pending, id: u64) -> SimpleTransfer {
+    pending.action = Some(id);
+    SimpleTransfer {
+        action: id,
+        movement: Movement {
+            id,
+            from: Place::Person(pending.intent.target),
+            to: Some(Place::Person(pending.intent.actor)),
+            good: pending.intent.good,
+            quantity: pending.intent.quantity,
+        },
+    }
+}
 
 /// Detached proposals. Goods and combat remain owned by their respective systems.
 pub struct Plan {
@@ -467,33 +480,33 @@ impl Context<'_> {
         if targets.par_windows(2).any(|pair| pair[0] > pair[1]) {
             targets.par_sort_unstable();
         }
-        let flags: Vec<_> = pending.par_iter().map(|p| u64::from(!p.opposed)).collect();
-        let action_count: u64 = flags.par_iter().sum();
-        self.action_base
-            .checked_add(action_count)
-            .ok_or("taking action overflow")?;
-        let prefixes = game_parallel_lot_allocation::prefixes(&flags);
-        let actions: Vec<_> = pending
-            .par_iter_mut()
-            .zip(prefixes.into_par_iter())
-            .filter_map(|(p, prefix)| {
-                if p.opposed {
-                    return None;
-                }
-                let id = self.action_base + prefix as u64;
-                p.action = Some(id);
-                Some(SimpleTransfer {
-                    action: id,
-                    movement: Movement {
-                        id,
-                        from: Place::Person(p.intent.target),
-                        to: Some(Place::Person(p.intent.actor)),
-                        good: p.intent.good,
-                        quantity: p.intent.quantity,
-                    },
+        let actions: Vec<_> = if pending.par_iter().all(|row| !row.opposed) {
+            let count = u64::try_from(pending.len()).map_err(|_| "taking action overflow")?;
+            self.action_base
+                .checked_add(count)
+                .ok_or("taking action overflow")?;
+            pending
+                .par_iter_mut()
+                .enumerate()
+                .map(|(index, row)| physical_action(row, self.action_base + index as u64))
+                .collect()
+        } else if pending.par_iter().all(|row| row.opposed) {
+            Vec::new()
+        } else {
+            let flags: Vec<_> = pending.par_iter().map(|p| u64::from(!p.opposed)).collect();
+            let action_count: u64 = flags.par_iter().sum();
+            self.action_base
+                .checked_add(action_count)
+                .ok_or("taking action overflow")?;
+            let prefixes = game_parallel_lot_allocation::prefixes(&flags);
+            pending
+                .par_iter_mut()
+                .zip(prefixes.into_par_iter())
+                .filter_map(|(row, prefix)| {
+                    (!row.opposed).then(|| physical_action(row, self.action_base + prefix as u64))
                 })
-            })
-            .collect();
+                .collect()
+        };
         let contests = pending
             .par_iter()
             .filter(|p| p.opposed && p.intent.escalate)

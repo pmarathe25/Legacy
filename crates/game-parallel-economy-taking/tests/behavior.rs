@@ -239,6 +239,61 @@ fn resistance_and_escalation_are_separate_personal_choices() {
 }
 
 #[test]
+fn taking_action_ids_remain_contiguous_with_and_without_resistance() {
+    let people = people(256);
+    for mode in 0..=2 {
+        let run = |workers, reverse: bool| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut policies: Vec<_> = (1..=128)
+                        .map(|person| policy(person, person + 128))
+                        .collect();
+                    if reverse {
+                        policies.reverse();
+                    }
+                    let responses = if mode != 0 {
+                        (1..=128)
+                            .filter(|person| mode == 2 || person % 3 == 0)
+                            .map(|person| Response {
+                                person: person + 128,
+                                notices: true,
+                                resist: true,
+                                resist_if_fear_at_least: None,
+                                resist_if_affinity_at_least: None,
+                                resist_if_affinity_at_most: None,
+                            })
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    let owner = Taking {
+                        policies: policies.into(),
+                        responses: responses.into(),
+                        ..Default::default()
+                    };
+                    let mut result = plan(&owner, &people, None);
+                    let expected: Vec<_> = (1..=128)
+                        .filter(|person| mode == 0 || (mode == 1 && person % 3 != 0))
+                        .collect();
+                    assert_eq!(result.actions.len(), expected.len());
+                    for (index, (row, person)) in result.actions.iter().zip(expected).enumerate() {
+                        assert_eq!(row.action, 10 + index as u64);
+                        assert_eq!(row.movement.id, row.action);
+                        assert_eq!(row.movement.to, Some(Place::Person(person)));
+                    }
+                    assert_eq!(result.contests.len(), [0, 42, 128][mode]);
+                    result.rebase(1000).unwrap();
+                    result.actions
+                })
+        };
+        assert_eq!(run(1, false), run(4, true));
+    }
+}
+
+#[test]
 fn a_hot_target_and_crossed_attempts_remain_disjoint_across_workers() {
     let count = 4096;
     let people = people(count + 1);
