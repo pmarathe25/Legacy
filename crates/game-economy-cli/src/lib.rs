@@ -213,6 +213,8 @@ struct PromiseOfferConfig {
     pressure_threshold: Option<u64>,
     #[serde(default)]
     after_work_recipe: Option<String>,
+    #[serde(default)]
+    after_help: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -885,6 +887,8 @@ pub fn scenario_with_options(
                         })
                         .transpose()?,
                     last_work_offer_at: None,
+                    after_help: p.after_help,
+                    last_help_offer_at: None,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

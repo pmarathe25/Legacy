@@ -61,6 +61,12 @@ pub struct OfferPolicy {
     /// Last observed completion already considered by this person.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_work_offer_at: Option<u64>,
+    /// Consider offering only after personally receiving new food from this recipient.
+    #[serde(default)]
+    pub after_help: bool,
+    /// Latest remembered help already considered by this person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_help_offer_at: Option<u64>,
 }
 /// A person may offer goods to a worker they personally saw complete requested work.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -276,6 +282,8 @@ impl Agreements {
                     || p.pressure_threshold == Some(0)
                     || p.last_work_offer_at
                         .is_some_and(|t| t > now || p.after_work_recipe.is_none())
+                    || p.last_help_offer_at
+                        .is_some_and(|t| t > now || !p.after_help)
             })
             || policies.par_windows(2).any(|pair| pair[0] == pair[1])
             || policies.par_iter().any(|person| !people.contains(person))

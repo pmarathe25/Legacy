@@ -3078,6 +3078,26 @@ impl Economy {
         if !underage.is_empty() {
             game_economy_work::reserve(&mut busy, underage);
         }
+        let help_memories: Vec<_> = if self
+            .agreements
+            .as_ref()
+            .is_some_and(|owner| owner.offering.par_iter().any(|policy| policy.after_help))
+        {
+            self.giving
+                .as_ref()
+                .map_or(&[][..], |giving| giving.learning.as_slice())
+                .par_iter()
+                .filter_map(|learning| {
+                    Some(game_economy_promises::offers::HelpMemory {
+                        person: learning.person,
+                        helper: learning.last_helper?,
+                        received_at: learning.last_help_at?,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let promise_offers =
             game_economy_promises::offers::prepare(game_economy_promises::offers::Context {
                 owner: self.agreements.as_ref(),
@@ -3087,6 +3107,7 @@ impl Economy {
                     .autowork
                     .as_ref()
                     .and_then(|auto| auto.requests.as_ref()),
+                help_memories: &help_memories,
                 locations: &locations,
                 busy: &busy,
                 max_hunger: self.rules.max_work_hunger,
@@ -4761,7 +4782,7 @@ impl Economy {
         let given =
             manual_give.map(|(person, _, _, _)| giving_plan.delivered(person, physical.events()));
         if let Some(giving) = &mut next_giving {
-            giving_plan.learn_sharing(giving, physical.events(), self.physical.goods());
+            giving_plan.learn_sharing(giving, physical.events(), self.physical.goods(), tick);
             giving_plan.clear_fulfilled_requests(giving, physical.events(), self.physical.goods());
         }
         let gathered = manual_gather.map(|(person, _)| {

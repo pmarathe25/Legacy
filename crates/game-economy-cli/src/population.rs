@@ -298,6 +298,7 @@ pub fn help(seed: u64, profiles: &[Profile]) -> Result<HelpRows, String> {
                         capacity: learning.capacity,
                         experiences: 0,
                         last_helper: None,
+                        last_help_at: None,
                         reciprocate_hunger: learning.reciprocate_hunger,
                         ask_helper: learning.ask_helper.clone(),
                     });

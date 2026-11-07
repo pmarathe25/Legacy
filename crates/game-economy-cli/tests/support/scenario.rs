@@ -5383,6 +5383,71 @@ fn player_sees_only_their_own_actual_journey() {
 }
 
 #[test]
+fn authored_personal_credit_uses_real_help_and_a_nonbinding_promise() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-personal-credit.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let bread = world
+                    .snapshot()
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|g| g.name == "bread")
+                    .unwrap()
+                    .id;
+                assert!(
+                    world
+                        .snapshot()
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .is_empty()
+                );
+                assert!(Player::new(&mut world).give(1, bread, 1).unwrap());
+                let saved = world.snapshot();
+                assert_eq!(
+                    saved.giving.as_ref().unwrap().learning[0].last_helper,
+                    Some(3)
+                );
+                assert!(saved.agreements.as_ref().unwrap().contracts.is_empty());
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for owner in [&mut world, &mut restored] {
+                    owner.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                for owner in [&mut world, &mut restored] {
+                    Player::new(owner).decide_promise(1, true).unwrap();
+                    for _ in 0..6 {
+                        owner.advance().unwrap();
+                    }
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let contracts = &state.agreements.as_ref().unwrap().contracts;
+                assert_eq!(contracts.len(), 1);
+                assert_eq!(contracts[0].status, game_agreements::Status::Defaulted);
+                assert_eq!(contracts[0].delivered, 0);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn player_can_give_carried_goods_without_creating_a_promise() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

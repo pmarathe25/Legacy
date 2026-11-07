@@ -11960,6 +11960,7 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
             capacity: 8,
             experiences: 2,
             last_helper: Some(2),
+            last_help_at: None,
             reciprocate_hunger: None,
             ask_helper: Some(HelperAsking {
                 min_hunger: 99,
@@ -30095,6 +30096,391 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
 }
 
 #[test]
+fn actual_food_help_can_motivate_a_revocable_promise_without_creating_debt() {
+    let mut initial = fixture();
+    initial.autowork = None;
+    initial.nutrition = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![
+            Lot {
+                good: 1,
+                quantity: 2,
+                expires_at: None,
+            },
+            Lot {
+                good: 3,
+                quantity: 1,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        acquaintance_asking: vec![],
+        policies: vec![],
+        responses: vec![FoodResponse {
+            person: 2,
+            good: 1,
+            alternatives: vec![],
+            quantity: 1,
+            recipient_hunger_at_least: 0,
+            willing: false,
+            minimum_trust: None,
+            pressure_threshold: None,
+            affinity_threshold: None,
+            affinity_at_most: None,
+            affinity_weight: None,
+        }],
+        learning: vec![SharingLearning {
+            person: 2,
+            enabled: true,
+            threshold: 1,
+            capacity: 10,
+            experiences: 0,
+            last_helper: None,
+            last_help_at: None,
+            reciprocate_hunger: None,
+            ask_helper: None,
+        }],
+        asking: vec![],
+        requests: vec![],
+    });
+    let agreements = initial.agreements.as_mut().unwrap();
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.next_id = 1;
+    agreements.policies = vec![AgreementPolicy {
+        person: 2,
+        honor: false,
+        accept: false,
+        minimum_trust: None,
+        minimum_honor_trust: None,
+        fear_honor_threshold: None,
+        obligation_honor_threshold: None,
+        accept_pressure_threshold: None,
+    }];
+    agreements.offering = vec![PromiseOfferPolicy {
+        person: 2,
+        recipient: 1,
+        good: 1,
+        quantity: 1,
+        due_after: 3,
+        retry_ticks: 1,
+        willing: true,
+        recipient_hunger_at_least: 0,
+        minimum_trust: None,
+        pressure_threshold: None,
+        next_review: 0,
+        after_work_recipe: None,
+        last_work_offer_at: None,
+        after_help: true,
+        last_help_offer_at: None,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .is_empty()
+                );
+                assert!(!world.give(1, 2, 1, 99).unwrap());
+                assert!(
+                    world.snapshot().giving.as_ref().unwrap().learning[0]
+                        .last_help_at
+                        .is_none()
+                );
+                assert!(world.give(1, 2, 3, 1).unwrap());
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .is_empty(),
+                    "nonfood is not a remembered food receipt"
+                );
+                assert!(world.give(1, 2, 1, 1).unwrap());
+                let saved = world.snapshot();
+                let memory = &saved.giving.as_ref().unwrap().learning[0];
+                assert_eq!(memory.last_helper, Some(1));
+                assert_eq!(memory.last_help_at, Some(saved.physical.custody.tick));
+                assert!(
+                    saved.agreements.as_ref().unwrap().contracts.is_empty(),
+                    "the same boundary cannot use a newly received memory"
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let mut refusing = Economy::compile(saved).unwrap();
+                refusing.set_promise_offer_choice(2, false).unwrap();
+                refusing.advance().unwrap();
+                assert!(
+                    refusing
+                        .snapshot()
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .is_empty()
+                );
+                for owner in [&mut world, &mut restored] {
+                    owner.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Proposed
+                );
+                for owner in [&mut world, &mut restored] {
+                    owner
+                        .decide_promises(&[PromiseDecision {
+                            contract: 1,
+                            actor: 1,
+                            accept: true,
+                        }])
+                        .unwrap();
+                    for _ in 0..5 {
+                        owner.advance().unwrap();
+                    }
+                }
+                let result = world.snapshot();
+                assert_eq!(result, restored.snapshot());
+                let contracts = &result.agreements.as_ref().unwrap().contracts;
+                assert_eq!(
+                    contracts.len(),
+                    1,
+                    "the same remembered gift is not repeatedly proposed"
+                );
+                assert_eq!(contracts[0].status, Status::Defaulted);
+                assert_eq!(contracts[0].delivered, 0);
+                assert_eq!(
+                    result
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap()
+                        .used,
+                    2
+                );
+                result
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn many_people_can_independently_offer_promises_after_real_help() {
+    let initial = help_promise_workload(4096);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                assert!(saved.agreements.as_ref().unwrap().contracts.is_empty());
+                assert_eq!(
+                    saved
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .learning
+                        .iter()
+                        .filter(|p| p.last_help_at == Some(1))
+                        .count(),
+                    4096
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let result = world.snapshot();
+                assert_eq!(result, restored.snapshot());
+                assert_eq!(result.agreements.as_ref().unwrap().contracts.len(), 4096);
+                assert!(
+                    result
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .iter()
+                        .all(|c| c.status == Status::Proposed)
+                );
+                result
+            })
+    };
+    let expected = run(1);
+    assert_eq!(expected, run(4));
+    assert_eq!(expected, run(6));
+    let mut unordered = initial.clone();
+    unordered.giving.as_mut().unwrap().learning.reverse();
+    let mut world = Economy::compile(unordered).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().agreements.unwrap().contracts,
+        expected.agreements.unwrap().contracts
+    );
+}
+
+fn help_promise_workload(count: u64) -> State {
+    let mut state = concentrated(count * 2);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    state.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        acquaintance_asking: vec![],
+        policies: (1..=count)
+            .map(|person| GivingPolicy {
+                person,
+                recipient: count + person,
+                good: 1,
+                quantity: 1,
+                recipient_hunger_at_least: 0,
+                willing: true,
+                requires_request: true,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+        responses: (1..=count)
+            .map(|i| FoodResponse {
+                person: count + i,
+                good: 1,
+                alternatives: vec![],
+                quantity: 1,
+                recipient_hunger_at_least: 0,
+                willing: false,
+                minimum_trust: None,
+                pressure_threshold: None,
+                affinity_threshold: None,
+                affinity_at_most: None,
+                affinity_weight: None,
+            })
+            .collect(),
+        learning: (1..=count)
+            .map(|i| SharingLearning {
+                person: count + i,
+                enabled: true,
+                threshold: 1,
+                capacity: 1,
+                experiences: 0,
+                last_helper: None,
+                last_help_at: None,
+                reciprocate_hunger: None,
+                ask_helper: None,
+            })
+            .collect(),
+        asking: vec![],
+        requests: (1..=count)
+            .map(|i| FoodRequest {
+                requester: count + i,
+                target: i,
+                expires_at: 10,
+            })
+            .collect(),
+    });
+    state.agreements = fixture().agreements;
+    let agreements = state.agreements.as_mut().unwrap();
+    agreements.contracts.clear();
+    agreements.events.clear();
+    agreements.next_id = 1;
+    agreements.policies.clear();
+    agreements.offering = (1..=count)
+        .map(|i| PromiseOfferPolicy {
+            person: count + i,
+            recipient: i,
+            good: 1,
+            quantity: 1,
+            due_after: 5,
+            retry_ticks: 1,
+            willing: true,
+            recipient_hunger_at_least: 0,
+            minimum_trust: None,
+            pressure_threshold: None,
+            next_review: 0,
+            after_work_recipe: None,
+            last_work_offer_at: None,
+            after_help: true,
+            last_help_offer_at: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+#[ignore = "manual real-help and personal promise benchmark"]
+fn help_promise_benchmark() {
+    let count = std::env::var("LEGACY_PAIRS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(5000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let initial = help_promise_workload(count);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut samples = Vec::new();
+        let mut expected = None;
+        for round in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let started = std::time::Instant::now();
+            world.advance().unwrap();
+            world.advance().unwrap();
+            let elapsed = started.elapsed().as_secs_f64();
+            let state = world.snapshot();
+            assert_eq!(state.agreements.as_ref().unwrap().contracts.len(), count as usize);
+            let bytes = serde_json::to_vec(&state).unwrap();
+            let hash = bytes.iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+            if let Some(expected) = expected { assert_eq!(hash, expected); } else { expected = Some(hash); }
+            if round > 0 { samples.push(elapsed); }
+        }
+        samples.sort_by(f64::total_cmp);
+        println!("workers={workers} pairs={count} people={} ticks=2 offers={count} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", count * 2, samples[0], samples[1], samples[2], expected.unwrap());
+    });
+}
+
+#[test]
 fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
     let mut initial = fixture();
     initial.autowork = None;
@@ -30154,6 +30540,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
             capacity: 3,
             experiences: 0,
             last_helper: None,
+            last_help_at: None,
             reciprocate_hunger: None,
             ask_helper: None,
         }],
@@ -30243,6 +30630,7 @@ fn sharing_learning_workload(count: u64) -> State {
         capacity: u32::try_from(count).unwrap(),
         experiences: 0,
         last_helper: None,
+        last_help_at: None,
         reciprocate_hunger: None,
         ask_helper: None,
     });
@@ -30341,6 +30729,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
             capacity: 5,
             experiences: 0,
             last_helper: None,
+            last_help_at: None,
             reciprocate_hunger: Some(5),
             ask_helper: None,
         }],
@@ -30481,6 +30870,7 @@ fn reciprocal_sharing_workload(count: u64) -> State {
             capacity: 2,
             experiences: 1,
             last_helper: Some(1),
+            last_help_at: None,
             reciprocate_hunger: Some(5),
             ask_helper: None,
         })
@@ -30614,6 +31004,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
             capacity: 5,
             experiences: 0,
             last_helper: None,
+            last_help_at: None,
             reciprocate_hunger: None,
             ask_helper: Some(HelperAsking {
                 min_hunger: 1,
@@ -30690,6 +31081,7 @@ fn learned_food_asking_workload(count: u64) -> State {
             capacity: 2,
             experiences: 1,
             last_helper: Some(1),
+            last_help_at: None,
             reciprocate_hunger: None,
             ask_helper: Some(HelperAsking {
                 min_hunger: 5,
@@ -32200,6 +32592,8 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         next_review: 0,
         after_work_recipe: None,
         last_work_offer_at: None,
+        after_help: false,
+        last_help_offer_at: None,
     }];
     let opinions = initial.opinions.as_mut().unwrap();
     opinions.records.clear();
@@ -32419,6 +32813,8 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
                 next_review: 0,
                 after_work_recipe: None,
                 last_work_offer_at: None,
+                after_help: false,
+                last_help_offer_at: None,
             })
             .collect(),
     });
@@ -32559,6 +32955,8 @@ fn new_personal_offers_preserve_other_promise_events_in_the_same_boundary() {
         next_review: 0,
         after_work_recipe: None,
         last_work_offer_at: None,
+        after_help: false,
+        last_help_offer_at: None,
     }];
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -32637,6 +33035,8 @@ fn fear_or_felt_obligation_can_motivate_outward_acceptance_without_binding_eithe
         next_review: 0,
         after_work_recipe: None,
         last_work_offer_at: None,
+        after_help: false,
+        last_help_offer_at: None,
     }];
     initial.opinions.as_mut().unwrap().records = vec![Opinion {
         observer: 1,
@@ -32738,6 +33138,8 @@ fn a_recipient_can_prefer_an_offer_from_someone_they_like() {
             next_review: 0,
             after_work_recipe: None,
             last_work_offer_at: None,
+            after_help: false,
+            last_help_offer_at: None,
         })
         .collect();
     let opinions = initial.opinions.as_mut().unwrap();
@@ -33054,6 +33456,8 @@ fn companions_can_make_accept_and_fulfill_personal_promises_while_traveling() {
         next_review: 0,
         after_work_recipe: None,
         last_work_offer_at: None,
+        after_help: false,
+        last_help_offer_at: None,
     }];
     initial.agreements = Some(agreements);
     let run = |workers| {
@@ -33262,6 +33666,8 @@ fn companions_can_make_accept_and_fulfill_personal_promises_while_traveling() {
         next_review: 0,
         after_work_recipe: None,
         last_work_offer_at: None,
+        after_help: false,
+        last_help_offer_at: None,
     }];
     let mut staggered = Economy::compile(initial).unwrap();
     staggered
@@ -34548,6 +34954,8 @@ fn witnessed_work_can_inspire_a_personal_offer_without_creating_a_duty() {
         next_review: 0,
         after_work_recipe: Some(1),
         last_work_offer_at: None,
+        after_help: false,
+        last_help_offer_at: None,
     }];
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()

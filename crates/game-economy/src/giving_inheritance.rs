@@ -69,6 +69,7 @@ pub fn enroll(owner: Option<&mut Giving>, family: Option<&Families>, tick: u64) 
             rule.person = member.id;
             rule.experiences = 0;
             rule.last_helper = None;
+            rule.last_help_at = None;
             if let Some(asking) = &mut rule.ask_helper {
                 asking.next_review = tick;
             }

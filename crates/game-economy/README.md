@@ -23,6 +23,11 @@ encounters in the same world and reports import and three-boundary times
 separately. Set `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` to vary the workload.
 It is a synthetic tactical workload, not a complete war or mixed campaign.
 
+The ignored `help_promise_benchmark` stages actual food gifts followed by
+independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary
+the population and concurrency. It reports a state fingerprint and times two
+boundaries; setup and fingerprinting are outside the timed interval.
+
 The ignored `concentrated_autonomous_delivery_benchmark` measures a full boundary with `LEGACY_PEOPLE` travelers giving to one recipient. Set `LEGACY_CAPACITY` below the population to exercise capacity contention and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings.
 
 The ignored `concentrated_expedition_acquisition_benchmark` measures travelers independently seeking one shared stock. Set `LEGACY_PEOPLE`, `LEGACY_STOCK`, and `LEGACY_WORKERS` to vary population, available goods, and concurrency; `LEGACY_NAMED_STORE` selects a shared named store. Profile timings use the same flags.

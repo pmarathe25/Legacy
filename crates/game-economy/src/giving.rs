@@ -58,6 +58,9 @@ pub struct SharingLearning {
     /// A remembered actual helper, used only for this person's own decisions.
     #[serde(default)]
     pub last_helper: Option<u64>,
+    /// Time of the most recent food receipt personally experienced by this person.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_help_at: Option<u64>,
     /// Offer food to that helper if they are hungry, without waiting for a request.
     #[serde(default)]
     pub reciprocate_hunger: Option<u32>,
@@ -198,6 +201,8 @@ impl Giving {
                     || p.experiences > p.capacity
                     || p.last_helper
                         .is_some_and(|id| id == p.person || !people.contains(&id))
+                    || p.last_help_at
+                        .is_some_and(|at| at > now || p.last_helper.is_none())
                     || p.ask_helper
                         .as_ref()
                         .is_some_and(|a| a.retry_ticks == 0 || a.request_lifetime == 0)
@@ -1028,7 +1033,7 @@ impl Plan {
             .collect()
     }
     /// Learn only from food that was actually received in this boundary.
-    pub fn learn_sharing(&self, giving: &mut Giving, events: &Events, goods: &[Good]) {
+    pub fn learn_sharing(&self, giving: &mut Giving, events: &Events, goods: &[Good], tick: u64) {
         if giving.learning.is_empty() || self.records.is_empty() {
             return;
         }
@@ -1061,6 +1066,7 @@ impl Plan {
                 p.experiences = p.experiences.saturating_add(count).min(p.capacity);
                 if end > start {
                     p.last_helper = Some(recipients[end - 1].2);
+                    p.last_help_at = Some(tick);
                 }
             });
     }

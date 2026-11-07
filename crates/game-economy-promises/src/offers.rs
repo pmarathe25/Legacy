@@ -9,7 +9,7 @@ use std::collections::HashSet;
 #[derive(Default)]
 pub struct Plan {
     proposals: Vec<Proposal>,
-    reviews: Vec<(u64, u64, Option<u64>)>,
+    reviews: Vec<(u64, u64, Option<u64>, Option<u64>)>,
     work_reviews: Vec<(u64, u64, u64)>,
 }
 impl Plan {
@@ -26,10 +26,18 @@ pub struct Context<'a> {
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
     pub requests: Option<&'a Requests>,
+    /// The recipient's own bounded memories of actual food received previously.
+    pub help_memories: &'a [HelpMemory],
     pub locations: &'a Colocation,
     pub busy: &'a [u64],
     pub max_hunger: u32,
     pub tick: u64,
+}
+#[derive(Clone, Copy)]
+pub struct HelpMemory {
+    pub person: u64,
+    pub helper: u64,
+    pub received_at: u64,
 }
 pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
     let Context {
@@ -37,6 +45,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         people,
         opinions,
         requests,
+        help_memories,
         locations,
         busy,
         max_hunger,
@@ -59,6 +68,15 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         .map(|c| (c.debtor, c.creditor, c.good))
         .collect();
     let opinions = opinions.map(Opinions::index);
+    let ordered_help = help_memories
+        .par_windows(2)
+        .any(|pair| pair[0].person > pair[1].person)
+        .then(|| {
+            let mut rows: Vec<_> = help_memories.par_iter().copied().collect();
+            rows.par_sort_unstable_by_key(|row| row.person);
+            rows
+        });
+    let help = ordered_help.as_deref().unwrap_or(help_memories);
     let mut work_memories: Vec<_> = if owner
         .offering
         .par_iter()
@@ -108,6 +126,23 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 }
                 None => None,
             };
+            let observed_help = if policy.after_help {
+                let memory = help
+                    .binary_search_by_key(&policy.person, |row| row.person)
+                    .ok()
+                    .map(|i| &help[i])?;
+                if memory.helper != policy.recipient
+                    || memory.received_at >= tick
+                    || policy
+                        .last_help_offer_at
+                        .is_some_and(|old| old >= memory.received_at)
+                {
+                    return None;
+                }
+                Some(memory.received_at)
+            } else {
+                None
+            };
             let pressured = policy.pressure_threshold.is_some_and(|threshold| {
                 opinions.as_ref().is_some_and(|index| {
                     let (fear, obligation) = index.feelings(actor.id, recipient.id);
@@ -131,13 +166,13 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 && busy.binary_search(&actor.id).is_err()
                 && (pressured || (policy.willing && trusts))
                 && !pending.contains(&(actor.id, recipient.id, policy.good)))
-            .then_some((policy, observed_work))
+            .then_some((policy, observed_work, observed_help))
         })
         .collect();
-    choices.par_sort_unstable_by_key(|(p, _)| p.person);
+    choices.par_sort_unstable_by_key(|(p, _, _)| p.person);
     let rows: Vec<_> = choices
         .par_iter()
-        .map(|(policy, observed_work)| {
+        .map(|(policy, observed_work, observed_help)| {
             Ok((
                 Proposal {
                     debtor: policy.person,
@@ -153,6 +188,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     tick.checked_add(policy.retry_ticks)
                         .ok_or("promise review overflow")?,
                     *observed_work,
+                    *observed_help,
                 ),
             ))
         })
@@ -284,6 +320,7 @@ pub fn publish(
         {
             policy.next_review = plan.reviews[i].1;
             policy.last_work_offer_at = plan.reviews[i].2;
+            policy.last_help_offer_at = plan.reviews[i].3;
         }
     });
     owner.work_offering.par_iter_mut().for_each(|policy| {

@@ -18,6 +18,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-community.toml` lets two neighbors encounter shortages and actual help while the player observes as a third person. A neighbor may construct a food-aid proposal from personal experience; the other independently evaluates it and chooses later actions. The proposal itself creates no goods or binding institution.
 
+`content/scenarios/economy-personal-credit.toml` lets the player give food to a neighbor who may later offer a revocable promise in response. The offer and its eventual fulfillment are separate personal choices; the gift is not automatically repaid.
+
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
 
 `content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.
