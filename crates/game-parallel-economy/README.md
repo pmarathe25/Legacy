@@ -20,6 +20,8 @@ The ignored `concentrated_autonomous_delivery_benchmark` measures a full boundar
 
 The ignored `concentrated_expedition_acquisition_benchmark` measures travelers independently seeking one shared stock. Set `LEGACY_PEOPLE`, `LEGACY_STOCK`, and `LEGACY_WORKERS` to vary population, available goods, and concurrency; `LEGACY_NAMED_STORE` selects a shared named store. Profile timings use the same flags.
 
+The ignored `concentrated_meeting_objectives_benchmark` measures many travelers independently seeking one person. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to vary population and concurrency.
+
 Travelers who choose to acquire delivery supplies can use regional stock or a named store in their current region. Named stores have separate physical custody; regional stock claims apply to regional stock. The traveler still needs capacity, retains their chosen reserve, and can change their acquisition preference.
 
 People held in the same cell can provide direct medical care using medicine they carry, provided they are available and the caregiver chooses to act. A barrier blocks treatment across it even when an opening permits supplies to pass. Escape, self-treatment, requests, and giving compete with medical care for the person's action.

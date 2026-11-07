@@ -3450,6 +3450,7 @@ dependencies = [
  "game-parallel-genetics",
  "game-parallel-lot-runtime",
  "game-parallel-lots",
+ "game-parallel-missions",
  "game-parallel-opinions",
  "game-parallel-personality",
  "game-parallel-social",

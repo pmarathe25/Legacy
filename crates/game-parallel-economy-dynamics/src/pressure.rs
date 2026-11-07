@@ -1,4 +1,6 @@
 //! Directed personal pressure produces disjoint local encounters without institutions.
+use game_parallel_economy_person::Person;
+use game_parallel_missions::Missions;
 use game_parallel_opinions::Opinions;
 use game_parallel_personality::Personality;
 use game_parallel_social::{Contact, Encounter, Social};
@@ -7,6 +9,8 @@ use rayon::prelude::*;
 pub struct Access<'a> {
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
+    pub missions: Option<&'a Missions>,
+    pub people: &'a [Person],
 }
 
 pub fn prepare(
@@ -20,6 +24,29 @@ pub fn prepare(
 ) -> Result<Social, &'static str> {
     let (seed, tick) = clock;
     let can_speak = access.speak;
+    let mut reserved: Vec<_> = requested
+        .into_iter()
+        .flat_map(|event| [event.a, event.b])
+        .collect();
+    reserved.sort_unstable();
+    let directed = crate::mission_meetings::Context {
+        missions: access.missions,
+        people: access.people,
+        contacts,
+        social,
+        opinions,
+        occupied: &reserved,
+        speak: can_speak,
+        seed,
+        tick,
+    }
+    .select();
+    reserved.par_extend(
+        directed
+            .par_iter()
+            .flat_map_iter(|event| [event.a, event.b]),
+    );
+    reserved.par_sort_unstable();
     let personality = personality.map(Personality::index);
     let needs = social
         .needs
@@ -60,6 +87,7 @@ pub fn prepare(
         };
         let eligible = |c: Contact| {
             !c.busy
+                && reserved.binary_search(&c.person).is_err()
                 && c.health > 0
                 && c.health >= social.rules.min_health
                 && c.hunger <= social.rules.max_hunger
@@ -128,6 +156,7 @@ pub fn prepare(
     } else {
         Vec::new()
     };
+    pressured.par_extend(directed);
     if let Some(requested) = requested {
         pressured.push(requested.clone());
     }

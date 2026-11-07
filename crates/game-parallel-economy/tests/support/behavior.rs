@@ -10651,6 +10651,111 @@ fn expedition_meeting_goal_requires_a_real_local_encounter() {
 }
 
 #[test]
+fn travelers_seek_their_meeting_objective_through_individual_choices() {
+    use game_parallel_social::{Participant, PressurePolicy};
+    let mut initial = expedition_fixture();
+    initial.people[1].region = Some(2);
+    initial.people[2].region = Some(2);
+    let social = initial.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+    social.participants.push(Participant {
+        person: 3,
+        willing: true,
+    });
+    social.pressures.push(PressurePolicy {
+        person: 3,
+        fear_at_least: Some(3),
+        obligation_at_least: Some(3),
+        enabled: true,
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    let id = world
+        .start_mission(MissionStart {
+            person: 1,
+            destination: 2,
+            visit_ticks: 5,
+        })
+        .unwrap();
+    world.set_mission_meeting(1, id, 3).unwrap();
+    let mut initial = world.snapshot();
+    initial.people[0].region = Some(2);
+    let mission = &mut initial.missions.as_mut().unwrap().entries[0];
+    mission.phase = MissionPhase::Visiting;
+    mission.remaining = 5;
+    let run = |workers, actor_willing, target_willing, fear, obligation| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                let social = state.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+                social
+                    .participants
+                    .iter_mut()
+                    .find(|row| row.person == 1)
+                    .unwrap()
+                    .willing = actor_willing;
+                social
+                    .participants
+                    .iter_mut()
+                    .find(|row| row.person == 3)
+                    .unwrap()
+                    .willing = target_willing;
+                state.opinions.as_mut().unwrap().records = vec![Opinion {
+                    observer: 3,
+                    target: 1,
+                    trust: 0,
+                    affinity: 0,
+                    fear,
+                    obligation,
+                }];
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let event = state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events
+                    .iter()
+                    .find(|event| (event.a, event.b) == (1, 3));
+                let expected = actor_willing && (target_willing || fear >= 3 || obligation >= 3);
+                assert_eq!(event.is_some(), expected);
+                if let Some(event) = event {
+                    assert_eq!(event.pressured, (!target_willing).then_some(3));
+                }
+                assert_eq!(
+                    state.missions.as_ref().unwrap().entries[0].objective_met,
+                    expected
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    for (actor, target, fear, obligation) in [
+        (true, true, 0, 0),
+        (true, false, 5, 0),
+        (true, false, 0, 5),
+        (true, false, 0, 0),
+        (false, true, 0, 0),
+    ] {
+        assert_eq!(
+            run(1, actor, target, fear, obligation),
+            run(4, actor, target, fear, obligation)
+        );
+    }
+}
+
+#[test]
 fn explicit_meeting_respects_refusal_or_personal_pressure_even_off_cadence() {
     use game_parallel_social::PressurePolicy;
     let mut initial = expedition_fixture();
@@ -17342,6 +17447,135 @@ fn concentrated_expeditions_move_real_people_deterministically() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+fn meeting_objective_workload(count: u64) -> State {
+    use game_parallel_economy_expeditions::Objective;
+    use game_parallel_social::{Participant, Rules as SocialRules, Social};
+    let mut state = expedition_workload(count + 1);
+    for person in &mut state.people {
+        person.region = Some(2);
+    }
+    let missions = state.missions.as_mut().unwrap();
+    missions.entries.pop();
+    for mission in &mut missions.entries {
+        mission.phase = MissionPhase::Visiting;
+        mission.visit_ticks = 5;
+        mission.remaining = 5;
+        mission.objective = Some(Objective::Meet { person: count + 1 });
+    }
+    state.dynamics = Some(Dynamics {
+        personality: None,
+        disease: None,
+        treatment: vec![],
+        claims: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 1,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: (1..=count + 1)
+                .map(|person| Participant {
+                    person,
+                    willing: true,
+                })
+                .collect(),
+            pressures: vec![],
+            relationships: vec![],
+            events: vec![],
+            needs: None,
+        }),
+    });
+    state
+}
+
+#[test]
+fn meeting_objectives_contend_without_double_booking_people() {
+    let count = 512;
+    let initial = meeting_objective_workload(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .missions
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .filter(|row| row.objective_met)
+                        .count(),
+                    1
+                );
+                let social = state.dynamics.as_ref().unwrap().social.as_ref().unwrap();
+                let mut participants: Vec<_> = social
+                    .events
+                    .iter()
+                    .flat_map(|event| [event.a, event.b])
+                    .collect();
+                participants.sort_unstable();
+                assert!(participants.windows(2).all(|pair| pair[0] != pair[1]));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "manual concentrated meeting objective benchmark"]
+fn concentrated_meeting_objectives_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = meeting_objective_workload(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .missions
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .filter(|row| row.objective_met)
+                        .count(),
+                    1
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} travelers={count} elapsed={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

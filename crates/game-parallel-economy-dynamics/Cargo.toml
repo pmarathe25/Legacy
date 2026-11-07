@@ -14,6 +14,7 @@ game-parallel-lots = { path = "../game-parallel-lots" }
 game-parallel-lot-runtime = { path = "../game-parallel-lot-runtime" }
 game-parallel-opinions = { path = "../game-parallel-opinions" }
 game-parallel-genetics = { path = "../game-parallel-genetics" }
+game-parallel-missions = { path = "../game-parallel-missions" }
 game-parallel-economy-claims = { path = "../game-parallel-economy-claims" }
 rayon.workspace = true
 serde.workspace = true

@@ -6,6 +6,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 mod friendship;
+mod mission_meetings;
 mod openings;
 mod pressure;
 mod travel_social;
@@ -206,6 +207,7 @@ macro_rules! prepare_dynamics {
                         contact: $contact,
                         speak: $speak,
                         opening: $opening,
+                        missions: $world.missions.as_ref(),
                     },
                 )
             })
@@ -240,6 +242,7 @@ pub struct Clock<'a> {
     pub contact: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
+    pub missions: Option<&'a game_parallel_missions::Missions>,
 }
 impl Dynamics {
     pub fn validate(
@@ -293,6 +296,7 @@ impl Dynamics {
             contact,
             speak,
             opening,
+            missions,
         } = clock;
         let (exposure, requested, combat) = encounters;
         let mut occupied: Vec<_> = exposure.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
@@ -337,7 +341,12 @@ impl Dynamics {
                     self.personality.as_ref(),
                     (seed, tick),
                     requested.as_ref(),
-                    pressure::Access { speak, opening },
+                    pressure::Access {
+                        speak,
+                        opening,
+                        missions,
+                        people: old,
+                    },
                 )
             })
             .transpose()
@@ -521,6 +530,7 @@ mod tests {
                         contact: None,
                         speak: None,
                         opening: None,
+                        missions: None,
                     },
                 )
                 .unwrap();
