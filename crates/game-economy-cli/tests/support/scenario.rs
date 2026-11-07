@@ -2,6 +2,150 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-succession.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut no_birth = world.snapshot();
+                no_birth
+                    .family
+                    .as_mut()
+                    .unwrap()
+                    .members
+                    .iter_mut()
+                    .find(|member| member.id == 2)
+                    .unwrap()
+                    .pregnancy = None;
+                let mut no_birth = game_economy::Economy::compile(no_birth).unwrap();
+                world.advance().unwrap();
+                no_birth.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().campaign.as_ref().unwrap().lineage.current,
+                    None
+                );
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .people
+                        .iter()
+                        .find(|person| person.id == 1)
+                        .unwrap()
+                        .health,
+                    0
+                );
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..8 {
+                    if world
+                        .snapshot()
+                        .campaign
+                        .as_ref()
+                        .unwrap()
+                        .lineage
+                        .current
+                        .is_some()
+                    {
+                        break;
+                    }
+                    game_economy_player::Player::new(&mut world)
+                        .advance()
+                        .unwrap();
+                    game_economy_player::Player::new(&mut restored)
+                        .advance()
+                        .unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let child = state
+                    .campaign
+                    .as_ref()
+                    .unwrap()
+                    .lineage
+                    .current
+                    .expect("actual birth should allow succession");
+                assert_ne!(child, 1);
+                assert!(
+                    state
+                        .family
+                        .as_ref()
+                        .unwrap()
+                        .members
+                        .iter()
+                        .any(|member| member.id == child && member.parents.contains(&2))
+                );
+                assert!(
+                    state
+                        .people
+                        .iter()
+                        .any(|person| person.id == child && person.controlled)
+                );
+                assert!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .any(|container| container.place == game_lots::Place::Person(child))
+                );
+                for _ in 0..10 {
+                    let guardians = game_economy_player::Player::new(&mut world)
+                        .guardians()
+                        .unwrap();
+                    if guardians
+                        .iter()
+                        .all(|guardian| guardian.region == Some(1) && guardian.journey.is_none())
+                    {
+                        break;
+                    }
+                    game_economy_player::Player::new(&mut world)
+                        .advance()
+                        .unwrap();
+                    game_economy_player::Player::new(&mut restored)
+                        .advance()
+                        .unwrap();
+                }
+                assert!(
+                    game_economy_player::Player::new(&mut world)
+                        .guardians()
+                        .unwrap()
+                        .iter()
+                        .all(|guardian| guardian.region == Some(1) && guardian.journey.is_none())
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                for _ in 0..6 {
+                    game_economy_player::Player::new(&mut no_birth)
+                        .advance()
+                        .unwrap();
+                }
+                assert!(no_birth.tick() > 1);
+                assert_eq!(
+                    no_birth
+                        .snapshot()
+                        .campaign
+                        .as_ref()
+                        .unwrap()
+                        .lineage
+                        .current,
+                    None
+                );
+                assert_eq!(no_birth.snapshot().people.len(), 4);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_conflict_does_not_stop_other_peoples_project() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
