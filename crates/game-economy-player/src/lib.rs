@@ -1542,9 +1542,30 @@ impl<'a> Player<'a> {
             }),
         )
     }
+    pub fn taking_assessment_preference(
+        &self,
+    ) -> Result<Option<game_economy::TakingAssessmentPreference>, String> {
+        Ok(self.world.taking_assessment_preference(self.current()?))
+    }
     pub fn revise_taking_assessment(&mut self, assessment: Option<i32>) -> Result<(), String> {
         self.world
             .revise_taking_assessment(self.current()?, assessment)
+    }
+    pub fn set_taking_precedent(
+        &mut self,
+        adjustment: Option<i32>,
+        belief: Option<game_economy::TakingReportBelief>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        let mut preference = self
+            .world
+            .taking_assessment_preference(person)
+            .unwrap_or_default();
+        preference.person = person;
+        preference.prior_actor_adjustment = adjustment;
+        preference.prior_belief = if adjustment.is_some() { belief } else { None };
+        self.world
+            .set_taking_assessment_preference(person, Some(preference))
     }
     pub fn request_taking_inquiry(
         &mut self,

@@ -42,3 +42,19 @@ doubted, unassessed), using `none` to withhold a judgment, or `clear` to remove
 the preference.
 `taking-assessment-now SCORE|none` lets the current recipient revise or
 withdraw their existing assessment without changing the testimony itself.
+
+An optional `prior_actor_adjustment` lets a person use an earlier report they
+already received about the same actor when interpreting a later event. The
+individual chooses the signed adjustment and can set `prior_belief` to consider
+only reports they believed, doubted, or left unassessed. The latest qualifying
+earlier observation is retained with the assessment as its personal basis;
+unknown reports and other people's private records cannot affect it. This is
+bounded by the existing personal report store and is neither a legal rule nor
+a finding of fact. A manual revision clears the recorded basis. In player mode,
+`taking-precedent off` disables it; `taking-precedent DELTA any|believed|doubted|unassessed`
+sets it for future assessments.
+
+The ignored `precedent_benchmark` exercises synthetic already-received reports
+and simultaneous answers. Run `cargo test --profile simulation -p game-economy-taking precedent_benchmark -- --ignored --nocapture`, setting
+`LEGACY_PEOPLE` and `LEGACY_WORKERS` as desired. It times only the inquiry
+update after setup and before result destruction, not a complete world boundary.

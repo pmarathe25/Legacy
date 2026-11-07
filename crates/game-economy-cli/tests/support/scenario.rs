@@ -373,6 +373,79 @@ fn personal_inquiry_preserves_the_account_and_requires_contact_and_choice() {
 }
 
 #[test]
+fn earlier_heard_case_can_personally_influence_a_later_inquiry() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-testimony.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                Player::new(&mut world)
+                    .set_taking_attention(1, true)
+                    .unwrap();
+                world.advance().unwrap();
+                world.set_taking_choice(1, false).unwrap();
+                Player::new(&mut world)
+                    .set_taking_report(2, 1, None)
+                    .unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                let first = world
+                    .taking_reports(2)
+                    .iter()
+                    .find(|r| r.actor == 1)
+                    .unwrap()
+                    .observed_at;
+                Player::new(&mut world)
+                    .set_taking_report_policy(2, 1, None)
+                    .unwrap();
+                world.set_taking_choice(1, true).unwrap();
+                world.advance().unwrap();
+                world.set_taking_choice(1, false).unwrap();
+                world
+                    .set_taking_assessment_preference(
+                        2,
+                        Some(game_economy::TakingAssessmentPreference {
+                            person: 2,
+                            matching_unassessed: Some(3),
+                            prior_actor_adjustment: Some(-8),
+                            ..Default::default()
+                        }),
+                    )
+                    .unwrap();
+                Player::new(&mut world)
+                    .request_taking_inquiry(2, 3, 1, 12)
+                    .unwrap();
+                let account = Player::new(&mut world).taking_inquiries().unwrap()[0].account;
+                assert!(account.observed_at > first);
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                Player::new(&mut world)
+                    .set_taking_report(2, 1, None)
+                    .unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for owner in [&mut world, &mut restored] {
+                    assert!(Player::new(owner).meet(2).unwrap());
+                }
+                let answer = world.taking_inquiries(2).remove(0).answer.unwrap();
+                assert_eq!(answer.assessment, Some(-5));
+                assert_eq!(answer.precedent.unwrap().observed_at, first);
+                assert!(world.taking_inquiries(3)[0].answer.is_none());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn accepted_inquiry_records_a_later_witness_statement_privately() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

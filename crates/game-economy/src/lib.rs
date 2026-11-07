@@ -1470,6 +1470,15 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Return this person's private interpretation settings.
+    pub fn taking_assessment_preference(&self, person: u64) -> Option<TakingAssessmentPreference> {
+        self.taking
+            .as_ref()?
+            .assessment_preferences
+            .iter()
+            .find(|p| p.person == person)
+            .copied()
+    }
     /// Set this person's private interpretation of future inquiry statements.
     pub fn set_taking_assessment_preference(
         &mut self,
@@ -1524,11 +1533,12 @@ impl Economy {
             .epoch
             .checked_add(1)
             .ok_or("economic generation overflow")?;
-        owner.complaints_mut()[index]
+        let answer = owner.complaints_mut()[index]
             .answer
             .as_mut()
-            .expect("answer exists")
-            .assessment = assessment;
+            .expect("answer exists");
+        answer.assessment = assessment;
+        answer.precedent = None;
         self.taking = Some(owner);
         self.epoch = epoch;
         Ok(())

@@ -54,6 +54,9 @@ pub struct Answer {
     /// The recipient's private interpretation, not a finding of fact.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub assessment: Option<i32>,
+    /// The earlier personal report used as a precedent, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub precedent: Option<Report>,
 }
 
 /// A person's own interpretation of a statement, including the choice to
@@ -74,6 +77,13 @@ pub struct AssessmentPreference {
     pub different_doubted: Option<i32>,
     #[serde(default)]
     pub different_unassessed: Option<i32>,
+    /// Optional personally chosen adjustment when an earlier report about the
+    /// same actor is known. Its sign and interpretation are up to this person.
+    #[serde(default)]
+    pub prior_actor_adjustment: Option<i32>,
+    /// Restrict the reports this person chooses to consider, if desired.
+    #[serde(default)]
+    pub prior_belief: Option<crate::ReportBelief>,
 }
 
 impl AssessmentPreference {
@@ -245,13 +255,38 @@ impl Taking {
                         && report.good == complaint.account.good
                         && report.quantity == complaint.account.quantity
                         && report.claimed_outcome == complaint.account.outcome;
-                    let assessment = assessments
+                    let preference = assessments
                         .binary_search_by_key(&complaint.recipient, |p| p.person)
                         .ok()
-                        .and_then(|i| assessments[i].assess(matches_account, report.belief));
+                        .map(|i| assessments[i]);
+                    let mut assessment =
+                        preference.and_then(|p| p.assess(matches_account, report.belief));
+                    let precedent = preference.and_then(|p| {
+                        let adjustment = p.prior_actor_adjustment?;
+                        let score = assessment.as_mut()?;
+                        let prior = previous
+                            .reports
+                            .get(complaint.recipient)
+                            .iter()
+                            .filter(|prior| {
+                                prior.actor == complaint.account.actor
+                                    && prior.observed_at < complaint.account.observed_at
+                                    && p.prior_belief.is_none_or(|belief| prior.belief == belief)
+                            })
+                            .max_by_key(|prior| {
+                                (
+                                    prior.observed_at,
+                                    prior.received_at,
+                                    std::cmp::Reverse(prior.speaker),
+                                )
+                            })?;
+                        *score = score.saturating_add(adjustment);
+                        Some(prior.clone())
+                    });
                     next.answer = Some(Answer {
                         matches_account,
                         assessment,
+                        precedent,
                         report: report.clone(),
                     });
                     return Some((index, next));
@@ -380,6 +415,22 @@ pub(crate) fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>,
                         && report.quantity > 0
                         && report.source_speaker.is_none_or(|source| {
                             source != report.speaker && people.contains(&source)
+                        })
+                        && answer.precedent.as_ref().is_none_or(|prior| {
+                            prior.recipient == c.recipient
+                                && prior.actor == c.account.actor
+                                && prior.observed_at < c.account.observed_at
+                                && prior.observed_at <= prior.received_at
+                                && prior.received_at < report.received_at
+                                && people.contains(&prior.speaker)
+                                && prior.speaker != prior.recipient
+                                && people.contains(&prior.target)
+                                && prior.target != prior.actor
+                                && goods.contains(&prior.good)
+                                && prior.quantity > 0
+                                && prior.source_speaker.is_none_or(|source| {
+                                    source != prior.speaker && people.contains(&source)
+                                })
                         })
                         && answer.matches_account
                             == (report.target == c.account.target
