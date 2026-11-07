@@ -1689,7 +1689,7 @@ impl Economy {
         let combat = game_parallel_economy_combat::compile_world!(state, physical, view);
         game_parallel_economy_knowledge::validate_world!(state, ids, view, physical);
         game_parallel_economy_dynamics::validate_world!(state, ids, goods, view, physical);
-        game_parallel_economy_expeditions::validate_world!(state, physical, view, ids);
+        game_parallel_economy_expeditions::validate_world!(state, physical, view, ids, goods);
         let _ = game_parallel_lot_projection::cargo(&view, state.rules.carrying_capacity)?;
         family::validate_custody!(people, view, ids, physical);
         if let Some(travel) = &state.travel {
@@ -5247,8 +5247,27 @@ impl Economy {
                 .find(|event| event.actor == intent.actor && event.target == intent.target)
                 .map(|event| event.outcome)
         });
+        let mission_gifts = if self.missions.as_ref().is_some_and(|missions| {
+            missions.entries.par_iter().any(|mission| {
+                matches!(
+                    mission.objective,
+                    Some(game_parallel_economy_expeditions::Objective::Deliver { .. })
+                ) && !mission.objective_met
+            })
+        }) {
+            giving_plan.practice_gifts(physical.events())
+        } else {
+            Vec::new()
+        };
         let missions = game_parallel_economy_expeditions::finish_world!(
-            self, expedition, person, travel, dynamics, held, tick
+            self,
+            expedition,
+            person,
+            travel,
+            dynamics,
+            mission_gifts,
+            held,
+            tick
         );
         #[cfg(feature = "profile")]
         {

@@ -2333,6 +2333,39 @@ fn campaign_guardians_share_people_travel_and_player_encounters() {
 }
 
 #[test]
+fn player_can_set_a_delivery_objective_through_the_cli() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let id = Player::new(&mut world).start_expedition(2, 5).unwrap();
+    let good = world.snapshot().physical.goods[0].id;
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &[
+                "deliver-expedition",
+                &id.to_string(),
+                "2",
+                &good.to_string(),
+                "3"
+            ]
+        )
+        .unwrap()
+    );
+    let objective =
+        serde_json::to_value(world.snapshot().missions.unwrap().entries[0].objective).unwrap();
+    assert_eq!(objective["kind"], "deliver");
+    assert_eq!(objective["person"], 2);
+    assert_eq!(objective["good"], good);
+    assert_eq!(objective["quantity"], 3);
+    assert_eq!(objective["delivered"], 0);
+}
+
+#[test]
 fn player_can_offer_and_request_lessons() {
     use game_parallel_economy_player::Player;
     use game_parallel_economy_skills::{Record, TeacherPolicy};

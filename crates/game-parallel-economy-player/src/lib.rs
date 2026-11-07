@@ -1211,6 +1211,16 @@ impl<'a> Player<'a> {
     pub fn set_expedition_meeting(&mut self, id: u64, target: u64) -> Result<(), String> {
         self.world.set_mission_meeting(self.current()?, id, target)
     }
+    pub fn set_expedition_delivery(
+        &mut self,
+        id: u64,
+        recipient: u64,
+        good: u32,
+        quantity: u64,
+    ) -> Result<(), String> {
+        self.world
+            .set_mission_delivery(self.current()?, id, recipient, good, quantity)
+    }
     pub fn invite_expedition(&mut self, id: u64, target: u64) -> Result<Option<u64>, String> {
         if !self.view()?.nearby.contains(&target) {
             return Err("person is not present".into());

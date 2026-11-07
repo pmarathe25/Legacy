@@ -9934,6 +9934,108 @@ fn initially_willing_companion_can_change_their_mind() {
 }
 
 #[test]
+fn expedition_delivery_counts_actual_gifts_and_preserves_partial_progress() {
+    use game_parallel_economy_expeditions::Objective;
+    let mut initial = expedition_fixture();
+    initial.people[0].controlled = true;
+    initial.people[1].region = Some(2);
+    initial.people[2].region = Some(2);
+    *initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap() = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 2,
+            quantity: 4,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let id = world
+                    .start_mission(MissionStart {
+                        person: 1,
+                        destination: 2,
+                        visit_ticks: 10,
+                    })
+                    .unwrap();
+                assert!(world.set_mission_delivery(1, id, 3, 99, 3).is_err());
+                world.set_mission_delivery(1, id, 3, 2, 3).unwrap();
+                for _ in 0..8 {
+                    if world.snapshot().people[0].region == Some(2) {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                assert_eq!(world.snapshot().people[0].region, Some(2));
+                let mut taken_state = world.snapshot();
+                taken_state.people[0].controlled = false;
+                taken_state.people[2].controlled = true;
+                let mut taken = Economy::compile(taken_state).unwrap();
+                assert_eq!(
+                    taken.take_possessions(3, 1, 2, 1, false).unwrap(),
+                    TakingOutcome::Transferred
+                );
+                assert_eq!(
+                    taken.snapshot().missions.unwrap().entries[0].objective,
+                    Some(Objective::Deliver {
+                        person: 3,
+                        good: 2,
+                        quantity: 3,
+                        delivered: 0
+                    })
+                );
+                assert!(world.give(1, 2, 2, 1).unwrap());
+                assert!(!world.give(1, 3, 2, 50).unwrap());
+                let stale = world.prepare().unwrap();
+                assert!(world.give(1, 3, 2, 1).unwrap());
+                let state = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(state, world.snapshot());
+                assert_eq!(
+                    state.missions.as_ref().unwrap().entries[0].objective,
+                    Some(Objective::Deliver {
+                        person: 3,
+                        good: 2,
+                        quantity: 3,
+                        delivered: 1
+                    })
+                );
+                let json = serde_json::to_string(&state).unwrap();
+                let mut world = Economy::compile(serde_json::from_str(&json).unwrap()).unwrap();
+                assert!(world.give(1, 3, 2, 2).unwrap());
+                assert!(world.snapshot().missions.unwrap().entries[0].objective_met);
+                for _ in 0..20 {
+                    if world.snapshot().missions.as_ref().unwrap().entries[0].phase
+                        == MissionPhase::Completed
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(
+                    state.missions.as_ref().unwrap().entries[0].phase,
+                    MissionPhase::Completed
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn expedition_meeting_goal_requires_a_real_local_encounter() {
     use game_parallel_social::Participant;
     let mut initial = expedition_fixture();

@@ -63,8 +63,23 @@ impl Missions {
             || self.entries.par_iter().any(|mission| {
                 (mission.party_opt_in && mission.party_compliant)
                     || (mission.party_compliant && mission.party.is_none())
-                    || mission.objective.is_some_and(|Objective::Meet { person }| {
-                        person == mission.person || !people.contains(&person)
+                    || mission.objective.is_some_and(|objective| match objective {
+                        Objective::Meet { person } => {
+                            person == mission.person || !people.contains(&person)
+                        }
+                        Objective::Deliver {
+                            person,
+                            good,
+                            quantity,
+                            delivered,
+                        } => {
+                            person == mission.person
+                                || !people.contains(&person)
+                                || good == 0
+                                || quantity == 0
+                                || delivered > quantity
+                                || mission.objective_met != (delivered == quantity)
+                        }
                     })
                     || (mission.objective.is_none() && mission.objective_met)
                     || mission.id >= self.next_id

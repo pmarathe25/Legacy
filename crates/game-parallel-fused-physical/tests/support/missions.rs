@@ -4,6 +4,23 @@ fn world() -> World {
     World::from_toml(include_str!("../../../../content/parallel/missions.toml")).unwrap()
 }
 #[test]
+fn fused_host_rejects_delivery_objectives_it_cannot_resolve() {
+    let mut state = world();
+    state.missions.as_mut().unwrap().entries[0].objective =
+        Some(game_parallel::MissionObjective::Deliver {
+            person: 3,
+            good: 1,
+            quantity: 2,
+            delivered: 0,
+        });
+    assert!(
+        Kernel::compile(state)
+            .err()
+            .unwrap()
+            .contains("delivery objectives")
+    );
+}
+#[test]
 fn accepted_expedition_uses_real_travel_and_returns_after_the_visit() {
     let mut kernel = Kernel::compile(world()).unwrap();
     kernel.step().unwrap();

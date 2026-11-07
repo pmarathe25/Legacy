@@ -1,3 +1,5 @@
 # Personal expeditions over dated custody
 
 Stages individual expeditions against real routes, local availability and the economic world's travel state. Departures preserve actual personal goods and never move someone whose physical circumstances no longer permit the trip. A meeting goal requires a real local encounter. An invited companion may participate voluntarily or respond to directed fear or obligation; they reassess that choice during the journey and can stop participating. Cancellation leaves any ongoing physical journey intact. Expedition routes currently require durations representable as `u32` ticks.
+
+A delivery objective tracks actual accepted gifts from the traveler to a specified person at the destination. Partial deliveries accumulate across boundaries and saves; wrong recipients, failed transfers, taking, and gifts elsewhere do not count. The traveler still decides whether to give, and can be motivated by their own fear or felt obligation. Completing an objective does not guarantee that the recipient retains the goods.

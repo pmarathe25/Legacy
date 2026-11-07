@@ -22,6 +22,16 @@ pub fn compile(mut world: World) -> Result<Imported, String> {
         return Err("preset institutions are not supported by the parallel simulation".into());
     }
     world.validate()?;
+    if world.missions.as_ref().is_some_and(|missions| {
+        missions.entries.iter().any(|mission| {
+            matches!(
+                mission.objective,
+                Some(game_parallel::MissionObjective::Deliver { .. })
+            )
+        })
+    }) {
+        return Err("delivery objectives are not supported by the fused host".into());
+    }
     if world.disease.as_ref().is_some_and(|disease| {
         disease
             .strains

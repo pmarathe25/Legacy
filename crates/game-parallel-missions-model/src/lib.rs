@@ -39,7 +39,16 @@ pub struct Mission {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Objective {
-    Meet { person: u64 },
+    Meet {
+        person: u64,
+    },
+    Deliver {
+        person: u64,
+        good: u32,
+        quantity: u64,
+        #[serde(default)]
+        delivered: u64,
+    },
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

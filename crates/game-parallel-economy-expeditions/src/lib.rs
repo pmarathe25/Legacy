@@ -29,6 +29,7 @@ pub fn validate(
     owner: Option<&Missions>,
     travel: Option<&Travel>,
     people: &HashSet<u64>,
+    goods: &HashSet<u32>,
     view: &View,
     adults: Option<&HashSet<u64>>,
     tick: u64,
@@ -36,6 +37,11 @@ pub fn validate(
     let Some(owner) = owner else {
         return Ok(());
     };
+    if owner.entries.par_iter().any(|mission| {
+        matches!(mission.objective, Some(Objective::Deliver { good, .. }) if !goods.contains(&good))
+    }) {
+        return Err("delivery objective references an unknown good".into());
+    }
     let travel = travel.ok_or("expeditions require travel")?;
     let routes = routes(travel)?;
     let regions = view
@@ -56,7 +62,7 @@ pub fn validate(
 }
 #[macro_export]
 macro_rules! validate_world {
-    ($state:expr, $physical:expr, $view:expr, $ids:expr) => {{
+    ($state:expr, $physical:expr, $view:expr, $ids:expr, $goods:expr) => {{
         let adults = $state.family.as_ref().map(|family| {
             family
                 .members
@@ -69,6 +75,7 @@ macro_rules! validate_world {
             $state.missions.as_ref(),
             $state.travel.as_ref(),
             &$ids,
+            &$goods,
             &$view,
             adults.as_ref(),
             $physical.tick(),
@@ -308,6 +315,47 @@ macro_rules! mission_methods {
             self.epoch = epoch;
             Ok(())
         }
+        /// Set a personal objective to give real goods to a person at the destination.
+        pub fn set_mission_delivery(
+            &mut self,
+            person: u64,
+            id: u64,
+            recipient: u64,
+            good: u32,
+            quantity: u64,
+        ) -> Result<(), String> {
+            if person == recipient
+                || !self.people.iter().any(|p| p.id == recipient)
+                || quantity == 0
+                || !self.physical.goods().iter().any(|g| g.id == good)
+            {
+                return Err(
+                    "delivery requires another person, a known good and a positive quantity".into(),
+                );
+            }
+            let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
+            let mission = missions
+                .entries
+                .iter_mut()
+                .find(|m| m.id == id && m.person == person)
+                .ok_or("unknown personal expedition")?;
+            if mission.phase != $crate::MissionPhase::Ready {
+                return Err("objective must be set before departure".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mission.objective = Some($crate::Objective::Deliver {
+                person: recipient,
+                good,
+                quantity,
+                delivered: 0,
+            });
+            mission.objective_met = false;
+            self.epoch = epoch;
+            Ok(())
+        }
         pub fn invite_mission(
             &mut self,
             actor: u64,
@@ -492,15 +540,28 @@ macro_rules! prepare_world {
         plan
     }};
 }
+pub struct FinishContext<'a> {
+    pub encounters: &'a [game_parallel_social::Encounter],
+    pub source_people: &'a [Person],
+    pub gifts: &'a [(u64, u64, u64, u32, u64)],
+    pub held: &'a [u64],
+    pub tick: u64,
+}
+
 pub fn finish(
     owner: Option<&Missions>,
     prepared: Option<Prepared>,
     travel: &mut Option<Travel>,
     people: &mut Vec<Person>,
-    encounters: &[game_parallel_social::Encounter],
-    held: &[u64],
-    tick: u64,
+    context: FinishContext<'_>,
 ) -> Option<Missions> {
+    let FinishContext {
+        encounters,
+        source_people,
+        gifts,
+        held,
+        tick,
+    } = context;
     let Some(prepared) = prepared else {
         return owner.map(|owner| {
             let mut next = game_parallel_missions::clone_parallel(owner);
@@ -574,14 +635,31 @@ pub fn finish(
         false
     };
     let mut meetings = game_parallel_mission_objectives::meetings(&mut next, encounters, tick);
+    let gifts: Vec<_> = gifts
+        .par_iter()
+        .filter_map(|&(_, giver, recipient, good, quantity)| {
+            let index = source_people
+                .binary_search_by_key(&giver, |person| person.id)
+                .ok()?;
+            Some(game_parallel_mission_objectives::Gift {
+                region: source_people[index].region?,
+                giver,
+                recipient,
+                good,
+                quantity,
+            })
+        })
+        .collect();
+    let mut deliveries = game_parallel_mission_objectives::deliveries(&mut next, &gifts, tick);
     draft.publish(&mut next, &available, accepted, tick);
     next.events.append(&mut meetings);
+    next.events.append(&mut deliveries);
     next.events.extend(prepared.stopped);
     Some(next)
 }
 #[macro_export]
 macro_rules! finish_world {
-    ($world:expr, $draft:expr, $person:expr, $travel:expr, $dynamics:expr, $held:expr, $tick:expr) => {{
+    ($world:expr, $draft:expr, $person:expr, $travel:expr, $dynamics:expr, $gifts:expr, $held:expr, $tick:expr) => {{
         let encounters = $dynamics
             .as_ref()
             .and_then(|d| d.social.as_ref())
@@ -591,9 +669,13 @@ macro_rules! finish_world {
             $draft,
             &mut $travel,
             &mut $person.people,
-            encounters,
-            &$held,
-            $tick,
+            $crate::FinishContext {
+                encounters,
+                source_people: &$world.people,
+                gifts: &$gifts,
+                held: &$held,
+                tick: $tick,
+            },
         )
     }};
 }
