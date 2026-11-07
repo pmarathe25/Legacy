@@ -126,7 +126,8 @@ impl Context<'_> {
             .records
             .par_iter()
             .filter_map(|record| {
-                if score(record.observer, record.target, record.affinity) <= 0 {
+                let own_score = score(record.observer, record.target, record.affinity);
+                if own_score <= 0 {
                     return None;
                 }
                 let a = record.observer.min(record.target);
@@ -139,8 +140,22 @@ impl Context<'_> {
                 {
                     return None;
                 }
-                let forward = score(a, b, index.affinity(a, b));
-                let reverse = score(b, a, index.affinity(b, a));
+                // This edge already supplies one direction. If both directions
+                // are positive, the lower-ID observer publishes their shared
+                // pair once; either asymmetric positive direction still works.
+                let other_score = score(
+                    record.target,
+                    record.observer,
+                    index.affinity(record.target, record.observer),
+                );
+                if record.observer == b && other_score > 0 {
+                    return None;
+                }
+                let (forward, reverse) = if record.observer == a {
+                    (own_score, other_score)
+                } else {
+                    (other_score, own_score)
+                };
                 Some((
                     a,
                     b,
@@ -304,5 +319,30 @@ mod tests {
         let mut busy = contacts.clone();
         busy[0].busy = true;
         assert!(run(4, &social, &opinions, &busy).is_empty());
+        social.participants[1].willing = true;
+        for record in &mut opinions.records {
+            record.affinity = match (record.observer, record.target) {
+                (3, 1) => 5,
+                _ => -3,
+            };
+        }
+        let reverse_only = run(1, &social, &opinions, &contacts);
+        assert_eq!(
+            reverse_only.iter().map(|e| (e.a, e.b)).collect::<Vec<_>>(),
+            vec![(1, 3)]
+        );
+        assert_eq!(reverse_only, run(4, &social, &opinions, &contacts));
+        opinions
+            .records
+            .iter_mut()
+            .find(|r| (r.observer, r.target) == (1, 3))
+            .unwrap()
+            .affinity = 4;
+        let reciprocal = run(1, &social, &opinions, &contacts);
+        assert_eq!(
+            reciprocal.iter().map(|e| (e.a, e.b)).collect::<Vec<_>>(),
+            vec![(1, 3)]
+        );
+        assert_eq!(reciprocal, run(4, &social, &opinions, &contacts));
     }
 }
