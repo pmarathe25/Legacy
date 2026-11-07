@@ -1,9 +1,19 @@
 //! Flatten transactions without changing their ownership or physical semantics.
-use game_parallel_lot_model::{Container, State, Transaction};
+use game_parallel_lot_model::{Container, SimpleTransfer, State, Transaction};
 use game_parallel_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
 mod independent;
 mod independent_transfer;
+
+/// Attempt a disjoint flat transfer batch; `None` requests the general arbiter.
+pub fn prepare_flat_transfers(
+    state: &State,
+    instance: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    independent_transfer::prepare_flat(state, instance, transfers, advance)
+}
 
 pub fn prepare(
     state: &State,

@@ -4,6 +4,18 @@ use game_parallel_lot_runtime::{Runtime, Snapshot};
 use game_parallel_lots::{Container, Lot, Place, State};
 use game_parallel_production_model::Good;
 
+fn transactions(
+    rows: &[game_parallel_lots::SimpleTransfer],
+) -> Vec<game_parallel_lots::Transaction> {
+    rows.iter()
+        .map(|row| game_parallel_lots::Transaction {
+            id: row.action,
+            movements: vec![row.movement],
+            creations: vec![],
+        })
+        .collect()
+}
+
 fn people(count: u64) -> Vec<Person> {
     (1..=count)
         .map(|id| Person {
@@ -118,13 +130,13 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
     assert_eq!(plan.actors, vec![1]);
     assert!(plan.contests.is_empty());
     plan.rebase(20).unwrap();
-    assert_eq!(plan.actions[0].id, 20);
-    assert_eq!(plan.actions[0].movements[0].id, 20);
+    assert_eq!(plan.actions[0].action, 20);
+    assert_eq!(plan.actions[0].movement.id, 20);
     assert!(plan.rebase(u64::MAX).is_err());
     let mut physical = runtime(5, 1);
     let before = physical.snapshot();
     let draft = physical
-        .prepare_with_choices(&[], &plan.actions, &[], &[], 7)
+        .prepare_with_choices(&[], &transactions(&plan.actions), &[], &[], 7)
         .unwrap();
     assert_eq!(physical.snapshot(), before);
     let events = plan.publish(draft.events(), &[]);
@@ -164,7 +176,7 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
     assert!(physical.custody(Place::Person(2)).unwrap().lots.is_empty());
     let mut blocked = runtime(0, 1);
     let draft = blocked
-        .prepare_with_choices(&[], &taken, &[], &[], 7)
+        .prepare_with_choices(&[], &transactions(&taken), &[], &[], 7)
         .unwrap();
     assert_eq!(
         plan.publish(draft.events(), &[])[0].outcome,
@@ -276,7 +288,7 @@ fn barriers_and_controlled_intent_have_physical_priority() {
     };
     let result = plan(&owner, &people, Some(manual));
     assert_eq!(result.actors, vec![1]);
-    assert_eq!(result.actions[0].movements[0].to, Some(Place::Person(1)));
+    assert_eq!(result.actions[0].movement.to, Some(Place::Person(1)));
     let locations = Colocation::new(None);
     let blocked = Context {
         owner: &owner,

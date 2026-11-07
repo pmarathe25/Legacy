@@ -4200,9 +4200,9 @@ impl Economy {
             profile_phase = game_diagnostics::span("economy.work_admission");
         }
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
-        if let Some(plan) = &mut taking_plan {
-            actions.append(&mut plan.take_actions());
-        }
+        let taking_actions = taking_plan
+            .as_mut()
+            .map_or_else(Vec::new, |plan| plan.take_actions());
         if let Some((_, _, action)) = &manual_animal_feed {
             actions.push(action.clone());
         }
@@ -4397,21 +4397,44 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.physical");
         }
-        let mut physical = self.physical.prepare_with_growth_and_custody(
-            &rates,
-            &actions,
-            &starts,
-            &abandon,
-            (
-                game_parallel_lot_runtime::Growth {
-                    harvest,
-                    animal_yield: &hunting_plan.yields,
-                    compact_consumption: &compact,
-                },
-                staged_custody,
-            ),
-            self.seed,
-        )?;
+        let flat = if taking_actions.len() >= 128
+            && actions.is_empty()
+            && rates.is_empty()
+            && starts.is_empty()
+            && abandon.is_empty()
+            && harvest.is_empty()
+            && hunting_plan.yields.is_empty()
+            && compact.is_empty()
+            && staged_custody.is_empty()
+        {
+            self.physical.prepare_flat_transfers(&taking_actions)?
+        } else {
+            None
+        };
+        let mut physical = if let Some(draft) = flat {
+            draft
+        } else {
+            actions.par_extend(taking_actions.into_par_iter().map(|row| Transaction {
+                id: row.action,
+                movements: vec![row.movement],
+                creations: vec![],
+            }));
+            self.physical.prepare_with_growth_and_custody(
+                &rates,
+                &actions,
+                &starts,
+                &abandon,
+                (
+                    game_parallel_lot_runtime::Growth {
+                        harvest,
+                        animal_yield: &hunting_plan.yields,
+                        compact_consumption: &compact,
+                    },
+                    staged_custody,
+                ),
+                self.seed,
+            )?
+        };
         let fatigue = game_parallel_economy_fatigue::prepare_world!(
             self,
             (rates, starts, physical),

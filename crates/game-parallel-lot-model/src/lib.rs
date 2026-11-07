@@ -123,6 +123,13 @@ pub struct Creation {
     pub lot: Lot,
 }
 
+/// One independently atomic movement, stored without a per-action vector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SimpleTransfer {
+    pub action: u64,
+    pub movement: Movement,
+}
+
 /// The transaction's outcome is independent of how many physical legs it has.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

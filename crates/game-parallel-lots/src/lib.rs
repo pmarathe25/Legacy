@@ -3,8 +3,8 @@ mod compose;
 mod view;
 pub use compose::{Composed, compose};
 pub use game_parallel_lot_model::{
-    Container, Creation, Lot, Movement, Outcome, Place, Spoilage, State, Transaction,
-    TransactionOutcome, deadline,
+    Container, Creation, Lot, Movement, Outcome, Place, SimpleTransfer, Spoilage, State,
+    Transaction, TransactionOutcome, deadline,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -316,6 +316,25 @@ impl Store {
             additions,
             retire: Vec::new(),
         })
+    }
+    /// Attempt a disjoint flat transfer batch. A caller must use the general
+    /// arbiter when this returns `None`, including for contested endpoints.
+    pub fn prepare_flat_transfers(
+        &self,
+        transfers: &[SimpleTransfer],
+        advance: bool,
+    ) -> Result<Option<Draft>, String> {
+        Ok(game_parallel_lot_batches::prepare_flat_transfers(
+            &self.state,
+            self.instance,
+            transfers,
+            advance,
+        )?
+        .map(|inner| Draft {
+            inner,
+            additions: Vec::new(),
+            retire: Vec::new(),
+        }))
     }
     /// Check this owner before publishing any part of a composed generation.
     pub fn validate_commit(&self, draft: &Draft) -> Result<(), String> {

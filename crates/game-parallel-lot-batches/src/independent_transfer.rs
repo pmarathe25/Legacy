@@ -1,6 +1,7 @@
 //! Disjoint single-leg transactions can resolve without shared arbitration.
 use game_parallel_lot_model::{
-    Container, Lot, Movement, Outcome, Place, Spoilage, State, Transaction, TransactionOutcome, key,
+    Container, Lot, Movement, Outcome, Place, SimpleTransfer, Spoilage, State, Transaction,
+    TransactionOutcome, key,
 };
 use game_parallel_lot_planning::Draft;
 use rayon::prelude::*;
@@ -75,6 +76,59 @@ pub fn prepare(
     {
         return Ok(None);
     }
+    prepare_rows(
+        state,
+        instance,
+        transactions.len(),
+        |index| {
+            let transaction = &transactions[index];
+            (transaction.id, transaction.movements[0])
+        },
+        advance,
+    )
+}
+
+/// Validate action identities before attempting the general flat transfer path.
+pub fn prepare_flat(
+    state: &State,
+    instance: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    let mut ids: Vec<_> = transfers.par_iter().map(|row| row.action).collect();
+    if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        ids.par_sort_unstable();
+    }
+    if ids.first() == Some(&0) || ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("invalid or duplicate transaction id".into());
+    }
+    if transfers.len() < 128
+        || transfers.par_iter().any(|row| {
+            let m = row.movement;
+            m.id == 0
+                || m.quantity == 0
+                || !m.from.accepts(m.good)
+                || m.to.is_none_or(|to| to == m.from || !to.accepts(m.good))
+        })
+    {
+        return Ok(None);
+    }
+    prepare_rows(
+        state,
+        instance,
+        transfers.len(),
+        |index| (transfers[index].action, transfers[index].movement),
+        advance,
+    )
+}
+
+fn prepare_rows(
+    state: &State,
+    instance: u64,
+    length: usize,
+    action: impl Fn(usize) -> (u64, Movement) + Sync,
+    advance: bool,
+) -> Result<Option<Draft>, String> {
     let next = if advance {
         state.tick.checked_add(1).ok_or("lot tick overflow")?
     } else {
@@ -105,14 +159,14 @@ pub fn prepare(
             .binary_search_by_key(&place, |c| c.place)
             .ok()
     };
-    let rows: Option<Vec<_>> = transactions
-        .par_iter()
-        .map(|t| {
-            let movement = t.movements[0];
+    let rows: Option<Vec<_>> = (0..length)
+        .into_par_iter()
+        .map(|index| {
+            let (transaction, movement) = action(index);
             Some(Row {
                 source: find(movement.from)?,
                 destination: find(movement.to?)?,
-                transaction: t.id,
+                transaction,
                 movement,
             })
         })

@@ -6,7 +6,7 @@ mod testimony;
 use game_parallel_economy_person::{Person, travel::Colocation};
 use game_parallel_genetics::random;
 use game_parallel_lot_runtime::Events;
-use game_parallel_lots::{Movement, Place, Transaction};
+use game_parallel_lots::{Movement, Place, SimpleTransfer};
 use game_parallel_opinions::Opinions;
 use rayon::prelude::*;
 pub use reactions::{Interpretation, ObservedTaking, Reaction, Witness};
@@ -231,7 +231,7 @@ pub struct Plan {
     pub actors: Vec<u64>,
     /// All targets, including those who do not notice or spend an action.
     pub targets: Vec<u64>,
-    pub actions: Vec<Transaction>,
+    pub actions: Vec<SimpleTransfer>,
     pub contests: Vec<Contest>,
     pending: Vec<Pending>,
     tick: u64,
@@ -482,16 +482,15 @@ impl Context<'_> {
                 }
                 let id = self.action_base + prefix as u64;
                 p.action = Some(id);
-                Some(Transaction {
-                    id,
-                    movements: vec![Movement {
+                Some(SimpleTransfer {
+                    action: id,
+                    movement: Movement {
                         id,
                         from: Place::Person(p.intent.target),
                         to: Some(Place::Person(p.intent.actor)),
                         good: p.intent.good,
                         quantity: p.intent.quantity,
-                    }],
-                    creations: vec![],
+                    },
                 })
             })
             .collect();
@@ -520,7 +519,7 @@ impl Context<'_> {
 impl Plan {
     /// Move physical actions to the host while retaining enough information to
     /// interpret the resulting receipts without cloning any movement vectors.
-    pub fn take_actions(&mut self) -> Vec<Transaction> {
+    pub fn take_actions(&mut self) -> Vec<SimpleTransfer> {
         if self.taken_count.is_some() {
             return Vec::new();
         }
@@ -536,11 +535,9 @@ impl Plan {
             .ok_or("taking action overflow")?;
         let previous = self.action_base;
         self.actions.par_iter_mut().for_each(|action| {
-            let id = base + (action.id - previous);
-            action.id = id;
-            for movement in &mut action.movements {
-                movement.id = id;
-            }
+            let id = base + (action.action - previous);
+            action.action = id;
+            action.movement.id = id;
         });
         self.pending.par_iter_mut().for_each(|pending| {
             if let Some(id) = &mut pending.action {

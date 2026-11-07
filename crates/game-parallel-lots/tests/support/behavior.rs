@@ -217,7 +217,17 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                     );
                 }
                 let mut fast = store(holders.clone());
+                let mut flat = store(holders.clone());
                 let mut general = store(holders);
+                let transfers: Vec<_> = actions
+                    .iter()
+                    .map(|action| crate::SimpleTransfer {
+                        action: action.id,
+                        movement: action.movements[0],
+                    })
+                    .collect();
+                let flat_draft = flat.prepare_flat_transfers(&transfers, advance).unwrap();
+                assert_eq!(flat_draft.is_none(), overlap);
                 let staged = fast
                     .prepare_with_empty(13, &actions, vec![], advance)
                     .unwrap();
@@ -236,6 +246,12 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 assert_eq!(staged.transactions(), full.transactions());
                 assert_eq!(staged.outcomes(), full.outcomes());
                 assert_eq!(staged.spoiled(), full.spoiled());
+                if let Some(flat_draft) = flat_draft {
+                    assert_eq!(flat_draft.transactions(), full.transactions());
+                    assert_eq!(flat_draft.outcomes(), full.outcomes());
+                    assert_eq!(flat_draft.spoiled(), full.spoiled());
+                    flat.commit(flat_draft).unwrap();
+                }
                 fast.commit(staged).unwrap();
                 assert!(fast.commit(stale).is_err());
                 general.commit(full).unwrap();
@@ -245,6 +261,9 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                     .containers
                     .retain(|c| c.place != Place::Inventory(99999));
                 assert_eq!(result, expected);
+                if !overlap {
+                    assert_eq!(flat.export(), result);
+                }
                 assert_eq!(Store::compile(result.clone()).unwrap().export(), result);
                 result
             })

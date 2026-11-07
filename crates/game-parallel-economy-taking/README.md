@@ -17,3 +17,5 @@ With `source = "heard"`, a policy forwards a previously received account instead
 Retained reports use immutable recipient-keyed pages, sharing unchanged pages across drafts. Saves still contain the same flat, canonically ordered report list. The owner benchmarks include dense relays, a single update in a large history, concentrated recipient batches, and retirement of densely changed history. Retirement releases unshared branches in parallel while retaining any pages shared with other generations.
 
 `taking_selection_benchmark` exercises independent attempts; set `LEGACY_SHARED` to make all attempts target one person and `LEGACY_WORKERS` or `LEGACY_PEOPLE` to vary execution. It measures proposal selection, not the complete world boundary.
+
+The owner hands simple taking actions to the physical host as flat movements. Independent batches can be staged without per-action movement allocations; mixed or contested physical work uses the general transaction arbiter.

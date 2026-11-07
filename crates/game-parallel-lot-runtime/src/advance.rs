@@ -1,6 +1,8 @@
 //! Progress, physical completion, loss and returns at one shared boundary.
 use super::{Growth, Phase, Runtime, Work};
-use game_parallel_lots::{Movement, Outcome, Place, Spoilage, Transaction, TransactionOutcome};
+use game_parallel_lots::{
+    Movement, Outcome, Place, SimpleTransfer, Spoilage, Transaction, TransactionOutcome,
+};
 use game_parallel_production_model::{JobPhase, Start};
 use rayon::prelude::*;
 
@@ -113,6 +115,85 @@ impl Runtime {
     ) -> Result<Events, String> {
         let draft = self.prepare_advance(rates, external, seed)?;
         self.commit_advance(draft)
+    }
+    /// Attempt a flat batch when no physical work is active. Contested or
+    /// unsupported movements return `None` for the general transaction path.
+    pub fn prepare_flat_transfers(
+        &self,
+        transfers: &[SimpleTransfer],
+    ) -> Result<Option<AdvanceDraft>, String> {
+        if !self.work.is_empty() {
+            return Ok(None);
+        }
+        if transfers.par_iter().any(|row| {
+            !self.catalog.contains(row.movement.good)
+                || row
+                    .movement
+                    .to
+                    .is_some_and(|place| matches!(place, Place::JobInput(_) | Place::JobOutput(_)))
+        }) {
+            return Err("invalid external physical action".into());
+        }
+        let Some(mut custody) = self.store.prepare_flat_transfers(transfers, true)? else {
+            return Ok(None);
+        };
+        let tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
+        let physical_actions = custody.transactions().par_iter().copied().collect();
+        let mut keys: Vec<_> = transfers
+            .par_iter()
+            .map(|row| (row.movement.id, row.action, row.movement))
+            .collect();
+        if keys.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            keys.par_sort_unstable_by_key(|row| row.0);
+        }
+        let (outcomes, spoiled) = custody.take_receipts();
+        let mut physical_movements: Vec<ExternalReceipt> = outcomes
+            .into_par_iter()
+            .chunks(2048)
+            .flat_map_iter(|chunk| {
+                let mut cursor = keys.partition_point(|row| row.0 < chunk[0].id);
+                let keys = &keys;
+                chunk.into_iter().filter_map(move |movement| {
+                    while cursor < keys.len() && keys[cursor].0 < movement.id {
+                        cursor += 1;
+                    }
+                    let &(_, action, request) =
+                        keys.get(cursor).filter(|row| row.0 == movement.id)?;
+                    cursor += 1;
+                    Some(ExternalReceipt {
+                        action,
+                        request,
+                        movement,
+                    })
+                })
+            })
+            .collect();
+        if physical_movements
+            .par_windows(2)
+            .any(|pair| pair[0].action > pair[1].action)
+        {
+            physical_movements.par_sort_unstable_by_key(|row| row.action);
+        }
+        Ok(Some(AdvanceDraft {
+            epoch: self.epoch,
+            custody,
+            work: Vec::new(),
+            events: Events {
+                tick,
+                started: Vec::new(),
+                start_denied: Vec::new(),
+                abandoned: Vec::new(),
+                finished: Vec::new(),
+                delivered: Vec::new(),
+                output_lost: Vec::new(),
+                interrupted: Vec::new(),
+                returned: Vec::new(),
+                empty_returns: Vec::new(),
+                spoiled,
+                physical_actions,
+                physical_movements,
+            },
+        }))
     }
     /// Prepare all owners against the same generation without publishing.
     pub fn prepare_advance(

@@ -817,6 +817,111 @@ fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_action
 }
 
 #[test]
+fn flat_transfers_match_general_runtime_and_rollback() {
+    use game_parallel_lots::{Movement, SimpleTransfer};
+    let mut snapshot = runtime().snapshot();
+    let mut containers = Vec::new();
+    let mut transfers = Vec::new();
+    for id in 1..=256 {
+        containers.push(
+            Container::new(
+                Place::Person(id),
+                10,
+                vec![
+                    Lot {
+                        good: 1,
+                        quantity: 2,
+                        expires_at: Some(1),
+                    },
+                    Lot {
+                        good: 1,
+                        quantity: 3,
+                        expires_at: Some(3),
+                    },
+                ],
+            )
+            .unwrap(),
+        );
+        containers.push(
+            Container::new(
+                Place::Person(id + 1000),
+                if id % 4 == 0 { 1 } else { 10 },
+                vec![],
+            )
+            .unwrap(),
+        );
+        transfers.push(SimpleTransfer {
+            action: id * 2,
+            movement: Movement {
+                id: 10_000 - id,
+                from: Place::Person(id),
+                to: Some(Place::Person(id + 1000)),
+                good: 1,
+                quantity: 2,
+            },
+        });
+    }
+    containers.sort_unstable_by_key(|row| row.place);
+    snapshot.custody.containers = containers;
+    let actions: Vec<_> = transfers
+        .iter()
+        .map(|row| Transaction {
+            id: row.action,
+            movements: vec![row.movement],
+            creations: vec![],
+        })
+        .collect();
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut transfers = transfers.clone();
+                let mut actions = actions.clone();
+                if reverse {
+                    transfers.reverse();
+                    actions.reverse();
+                }
+                let mut flat = Runtime::compile(snapshot.clone()).unwrap();
+                let mut general = Runtime::compile(snapshot.clone()).unwrap();
+                let before = flat.snapshot();
+                let draft = flat.prepare_flat_transfers(&transfers).unwrap().unwrap();
+                let stale = flat.prepare_flat_transfers(&transfers).unwrap().unwrap();
+                assert_eq!(flat.snapshot(), before);
+                let other = general.prepare_advance(&[], &actions, 19).unwrap();
+                assert!(
+                    draft.events() == other.events(),
+                    "flat and general receipts differ"
+                );
+                let events = flat.commit_advance(draft).unwrap();
+                assert!(flat.commit_advance(stale).is_err());
+                general.commit_advance(other).unwrap();
+                assert_eq!(flat.snapshot(), general.snapshot());
+                (flat.snapshot(), events)
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+    let mut duplicate = transfers.clone();
+    duplicate[1].action = duplicate[0].action;
+    assert!(
+        Runtime::compile(snapshot.clone())
+            .unwrap()
+            .prepare_flat_transfers(&duplicate)
+            .is_err()
+    );
+    let mut overlap = transfers;
+    overlap[1].movement.from = overlap[0].movement.from;
+    assert!(
+        Runtime::compile(snapshot)
+            .unwrap()
+            .prepare_flat_transfers(&overlap)
+            .unwrap()
+            .is_none()
+    );
+}
+
+#[test]
 fn ordered_single_leg_receipts_match_general_merge_with_other_work() {
     use game_parallel_lots::Movement;
     let actions: Vec<_> = (1..=2300)
