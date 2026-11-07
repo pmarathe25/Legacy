@@ -9,6 +9,7 @@ mod harm;
 mod opposed_action;
 mod personal_change;
 mod report_trust;
+mod social_merge;
 mod teaching;
 pub use confinement::{
     Experience as ConfinementExperience, ExperienceKind as ConfinementExperienceKind,
@@ -866,73 +867,7 @@ impl Opinions {
         {
             old.par_sort_unstable_by_key(|row| (row.observer, row.target));
         }
-        let rules = &self.rules;
-        let merged: Vec<_> = updates
-            .par_chunks(1024)
-            .enumerate()
-            .flat_map_iter(|(chunk_index, chunk)| {
-                let start = if chunk_index == 0 {
-                    0
-                } else {
-                    old.partition_point(|r| (r.observer, r.target) < chunk[0].0)
-                };
-                let end = if (chunk_index + 1) * 1024 >= updates.len() {
-                    old.len()
-                } else {
-                    old.partition_point(|r| {
-                        (r.observer, r.target) < updates[(chunk_index + 1) * 1024].0
-                    })
-                };
-                let mut cursor = start;
-                let mut rows = Vec::with_capacity(end - start + chunk.len());
-                for &((observer, target), delta) in chunk {
-                    while cursor < end
-                        && (old[cursor].observer, old[cursor].target) < (observer, target)
-                    {
-                        rows.push((old[cursor].clone(), None));
-                        cursor += 1;
-                    }
-                    let (before, fear, obligation, affinity) = if cursor < end
-                        && (old[cursor].observer, old[cursor].target) == (observer, target)
-                    {
-                        let previous = (
-                            old[cursor].trust,
-                            old[cursor].fear,
-                            old[cursor].obligation,
-                            old[cursor].affinity,
-                        );
-                        cursor += 1;
-                        previous
-                    } else {
-                        (rules.initial, 0, 0, 0)
-                    };
-                    let after = (i128::from(before) + delta)
-                        .clamp(i128::from(rules.minimum), i128::from(rules.maximum))
-                        as i32;
-                    rows.push((
-                        Opinion {
-                            observer,
-                            target,
-                            trust: after,
-                            fear,
-                            obligation,
-                            affinity,
-                        },
-                        Some(Event {
-                            tick,
-                            observer,
-                            target,
-                            before,
-                            after,
-                        }),
-                    ));
-                }
-                rows.extend(old[cursor..end].iter().cloned().map(|row| (row, None)));
-                rows
-            })
-            .collect();
-        self.events = merged.par_iter().filter_map(|row| row.1.clone()).collect();
-        self.records = merged.into_par_iter().map(|row| row.0).collect();
+        (self.records, self.events) = social_merge::merge(old, &updates, &self.rules, tick);
         #[cfg(feature = "profile")]
         drop(social_phase);
     }
