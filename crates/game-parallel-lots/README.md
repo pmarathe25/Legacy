@@ -13,3 +13,5 @@ Parallel preparation of physical lot movements and expiry. Claims are arbitrated
 `prepare_flat_transfers` accepts independently atomic single movements in a flat batch. It returns no fast-path draft when endpoints contend or the batch needs general handling; the caller must then submit normal transactions to the general arbiter. It preserves dated cohorts, boundary spoilage, atomic drafts, and the existing save format.
 
 `prepare_partitioned_flat` also separates transfers whose endpoints are exclusive from those that share a source or destination. The shared group uses the general arbiter with the original action identities and seed. Both groups remain one atomic draft, with expiry applied once. Unsupported layouts still return no specialized draft.
+
+Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.

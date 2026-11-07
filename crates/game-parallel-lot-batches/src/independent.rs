@@ -152,7 +152,7 @@ pub fn prepare(
                 Outcome {
                     id: row.movement.id,
                     accepted,
-                    lots: Vec::new(),
+                    lots: Default::default(),
                 },
                 TransactionOutcome {
                     id: row.transaction,

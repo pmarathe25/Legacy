@@ -161,6 +161,24 @@ fn independent_compact_consumption_matches_general_planning_with_expiry() {
 }
 
 #[test]
+fn shared_receipt_lots_are_isolated_and_serialize_as_flat_arrays() {
+    use std::sync::Arc;
+    let arena: Arc<[Lot]> = vec![lot(1, 2, Some(4)), lot(1, 3, None), lot(2, 1, None)].into();
+    let first = crate::LotList::shared(arena.clone(), 0..2);
+    let second = crate::LotList::shared(arena.clone(), 2..3);
+    let empty = crate::LotList::shared(arena.clone(), 1..1);
+    drop(arena);
+    assert_eq!(first.as_slice(), &[lot(1, 2, Some(4)), lot(1, 3, None)]);
+    assert_eq!(second.as_slice(), &[lot(2, 1, None)]);
+    assert!(empty.is_empty());
+    let serialized = serde_json::to_value(&first).unwrap();
+    assert!(serialized.is_array());
+    let restored: crate::LotList = serde_json::from_value(serialized).unwrap();
+    assert_eq!(first, restored);
+    assert_eq!(first.clone(), restored);
+}
+
+#[test]
 fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
     let mut initial = Vec::new();
     let mut actions = Vec::new();

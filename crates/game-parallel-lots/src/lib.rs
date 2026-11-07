@@ -3,7 +3,7 @@ mod compose;
 mod view;
 pub use compose::{Composed, compose};
 pub use game_parallel_lot_model::{
-    Container, Creation, Lot, Movement, Outcome, Place, SimpleTransfer, Spoilage, State,
+    Container, Creation, Lot, LotList, Movement, Outcome, Place, SimpleTransfer, Spoilage, State,
     Transaction, TransactionOutcome, deadline,
 };
 use rayon::prelude::*;

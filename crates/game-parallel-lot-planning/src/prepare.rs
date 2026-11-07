@@ -492,7 +492,7 @@ pub fn prepare(
                     Outcome {
                         id: movement.id,
                         accepted: matched.is_some(),
-                        lots,
+                        lots: lots.into(),
                     }
                 })
                 .collect::<Vec<_>>()

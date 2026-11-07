@@ -1,5 +1,7 @@
 //! Physical goods cohorts and stable custody identities.
 use serde::{Deserialize, Serialize};
+mod lot_list;
+pub use lot_list::LotList;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]
@@ -162,7 +164,7 @@ pub struct Spoilage {
 pub struct Outcome {
     pub id: u64,
     pub accepted: bool,
-    pub lots: Vec<Lot>,
+    pub lots: LotList,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

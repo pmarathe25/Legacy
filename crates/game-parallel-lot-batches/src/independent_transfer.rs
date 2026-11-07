@@ -1,7 +1,7 @@
 //! Disjoint single-leg transactions can resolve without shared arbitration.
 use game_parallel_lot_model::{
-    Container, Lot, Movement, Outcome, Place, SimpleTransfer, Spoilage, State, Transaction,
-    TransactionOutcome, key,
+    Container, Lot, LotList, Movement, Outcome, Place, SimpleTransfer, Spoilage, State,
+    Transaction, TransactionOutcome, key,
 };
 use game_parallel_lot_planning::Draft;
 use rayon::prelude::*;
@@ -220,48 +220,54 @@ fn prepare_rows(
         drop(phase);
         phase = game_diagnostics::span("physical.independent.resolve_and_group");
     }
+    // Each logical chunk owns one packed arena. Receipts retain immutable
+    // ranges into it instead of allocating a lot vector for every movement.
     let parts: Vec<_> = rows
-        .into_par_iter()
-        .with_min_len(2048)
-        .map(|row| {
-            let source = &state.containers[row.source];
-            let destination = &state.containers[row.destination];
-            let live_used: u64 = destination
-                .lots
-                .iter()
-                .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
-                .map(|lot| lot.quantity)
-                .sum();
-            let available: u64 = source
-                .lots
-                .iter()
-                .filter(|lot| {
-                    lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
-                })
-                .map(|lot| lot.quantity)
-                .sum();
-            let accepted = row.movement.quantity <= available
-                && row.movement.quantity <= destination.capacity - live_used;
-            let mut remaining = if accepted { row.movement.quantity } else { 0 };
-            let mut moved = Vec::new();
-            for lot in &source.lots {
-                if remaining == 0 {
-                    break;
+        .par_chunks(2048)
+        .map(|chunk| {
+            let mut lots = Vec::with_capacity(chunk.len());
+            let mut headers = Vec::with_capacity(chunk.len());
+            let mut transactions = Vec::with_capacity(chunk.len());
+            let mut changes = Vec::with_capacity(chunk.len() * 2);
+            for row in chunk {
+                let source = &state.containers[row.source];
+                let destination = &state.containers[row.destination];
+                let live_used: u64 = destination
+                    .lots
+                    .iter()
+                    .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                    .map(|lot| lot.quantity)
+                    .sum();
+                let available: u64 = source
+                    .lots
+                    .iter()
+                    .filter(|lot| {
+                        lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
+                    })
+                    .map(|lot| lot.quantity)
+                    .sum();
+                let accepted = row.movement.quantity <= available
+                    && row.movement.quantity <= destination.capacity - live_used;
+                let mut remaining = if accepted { row.movement.quantity } else { 0 };
+                let begin = lots.len();
+                for lot in &source.lots {
+                    if remaining == 0 {
+                        break;
+                    }
+                    if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next) {
+                        let quantity = remaining.min(lot.quantity);
+                        lots.push(Lot {
+                            good: lot.good,
+                            quantity,
+                            expires_at: lot.expires_at,
+                        });
+                        remaining -= quantity;
+                    }
                 }
-                if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next) {
-                    let quantity = remaining.min(lot.quantity);
-                    moved.push(Lot {
-                        good: lot.good,
-                        quantity,
-                        expires_at: lot.expires_at,
-                    });
-                    remaining -= quantity;
-                }
-            }
-            debug_assert_eq!(remaining, 0);
-            let source_change =
-                (accepted || source.next_expiry.is_some_and(|at| at <= next)).then(|| {
-                    (
+                debug_assert_eq!(remaining, 0);
+                let end = lots.len();
+                if accepted || source.next_expiry.is_some_and(|at| at <= next) {
+                    changes.push((
                         row.source,
                         after(
                             source,
@@ -270,36 +276,38 @@ fn prepare_rows(
                             if accepted { row.movement.quantity } else { 0 },
                             &[],
                         ),
-                    )
-                });
-            let destination_change = (accepted
-                || destination.next_expiry.is_some_and(|at| at <= next))
-            .then(|| (row.destination, after(destination, next, 0, 0, &moved)));
-            (
-                Outcome {
-                    id: row.movement.id,
-                    accepted,
-                    lots: moved,
-                },
-                TransactionOutcome {
+                    ));
+                }
+                if accepted || destination.next_expiry.is_some_and(|at| at <= next) {
+                    changes.push((
+                        row.destination,
+                        after(destination, next, 0, 0, &lots[begin..end]),
+                    ));
+                }
+                headers.push((row.movement.id, accepted, begin..end));
+                transactions.push(TransactionOutcome {
                     id: row.transaction,
                     accepted,
-                },
-                source_change,
-                destination_change,
-            )
+                });
+            }
+            let arena: Option<std::sync::Arc<[Lot]>> = (!lots.is_empty()).then(|| lots.into());
+            let outcomes = headers
+                .into_iter()
+                .map(|(id, accepted, range)| Outcome {
+                    id,
+                    accepted,
+                    lots: if range.is_empty() {
+                        LotList::default()
+                    } else {
+                        LotList::shared(
+                            arena.as_ref().expect("nonempty receipt arena").clone(),
+                            range,
+                        )
+                    },
+                })
+                .collect::<Vec<_>>();
+            (outcomes, transactions, changes)
         })
-        .fold(
-            || (Vec::new(), Vec::new(), Vec::new()),
-            |(mut outcomes, mut transactions, mut changes),
-             (outcome, transaction, source, destination)| {
-                outcomes.push(outcome);
-                transactions.push(transaction);
-                changes.extend(source);
-                changes.extend(destination);
-                (outcomes, transactions, changes)
-            },
-        )
         .collect();
     #[cfg(feature = "profile")]
     {

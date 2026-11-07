@@ -116,7 +116,7 @@ mod tests {
                     movement: Outcome {
                         id,
                         accepted: true,
-                        lots: vec![],
+                        lots: Default::default(),
                     },
                 }
             })
