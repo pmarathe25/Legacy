@@ -217,18 +217,10 @@ fn prepare_rows(
             })
             .then_some(source_first)
     });
-    let endpoints: Vec<_> = if let Some(source_first) = separated {
-        if source_first {
-            rows.par_iter()
-                .map(|row| row.source)
-                .chain(rows.par_iter().map(|row| row.destination))
-                .collect()
-        } else {
-            rows.par_iter()
-                .map(|row| row.destination)
-                .chain(rows.par_iter().map(|row| row.source))
-                .collect()
-        }
+    let endpoints = if separated.is_some() {
+        // Both columns are sorted and disjoint already. Keep them in place
+        // instead of allocating a second copy of every endpoint.
+        None
     } else {
         let mut endpoints: Vec<_> = rows
             .par_iter()
@@ -238,7 +230,7 @@ fn prepare_rows(
         if endpoints.par_windows(2).any(|p| p[0] == p[1]) {
             return Ok(None);
         }
-        endpoints
+        Some(endpoints)
     };
     let mut movement_ids: Vec<_> = rows.par_iter().map(|r| r.movement.id).collect();
     if movement_ids.par_windows(2).any(|p| p[0] > p[1]) {
@@ -291,12 +283,16 @@ fn prepare_rows(
             for row in chunk {
                 let source = &state.containers[row.source];
                 let destination = &state.containers[row.destination];
-                let live_used: u64 = destination
-                    .lots
-                    .iter()
-                    .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
-                    .map(|lot| lot.quantity)
-                    .sum();
+                let live_used: u64 = if destination.next_expiry.is_none_or(|at| at > next) {
+                    destination.used
+                } else {
+                    destination
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                        .map(|lot| lot.quantity)
+                        .sum()
+                };
                 let available: u64 = source
                     .lots
                     .iter()
@@ -422,7 +418,15 @@ fn prepare_rows(
             .enumerate()
             .filter_map(|(index, container)| {
                 (container.next_expiry.is_some_and(|at| at <= next)
-                    && endpoints.binary_search(&index).is_err())
+                    && endpoints.as_ref().map_or_else(
+                        || {
+                            rows.binary_search_by_key(&index, |row| row.source).is_err()
+                                && rows
+                                    .binary_search_by_key(&index, |row| row.destination)
+                                    .is_err()
+                        },
+                        |endpoints| endpoints.binary_search(&index).is_err(),
+                    ))
                 .then(|| (index, after(container, next, 0, 0, &[])))
             })
             .collect()
