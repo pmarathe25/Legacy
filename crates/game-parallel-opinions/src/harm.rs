@@ -204,6 +204,7 @@ pub enum AffinityKind {
     Harm,
     Encounter,
     PressuredEncounter,
+    StockUse,
     SiteUse,
     SiteDestruction,
     SiteSalvage,
@@ -235,6 +236,10 @@ impl AffinityKind {
                 .and_then(|c| c.pressured_encounter)
                 .or_else(|| personal.and_then(|p| p.affinity_pressured_encounter))
                 .unwrap_or(rules.pressured_encounter_change),
+            Self::StockUse => case
+                .and_then(|c| c.stock_use)
+                .or_else(|| personal.and_then(|p| p.affinity_stock_use))
+                .unwrap_or(0),
             Self::SiteUse => case
                 .and_then(|c| c.site_use)
                 .or_else(|| personal.and_then(|p| p.affinity_site_use))

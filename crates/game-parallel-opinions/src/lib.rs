@@ -181,6 +181,13 @@ impl Opinions {
     /// Apply a simultaneous set of directly witnessed takings by directed pair.
     pub fn witness_thefts(&mut self, incidents: &[(u64, u64)], tick: u64) {
         harm::theft(self, incidents, tick);
+        if !incidents.is_empty() && harm::tracks_affinity(self, harm::AffinityKind::StockUse) {
+            let experiences: Vec<_> = incidents
+                .par_iter()
+                .map(|&(observer, actor)| (observer, actor, 1))
+                .collect();
+            harm::affinity(self, &experiences, harm::AffinityKind::StockUse);
+        }
     }
     pub fn tracks_affinity_help(&self) -> bool {
         harm::tracks_affinity(self, harm::AffinityKind::Help)
@@ -331,6 +338,7 @@ impl Opinions {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,

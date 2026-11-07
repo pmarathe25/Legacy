@@ -1,6 +1,84 @@
 use super::*;
 
 #[test]
+fn witnessed_stock_use_has_personal_and_relationship_specific_affinity() {
+    let mut configured = rules();
+    configured.theft_loss = 0;
+    configured.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let initial = Opinions {
+        rules: configured,
+        records: vec![],
+        events: vec![],
+        sensitivities: vec![
+            Sensitivity {
+                person: 1,
+                affinity_stock_use: Some(-2),
+                relationship_cases: vec![
+                    RelationshipCase {
+                        target: 2,
+                        stock_use: Some(3),
+                        ..Default::default()
+                    },
+                    RelationshipCase {
+                        target: 4,
+                        stock_use: Some(0),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            },
+            Sensitivity {
+                person: 3,
+                affinity_stock_use: Some(-4),
+                ..Default::default()
+            },
+        ]
+        .into(),
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.witness_thefts(&[(1, 2), (1, 2), (1, 4), (1, 5), (3, 2)], 1);
+                assert_eq!(state.index().affinity(1, 2), 6);
+                assert_eq!(state.index().affinity(1, 4), 0);
+                assert_eq!(state.index().affinity(1, 5), -2);
+                assert_eq!(state.index().affinity(3, 2), -4);
+                assert!(
+                    state
+                        .records
+                        .iter()
+                        .all(|row| row.obligation == 0 && row.trust == 0)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut saved = serde_json::to_value(&initial).unwrap();
+    for sensitivity in saved["sensitivities"].as_array_mut().unwrap() {
+        sensitivity
+            .as_object_mut()
+            .unwrap()
+            .remove("affinity_stock_use");
+        for case in sensitivity["relationship_cases"].as_array_mut().unwrap() {
+            case.as_object_mut().unwrap().remove("stock_use");
+        }
+    }
+    let mut older: Opinions = serde_json::from_value(saved).unwrap();
+    older.witness_thefts(&[(1, 2)], 1);
+    assert_eq!(older.index().affinity(1, 2), 0);
+}
+
+#[test]
 fn ordered_new_relationships_match_shuffled_merge_for_signed_feelings() {
     for affinity_enabled in [false, true] {
         let mut configured = rules();
@@ -1141,6 +1219,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
@@ -1169,6 +1248,7 @@ fn people_can_interpret_the_same_kind_of_taking_differently() {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
@@ -1211,6 +1291,7 @@ fn individual_reciprocity_relief_preserves_other_feelings_and_creates_no_empty_m
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
@@ -1289,6 +1370,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
@@ -1317,6 +1399,7 @@ fn each_person_can_respond_differently_to_the_same_experience() {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
@@ -1748,6 +1831,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
         affinity_harm_per_damage: Some(harm),
         affinity_encounter: Some(encounter),
         affinity_pressured_encounter: Some(pressured),
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -1818,6 +1902,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
         affinity_harm_per_damage: Some(3),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -1836,6 +1921,7 @@ fn a_person_can_interpret_the_same_harm_differently_by_relationship() {
             harm_per_damage: Some(-2),
             encounter: None,
             pressured_encounter: None,
+            stock_use: None,
             site_use: None,
             site_destruction: None,
             site_salvage: None,
@@ -1893,6 +1979,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -1911,6 +1998,7 @@ fn obligation_from_help_depends_on_the_person_and_relationship() {
             harm_per_damage: None,
             encounter: None,
             pressured_encounter: None,
+            stock_use: None,
             site_use: None,
             site_destruction: None,
             site_salvage: None,

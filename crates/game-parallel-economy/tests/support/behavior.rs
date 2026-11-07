@@ -7151,6 +7151,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -8122,6 +8123,31 @@ fn conflicting_claims_are_personal_and_observed_only_after_actual_use() {
     initial.people[1].seek_meals = true;
     initial.people[1].hunger = 5;
     initial.opinions.as_mut().unwrap().rules.theft_loss = 2;
+    initial.opinions.as_mut().unwrap().rules.affinity =
+        Some(game_parallel_opinions::AffinityRules {
+            limit: 100,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+    *initial.opinions.as_mut().unwrap().sensitivities_mut() = vec![
+        OpinionSensitivity {
+            person: 1,
+            affinity_stock_use: Some(-4),
+            relationship_cases: vec![RelationshipCase {
+                target: 2,
+                stock_use: Some(6),
+                ..Default::default()
+            }],
+            ..Default::default()
+        },
+        OpinionSensitivity {
+            person: 4,
+            affinity_stock_use: Some(-3),
+            ..Default::default()
+        },
+    ];
     let stock = initial
         .physical
         .custody
@@ -8158,6 +8184,15 @@ fn conflicting_claims_are_personal_and_observed_only_after_actual_use() {
                 assert!(world.claim_stock(1, 1, 1).is_err());
                 world.advance().unwrap();
                 let before = world.snapshot();
+                assert!(
+                    before
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .all(|row| row.target != 2)
+                );
                 assert!(
                     before
                         .dynamics
@@ -8215,6 +8250,15 @@ fn conflicting_claims_are_personal_and_observed_only_after_actual_use() {
                     .collect();
                 assert_eq!(observers.len(), 2);
                 assert!(observers.iter().all(|o| o.trust == -2));
+                assert_eq!(
+                    observers.iter().find(|o| o.observer == 1).unwrap().affinity,
+                    6
+                );
+                assert_eq!(
+                    observers.iter().find(|o| o.observer == 4).unwrap().affinity,
+                    -3
+                );
+                assert!(observers.iter().all(|o| o.obligation == 0));
                 Economy::compile(state.clone()).unwrap();
                 state
             })
@@ -29613,6 +29657,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -29790,6 +29835,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -29972,6 +30018,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_harm_per_damage: Some(2),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -29995,6 +30042,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         harm_per_damage: Some(-1),
         encounter: None,
         pressured_encounter: None,
+        stock_use: None,
         site_use: None,
         site_destruction: None,
         site_salvage: None,
@@ -30058,6 +30106,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_harm_per_damage: Some(1),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -30154,6 +30203,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -30338,6 +30388,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
@@ -30592,6 +30643,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -30750,6 +30802,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -30969,6 +31022,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
@@ -31849,6 +31903,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
@@ -31868,6 +31923,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     harm_per_damage: None,
                     encounter: None,
                     pressured_encounter: None,
+                    stock_use: None,
                     site_use: None,
                     site_destruction: None,
                     site_salvage: None,
@@ -32358,6 +32414,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
@@ -35914,6 +35971,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: Some(rate),
         affinity_site_destruction: None,
         affinity_site_salvage: None,
@@ -35936,6 +35994,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         harm_per_damage: None,
         encounter: None,
         pressured_encounter: None,
+        stock_use: None,
         site_use: Some(6),
         site_destruction: None,
         site_salvage: None,
@@ -36238,6 +36297,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: Some(5),
         affinity_site_salvage: None,
@@ -37491,6 +37551,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: Some(rate),
@@ -37513,6 +37574,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         harm_per_damage: None,
         encounter: None,
         pressured_encounter: None,
+        stock_use: None,
         site_use: None,
         site_destruction: None,
         site_salvage: Some(7),
@@ -38344,6 +38406,7 @@ fn concentrated_site_salvage_benchmark() {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: Some(1),

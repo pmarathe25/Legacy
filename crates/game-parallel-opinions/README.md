@@ -20,6 +20,8 @@ relationship_cases = [{ target = 1, promise_unfulfilled_trust = 2 }]
 
 `theft_loss` controls the default trust change when a present claimant witnesses unauthorized use or pickup. An absent claimant does not automatically learn of it. This is an individual's reaction to a claim being disregarded, not a universal criminal status.
 
+An optional signed `affinity_stock_use` independently controls how a claimant feels about someone they witness using claimed regional stock. A relationship case can override it with `stock_use`, including an explicit zero. The default is no affinity change; no obligation is created.
+
 `fear_per_damage` optionally increases the victim's directed fear of a person who actually injures them. This is tracked independently of trust and does not require a market. The fused host applies those updates only after the complete tick succeeds. Automatic responses to requests can use the victim's previously committed fear; compliance does not imply approval or increase trust.
 
 Optional `fear_decay_per_tick` reduces existing fear in parallel at each committed tick, before new injuries are recorded. It defaults to zero. Choices read the prior committed fear, so a person can later stop complying as fear subsides without altering trust or obligations.

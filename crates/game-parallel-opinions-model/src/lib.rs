@@ -48,6 +48,9 @@ pub struct Sensitivity {
     pub affinity_encounter: Option<i32>,
     #[serde(default)]
     pub affinity_pressured_encounter: Option<i32>,
+    /// Personal interpretation of another person's witnessed use of claimed regional stock.
+    #[serde(default)]
+    pub affinity_stock_use: Option<i32>,
     /// Personal interpretation of another person's witnessed use of a claimed site.
     #[serde(default)]
     pub affinity_site_use: Option<i32>,
@@ -121,6 +124,9 @@ pub struct RelationshipCase {
     pub encounter: Option<i32>,
     #[serde(default)]
     pub pressured_encounter: Option<i32>,
+    /// Override the observer's general reaction to this person's stock use.
+    #[serde(default)]
+    pub stock_use: Option<i32>,
     #[serde(default)]
     pub site_use: Option<i32>,
     #[serde(default)]

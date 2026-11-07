@@ -113,6 +113,7 @@ pub fn claim_tolerance(
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
