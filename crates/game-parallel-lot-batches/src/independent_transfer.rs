@@ -21,33 +21,57 @@ fn after(
     mut debit: u64,
     incoming: &[Lot],
 ) -> Container {
-    let mut lots: Vec<_> = container
-        .lots
-        .iter()
-        .filter_map(|lot| {
-            if lot.expires_at.is_some_and(|at| at <= tick) {
-                return None;
-            }
-            let consumed = if lot.good == good {
-                debit.min(lot.quantity)
-            } else {
-                0
-            };
-            debit -= consumed;
-            (consumed < lot.quantity).then(|| Lot {
-                good: lot.good,
-                quantity: lot.quantity - consumed,
-                expires_at: lot.expires_at,
-            })
-        })
-        .collect();
-    debug_assert_eq!(debit, 0);
-    for lot in incoming {
-        match lots.binary_search_by_key(&key(lot), key) {
-            Ok(index) => lots[index].quantity += lot.quantity,
-            Err(index) => lots.insert(index, lot.clone()),
+    let surviving = container.lots.iter().filter_map(|lot| {
+        if lot.expires_at.is_some_and(|at| at <= tick) {
+            return None;
         }
-    }
+        let consumed = if lot.good == good {
+            debit.min(lot.quantity)
+        } else {
+            0
+        };
+        debit -= consumed;
+        (consumed < lot.quantity).then(|| Lot {
+            good: lot.good,
+            quantity: lot.quantity - consumed,
+            expires_at: lot.expires_at,
+        })
+    });
+    let lots: Vec<_> = if incoming.is_empty() {
+        surviving.collect()
+    } else {
+        // Both inputs are already sorted and have unique cohort keys. Merge
+        // once so many dated lots do not require repeated vector insertions.
+        let mut existing = surviving.peekable();
+        let mut additions = incoming.iter().peekable();
+        let mut output = Vec::with_capacity(container.lots.len().saturating_add(incoming.len()));
+        loop {
+            match (existing.peek(), additions.peek()) {
+                (Some(old), Some(new)) => match key(old).cmp(&key(new)) {
+                    std::cmp::Ordering::Less => output.push(existing.next().unwrap()),
+                    std::cmp::Ordering::Greater => {
+                        output.push((*additions.next().unwrap()).clone())
+                    }
+                    std::cmp::Ordering::Equal => {
+                        let mut lot = existing.next().unwrap();
+                        lot.quantity += additions.next().unwrap().quantity;
+                        output.push(lot);
+                    }
+                },
+                (Some(_), None) => {
+                    output.extend(existing);
+                    break;
+                }
+                (None, Some(_)) => {
+                    output.extend(additions.cloned());
+                    break;
+                }
+                (None, None) => break,
+            }
+        }
+        output
+    };
+    debug_assert_eq!(debit, 0);
     Container {
         place: container.place,
         capacity: container.capacity,
@@ -253,8 +277,11 @@ fn prepare_rows(
     }
     // Each logical chunk owns one packed arena. Receipts retain immutable
     // ranges into it instead of allocating a lot vector for every movement.
+    // Keep a fixed logical partition independent of worker count while
+    // exposing parallelism for smaller batches with expensive lot cohorts.
+    let chunk_size = rows.len().div_ceil(64).clamp(16, 2048);
     let parts: Vec<_> = rows
-        .par_chunks(2048)
+        .par_chunks(chunk_size)
         .map(|chunk| {
             let mut lots = Vec::with_capacity(chunk.len());
             let mut headers = Vec::with_capacity(chunk.len());

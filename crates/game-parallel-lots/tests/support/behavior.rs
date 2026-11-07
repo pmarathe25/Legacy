@@ -415,6 +415,139 @@ fn ordered_disjoint_ranges_and_interleaved_endpoints_match_general_arbitration()
     }
 }
 
+fn many_cohort_transfers(count: u64, cohorts: u64) -> (Vec<Container>, Vec<crate::SimpleTransfer>) {
+    let mut holders = Vec::new();
+    let mut transfers = Vec::new();
+    for person in 1..=count {
+        let mut source = vec![lot(1, 1, Some(1))];
+        let mut destination = vec![lot(1, 1, Some(1))];
+        for index in 0..cohorts {
+            source.push(lot(1, 1, Some(2 * index + 4)));
+            destination.push(lot(
+                1,
+                1,
+                Some(2 * index + if index % 3 == 0 { 4 } else { 3 }),
+            ));
+        }
+        holders.push(container(Place::Person(person), 3 * cohorts + 5, source));
+        holders.push(container(
+            Place::Person(count + person),
+            if person % 7 == 0 {
+                cohorts + 1
+            } else {
+                3 * cohorts + 5
+            },
+            destination,
+        ));
+        transfers.push(crate::SimpleTransfer {
+            action: person,
+            movement: Movement {
+                id: person,
+                from: Place::Person(person),
+                to: Some(Place::Person(count + person)),
+                good: 1,
+                quantity: if person % 5 == 0 {
+                    cohorts / 2
+                } else {
+                    cohorts
+                },
+            },
+        });
+    }
+    holders.sort_unstable_by_key(|row| row.place);
+    (holders, transfers)
+}
+
+#[test]
+fn many_interleaved_dated_cohorts_match_the_general_arbiter() {
+    let (holders, transfers) = many_cohort_transfers(128, 256);
+    let actions: Vec<_> = transfers
+        .iter()
+        .map(|row| Transaction {
+            id: row.action,
+            movements: vec![row.movement],
+            creations: vec![],
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut fast = store(holders.clone());
+                let mut general = store(holders.clone());
+                let draft = fast
+                    .prepare_flat_transfers(&transfers, true)
+                    .unwrap()
+                    .unwrap();
+                let reference = general
+                    .prepare_with_empty(
+                        17,
+                        &actions,
+                        vec![container(Place::Inventory(99999), 10, vec![])],
+                        true,
+                    )
+                    .unwrap();
+                assert_eq!(draft.transactions(), reference.transactions());
+                assert_eq!(draft.outcomes(), reference.outcomes());
+                assert_eq!(draft.spoiled(), reference.spoiled());
+                fast.commit(draft).unwrap();
+                general.commit(reference).unwrap();
+                let mut expected = general.export();
+                expected
+                    .containers
+                    .retain(|row| row.place != Place::Inventory(99999));
+                assert_eq!(fast.export(), expected);
+                fast.export()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "manual many-cohort physical transfer benchmark"]
+fn many_cohort_transfer_benchmark() {
+    let count = std::env::var("LEGACY_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(256);
+    let cohorts = std::env::var("LEGACY_COHORTS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(512);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let (holders, transfers) = many_cohort_transfers(count, cohorts);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let owner = store(holders);
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let start = std::time::Instant::now();
+                let draft = owner
+                    .prepare_flat_transfers(&transfers, true)
+                    .unwrap()
+                    .unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(draft.transactions().len(), count as usize);
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} transfers={count} cohorts={cohorts} prepare={:.6}",
+                samples[2]
+            );
+        });
+}
+
 #[test]
 fn late_empty_holders_do_not_shift_planned_physical_changes() {
     let mut store = store(vec![

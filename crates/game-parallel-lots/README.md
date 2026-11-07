@@ -15,3 +15,5 @@ Parallel preparation of physical lot movements and expiry. Claims are arbitrated
 `prepare_partitioned_flat` also separates transfers whose endpoints are exclusive from those that share a source or destination. The shared group uses the general arbiter with the original action identities and seed. Both groups remain one atomic draft, with expiry applied once. Unsupported layouts still return no specialized draft.
 
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
+
+Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.
