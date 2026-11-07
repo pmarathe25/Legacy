@@ -134,7 +134,7 @@ For bounded reasoning from personal cases, a mind can set `precedent = { same_pe
 
 For ordinary regional food reports, a person's knowledge mind may contain `misreport = { food_delta = 50, target = 1 }`. The target is optional; a negative offset understates remembered food. Player mode can set `food-misreport DELTA [TARGET]` or `food-misreport off`, and administrative mode takes the person's ID first. Only reports at actual encounters change; the speaker's memory and physical stock do not. A recipient can independently disregard reports based on directed trust.
 
-Each person's opinion sensitivity can choose `report_reception = "always"`, `"never"`, or `{ trust_at_least = 0 }`; an absent choice uses the scenario's default threshold. Player mode changes the ruler's own choice with `food-report-reception default|all|none|MIN`, and administrative mode takes the person's ID first. This policy applies to ordinary food reports and does not reveal whether a speaker is honest.
+Each person's opinion sensitivity can choose `report_reception = "always"`, `"never"`, or `{ trust_at_least = 0 }`; an absent choice uses the scenario's default threshold. Player mode changes the ruler's own choice with `food-report-reception default|all|none|MIN`, and administrative mode takes the person's ID first. This policy applies to ordinary food and encounter reports and does not reveal whether a speaker is honest.
 
 Scenarios can also use `[[aspiration_learning]]` to specify an individual's inclination directly; authored entries override generated ones. With `inherit_aspiration_learning = true` and family birth enrollment enabled, actual newborns can acquire a parent's general inclination, without inheriting their aspirations or experiences.
 
