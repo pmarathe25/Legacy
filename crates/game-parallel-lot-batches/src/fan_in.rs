@@ -47,6 +47,8 @@ pub fn prepare(
         .revision
         .checked_add(1)
         .ok_or("lot revision overflow")?;
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("physical.fan_in.locate");
     let people_start = state
         .containers
         .partition_point(|c| c.place < Place::Person(1));
@@ -79,6 +81,11 @@ pub fn prepare(
         })
         .collect();
     let Some(rows) = rows else { return Ok(None) };
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.fan_in.eligibility");
+    }
     let mut sources: Vec<_> = rows.par_iter().map(|row| row.source).collect();
     if sources.par_windows(2).any(|pair| pair[0] > pair[1]) {
         sources.par_sort_unstable();
@@ -91,10 +98,21 @@ pub fn prepare(
         destinations.par_sort_unstable();
     }
     // Independent transfers already handle distinct destinations more cheaply.
-    if destinations.par_windows(2).all(|pair| pair[0] != pair[1])
+    if destinations.par_windows(2).all(|pair| pair[0] != pair[1]) {
+        return Ok(None);
+    }
+    let separated = sources
+        .last()
+        .zip(destinations.first())
+        .is_some_and(|(source, destination)| source < destination)
         || destinations
-            .par_iter()
-            .any(|index| sources.binary_search(index).is_ok())
+            .last()
+            .zip(sources.first())
+            .is_some_and(|(destination, source)| destination < source);
+    if !separated
+        && destinations
+            .par_chunk_by(|a, b| a == b)
+            .any(|group| sources.binary_search(&group[0]).is_ok())
     {
         return Ok(None);
     }
@@ -104,6 +122,11 @@ pub fn prepare(
     }
     if movement_ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
         return Ok(None);
+    }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.fan_in.arbitrate");
     }
     let source_valid: Vec<_> = rows
         .par_iter()
@@ -195,6 +218,11 @@ pub fn prepare(
     } else {
         source_valid
     };
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.fan_in.materialize");
+    }
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
@@ -273,6 +301,11 @@ pub fn prepare(
         changes.extend(source_changes);
         incoming.extend(additions);
     }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.fan_in.coalesce");
+    }
     if incoming
         .par_windows(2)
         .any(|pair| (pair[0].0, key(&pair[0].1)) > (pair[1].0, key(&pair[1].1)))
@@ -348,6 +381,11 @@ pub fn prepare(
             },
         ));
     }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.fan_in.finalize");
+    }
     changes.par_sort_unstable_by_key(|row| row.0);
     let mut outcomes = OutcomeBatch::from_chunks(chunks);
     outcomes.sort_by_id();
@@ -357,6 +395,8 @@ pub fn prepare(
     {
         transactions.par_sort_unstable_by_key(|row| row.id);
     }
+    #[cfg(feature = "profile")]
+    drop(phase);
     Ok(Some(Draft {
         base_instance: instance,
         base_tick: state.tick,
@@ -371,112 +411,5 @@ pub fn prepare(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn fixture() -> (State, Vec<Transaction>) {
-        let mut containers: Vec<_> = (1..=128)
-            .map(|id| {
-                Container::new(
-                    Place::Person(id),
-                    10,
-                    vec![Lot {
-                        good: 1,
-                        quantity: 1,
-                        expires_at: None,
-                    }],
-                )
-                .unwrap()
-            })
-            .collect();
-        containers.push(Container::new(Place::Person(1000), 128, vec![]).unwrap());
-        let actions = (1..=128)
-            .map(|id| Transaction {
-                id,
-                movements: vec![Movement {
-                    id,
-                    from: Place::Person(id),
-                    to: Some(Place::Person(1000)),
-                    good: 1,
-                    quantity: 1,
-                }],
-                creations: vec![],
-            })
-            .collect();
-        (
-            State {
-                tick: 0,
-                revision: 0,
-                containers,
-            },
-            actions,
-        )
-    }
-
-    #[test]
-    fn fast_path_handles_contention_and_declines_invalid_topologies() {
-        let (state, actions) = fixture();
-        assert!(prepare(&state, 1, 17, &actions, true).unwrap().is_some());
-        let mut changed = actions.clone();
-        changed[1].movements[0].from = changed[0].movements[0].from;
-        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
-        let mut changed = actions.clone();
-        changed[0].movements[0].to = Some(Place::Person(2));
-        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
-        let mut changed = actions.clone();
-        changed[0].movements[0].to = Some(Place::Person(9999));
-        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
-        let mut changed = actions.clone();
-        changed[1].movements[0].id = changed[0].movements[0].id;
-        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
-        let mut changed = actions.clone();
-        changed[0].movements[0].quantity = 2;
-        let shortage = prepare(&state, 1, 17, &changed, true).unwrap().unwrap();
-        assert_eq!(
-            shortage
-                .transactions
-                .iter()
-                .filter(|row| !row.accepted)
-                .count(),
-            1
-        );
-        let mut limited = state.clone();
-        *limited.containers.last_mut().unwrap() =
-            Container::new(Place::Person(1000), 127, vec![]).unwrap();
-        let contested = prepare(&limited, 1, 17, &actions, true).unwrap().unwrap();
-        assert_eq!(
-            contested
-                .transactions
-                .iter()
-                .filter(|row| !row.accepted)
-                .count(),
-            1
-        );
-        let mut changed = actions;
-        let extra = changed[1].movements[0];
-        changed[0].movements.push(extra);
-        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
-    }
-
-    #[test]
-    fn total_incoming_capacity_is_checked_without_overflow() {
-        let (mut state, mut actions) = fixture();
-        for (index, action) in actions.iter_mut().enumerate().take(2) {
-            state.containers[index] = Container::new(
-                Place::Person(index as u64 + 1),
-                u64::MAX,
-                vec![Lot {
-                    good: 1,
-                    quantity: u64::MAX,
-                    expires_at: None,
-                }],
-            )
-            .unwrap();
-            action.movements[0].quantity = u64::MAX;
-        }
-        *state.containers.last_mut().unwrap() =
-            Container::new(Place::Person(1000), u64::MAX, vec![]).unwrap();
-        let result = prepare(&state, 1, 17, &actions, true).unwrap().unwrap();
-        assert!(result.transactions.iter().any(|row| !row.accepted));
-    }
-}
+#[path = "../tests/support/fan_in.rs"]
+mod tests;

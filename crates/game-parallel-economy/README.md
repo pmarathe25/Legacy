@@ -16,6 +16,8 @@ People may attempt to take goods from another living person's custody. The targe
 
 The ignored `taking_world_benchmark` measures the complete boundary for `LEGACY_ATTEMPTS` attempts and twice as many people. Set `LEGACY_SHARED` for one target and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings.
 
+The ignored `concentrated_autonomous_delivery_benchmark` measures a full boundary with `LEGACY_PEOPLE` travelers giving to one recipient. Set `LEGACY_CAPACITY` below the population to exercise capacity contention and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings.
+
 People held in the same cell can provide direct medical care using medicine they carry, provided they are available and the caregiver chooses to act. A barrier blocks treatment across it even when an opening permits supplies to pass. Escape, self-treatment, requests, and giving compete with medical care for the person's action.
 
 People can independently attempt to handle a living local animal. The animal's own willingness and remembered affinity determine its response, and its configured signed reactions can change later behavior. Feeding takes precedence for an animal already selected for feeding, and handling excludes hunting that animal in the same boundary. Handling preserves the animal's identity and does not establish ownership or obedience.

@@ -162,6 +162,17 @@ fn prepare_rows(
         .revision
         .checked_add(1)
         .ok_or("lot revision overflow")?;
+    // A single shared destination cannot satisfy the disjoint-endpoint path.
+    // Detect it before locating and sorting every endpoint; another planner
+    // still performs all identity, capacity, and transaction checks.
+    let first_destination = action(0).1.to;
+    if action(1).1.to == first_destination
+        && (2..length)
+            .into_par_iter()
+            .all(|index| action(index).1.to == first_destination)
+    {
+        return Ok(None);
+    }
     #[cfg(feature = "profile")]
     let mut phase = game_diagnostics::span("physical.independent.locate");
     let people_start = state
