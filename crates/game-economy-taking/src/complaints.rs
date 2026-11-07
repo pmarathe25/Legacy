@@ -1,5 +1,5 @@
 //! Personal requests to consider a remembered or reported taking.
-use crate::{Outcome, Taking};
+use crate::{Outcome, Report, Taking};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -40,6 +40,17 @@ pub struct Complaint {
     pub decision: Decision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_at: Option<u64>,
+    /// The investigator's later received statement; this is not proof of truth.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<Answer>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Answer {
+    pub report: Report,
+    /// Whether the statement's details match the frozen account.
+    pub matches_account: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,11 +115,31 @@ impl Taking {
         pairs.par_sort_unstable();
         let mut preferences: Vec<_> = previous.complaint_preferences.par_iter().collect();
         preferences.par_sort_unstable_by_key(|row| row.person);
+        let reports = &self.reports;
         self.complaints = previous
             .complaints
             .par_iter()
             .cloned()
             .map(|mut complaint| {
+                if complaint.decision == Decision::Accepted
+                    && complaint.answer.is_none()
+                    && tick < complaint.expires_at
+                    && complaint.decided_at.is_some_and(|at| at < tick)
+                    && let Some(report) = reports.get(complaint.recipient).iter().find(|report| {
+                        report.speaker == complaint.witness
+                            && report.actor == complaint.account.actor
+                            && report.observed_at == complaint.account.observed_at
+                            && report.received_at == tick
+                    })
+                {
+                    complaint.answer = Some(Answer {
+                        matches_account: report.target == complaint.account.target
+                            && report.good == complaint.account.good
+                            && report.quantity == complaint.account.quantity
+                            && report.claimed_outcome == complaint.account.outcome,
+                        report: report.clone(),
+                    });
+                }
                 if complaint.decision != Decision::Pending {
                     return complaint;
                 }
@@ -183,6 +214,29 @@ pub(crate) fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>,
                     .is_none_or(|source| source != c.author && people.contains(&source))
                 && c.created_at <= now
                 && c.expires_at > c.created_at
+                && c.answer.as_ref().is_none_or(|answer| {
+                    let report = &answer.report;
+                    c.decision == Decision::Accepted
+                        && c.decided_at.is_some_and(|at| at < report.received_at)
+                        && report.received_at < c.expires_at
+                        && report.received_at <= now
+                        && report.recipient == c.recipient
+                        && report.speaker == c.witness
+                        && report.actor == c.account.actor
+                        && report.observed_at == c.account.observed_at
+                        && people.contains(&report.target)
+                        && report.target != report.actor
+                        && goods.contains(&report.good)
+                        && report.quantity > 0
+                        && report.source_speaker.is_none_or(|source| {
+                            source != report.speaker && people.contains(&source)
+                        })
+                        && answer.matches_account
+                            == (report.target == c.account.target
+                                && report.good == c.account.good
+                                && report.quantity == c.account.quantity
+                                && report.claimed_outcome == c.account.outcome)
+                })
                 && match c.decision {
                     Decision::Pending => c.decided_at.is_none() && c.expires_at > now,
                     _ => c

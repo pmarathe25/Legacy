@@ -1407,6 +1407,7 @@ impl Economy {
             expires_at,
             decision: TakingComplaintDecision::Pending,
             decided_at: None,
+            answer: None,
         });
         complaints.sort_unstable_by_key(|row| row.recipient);
         self.taking = Some(owner);
@@ -1414,7 +1415,7 @@ impl Economy {
         Ok(())
     }
     /// View only requests authored by or addressed to this person.
-    pub fn taking_inquiries(&self, person: u64) -> Vec<&TakingComplaint> {
+    pub fn taking_inquiries(&self, person: u64) -> Vec<TakingComplaint> {
         self.taking.as_ref().map_or_else(Vec::new, |owner| {
             owner
                 .complaints
@@ -1427,6 +1428,13 @@ impl Economy {
                                 TakingComplaintDecision::Accepted
                                     | TakingComplaintDecision::Declined
                             ))
+                })
+                .map(|row| {
+                    let mut visible = row.clone();
+                    if row.recipient != person {
+                        visible.answer = None;
+                    }
+                    visible
                 })
                 .collect()
         })
@@ -5517,10 +5525,12 @@ impl Economy {
             }
         }
         if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking)
-            && previous
-                .complaints
-                .par_iter()
-                .any(|row| row.decision == TakingComplaintDecision::Pending)
+            && previous.complaints.par_iter().any(|row| {
+                row.decision == TakingComplaintDecision::Pending
+                    || (row.decision == TakingComplaintDecision::Accepted
+                        && row.answer.is_none()
+                        && tick < row.expires_at)
+            })
         {
             let contacts: Vec<_> = dynamics
                 .as_ref()

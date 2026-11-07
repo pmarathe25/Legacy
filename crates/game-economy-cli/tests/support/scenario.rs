@@ -329,6 +329,71 @@ fn personal_inquiry_preserves_the_account_and_requires_contact_and_choice() {
 }
 
 #[test]
+fn accepted_inquiry_records_a_later_witness_statement_privately() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-testimony.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                Player::new(&mut world)
+                    .set_taking_attention(1, true)
+                    .unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                Player::new(&mut world)
+                    .request_taking_inquiry(2, 3, 1, 12)
+                    .unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                let accepted = Player::new(&mut world)
+                    .taking_inquiries()
+                    .unwrap()
+                    .remove(0);
+                assert_eq!(
+                    accepted.decision,
+                    game_economy::TakingComplaintDecision::Accepted
+                );
+                assert!(accepted.answer.is_none());
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for owner in [&mut world, &mut restored] {
+                    Player::new(owner)
+                        .set_taking_report(2, 1, Some(game_economy::TakingOutcome::Resisted))
+                        .unwrap();
+                    assert!(Player::new(owner).meet(2).unwrap());
+                }
+                let investigator = world.taking_inquiries(2).remove(0);
+                let answer = investigator
+                    .answer
+                    .expect("a later statement reaches the investigator");
+                assert_eq!(answer.report.speaker, 3);
+                assert_eq!(answer.report.observed_at, accepted.account.observed_at);
+                assert_eq!(
+                    answer.report.claimed_outcome,
+                    game_economy::TakingOutcome::Resisted
+                );
+                assert!(!answer.matches_account);
+                assert!(
+                    Player::new(&mut world).taking_inquiries().unwrap()[0]
+                        .answer
+                        .is_none()
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

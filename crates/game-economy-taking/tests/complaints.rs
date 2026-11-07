@@ -1,6 +1,62 @@
 use game_economy_taking::{
-    Complaint, ComplaintAccount, ComplaintDecision, ComplaintPreference, Outcome, Taking,
+    Complaint, ComplaintAccount, ComplaintDecision, ComplaintPreference, Outcome, Report,
+    ReportBelief, Taking,
 };
+
+#[test]
+fn accepted_request_records_only_a_later_matching_event_statement() {
+    let account = ComplaintAccount {
+        actor: 4,
+        target: 1,
+        good: 1,
+        quantity: 2,
+        observed_at: 2,
+        outcome: Outcome::Transferred,
+        source: None,
+    };
+    let mut previous = Taking {
+        complaints: vec![Complaint {
+            author: 1,
+            recipient: 2,
+            witness: 3,
+            account,
+            created_at: 3,
+            expires_at: 8,
+            decision: ComplaintDecision::Accepted,
+            decided_at: Some(4),
+            answer: None,
+        }]
+        .into(),
+        ..Default::default()
+    };
+    let statement = Report {
+        speaker: 3,
+        recipient: 2,
+        actor: 4,
+        target: 1,
+        good: 1,
+        quantity: 2,
+        observed_at: 2,
+        received_at: 5,
+        claimed_outcome: Outcome::Resisted,
+        belief: ReportBelief::Doubts,
+        source_speaker: None,
+    };
+    let mut next = previous.clone();
+    let mut wrong = statement.clone();
+    wrong.observed_at = 3;
+    next.reports = vec![wrong].into();
+    next.advance_complaints(&previous, &[(2, 3)], 5, &|_, _| 0);
+    assert!(next.complaints[0].answer.is_none());
+    previous = next;
+    let mut next = previous.clone();
+    next.reports = vec![statement.clone()].into();
+    next.advance_complaints(&previous, &[(2, 3)], 5, &|_, _| 0);
+    let answer = next.complaints[0].answer.as_ref().unwrap();
+    assert!(!answer.matches_account);
+    assert_eq!(answer.report, statement);
+    assert_eq!(answer.report.belief, ReportBelief::Doubts);
+}
 
 #[test]
 fn complaints_require_contact_and_personal_choice_and_expire() {
@@ -23,6 +79,7 @@ fn complaints_require_contact_and_personal_choice_and_expire() {
             expires_at: 6,
             decision: ComplaintDecision::Pending,
             decided_at: None,
+            answer: None,
         }]
         .into(),
         complaint_preferences: vec![ComplaintPreference {
@@ -97,6 +154,7 @@ fn many_independent_inquiry_requests_replay_across_workers() {
                 expires_at: 8,
                 decision: ComplaintDecision::Pending,
                 decided_at: None,
+                answer: None,
             }
         })
         .collect::<Vec<_>>();
@@ -146,4 +204,44 @@ fn many_independent_inquiry_requests_replay_across_workers() {
     );
     assert_eq!(one, run(4));
     assert_eq!(one, run(6));
+    let reports: Vec<_> = one
+        .complaints
+        .iter()
+        .map(|c| Report {
+            speaker: c.witness,
+            recipient: c.recipient,
+            actor: c.account.actor,
+            target: c.account.target,
+            good: c.account.good,
+            quantity: c.account.quantity,
+            observed_at: c.account.observed_at,
+            received_at: 4,
+            claimed_outcome: c.account.outcome,
+            belief: ReportBelief::Unassessed,
+            source_speaker: None,
+        })
+        .collect();
+    let answer = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = one.clone();
+                next.reports = reports.clone().into();
+                next.advance_complaints(&one, &[], 4, &|_, _| 0);
+                next
+            })
+    };
+    let answered = answer(1);
+    assert_eq!(
+        answered
+            .complaints
+            .iter()
+            .filter(|c| c.answer.is_some())
+            .count(),
+        count as usize / 2
+    );
+    assert_eq!(answered, answer(4));
+    assert_eq!(answered, answer(6));
 }

@@ -5,8 +5,8 @@ mod reactions;
 mod report_store;
 mod testimony;
 pub use complaints::{
-    Account as ComplaintAccount, Complaint, Decision as ComplaintDecision,
-    Preference as ComplaintPreference,
+    Account as ComplaintAccount, Answer as ComplaintAnswer, Complaint,
+    Decision as ComplaintDecision, Preference as ComplaintPreference,
 };
 use game_economy_person::{Person, travel::Colocation};
 use game_genetics::random;

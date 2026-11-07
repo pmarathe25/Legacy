@@ -1522,7 +1522,7 @@ impl<'a> Player<'a> {
     pub fn taking_reports(&self) -> Result<Vec<&game_economy::TakingReport>, String> {
         Ok(self.world.taking_reports(self.current()?))
     }
-    pub fn taking_inquiries(&self) -> Result<Vec<&game_economy::TakingComplaint>, String> {
+    pub fn taking_inquiries(&self) -> Result<Vec<game_economy::TakingComplaint>, String> {
         Ok(self.world.taking_inquiries(self.current()?))
     }
     pub fn request_taking_inquiry(
