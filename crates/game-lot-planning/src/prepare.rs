@@ -42,6 +42,8 @@ pub fn prepare(
     batch: Option<Batch<'_>>,
     advance: bool,
 ) -> Result<Draft, String> {
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("physical.general.setup");
     let next = if advance {
         state.tick.checked_add(1).ok_or("lot tick overflow")?
     } else {
@@ -218,6 +220,11 @@ pub fn prepare(
         })
         .collect();
     spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.general.source_arbitration");
+    }
     let source_ok: Vec<_> = (0..claims.len())
         .into_par_iter()
         .map(|_| AtomicBool::new(false))
@@ -277,6 +284,11 @@ pub fn prepare(
         .into_par_iter()
         .map(|_| AtomicBool::new(false))
         .collect();
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.general.destination_arbitration");
+    }
     let mut destinations: Vec<_> = claims
         .par_iter()
         .enumerate()
@@ -360,6 +372,11 @@ pub fn prepare(
         })
         .collect();
     creation_outcomes.par_sort_unstable_by_key(|row| row.0);
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.general.cohorts");
+    }
     let groups: Vec<_> = claims
         .par_chunk_by(|a, b| (a.source, a.movement.good) == (b.source, b.movement.good))
         .map(|group| {
@@ -464,6 +481,11 @@ pub fn prepare(
             (group[0].source, group[0].movement.good, total, pieces)
         })
         .collect();
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.general.receipts_and_incoming");
+    }
     let mut debits: Vec<_> = groups
         .par_iter()
         .filter(|row| row.2 > 0)
@@ -533,6 +555,11 @@ pub fn prepare(
     // Only touched or expiring custody needs materializing. Searching every
     // unchanged container for incoming and outgoing lots scales with the
     // entire population even when activity is sparse.
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.general.materialize");
+    }
     let mut touched: Vec<_> = debits
         .par_iter()
         .map(|row| row.0)
@@ -662,6 +689,8 @@ pub fn prepare(
         .collect();
     changes.par_sort_unstable_by_key(|row| row.0);
     outcomes.sort_by_id();
+    #[cfg(feature = "profile")]
+    drop(phase);
     Ok(Draft {
         base_instance: instance,
         base_tick: state.tick,
