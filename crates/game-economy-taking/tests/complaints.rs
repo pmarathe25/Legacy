@@ -59,6 +59,108 @@ fn accepted_request_records_only_a_later_matching_event_statement() {
 }
 
 #[test]
+fn inquiry_assessments_follow_individual_subjective_preferences() {
+    use game_economy_taking::AssessmentPreference;
+    let account = ComplaintAccount {
+        actor: 4,
+        target: 1,
+        good: 1,
+        quantity: 2,
+        observed_at: 2,
+        outcome: Outcome::Transferred,
+        source: None,
+    };
+    let run = |workers, preference: Option<AssessmentPreference>, belief, claimed_outcome| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let previous = Taking {
+                    complaints: vec![Complaint {
+                        author: 1,
+                        recipient: 2,
+                        witness: 3,
+                        account,
+                        created_at: 3,
+                        expires_at: 8,
+                        decision: ComplaintDecision::Accepted,
+                        decided_at: Some(4),
+                        answer: None,
+                    }]
+                    .into(),
+                    assessment_preferences: preference.into_iter().collect::<Vec<_>>().into(),
+                    ..Default::default()
+                };
+                let mut next = previous.clone();
+                next.reports = vec![Report {
+                    speaker: 3,
+                    recipient: 2,
+                    actor: 4,
+                    target: 1,
+                    good: 1,
+                    quantity: 2,
+                    observed_at: 2,
+                    received_at: 5,
+                    claimed_outcome,
+                    belief,
+                    source_speaker: None,
+                }]
+                .into();
+                next.advance_complaints(&previous, &[(2, 3)], 5, &|_, _| 0);
+                next.complaints[0].answer.clone().unwrap()
+            })
+    };
+    let preference = AssessmentPreference {
+        person: 2,
+        matching_believed: Some(-9),
+        different_doubted: Some(7),
+        different_unassessed: Some(0),
+        ..Default::default()
+    };
+    assert_eq!(
+        run(
+            1,
+            Some(preference),
+            ReportBelief::Believes,
+            Outcome::Transferred
+        )
+        .assessment,
+        Some(-9)
+    );
+    let answer = run(1, Some(preference), ReportBelief::Doubts, Outcome::Resisted);
+    assert_eq!(answer.assessment, Some(7));
+    assert_eq!(
+        answer,
+        run(4, Some(preference), ReportBelief::Doubts, Outcome::Resisted)
+    );
+    assert_eq!(
+        run(
+            1,
+            Some(preference),
+            ReportBelief::Unassessed,
+            Outcome::Resisted
+        )
+        .assessment,
+        Some(0)
+    );
+    assert_eq!(
+        run(
+            1,
+            Some(preference),
+            ReportBelief::Believes,
+            Outcome::Resisted
+        )
+        .assessment,
+        None
+    );
+    assert_eq!(
+        run(1, None, ReportBelief::Doubts, Outcome::Resisted).assessment,
+        None
+    );
+}
+
+#[test]
 fn complaints_require_contact_and_personal_choice_and_expire() {
     let account = ComplaintAccount {
         actor: 4,
@@ -275,6 +377,40 @@ fn many_independent_inquiry_requests_replay_across_workers() {
     );
     assert_eq!(answered, answer(4));
     assert_eq!(answered, answer(6));
+    let mut judging = one.clone();
+    judging.assessment_preferences = one
+        .complaints
+        .iter()
+        .rev()
+        .map(|c| game_economy_taking::AssessmentPreference {
+            person: c.recipient,
+            matching_unassessed: Some((c.recipient % 7) as i32 - 3),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let judge = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = judging.clone();
+                next.reports = reports.clone().into();
+                next.advance_complaints(&judging, &[], 4, &|_, _| 0);
+                next
+            })
+    };
+    let judged = judge(1);
+    assert!(
+        judged
+            .complaints
+            .iter()
+            .filter_map(|c| c.answer.as_ref().map(|a| (c, a)))
+            .all(|(c, a)| a.assessment == Some((c.recipient % 7) as i32 - 3))
+    );
+    assert_eq!(judged, judge(4));
+    assert_eq!(judged, judge(6));
     let mut with_history = one.clone();
     with_history.witnesses = one
         .complaints

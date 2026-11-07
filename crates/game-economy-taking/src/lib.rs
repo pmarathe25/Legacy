@@ -5,7 +5,7 @@ mod reactions;
 mod report_store;
 mod testimony;
 pub use complaints::{
-    Account as ComplaintAccount, Answer as ComplaintAnswer, Complaint,
+    Account as ComplaintAccount, Answer as ComplaintAnswer, AssessmentPreference, Complaint,
     Decision as ComplaintDecision, Preference as ComplaintPreference,
 };
 use game_economy_person::{Person, travel::Colocation};
@@ -89,6 +89,9 @@ pub struct Taking {
     pub complaints: Arc<Vec<Complaint>>,
     #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
     pub complaint_preferences: Arc<Vec<ComplaintPreference>>,
+    /// Optional private interpretations for later received testimony.
+    #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
+    pub assessment_preferences: Arc<Vec<AssessmentPreference>>,
     /// People who personally choose to seek contacts for their own inquiries.
     #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
     pub inquiry_pursuit: Arc<Vec<u64>>,
@@ -126,6 +129,9 @@ impl Taking {
     }
     pub fn complaint_preferences_mut(&mut self) -> &mut Vec<ComplaintPreference> {
         detach(&mut self.complaint_preferences)
+    }
+    pub fn assessment_preferences_mut(&mut self) -> &mut Vec<AssessmentPreference> {
+        detach(&mut self.assessment_preferences)
     }
     pub fn inquiry_pursuit_mut(&mut self) -> &mut Vec<u64> {
         detach(&mut self.inquiry_pursuit)

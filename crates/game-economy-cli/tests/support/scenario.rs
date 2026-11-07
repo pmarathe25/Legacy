@@ -384,6 +384,7 @@ fn accepted_inquiry_records_a_later_witness_statement_privately() {
                     game_economy::TakingOutcome::Resisted
                 );
                 assert!(!answer.matches_account);
+                assert_eq!(answer.assessment, Some(-7));
                 assert!(
                     Player::new(&mut world).taking_inquiries().unwrap()[0]
                         .answer

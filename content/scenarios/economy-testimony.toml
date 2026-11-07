@@ -134,3 +134,8 @@ stance = "doubt"
 [[taking.complaint_preferences]]
 person = 2
 willing = true
+
+# This person privately interprets an unassessed conflicting statement.
+[[taking.assessment_preferences]]
+person = 2
+different_unassessed = -7

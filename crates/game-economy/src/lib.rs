@@ -36,13 +36,14 @@ pub use game_economy_person::travel::{Colocation, Departure, Journey, Route, Tra
 pub use game_economy_promises::{Decision as PromiseDecision, Proposal as PromiseProposal};
 pub use game_economy_skills::Skills;
 pub use game_economy_taking::{
-    Complaint as TakingComplaint, ComplaintDecision as TakingComplaintDecision,
-    ComplaintPreference as TakingComplaintPreference, Event as TakingEvent, Intent as TakingIntent,
-    Interpretation as TakingInterpretation, Outcome as TakingOutcome, Policy as TakingPolicy,
-    Reaction as TakingReaction, Reception as TakingReception, Report as TakingReport,
-    ReportBelief as TakingReportBelief, ReportDetails as TakingReportDetails,
-    ReportPolicy as TakingReportPolicy, ReportSource as TakingReportSource,
-    Response as TakingResponse, Stance as TakingReportStance, Taking, Witness as TakingWitness,
+    AssessmentPreference as TakingAssessmentPreference, Complaint as TakingComplaint,
+    ComplaintDecision as TakingComplaintDecision, ComplaintPreference as TakingComplaintPreference,
+    Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
+    Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
+    Reception as TakingReception, Report as TakingReport, ReportBelief as TakingReportBelief,
+    ReportDetails as TakingReportDetails, ReportPolicy as TakingReportPolicy,
+    ReportSource as TakingReportSource, Response as TakingResponse, Stance as TakingReportStance,
+    Taking, Witness as TakingWitness,
 };
 pub use game_economy_work::care::DependentCare;
 pub use game_economy_work::sites::{
@@ -1460,6 +1461,36 @@ impl Economy {
             .checked_add(1)
             .ok_or("economic generation overflow")?;
         let preferences = owner.complaint_preferences_mut();
+        preferences.retain(|row| row.person != person);
+        if let Some(preference) = preference {
+            preferences.push(preference);
+        }
+        preferences.sort_unstable_by_key(|row| row.person);
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Set this person's private interpretation of future inquiry statements.
+    pub fn set_taking_assessment_preference(
+        &mut self,
+        person: u64,
+        preference: Option<TakingAssessmentPreference>,
+    ) -> Result<(), String> {
+        if preference.is_some_and(|p| p.person != person)
+            || self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("invalid assessment preference".into());
+        }
+        let mut owner = self.taking.clone().ok_or("taking is disabled")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let preferences = owner.assessment_preferences_mut();
         preferences.retain(|row| row.person != person);
         if let Some(preference) = preference {
             preferences.push(preference);

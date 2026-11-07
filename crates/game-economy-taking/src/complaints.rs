@@ -51,6 +51,42 @@ pub struct Answer {
     pub report: Report,
     /// Whether the statement's details match the frozen account.
     pub matches_account: bool,
+    /// The recipient's private interpretation, not a finding of fact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<i32>,
+}
+
+/// A person's own interpretation of a statement, including the choice to
+/// withhold judgment. Scores have no prescribed moral meaning or consequences.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AssessmentPreference {
+    pub person: u64,
+    #[serde(default)]
+    pub matching_believed: Option<i32>,
+    #[serde(default)]
+    pub matching_doubted: Option<i32>,
+    #[serde(default)]
+    pub matching_unassessed: Option<i32>,
+    #[serde(default)]
+    pub different_believed: Option<i32>,
+    #[serde(default)]
+    pub different_doubted: Option<i32>,
+    #[serde(default)]
+    pub different_unassessed: Option<i32>,
+}
+
+impl AssessmentPreference {
+    fn assess(self, matches: bool, belief: crate::ReportBelief) -> Option<i32> {
+        match (matches, belief) {
+            (true, crate::ReportBelief::Believes) => self.matching_believed,
+            (true, crate::ReportBelief::Doubts) => self.matching_doubted,
+            (true, crate::ReportBelief::Unassessed) => self.matching_unassessed,
+            (false, crate::ReportBelief::Believes) => self.different_believed,
+            (false, crate::ReportBelief::Doubts) => self.different_doubted,
+            (false, crate::ReportBelief::Unassessed) => self.different_unassessed,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -171,6 +207,22 @@ impl Taking {
         let preferences = ordered_preferences
             .as_deref()
             .unwrap_or(previous.complaint_preferences.as_slice());
+        let ordered_assessments = previous
+            .assessment_preferences
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+            .then(|| {
+                let mut rows: Vec<_> = previous
+                    .assessment_preferences
+                    .par_iter()
+                    .copied()
+                    .collect();
+                rows.par_sort_unstable_by_key(|row| row.person);
+                rows
+            });
+        let assessments = ordered_assessments
+            .as_deref()
+            .unwrap_or(previous.assessment_preferences.as_slice());
         let reports = &self.reports;
         let mut updates: Vec<_> = previous
             .complaints
@@ -189,11 +241,17 @@ impl Taking {
                     })
                 {
                     let mut next = complaint.clone();
+                    let matches_account = report.target == complaint.account.target
+                        && report.good == complaint.account.good
+                        && report.quantity == complaint.account.quantity
+                        && report.claimed_outcome == complaint.account.outcome;
+                    let assessment = assessments
+                        .binary_search_by_key(&complaint.recipient, |p| p.person)
+                        .ok()
+                        .and_then(|i| assessments[i].assess(matches_account, report.belief));
                     next.answer = Some(Answer {
-                        matches_account: report.target == complaint.account.target
-                            && report.good == complaint.account.good
-                            && report.quantity == complaint.account.quantity
-                            && report.claimed_outcome == complaint.account.outcome,
+                        matches_account,
+                        assessment,
                         report: report.clone(),
                     });
                     return Some((index, next));
@@ -273,9 +331,17 @@ pub(crate) fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>,
     preferences.par_sort_unstable();
     let mut pursuing: Vec<_> = owner.inquiry_pursuit.par_iter().copied().collect();
     pursuing.par_sort_unstable();
+    let mut assessments: Vec<_> = owner
+        .assessment_preferences
+        .par_iter()
+        .map(|p| p.person)
+        .collect();
+    assessments.par_sort_unstable();
     !recipients.par_windows(2).any(|p| p[0] == p[1])
         && !preferences.par_windows(2).any(|p| p[0] == p[1])
         && !pursuing.par_windows(2).any(|p| p[0] == p[1])
+        && !assessments.par_windows(2).any(|p| p[0] == p[1])
+        && assessments.par_iter().all(|id| people.contains(id))
         && pursuing.par_iter().all(|id| people.contains(id))
         && owner
             .complaint_preferences

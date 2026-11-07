@@ -21,3 +21,14 @@ Retained reports use immutable recipient-keyed pages, sharing unchanged pages ac
 The owner hands simple taking actions to the physical host as flat movements. Independent batches can be staged without per-action movement allocations; mixed or contested physical work uses the general transaction arbiter.
 
 A listener can set `matching_toward_speaker` and `different_toward_speaker` to signed reactions when a received account refers to the same event in that listener's own direct memory. An absent memory or a different observation time gives no comparison reaction. Each person chooses these responses independently; a difference does not establish intent or force belief.
+Inquiry recipients can optionally interpret a later witness statement using their
+own `assessment_preferences`. Separate optional signed scores apply to matching
+or different statements which the recipient believes, doubts, or leaves
+unassessed. An absent score means no judgment; zero is an explicit neutral
+judgment. This private assessment is recorded with the received answer and
+does not establish truth, impose a duty, change feelings, or cause enforcement.
+It reflects the preference and belief at the time the statement is received.
+The player can set future interpretations with `taking-assessment` followed by
+six scores (matching believed, doubted, unassessed, then different believed,
+doubted, unassessed), using `none` to withhold a judgment, or `clear` to remove
+the preference.

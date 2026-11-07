@@ -1529,6 +1529,19 @@ impl<'a> Player<'a> {
         self.world
             .set_taking_inquiry_pursuit(self.current()?, enabled)
     }
+    pub fn set_taking_assessment_preference(
+        &mut self,
+        preference: Option<game_economy::TakingAssessmentPreference>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        self.world.set_taking_assessment_preference(
+            person,
+            preference.map(|mut p| {
+                p.person = person;
+                p
+            }),
+        )
+    }
     pub fn request_taking_inquiry(
         &mut self,
         recipient: u64,
