@@ -1,7 +1,9 @@
 //! Physical goods cohorts and stable custody identities.
 use serde::{Deserialize, Serialize};
 mod lot_list;
+mod outcome_batch;
 pub use lot_list::LotList;
+pub use outcome_batch::{OutcomeBatch, OutcomeChunk, OutcomeHeader, OutcomeRef};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "id", rename_all = "snake_case")]

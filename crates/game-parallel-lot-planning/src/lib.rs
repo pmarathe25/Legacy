@@ -1,7 +1,7 @@
 //! Snapshot planning for physical custody.
 mod prepare;
 pub use game_parallel_lot_allocation::prefixes;
-use game_parallel_lot_model::{Container, Outcome, Spoilage, TransactionOutcome};
+use game_parallel_lot_model::{Container, OutcomeBatch, Spoilage, TransactionOutcome};
 pub use prepare::prepare;
 use std::ops::Range;
 
@@ -21,7 +21,7 @@ pub struct Draft {
     pub base_revision: u64,
     pub next_tick: u64,
     pub changes: Vec<(usize, Container)>,
-    pub outcomes: Vec<Outcome>,
+    pub outcomes: OutcomeBatch,
     pub spoiled: Vec<Spoilage>,
     pub creations: Vec<(u64, bool)>,
     pub transactions: Vec<TransactionOutcome>,

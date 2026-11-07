@@ -1,12 +1,16 @@
 //! Dated physical production; callers own character decisions and observation.
 mod advance;
-pub use advance::{AdvanceDraft, Events, ExternalReceipt};
+mod receipts;
+pub use advance::{AdvanceDraft, Events};
 use game_parallel_lot_content::Catalog;
 pub use game_parallel_lot_content::Growth;
 pub use game_parallel_lot_work::{Phase, Snapshot, Work};
 use game_parallel_lots::{Outcome, Place, Spoilage, Store, Transaction, TransactionOutcome};
 use game_parallel_production_model::{Good, JobPhase, Recipe, Start};
 use rayon::prelude::*;
+pub use receipts::{
+    ExternalReceipt, ExternalReceiptBatch, ExternalReceiptHeader, ExternalReceiptRef,
+};
 use std::collections::HashSet;
 
 pub struct PhysicalOutcomes {

@@ -662,7 +662,7 @@ pub fn prepare(
         base_revision: state.revision,
         next_tick: next,
         changes,
-        outcomes,
+        outcomes: game_parallel_lot_model::OutcomeBatch::from_outcomes(outcomes),
         spoiled,
         creations: creation_outcomes,
         transactions: transaction_outcomes,

@@ -1,9 +1,9 @@
 //! Validate physical evidence against the exact selected action.
-use game_parallel_lot_runtime::{Events, ExternalReceipt};
+use game_parallel_lot_runtime::{Events, ExternalReceiptRef};
 use game_parallel_lots::Transaction;
 use rayon::prelude::*;
 pub struct Index<'a> {
-    rows: Vec<&'a ExternalReceipt>,
+    rows: Vec<ExternalReceiptRef<'a>>,
 }
 impl<'a> Index<'a> {
     pub fn new(events: &'a Events) -> Result<Self, String> {

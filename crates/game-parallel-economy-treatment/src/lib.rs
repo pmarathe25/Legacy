@@ -365,7 +365,7 @@ mod tests {
                 id: 1,
                 accepted: true,
             }],
-            physical_movements: vec![],
+            physical_movements: vec![].into(),
         };
         apply(Some(&mut disease), &plan, &events);
         assert_eq!(disease.cases.len(), 1);

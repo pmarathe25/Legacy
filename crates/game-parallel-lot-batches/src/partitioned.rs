@@ -189,8 +189,8 @@ fn merge(
     };
     changes.par_sort_unstable_by_key(|row| row.0);
     general.changes = changes;
-    general.outcomes.par_extend(fast.outcomes);
-    general.outcomes.par_sort_unstable_by_key(|row| row.id);
+    general.outcomes.append(fast.outcomes);
+    general.outcomes.sort_by_id();
     general.transactions.par_extend(fast.transactions);
     general.transactions.par_sort_unstable_by_key(|row| row.id);
     general

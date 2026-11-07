@@ -32,6 +32,12 @@ impl LotList {
             Storage::Shared { arena, range } => &arena[range.clone()],
         }
     }
+    pub fn into_vec(self) -> Vec<Lot> {
+        match self.0 {
+            Storage::Owned(lots) => lots,
+            Storage::Shared { arena, range } => arena[range].to_vec(),
+        }
+    }
 }
 impl Default for LotList {
     fn default() -> Self {

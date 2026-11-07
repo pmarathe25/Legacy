@@ -1,17 +1,9 @@
 //! Progress, physical completion, loss and returns at one shared boundary.
-use super::{Growth, Phase, Runtime, Work};
-use game_parallel_lots::{
-    Movement, Outcome, Place, SimpleTransfer, Spoilage, Transaction, TransactionOutcome,
-};
+use super::{ExternalReceiptBatch, ExternalReceiptHeader, Growth, Phase, Runtime, Work};
+use game_parallel_lots::{Place, SimpleTransfer, Spoilage, Transaction, TransactionOutcome};
 use game_parallel_production_model::{JobPhase, Start};
 use rayon::prelude::*;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct ExternalReceipt {
-    pub action: u64,
-    pub request: Movement,
-    pub movement: Outcome,
-}
 #[derive(Debug, PartialEq, Eq)]
 pub struct Events {
     pub tick: u64,
@@ -26,7 +18,7 @@ pub struct Events {
     pub empty_returns: Vec<u64>,
     pub spoiled: Vec<Spoilage>,
     pub physical_actions: Vec<TransactionOutcome>,
-    pub physical_movements: Vec<ExternalReceipt>,
+    pub physical_movements: ExternalReceiptBatch,
 }
 pub struct AdvanceDraft {
     epoch: u64,
@@ -146,8 +138,9 @@ impl Runtime {
         if keys.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
             keys.par_sort_unstable_by_key(|row| row.0);
         }
-        let (outcomes, spoiled) = custody.take_receipts();
-        let mut physical_movements: Vec<ExternalReceipt> = outcomes
+        let (outcomes, spoiled) = custody.take_outcome_batch();
+        let (headers, arenas) = outcomes.into_parts();
+        let headers: Vec<ExternalReceiptHeader> = headers
             .into_par_iter()
             .chunks(2048)
             .flat_map_iter(|chunk| {
@@ -160,7 +153,7 @@ impl Runtime {
                     let &(_, action, request) =
                         keys.get(cursor).filter(|row| row.0 == movement.id)?;
                     cursor += 1;
-                    Some(ExternalReceipt {
+                    Some(ExternalReceiptHeader {
                         action,
                         request,
                         movement,
@@ -168,12 +161,8 @@ impl Runtime {
                 })
             })
             .collect();
-        if physical_movements
-            .par_windows(2)
-            .any(|pair| pair[0].action > pair[1].action)
-        {
-            physical_movements.par_sort_unstable_by_key(|row| row.action);
-        }
+        let mut physical_movements = ExternalReceiptBatch::from_parts(headers, arenas);
+        physical_movements.sort_by_action();
         Ok(Some(AdvanceDraft {
             epoch: self.epoch,
             custody,
@@ -251,19 +240,21 @@ impl Runtime {
                 accepted: row.accepted,
             })
             .collect();
-        let (outcomes, spoiled) = custody.take_receipts();
-        let physical_movements = outcomes
+        let (outcomes, spoiled) = custody.take_outcome_batch();
+        let (headers, arenas) = outcomes.into_parts();
+        let headers = headers
             .into_par_iter()
             .map(|mut movement| {
                 let original = ordered[(movement.id - 1) as usize];
                 movement.id = original.movement.id;
-                ExternalReceipt {
+                ExternalReceiptHeader {
                     action: original.action,
                     request: original.movement,
                     movement,
                 }
             })
             .collect();
+        let physical_movements = ExternalReceiptBatch::from_parts(headers, arenas);
         Ok(Some(AdvanceDraft {
             epoch: self.epoch,
             custody,
@@ -670,9 +661,10 @@ impl Runtime {
             drop(finalize_phase);
             finalize_phase = game_diagnostics::span("physical.finalize.receipts");
         }
-        let (outcomes, spoiled) = draft.take_receipts();
-        let physical_movements = if let Some(first) = direct_start {
-            outcomes
+        let (outcomes, spoiled) = draft.take_outcome_batch();
+        let (headers, arenas) = outcomes.into_parts();
+        let headers = if let Some(first) = direct_start {
+            headers
                 .into_par_iter()
                 .filter_map(|mut movement| {
                     let index = movement
@@ -682,7 +674,7 @@ impl Runtime {
                     let action = direct_external.get(index)?;
                     let request = action.movements[0];
                     movement.id = request.id;
-                    Some(ExternalReceipt {
+                    Some(ExternalReceiptHeader {
                         action: action.id,
                         request,
                         movement,
@@ -690,7 +682,7 @@ impl Runtime {
                 })
                 .collect()
         } else {
-            outcomes
+            headers
                 .into_par_iter()
                 .chunks(2048)
                 .flat_map_iter(|chunk| {
@@ -704,7 +696,7 @@ impl Runtime {
                             keys.get(cursor).filter(|row| row.0 == movement.id)?;
                         cursor += 1;
                         movement.id = request.id;
-                        Some(ExternalReceipt {
+                        Some(ExternalReceiptHeader {
                             action,
                             request,
                             movement,
@@ -713,6 +705,7 @@ impl Runtime {
                 })
                 .collect()
         };
+        let physical_movements = ExternalReceiptBatch::from_parts(headers, arenas);
         #[cfg(feature = "profile")]
         drop(finalize_phase);
         let events = Events {

@@ -3,8 +3,8 @@ mod compose;
 mod view;
 pub use compose::{Composed, compose};
 pub use game_parallel_lot_model::{
-    Container, Creation, Lot, LotList, Movement, Outcome, Place, SimpleTransfer, Spoilage, State,
-    Transaction, TransactionOutcome, deadline,
+    Container, Creation, Lot, LotList, Movement, Outcome, OutcomeBatch, OutcomeHeader, OutcomeRef,
+    Place, SimpleTransfer, Spoilage, State, Transaction, TransactionOutcome, deadline,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -71,8 +71,12 @@ pub struct Draft {
     retire: Vec<Place>,
 }
 impl Draft {
-    pub fn outcomes(&self) -> &[Outcome] {
-        &self.inner.outcomes
+    pub fn outcomes(&self) -> Vec<Outcome> {
+        self.inner
+            .outcomes
+            .par_iter()
+            .map(OutcomeRef::to_owned)
+            .collect()
     }
     pub fn spoiled(&self) -> &[Spoilage] {
         &self.inner.spoiled
@@ -80,6 +84,13 @@ impl Draft {
     /// Move receipt data to a detached owner. The draft still commits the same
     /// custody changes, but its eventual commit returns no drained receipts.
     pub fn take_receipts(&mut self) -> (Vec<Outcome>, Vec<Spoilage>) {
+        (
+            std::mem::take(&mut self.inner.outcomes).into_owned(),
+            std::mem::take(&mut self.inner.spoiled),
+        )
+    }
+    /// Move the packed receipts without materializing individually owned lots.
+    pub fn take_outcome_batch(&mut self) -> (OutcomeBatch, Vec<Spoilage>) {
         (
             std::mem::take(&mut self.inner.outcomes),
             std::mem::take(&mut self.inner.spoiled),
@@ -450,7 +461,7 @@ impl Store {
         }
         self.state.tick = draft.next_tick;
         self.state.revision = revision;
-        Ok((draft.outcomes, draft.spoiled))
+        Ok((draft.outcomes.into_owned(), draft.spoiled))
     }
 }
 

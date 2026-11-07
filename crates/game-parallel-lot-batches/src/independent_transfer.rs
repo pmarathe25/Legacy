@@ -1,6 +1,6 @@
 //! Disjoint single-leg transactions can resolve without shared arbitration.
 use game_parallel_lot_model::{
-    Container, Lot, LotList, Movement, Outcome, Place, SimpleTransfer, Spoilage, State,
+    Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State,
     Transaction, TransactionOutcome, key,
 };
 use game_parallel_lot_planning::Draft;
@@ -345,23 +345,12 @@ fn prepare_rows(
                     accepted,
                 });
             }
-            let arena: Option<std::sync::Arc<[Lot]>> = (!lots.is_empty()).then(|| lots.into());
-            let outcomes = headers
-                .into_iter()
-                .map(|(id, accepted, range)| Outcome {
-                    id,
-                    accepted,
-                    lots: if range.is_empty() {
-                        LotList::default()
-                    } else {
-                        LotList::shared(
-                            arena.as_ref().expect("nonempty receipt arena").clone(),
-                            range,
-                        )
-                    },
-                })
-                .collect::<Vec<_>>();
-            (outcomes, transactions, sources, destinations)
+            (
+                OutcomeChunk { headers, lots },
+                transactions,
+                sources,
+                destinations,
+            )
         })
         .collect();
     #[cfg(feature = "profile")]
@@ -381,10 +370,10 @@ fn prepare_rows(
         .unzip();
     let (source_parts, destination_parts): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
     let (mut outcomes, (mut transaction_outcomes, (mut sources, mut destinations))): (
-        Vec<_>,
+        OutcomeBatch,
         (Vec<_>, (Vec<_>, Vec<_>)),
     ) = rayon::join(
-        || outcome_parts.into_par_iter().flatten().collect(),
+        || OutcomeBatch::from_chunks(outcome_parts),
         || {
             rayon::join(
                 || transaction_parts.into_par_iter().flatten().collect(),
@@ -441,9 +430,7 @@ fn prepare_rows(
     if !already_ordered {
         changes.par_sort_unstable_by_key(|row| row.0);
     }
-    if outcomes.par_windows(2).any(|p| p[0].id > p[1].id) {
-        outcomes.par_sort_unstable_by_key(|row| row.id);
-    }
+    outcomes.sort_by_id();
     if transaction_outcomes
         .par_windows(2)
         .any(|p| p[0].id > p[1].id)

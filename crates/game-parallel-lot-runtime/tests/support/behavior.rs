@@ -726,13 +726,8 @@ fn external_taking_and_job_completion_compete_for_the_same_snapshot() {
                 assert_eq!(events.physical_actions.len(), 1);
                 assert_eq!(events.physical_actions[0].id, 31);
                 assert_eq!(events.physical_movements.len(), 1);
-                assert_eq!(
-                    (
-                        events.physical_movements[0].action,
-                        events.physical_movements[0].movement.id
-                    ),
-                    (31, 97)
-                );
+                let receipt = events.physical_movements.iter().next().unwrap();
+                assert_eq!((receipt.action, receipt.movement.id), (31, 97));
                 assert_ne!(
                     events.physical_actions[0].accepted,
                     !events.finished.is_empty()
@@ -964,6 +959,75 @@ fn flat_transfers_match_general_runtime_and_rollback() {
 }
 
 #[test]
+fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
+    use game_parallel_lots::{Movement, SimpleTransfer};
+    let mut snapshot = runtime().snapshot();
+    let mut containers = Vec::new();
+    let mut transfers = Vec::new();
+    for id in 1..=128 {
+        containers.push(
+            Container::new(
+                Place::Person(id),
+                10,
+                vec![
+                    Lot {
+                        good: 1,
+                        quantity: 1,
+                        expires_at: Some(2),
+                    },
+                    Lot {
+                        good: 1,
+                        quantity: 2,
+                        expires_at: Some(4),
+                    },
+                ],
+            )
+            .unwrap(),
+        );
+        containers.push(Container::new(Place::Person(id + 1000), 10, vec![]).unwrap());
+        transfers.push(SimpleTransfer {
+            action: id,
+            movement: Movement {
+                id,
+                from: Place::Person(id),
+                to: Some(Place::Person(id + 1000)),
+                good: 1,
+                quantity: 2,
+            },
+        });
+    }
+    containers.sort_unstable_by_key(|row| row.place);
+    snapshot.custody.containers = containers;
+    let events = {
+        let mut runtime = Runtime::compile(snapshot).unwrap();
+        let draft = runtime.prepare_flat_transfers(&transfers).unwrap().unwrap();
+        runtime.commit_advance(draft).unwrap()
+    };
+    assert_eq!(events.physical_movements.len(), 128);
+    for receipt in &events.physical_movements {
+        assert!(receipt.movement.accepted);
+        assert_eq!(
+            receipt.movement.lots,
+            &[
+                Lot {
+                    good: 1,
+                    quantity: 1,
+                    expires_at: Some(2)
+                },
+                Lot {
+                    good: 1,
+                    quantity: 1,
+                    expires_at: Some(4)
+                },
+            ]
+        );
+    }
+    let owned = events.physical_movements.into_owned();
+    assert_eq!(owned.len(), 128);
+    assert_eq!(owned[0].movement.lots.as_slice()[0].expires_at, Some(2));
+}
+
+#[test]
 fn ordered_single_leg_receipts_match_general_merge_with_other_work() {
     use game_parallel_lots::Movement;
     let actions: Vec<_> = (1..=2300)
@@ -1051,7 +1115,17 @@ fn detached_generation_rolls_back_and_abandonment_invalidates_it() {
     };
     let draft = runtime.prepare_advance(&[(1, 1)], &[action], 1).unwrap();
     assert!(draft.events().physical_actions[0].accepted);
-    assert_eq!(draft.events().physical_movements[0].movement.id, 12);
+    assert_eq!(
+        draft
+            .events()
+            .physical_movements
+            .iter()
+            .next()
+            .unwrap()
+            .movement
+            .id,
+        12
+    );
     assert_eq!(runtime.snapshot(), before);
     runtime.abandon(1, 1).unwrap();
     let abandoned = runtime.snapshot();

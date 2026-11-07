@@ -120,7 +120,7 @@ mod tests {
                     },
                 }
             })
-            .collect();
+            .collect::<Vec<_>>();
         let events = Events {
             tick: 1,
             started: vec![],
@@ -134,19 +134,21 @@ mod tests {
             empty_returns: vec![],
             spoiled: vec![],
             physical_actions: vec![],
-            physical_movements,
+            physical_movements: physical_movements.into(),
         };
         (events, people)
     }
     #[test]
     fn concentrated_contacts_preserve_all_actual_pairs_and_ignore_failed_transfers() {
         let (mut events, people) = workload(4096);
-        let failed = events.physical_movements.last_mut().unwrap();
+        let mut receipts = std::mem::take(&mut events.physical_movements).into_owned();
+        let failed = receipts.last_mut().unwrap();
         failed.movement.accepted = false;
         let failed_person = match failed.request.to {
             Some(Place::Person(id)) => id,
             _ => unreachable!(),
         };
+        events.physical_movements = receipts.into();
         let run = |workers| {
             rayon::ThreadPoolBuilder::new()
                 .num_threads(workers)
