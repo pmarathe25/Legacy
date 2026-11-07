@@ -91,6 +91,7 @@ fn main() {
                     a,
                     b: a + 1,
                     pressured: None,
+                    also_pressured: None,
                 })
                 .collect();
             let filter = opinions.as_ref().and_then(Opinions::report_filter);
@@ -112,6 +113,7 @@ fn main() {
                     a,
                     b: a + 1,
                     pressured: None,
+                    also_pressured: None,
                 })
                 .collect();
             let draft =

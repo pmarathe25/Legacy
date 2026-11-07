@@ -163,7 +163,11 @@ pub fn advance(
         social
             .events
             .par_iter()
-            .filter_map(|event| event.pressured.map(|person| (event.a, event.b, person)))
+            .flat_map_iter(|event| {
+                event
+                    .pressured_people()
+                    .map(|person| (event.a, event.b, person))
+            })
             .collect()
     });
     // A person may willingly meet but still teach only because of their own

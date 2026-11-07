@@ -82,6 +82,7 @@ fn persistent_records_match_reference_for_sparse_reordered_minds_and_spilled_cap
                                     a: p[0].person,
                                     b: p[1].person,
                                     pressured: None,
+                                    also_pressured: None,
                                 })
                                 .collect();
                             let next = expected
@@ -177,6 +178,7 @@ fn reports_use_prior_records_not_the_partners_same_tick_observation() {
         a: 1,
         b: 2,
         pressured: None,
+        also_pressured: None,
     }];
     let mut runtime = Runtime::compile_validated(&owner, 0).unwrap();
     let draft = runtime.prepare_validated(&view, &encounters, 0).unwrap();
@@ -202,6 +204,7 @@ fn targeted_false_reports_match_reference_and_never_rewrite_the_speakers_memory(
         a: 1,
         b: 2,
         pressured: None,
+        also_pressured: None,
     }];
     for workers in [1, 4] {
         rayon::ThreadPoolBuilder::new()
@@ -288,6 +291,7 @@ fn dense_encounter_index_matches_sorted_selection_for_duplicate_and_unknown_part
                     a: 1,
                     b: 3,
                     pressured: None,
+                    also_pressured: None,
                 },
                 Encounter {
                     tick: 1,
@@ -295,6 +299,7 @@ fn dense_encounter_index_matches_sorted_selection_for_duplicate_and_unknown_part
                     a: 1,
                     b: 2,
                     pressured: None,
+                    also_pressured: None,
                 },
             ],
             Some(2),
@@ -307,6 +312,7 @@ fn dense_encounter_index_matches_sorted_selection_for_duplicate_and_unknown_part
                     a: 1,
                     b: 2,
                     pressured: None,
+                    also_pressured: None,
                 },
                 Encounter {
                     tick: 1,
@@ -314,6 +320,7 @@ fn dense_encounter_index_matches_sorted_selection_for_duplicate_and_unknown_part
                     a: 0,
                     b: 1,
                     pressured: None,
+                    also_pressured: None,
                 },
             ],
             None,

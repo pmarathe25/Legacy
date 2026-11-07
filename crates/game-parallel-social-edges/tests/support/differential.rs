@@ -83,6 +83,7 @@ fn expiry_precedes_renewal_and_overflow_never_publishes() {
         region: 1,
         tick: 1,
         pressured: None,
+        also_pressured: None,
     };
     let mut runtime =
         Runtime::compile_validated(&owner.relationships, owner.rules.clone(), 0).unwrap();
@@ -144,6 +145,7 @@ fn authored_order_discarded_generations_and_reused_slots_stay_independent() {
             a: 1,
             b: 2,
             pressured: None,
+            also_pressured: None,
         },
         game_parallel_social::Encounter {
             tick: 3,
@@ -151,6 +153,7 @@ fn authored_order_discarded_generations_and_reused_slots_stay_independent() {
             a: 3,
             b: 4,
             pressured: None,
+            also_pressured: None,
         },
     ];
     let draft = runtime.prepare_validated(&events, 3).unwrap();

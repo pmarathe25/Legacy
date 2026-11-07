@@ -61,5 +61,6 @@ pub fn resolve(
         a: actor.min(target),
         b: actor.max(target),
         pressured: pressured.then_some(target),
+        also_pressured: None,
     }))
 }

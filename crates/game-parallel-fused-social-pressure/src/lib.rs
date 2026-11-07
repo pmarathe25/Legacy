@@ -184,6 +184,7 @@ pub fn prepare(
                             a: requester.min(target.person),
                             b: requester.max(target.person),
                             pressured: Some(target.person),
+                            also_pressured: None,
                         });
                     }
                 }

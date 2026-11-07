@@ -642,13 +642,13 @@ impl Opinions {
                 .flat_map_iter(|event| {
                     [(event.a, event.b, 1), (event.b, event.a, 1)]
                         .into_iter()
-                        .filter(|row| event.pressured != Some(row.0))
+                        .filter(|row| !event.is_pressured(row.0))
                 })
                 .collect();
             let pressured: Vec<_> = encounters
                 .par_iter()
-                .filter_map(|event| {
-                    event.pressured.map(|person| {
+                .flat_map_iter(|event| {
+                    event.pressured_people().map(|person| {
                         (person, if person == event.a { event.b } else { event.a }, 1)
                     })
                 })
@@ -774,7 +774,7 @@ impl Opinions {
             changes.par_extend(encounters.par_iter().flat_map_iter(|event| {
                 [((event.a, event.b), gain), ((event.b, event.a), gain)]
                     .into_iter()
-                    .filter(|(pair, _)| event.pressured != Some(pair.0))
+                    .filter(|(pair, _)| !event.is_pressured(pair.0))
             }));
         }
         if changes.is_empty() {

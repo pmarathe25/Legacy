@@ -34,6 +34,7 @@ fn meeting_receipts_require_active_departure_and_the_correct_place_and_tick() {
         a: 1,
         b: 100_001,
         pressured: None,
+        also_pressured: None,
     };
     state.entries[0].phase = MissionPhase::Ready;
     assert!(meetings(&mut state, &[event.clone()], 1).is_empty());
@@ -242,6 +243,7 @@ fn concentrated_meetings_match_across_worker_counts() {
             a: person,
             b: person + 100_000,
             pressured: None,
+            also_pressured: None,
         })
         .collect();
     let run = |workers| {

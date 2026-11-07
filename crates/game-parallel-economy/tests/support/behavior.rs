@@ -10667,6 +10667,13 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
         obligation_at_least: Some(3),
         enabled: true,
     });
+    social.pressures.push(PressurePolicy {
+        person: 1,
+        fear_at_least: Some(3),
+        obligation_at_least: Some(3),
+        enabled: true,
+    });
+    initial.opinions.as_mut().unwrap().rules.encounter_gain = 1;
     let mut world = Economy::compile(initial).unwrap();
     let id = world
         .start_mission(MissionStart {
@@ -10681,7 +10688,7 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
     let mission = &mut initial.missions.as_mut().unwrap().entries[0];
     mission.phase = MissionPhase::Visiting;
     mission.remaining = 5;
-    let run = |workers, actor_willing, target_willing, fear, obligation| {
+    let run = |workers, actor_willing, target_willing, actor_fear, fear, obligation| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -10701,14 +10708,24 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
                     .find(|row| row.person == 3)
                     .unwrap()
                     .willing = target_willing;
-                state.opinions.as_mut().unwrap().records = vec![Opinion {
-                    observer: 3,
-                    target: 1,
-                    trust: 0,
-                    affinity: 0,
-                    fear,
-                    obligation,
-                }];
+                state.opinions.as_mut().unwrap().records = vec![
+                    Opinion {
+                        observer: 1,
+                        target: 3,
+                        trust: 0,
+                        affinity: 0,
+                        fear: actor_fear,
+                        obligation: 0,
+                    },
+                    Opinion {
+                        observer: 3,
+                        target: 1,
+                        trust: 0,
+                        affinity: 0,
+                        fear,
+                        obligation,
+                    },
+                ];
                 let mut world = Economy::compile(state).unwrap();
                 world.advance().unwrap();
                 let state = world.snapshot();
@@ -10722,10 +10739,15 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
                     .events
                     .iter()
                     .find(|event| (event.a, event.b) == (1, 3));
-                let expected = actor_willing && (target_willing || fear >= 3 || obligation >= 3);
+                let expected = (actor_willing || actor_fear >= 3)
+                    && (target_willing || fear >= 3 || obligation >= 3);
                 assert_eq!(event.is_some(), expected);
                 if let Some(event) = event {
-                    assert_eq!(event.pressured, (!target_willing).then_some(3));
+                    assert_eq!(event.is_pressured(1), !actor_willing);
+                    assert_eq!(event.is_pressured(3), !target_willing);
+                    let opinions = state.opinions.as_ref().unwrap().index();
+                    assert_eq!(opinions.trust(1, 3), i32::from(actor_willing));
+                    assert_eq!(opinions.trust(3, 1), i32::from(target_willing));
                 }
                 assert_eq!(
                     state.missions.as_ref().unwrap().entries[0].objective_met,
@@ -10741,16 +10763,18 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
                 world.snapshot()
             })
     };
-    for (actor, target, fear, obligation) in [
-        (true, true, 0, 0),
-        (true, false, 5, 0),
-        (true, false, 0, 5),
-        (true, false, 0, 0),
-        (false, true, 0, 0),
+    for (actor, target, actor_fear, fear, obligation) in [
+        (true, true, 0, 0, 0),
+        (true, false, 0, 5, 0),
+        (true, false, 0, 0, 5),
+        (true, false, 0, 0, 0),
+        (false, true, 0, 0, 0),
+        (false, true, 5, 0, 0),
+        (false, false, 5, 0, 5),
     ] {
         assert_eq!(
-            run(1, actor, target, fear, obligation),
-            run(4, actor, target, fear, obligation)
+            run(1, actor, target, actor_fear, fear, obligation),
+            run(4, actor, target, actor_fear, fear, obligation)
         );
     }
 }

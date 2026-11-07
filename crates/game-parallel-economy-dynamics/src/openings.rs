@@ -78,6 +78,7 @@ impl Context<'_> {
                         a: outside.4.min(inside.4),
                         b: outside.4.max(inside.4),
                         pressured: None,
+                        also_pressured: None,
                     }
                 })
             })

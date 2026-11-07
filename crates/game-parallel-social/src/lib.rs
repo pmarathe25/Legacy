@@ -91,6 +91,11 @@ impl Social {
                 || !participants.contains(&e.b)
                 || e.pressured
                     .is_some_and(|person| person != e.a && person != e.b)
+                || e.also_pressured.is_some_and(|person| {
+                    e.pressured.is_none()
+                        || Some(person) == e.pressured
+                        || (person != e.a && person != e.b)
+                })
         }) {
             return Err("invalid social event");
         }
@@ -376,6 +381,7 @@ impl Social {
                     a: pair[0].3.min(pair[1].3),
                     b: pair[0].3.max(pair[1].3),
                     pressured: None,
+                    also_pressured: None,
                 })
             })
             .collect();

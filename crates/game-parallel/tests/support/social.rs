@@ -368,6 +368,7 @@ fn social_needs_handle_sorted_and_reordered_contacts_equally() {
         a: 1,
         b: 2,
         pressured: None,
+        also_pressured: None,
     }];
     let expected = needs.advance(&people, &contacts, &events);
     let mut reversed = contacts.clone();

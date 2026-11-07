@@ -462,6 +462,7 @@ mod tests {
             a: 1,
             b: 2,
             pressured: None,
+            also_pressured: None,
         }];
         for infected in [false, true] {
             let disease = Disease {

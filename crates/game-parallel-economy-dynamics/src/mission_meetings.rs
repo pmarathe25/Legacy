@@ -88,7 +88,6 @@ impl Context<'_> {
                 let region = actor.region?;
                 if !eligible(actor)
                     || !eligible(target_contact)
-                    || !find_participant(actor.person)?.willing
                     || (target_contact.region != Some(region)
                         && !self
                             .speak
@@ -96,43 +95,67 @@ impl Context<'_> {
                 {
                     return None;
                 }
-                let willing = find_participant(target)?.willing;
-                let pressured = !willing
-                    && policies
-                        .binary_search_by_key(&target, |row| row.person)
+                let responds = |person, other| {
+                    policies
+                        .binary_search_by_key(&person, |row| row.person)
                         .ok()
                         .is_some_and(|index| {
                             feelings.as_ref().is_some_and(|opinions| {
-                                let (fear, obligation) = opinions.feelings(target, actor.person);
+                                let (fear, obligation) = opinions.feelings(person, other);
                                 policies[index].responds(fear, obligation)
                             })
-                        });
-                if !willing && !pressured {
+                        })
+                };
+                let actor_willing = find_participant(actor.person)?.willing;
+                let target_willing = find_participant(target)?.willing;
+                let actor_pressured = !actor_willing && responds(actor.person, target);
+                let target_pressured = !target_willing && responds(target, actor.person);
+                if !(actor_willing || actor_pressured) || !(target_willing || target_pressured) {
                     return None;
                 }
                 let rank =
                     game_parallel_genetics::random(self.seed ^ actor.person, target, self.tick);
-                Some((rank, actor.person, target, region, pressured))
+                Some((
+                    rank,
+                    actor.person,
+                    target,
+                    region,
+                    actor_pressured,
+                    target_pressured,
+                ))
             })
             .collect();
         if candidates.is_empty() {
             return vec![];
         }
+        let event =
+            |actor: u64, target: u64, region, actor_pressured: bool, target_pressured: bool| {
+                Encounter {
+                    tick: self.tick,
+                    region,
+                    a: actor.min(target),
+                    b: actor.max(target),
+                    pressured: actor_pressured
+                        .then_some(actor)
+                        .or_else(|| target_pressured.then_some(target)),
+                    also_pressured: (actor_pressured && target_pressured).then_some(target),
+                }
+            };
         let shared_target = candidates[0].2;
         if candidates.par_iter().all(|row| row.2 == shared_target) {
             // Each active mission has a distinct actor, and no one can target
             // themselves. Only the target's deterministic choice is contested.
-            let &(_, actor, target, region, pressured) = candidates
+            let &(_, actor, target, region, actor_pressured, target_pressured) = candidates
                 .par_iter()
                 .min_by_key(|row| (row.0, row.1, row.2))
                 .expect("nonempty candidates");
-            return vec![Encounter {
-                tick: self.tick,
+            return vec![event(
+                actor,
+                target,
                 region,
-                a: actor.min(target),
-                b: actor.max(target),
-                pressured: pressured.then_some(target),
-            }];
+                actor_pressured,
+                target_pressured,
+            )];
         }
         // A proposal wins only if both people choose the same highest-priority
         // incident. This gives disjoint meetings without a serial matching pass.
@@ -154,21 +177,18 @@ impl Context<'_> {
         candidates
             .into_par_iter()
             .enumerate()
-            .filter_map(|(index, (_, actor, target, region, pressured))| {
-                let winner = |person| {
-                    winners
-                        .binary_search_by_key(&person, |row| row.0)
-                        .ok()
-                        .is_some_and(|i| winners[i].1 == index)
-                };
-                (winner(actor) && winner(target)).then_some(Encounter {
-                    tick: self.tick,
-                    region,
-                    a: actor.min(target),
-                    b: actor.max(target),
-                    pressured: pressured.then_some(target),
-                })
-            })
+            .filter_map(
+                |(index, (_, actor, target, region, actor_pressured, target_pressured))| {
+                    let winner = |person| {
+                        winners
+                            .binary_search_by_key(&person, |row| row.0)
+                            .ok()
+                            .is_some_and(|i| winners[i].1 == index)
+                    };
+                    (winner(actor) && winner(target))
+                        .then(|| event(actor, target, region, actor_pressured, target_pressured))
+                },
+            )
             .collect()
     }
 }

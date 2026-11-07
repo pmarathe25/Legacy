@@ -1,6 +1,55 @@
 use super::*;
 
 #[test]
+fn both_participants_can_interpret_a_pressured_meeting_independently() {
+    let mut configured = rules();
+    configured.encounter_gain = 2;
+    configured.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 3,
+        pressured_encounter_change: -2,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let event = game_parallel_social::Encounter {
+        tick: 1,
+        region: 1,
+        a: 1,
+        b: 2,
+        pressured: Some(1),
+        also_pressured: Some(2),
+    };
+    assert_eq!(event.unpressured().count(), 0);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = Opinions {
+                    rules: configured.clone(),
+                    records: vec![],
+                    events: vec![],
+                    sensitivities: vec![].into(),
+                };
+                state.advance_with_social(&[], &[], std::slice::from_ref(&event), 1);
+                assert_eq!(state.index().affinity(1, 2), -2);
+                assert_eq!(state.index().affinity(2, 1), -2);
+                assert_eq!(state.index().trust(1, 2), 0);
+                assert_eq!(state.index().trust(2, 1), 0);
+                assert!(state.records.iter().all(|row| row.obligation == 0));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut older = serde_json::to_value(&event).unwrap();
+    older.as_object_mut().unwrap().remove("also_pressured");
+    let loaded: game_parallel_social::Encounter = serde_json::from_value(older).unwrap();
+    assert!(loaded.is_pressured(1));
+    assert!(!loaded.is_pressured(2));
+}
+
+#[test]
 fn witnessed_stock_use_has_personal_and_relationship_specific_affinity() {
     let mut configured = rules();
     configured.theft_loss = 0;
@@ -1800,6 +1849,7 @@ fn affinity_is_directed_and_reflects_help_harm_and_unpressured_encounters() {
         a: 1,
         b: 2,
         pressured: None,
+        also_pressured: None,
     }];
     state.advance_with_social(&[], &[], &meetings, 1);
     assert_eq!(state.index().affinity(1, 2), -1);
@@ -1811,6 +1861,7 @@ fn affinity_is_directed_and_reflects_help_harm_and_unpressured_encounters() {
         a: 1,
         b: 2,
         pressured: Some(1),
+        also_pressured: None,
     }];
     state.advance_with_social(&[], &[], &pressured, 2);
     assert_eq!(state.index().affinity(1, 2), -1);
@@ -1876,6 +1927,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
             a: 1,
             b: 2,
             pressured: Some(1),
+            also_pressured: None,
         },
         game_parallel_social::Encounter {
             tick: 1,
@@ -1883,6 +1935,7 @@ fn individuals_can_interpret_the_same_experience_in_opposite_ways() {
             a: 2,
             b: 3,
             pressured: Some(3),
+            also_pressured: None,
         },
     ];
     state.advance_with_social(&[], &[], &events, 1);

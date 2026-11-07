@@ -116,12 +116,23 @@ pub struct Encounter {
     pub b: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pressured: Option<u64>,
+    /// A second participant may independently act under pressure.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub also_pressured: Option<u64>,
 }
 impl Encounter {
+    pub fn is_pressured(&self, person: u64) -> bool {
+        self.pressured == Some(person) || self.also_pressured == Some(person)
+    }
+    pub fn pressured_people(&self) -> impl Iterator<Item = u64> + '_ {
+        [self.a, self.b]
+            .into_iter()
+            .filter(|&person| self.is_pressured(person))
+    }
     pub fn unpressured(&self) -> impl Iterator<Item = u64> + '_ {
         [self.a, self.b]
             .into_iter()
-            .filter(|&person| self.pressured != Some(person))
+            .filter(|&person| !self.is_pressured(person))
     }
 }
 

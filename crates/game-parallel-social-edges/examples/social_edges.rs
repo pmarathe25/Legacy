@@ -27,6 +27,7 @@ fn main() {
                     a: i + 1,
                     b: half + (i + tick) % half + 1,
                     pressured: None,
+                    also_pressured: None,
                 })
                 .collect()
         })

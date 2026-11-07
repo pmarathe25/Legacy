@@ -114,6 +114,7 @@ pub fn prepare(
             a: actor.id.min(target.id),
             b: actor.id.max(target.id),
             pressured: (!willing).then_some(target.id),
+            also_pressured: None,
         }),
     }))
 }

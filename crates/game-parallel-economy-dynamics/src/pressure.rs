@@ -149,6 +149,7 @@ pub fn prepare(
                     a: requester.min(target),
                     b: requester.max(target),
                     pressured: Some(target),
+                    also_pressured: None,
                 }
             })
             .collect();
