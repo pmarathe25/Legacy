@@ -15,6 +15,8 @@ pub struct Config {
     #[serde(default)]
     pub complaint_preferences: Vec<crate::ComplaintPreference>,
     #[serde(default)]
+    pub inquiry_pursuit: Vec<u64>,
+    #[serde(default)]
     pub policies: Vec<PolicyConfig>,
     #[serde(default)]
     pub responses: Vec<Response>,
@@ -139,6 +141,7 @@ impl Config {
         Ok(Taking {
             complaints: Default::default(),
             complaint_preferences: self.complaint_preferences.into(),
+            inquiry_pursuit: self.inquiry_pursuit.into(),
             policies: policies.into(),
             responses: self.responses.into(),
             reactions: self.reactions.into(),

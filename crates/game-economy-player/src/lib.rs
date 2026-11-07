@@ -1525,6 +1525,10 @@ impl<'a> Player<'a> {
     pub fn taking_inquiries(&self) -> Result<Vec<game_economy::TakingComplaint>, String> {
         Ok(self.world.taking_inquiries(self.current()?))
     }
+    pub fn set_taking_inquiry_pursuit(&mut self, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_taking_inquiry_pursuit(self.current()?, enabled)
+    }
     pub fn request_taking_inquiry(
         &mut self,
         recipient: u64,

@@ -183,6 +183,10 @@ macro_rules! prepare_dynamics {
         } else {
             Vec::new()
         };
+        let inquiry_meetings = $world
+            .taking
+            .as_ref()
+            .map_or_else(Vec::new, |owner| owner.inquiry_meetings($tick));
         let mut next = $world
             .dynamics
             .as_ref()
@@ -208,6 +212,7 @@ macro_rules! prepare_dynamics {
                         speak: $speak,
                         opening: $opening,
                         missions: $world.missions.as_ref(),
+                        inquiry_meetings: &inquiry_meetings,
                     },
                 )
             })
@@ -243,6 +248,7 @@ pub struct Clock<'a> {
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
     pub missions: Option<&'a game_missions::Missions>,
+    pub inquiry_meetings: &'a [(u64, u64)],
 }
 impl Dynamics {
     pub fn validate(
@@ -297,6 +303,7 @@ impl Dynamics {
             speak,
             opening,
             missions,
+            inquiry_meetings,
         } = clock;
         let (exposure, requested, combat) = encounters;
         let mut occupied: Vec<_> = exposure.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
@@ -345,6 +352,7 @@ impl Dynamics {
                         speak,
                         opening,
                         missions,
+                        inquiry_meetings,
                         people: old,
                     },
                 )
@@ -532,6 +540,7 @@ mod tests {
                         speak: None,
                         opening: None,
                         missions: None,
+                        inquiry_meetings: &[],
                     },
                 )
                 .unwrap();

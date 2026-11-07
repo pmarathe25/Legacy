@@ -124,7 +124,9 @@ fn main() {
             let complaint_preferences = groups.iter().map(|&(_, _, recipient)| ComplaintPreference {
                 person: recipient, willing: true, pressure_threshold: None,
             }).collect::<Vec<_>>();
-            initial.taking = Some(Taking { policies: policies.into(), responses: responses.into(), witnesses: witnesses.into(), report_policies: report_policies.into(), complaint_preferences: complaint_preferences.into(), ..Default::default() });
+            let mut inquiry_pursuit = groups.iter().flat_map(|&(_, author, recipient)| [author, recipient]).collect::<Vec<_>>();
+            inquiry_pursuit.sort_unstable();
+            initial.taking = Some(Taking { policies: policies.into(), responses: responses.into(), witnesses: witnesses.into(), report_policies: report_policies.into(), complaint_preferences: complaint_preferences.into(), inquiry_pursuit: inquiry_pursuit.into(), ..Default::default() });
             let mut staged = game_economy::Economy::compile(initial).unwrap();
             staged.advance().unwrap();
             initial = staged.snapshot();

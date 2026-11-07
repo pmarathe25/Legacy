@@ -127,6 +127,15 @@ fn complaints_require_contact_and_personal_choice_and_expire() {
     let mut expired = initial.clone();
     expired.advance_complaints(&initial, &[(1, 2)], 6, &|_, _| 9);
     assert_eq!(expired.complaints[0].decision, ComplaintDecision::Expired);
+    assert!(initial.inquiry_meetings(4).is_empty());
+    let mut seeking = initial.clone();
+    seeking.inquiry_pursuit = vec![1, 2].into();
+    assert_eq!(seeking.inquiry_meetings(4), vec![(1, 2)]);
+    let mut accepted_seeking = accepted.clone();
+    accepted_seeking.inquiry_pursuit = vec![1, 2].into();
+    assert_eq!(accepted_seeking.inquiry_meetings(5), vec![(2, 3)]);
+    accepted_seeking.inquiry_pursuit = vec![1].into();
+    assert!(accepted_seeking.inquiry_meetings(5).is_empty());
     let encoded = serde_json::to_string(&accepted).unwrap();
     assert_eq!(serde_json::from_str::<Taking>(&encoded).unwrap(), accepted);
 }

@@ -89,6 +89,9 @@ pub struct Taking {
     pub complaints: Arc<Vec<Complaint>>,
     #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
     pub complaint_preferences: Arc<Vec<ComplaintPreference>>,
+    /// People who personally choose to seek contacts for their own inquiries.
+    #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
+    pub inquiry_pursuit: Arc<Vec<u64>>,
     #[serde(default)]
     pub policies: Arc<Vec<Policy>>,
     #[serde(default)]
@@ -123,6 +126,9 @@ impl Taking {
     }
     pub fn complaint_preferences_mut(&mut self) -> &mut Vec<ComplaintPreference> {
         detach(&mut self.complaint_preferences)
+    }
+    pub fn inquiry_pursuit_mut(&mut self) -> &mut Vec<u64> {
+        detach(&mut self.inquiry_pursuit)
     }
     pub fn policies_mut(&mut self) -> &mut Vec<Policy> {
         detach(&mut self.policies)

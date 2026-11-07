@@ -63,6 +63,38 @@ pub struct Preference {
 }
 
 impl Taking {
+    /// Independent, optional intentions; the social owner still arbitrates contact.
+    pub fn inquiry_meetings(&self, tick: u64) -> Vec<(u64, u64)> {
+        if self.inquiry_pursuit.is_empty() || self.complaints.is_empty() {
+            return Vec::new();
+        }
+        let mut pursuing: Vec<_> = self.inquiry_pursuit.par_iter().copied().collect();
+        if pursuing.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            pursuing.par_sort_unstable();
+        }
+        self.complaints
+            .par_iter()
+            .filter_map(|c| {
+                let (actor, target) = match c.decision {
+                    Decision::Pending if c.created_at < tick && tick < c.expires_at => {
+                        (c.author, c.recipient)
+                    }
+                    Decision::Accepted
+                        if c.answer.is_none()
+                            && c.decided_at.is_some_and(|at| at < tick)
+                            && tick < c.expires_at =>
+                    {
+                        (c.recipient, c.witness)
+                    }
+                    _ => return None,
+                };
+                pursuing
+                    .binary_search(&actor)
+                    .is_ok()
+                    .then_some((actor, target))
+            })
+            .collect()
+    }
     /// Freeze only an account already in the author's own memory or reports.
     pub fn complaint_account(&self, author: u64, actor: u64) -> Option<Account> {
         if let Some(seen) = self
@@ -191,8 +223,12 @@ pub(crate) fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>,
         .map(|row| row.person)
         .collect();
     preferences.par_sort_unstable();
+    let mut pursuing: Vec<_> = owner.inquiry_pursuit.par_iter().copied().collect();
+    pursuing.par_sort_unstable();
     !recipients.par_windows(2).any(|p| p[0] == p[1])
         && !preferences.par_windows(2).any(|p| p[0] == p[1])
+        && !pursuing.par_windows(2).any(|p| p[0] == p[1])
+        && pursuing.par_iter().all(|id| people.contains(id))
         && owner
             .complaint_preferences
             .par_iter()

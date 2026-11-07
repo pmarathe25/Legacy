@@ -397,6 +397,89 @@ fn accepted_inquiry_records_a_later_witness_statement_privately() {
 }
 
 #[test]
+fn autonomous_people_pursue_inquiries_without_forcing_testimony() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, testify| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-testimony.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                world.set_taking_choice(1, false).unwrap();
+                world
+                    .set_taking_inquiry_preference(
+                        1,
+                        Some(game_economy::TakingComplaintPreference {
+                            person: 1,
+                            willing: true,
+                            pressure_threshold: None,
+                        }),
+                    )
+                    .unwrap();
+                world.set_taking_inquiry_pursuit(2, true).unwrap();
+                world.set_taking_inquiry_pursuit(1, true).unwrap();
+                world
+                    .set_taking_report_policy(
+                        2,
+                        1,
+                        1,
+                        Some(game_economy::TakingReportPolicy {
+                            person: 2,
+                            recipient: 1,
+                            actor: 1,
+                            willing: testify,
+                            pressure_threshold: None,
+                            claimed_outcome: None,
+                            source: Default::default(),
+                            heard_from: None,
+                            details: None,
+                        }),
+                    )
+                    .unwrap();
+                world.request_taking_inquiry(2, 1, 2, 1, 10).unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..6 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                    if !world.taking_inquiries(1).is_empty() {
+                        break;
+                    }
+                }
+                assert_eq!(
+                    world.taking_inquiries(1)[0].decision,
+                    game_economy::TakingComplaintDecision::Accepted
+                );
+                assert!(world.taking_inquiries(1)[0].answer.is_none());
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                    if world.taking_inquiries(1)[0].answer.is_some() {
+                        break;
+                    }
+                }
+                let inquiry = world.taking_inquiries(1).remove(0);
+                assert_eq!(inquiry.answer.is_some(), testify);
+                if let Some(answer) = inquiry.answer {
+                    assert!(answer.matches_account);
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

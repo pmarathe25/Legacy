@@ -10,6 +10,7 @@ pub struct Access<'a> {
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
     pub missions: Option<&'a Missions>,
+    pub inquiry_meetings: &'a [(u64, u64)],
     pub people: &'a [Person],
 }
 
@@ -31,6 +32,7 @@ pub fn prepare(
     reserved.sort_unstable();
     let directed = crate::mission_meetings::Context {
         missions: access.missions,
+        inquiry_meetings: access.inquiry_meetings,
         people: access.people,
         contacts,
         social,

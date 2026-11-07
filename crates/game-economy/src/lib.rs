@@ -1469,6 +1469,31 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Choose whether this person seeks contacts for their own inquiries.
+    pub fn set_taking_inquiry_pursuit(&mut self, person: u64, enabled: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut owner = self.taking.clone().ok_or("taking is disabled")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let pursuing = owner.inquiry_pursuit_mut();
+        pursuing.retain(|&id| id != person);
+        if enabled {
+            pursuing.push(person);
+        }
+        pursuing.par_sort_unstable();
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Change a person's voluntary inclination without removing personal pressure.
     pub fn set_taking_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
         if self
