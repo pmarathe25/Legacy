@@ -27458,19 +27458,9 @@ fn concentrated_economy_benchmark() {
         });
 }
 
-#[test]
-#[ignore]
-fn concentrated_family_care_benchmark() {
+fn mixed_settlement(count: u64) -> State {
     use game_dependent_care::{Policy as CarePolicy, Rules as CareRules};
     use game_families::{Families, FamilyRules, FamilyTotals, Genome, Member, Sex};
-    let workers = std::env::var("LEGACY_WORKERS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(1);
-    let count = std::env::var("LEGACY_PEOPLE")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100_000u64);
     let adults = count * 4 / 5;
     let mut initial = concentrated(count);
     for person in &mut initial.people {
@@ -27545,6 +27535,54 @@ fn concentrated_family_care_benchmark() {
             .collect(),
         events: vec![],
     });
+    initial
+}
+
+#[test]
+fn production_and_family_care_continue_together_across_workers_and_reload() {
+    let initial = mixed_settlement(1000);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let first = world.advance().unwrap();
+                assert!(!first.started.is_empty(), "adults should start production");
+                assert_eq!(
+                    first
+                        .physical_actions
+                        .iter()
+                        .filter(|row| row.accepted)
+                        .count(),
+                    200,
+                    "care must physically reach the dependents"
+                );
+                world.advance().unwrap();
+                let mut reloaded = Economy::compile(world.snapshot()).unwrap();
+                world.advance().unwrap();
+                reloaded.advance().unwrap();
+                assert_eq!(world.snapshot(), reloaded.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn concentrated_family_care_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100_000u64);
+    let mut initial = mixed_settlement(count);
+    let adults = count * 4 / 5;
     let confined = std::env::var("LEGACY_CONFINED").is_ok_and(|value| value == "1");
     if confined {
         initial.work_sites = Some(WorkSites {

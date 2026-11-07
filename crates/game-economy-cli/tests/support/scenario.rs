@@ -2,6 +2,37 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_campaign_advances_consistently_across_workers_and_reload() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-campaign.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                }
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =
