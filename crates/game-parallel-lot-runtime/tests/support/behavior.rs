@@ -817,6 +817,63 @@ fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_action
 }
 
 #[test]
+fn ordered_single_leg_receipts_match_general_merge_with_other_work() {
+    use game_parallel_lots::Movement;
+    let actions: Vec<_> = (1..=2300)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id: 10_000 - id,
+                from: Place::Stock { region: 1, good: 1 },
+                to: None,
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let mut initial = runtime();
+    initial
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let snapshot = initial.snapshot();
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                if reverse {
+                    actions.reverse();
+                }
+                let mut world = Runtime::compile(snapshot.clone()).unwrap();
+                let events = world.advance_with_actions(&[(1, 2)], &actions, 19).unwrap();
+                assert_eq!(events.physical_movements.len(), actions.len());
+                for receipt in &events.physical_movements {
+                    assert_eq!(receipt.request.id, 10_000 - receipt.action);
+                    assert_eq!(receipt.movement.id, receipt.request.id);
+                    assert_eq!(
+                        receipt.movement.accepted,
+                        events.physical_actions[(receipt.action - 1) as usize].accepted
+                    );
+                }
+                (world.snapshot(), events)
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+}
+
+#[test]
 fn detached_generation_rolls_back_and_abandonment_invalidates_it() {
     use game_parallel_lots::{Movement, Transaction};
     let mut runtime = runtime();

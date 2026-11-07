@@ -2079,6 +2079,8 @@ impl Economy {
             _ => None,
         };
         let default_taking = Taking::default();
+        #[cfg(feature = "profile")]
+        let taking_phase = game_diagnostics::span("economy.setup.taking");
         let mut taking_plan = if self.taking.is_some() || manual_taking.is_some() {
             let mut taking_busy =
                 game_parallel_economy_fatigue::resting(self.fatigue.as_ref(), &self.people);
@@ -2147,6 +2149,8 @@ impl Economy {
         } else {
             None
         };
+        #[cfg(feature = "profile")]
+        drop(taking_phase);
         let requested_contests: Vec<_> = taking_plan
             .as_ref()
             .map_or(&[][..], |plan| plan.contests.as_slice())
@@ -2238,6 +2242,8 @@ impl Economy {
             fighters
         });
         let initial_fighters = combined_fighters.as_deref().unwrap_or(current_fighters);
+        #[cfg(feature = "profile")]
+        let people_phase = game_diagnostics::span("economy.setup.people");
         let (fighters, resting, people, meal_candidates, meals, mut busy) = family::prepare_people!(
             self,
             view,
@@ -2250,6 +2256,8 @@ impl Economy {
                 .as_ref()
                 .map_or(&[][..], |plan| plan.actors.as_slice())
         );
+        #[cfg(feature = "profile")]
+        drop(people_phase);
         let mut held: Vec<_> = self
             .confinement
             .as_ref()

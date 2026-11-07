@@ -207,6 +207,7 @@ impl Runtime {
             growth.animal_yield,
             next_tick,
         )?;
+        let direct_external = external;
         let combined =
             game_parallel_lot_content::combine_growth(external, growth.harvest, &animal_yield);
         let external = combined.as_deref().unwrap_or(external);
@@ -332,30 +333,49 @@ impl Runtime {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("physical.finalize");
         }
-        let mut external_index: Vec<_> = external.par_iter().collect();
-        if external_index.par_windows(2).any(|p| p[0].id > p[1].id) {
-            external_index.par_sort_unstable_by_key(|row| row.id);
-        }
-        // Composition orders both the owner keys and the assigned movement IDs.
-        // Pair the external slice with its sorted originals once, then use a
-        // parallel merge for receipts instead of a binary search per movement.
+        #[cfg(feature = "profile")]
+        let mut finalize_phase = game_diagnostics::span("physical.finalize.keys");
+        // A sorted run of single-movement external actions receives contiguous
+        // movement IDs during composition. It can be mapped directly without a
+        // separate per-movement index; mixed actions use the general merge.
         let external_begin = composed.keys.partition_point(|key| key.0 < 4);
         let external_end = composed.keys.partition_point(|key| key.0 <= 4);
-        debug_assert_eq!(external_end - external_begin, external_index.len());
-        let movement_keys: Vec<_> = composed.transactions[external_begin..external_end]
-            .par_iter()
-            .zip(composed.keys[external_begin..external_end].par_iter())
-            .zip(external_index.par_iter())
-            .filter(|((action, _), _)| compact.binary_search(&action.id).is_err())
-            .flat_map_iter(|((action, key), original)| {
-                debug_assert_eq!(key.1, original.id);
-                action
-                    .movements
-                    .iter()
-                    .zip(original.movements.iter())
-                    .map(move |(assigned, source)| (assigned.id, key.1, *source))
-            })
-            .collect();
+        debug_assert_eq!(external_end - external_begin, external.len());
+        let direct_start = (combined.is_none()
+            && compact.is_empty()
+            && !external.is_empty()
+            && external.par_windows(2).all(|p| p[0].id < p[1].id)
+            && external
+                .par_iter()
+                .all(|action| action.movements.len() == 1 && action.creations.is_empty()))
+        .then(|| composed.transactions[external_begin].movements[0].id);
+        let movement_keys: Vec<_> = if direct_start.is_some() {
+            Vec::new()
+        } else {
+            let mut external_index: Vec<_> = external.par_iter().collect();
+            if external_index.par_windows(2).any(|p| p[0].id > p[1].id) {
+                external_index.par_sort_unstable_by_key(|row| row.id);
+            }
+            composed.transactions[external_begin..external_end]
+                .par_iter()
+                .zip(composed.keys[external_begin..external_end].par_iter())
+                .zip(external_index.par_iter())
+                .filter(|((action, _), _)| compact.binary_search(&action.id).is_err())
+                .flat_map_iter(|((action, key), original)| {
+                    debug_assert_eq!(key.1, original.id);
+                    action
+                        .movements
+                        .iter()
+                        .zip(original.movements.iter())
+                        .map(move |(assigned, source)| (assigned.id, key.1, *source))
+                })
+                .collect()
+        };
+        #[cfg(feature = "profile")]
+        {
+            drop(finalize_phase);
+            finalize_phase = game_diagnostics::span("physical.finalize.results");
+        }
         game_parallel_lot_work::release_actions(&mut composed.transactions, combined);
         let physical_actions: Vec<_> = draft
             .transactions()
@@ -440,6 +460,11 @@ impl Runtime {
                 (!accepted_external.contains(action)).then_some(container.place)
             }));
         }
+        #[cfg(feature = "profile")]
+        {
+            drop(finalize_phase);
+            finalize_phase = game_diagnostics::span("physical.finalize.bookkeeping");
+        }
         self.store.retire_in(&mut draft, retire)?;
         next.par_iter_mut()
             .filter(|row| finished_ids.binary_search(&row.job.id).is_ok())
@@ -469,30 +494,56 @@ impl Runtime {
         );
         next.par_sort_unstable_by_key(|row| row.job.id);
         self.store.validate_commit(&draft)?;
-        let movement_keys = &movement_keys;
+        #[cfg(feature = "profile")]
+        {
+            drop(finalize_phase);
+            finalize_phase = game_diagnostics::span("physical.finalize.receipts");
+        }
         let (outcomes, spoiled) = draft.take_receipts();
-        let physical_movements = outcomes
-            .into_par_iter()
-            .chunks(2048)
-            .flat_map_iter(|chunk| {
-                let mut cursor = movement_keys.partition_point(|row| row.0 < chunk[0].id);
-                chunk.into_iter().filter_map(move |mut movement| {
-                    while cursor < movement_keys.len() && movement_keys[cursor].0 < movement.id {
-                        cursor += 1;
-                    }
-                    let &(_, action, request) = movement_keys
-                        .get(cursor)
-                        .filter(|row| row.0 == movement.id)?;
-                    cursor += 1;
+        let physical_movements = if let Some(first) = direct_start {
+            outcomes
+                .into_par_iter()
+                .filter_map(|mut movement| {
+                    let index = movement
+                        .id
+                        .checked_sub(first)
+                        .and_then(|n| usize::try_from(n).ok())?;
+                    let action = direct_external.get(index)?;
+                    let request = action.movements[0];
                     movement.id = request.id;
                     Some(ExternalReceipt {
-                        action,
+                        action: action.id,
                         request,
                         movement,
                     })
                 })
-            })
-            .collect();
+                .collect()
+        } else {
+            outcomes
+                .into_par_iter()
+                .chunks(2048)
+                .flat_map_iter(|chunk| {
+                    let mut cursor = movement_keys.partition_point(|row| row.0 < chunk[0].id);
+                    let keys = &movement_keys;
+                    chunk.into_iter().filter_map(move |mut movement| {
+                        while cursor < keys.len() && keys[cursor].0 < movement.id {
+                            cursor += 1;
+                        }
+                        let &(_, action, request) =
+                            keys.get(cursor).filter(|row| row.0 == movement.id)?;
+                        cursor += 1;
+                        movement.id = request.id;
+                        Some(ExternalReceipt {
+                            action,
+                            request,
+                            movement,
+                        })
+                    })
+                })
+                .collect()
+        };
+        #[cfg(feature = "profile")]
+        drop(finalize_phase);
         let events = Events {
             tick: next_tick,
             started: started_ids,
