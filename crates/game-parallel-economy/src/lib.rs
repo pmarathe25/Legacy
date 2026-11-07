@@ -4897,6 +4897,22 @@ impl Economy {
             knowledge,
             family_access
         );
+        if !births.is_empty()
+            && let Some((next, previous)) = dynamics
+                .as_mut()
+                .and_then(|owner| owner.disease.as_mut())
+                .zip(
+                    self.dynamics
+                        .as_ref()
+                        .and_then(|owner| owner.disease.as_ref()),
+                )
+        {
+            let pairs: Vec<_> = births
+                .par_iter()
+                .map(|birth| (birth.id, birth.mother))
+                .collect();
+            next.admit_births_validated(previous, &pairs, self.seed, tick);
+        }
         if let Some(confinement) = &mut next_confinement
             && !births.is_empty()
         {

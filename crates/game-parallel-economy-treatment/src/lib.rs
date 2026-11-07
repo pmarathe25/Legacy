@@ -383,6 +383,7 @@ mod tests {
                 damage_per_tick: 0,
                 transmission_per_million: 0,
                 combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![],

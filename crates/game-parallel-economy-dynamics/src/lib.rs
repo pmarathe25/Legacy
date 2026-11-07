@@ -465,6 +465,7 @@ mod tests {
                     damage_per_tick: 3,
                     transmission_per_million: 1_000_000,
                     combat_transmission_per_million: 0,
+                    birth_transmission_per_million: 0,
                 }],
                 treatments: vec![],
                 cases: if infected {

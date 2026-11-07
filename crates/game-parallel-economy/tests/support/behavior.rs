@@ -5821,6 +5821,7 @@ fn infection_from(person: u64) -> Dynamics {
                 damage_per_tick: 0,
                 transmission_per_million: 1_000_000,
                 combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![Case {
@@ -5886,6 +5887,7 @@ fn actual_personal_encounters_transmit_disease_and_survive_reload() {
                 damage_per_tick: 4,
                 transmission_per_million: 1_000_000,
                 combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![Case {
@@ -6708,6 +6710,7 @@ fn self_treatment_requires_personal_choice_and_actual_unexpired_medicine() {
                 damage_per_tick: 1,
                 transmission_per_million: 0,
                 combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
             }],
             treatments: vec![Treatment {
                 strain: 1,
@@ -10164,6 +10167,68 @@ fn campaign_fixture() -> State {
         embodied_guardians: None,
     });
     state
+}
+
+#[test]
+fn actual_birth_can_transmit_maternal_infection_atomically() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.dynamics = Some(infection_from(1));
+    let disease = initial.dynamics.as_mut().unwrap().disease.as_mut().unwrap();
+    disease.strains[0].transmission_per_million = 0;
+    disease.strains[0].birth_transmission_per_million = 1_000_000;
+    let run = |workers, enabled: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if !enabled {
+                    state
+                        .dynamics
+                        .as_mut()
+                        .unwrap()
+                        .disease
+                        .as_mut()
+                        .unwrap()
+                        .strains[0]
+                        .birth_transmission_per_million = 0;
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let before = world.snapshot();
+                let stale = world.prepare().unwrap();
+                assert_eq!(world.snapshot(), before);
+                world.set_taking_response(1, false, false).unwrap();
+                assert!(world.commit(stale).is_err());
+                assert!(!world.snapshot().people.iter().any(|p| p.id == 5));
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                assert!(saved.people.iter().any(|p| p.id == 5));
+                let disease = saved.dynamics.as_ref().unwrap().disease.as_ref().unwrap();
+                let child = disease.cases.iter().find(|case| case.person == 5);
+                assert_eq!(
+                    child.map(|case| (case.source, case.infected_at)),
+                    enabled.then_some((Some(1), 2))
+                );
+                assert_eq!(
+                    disease.events.iter().any(|event| event.person == 5),
+                    enabled
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                saved
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
 }
 
 #[test]
@@ -16315,6 +16380,7 @@ fn disease_workload(count: u64) -> State {
                 damage_per_tick: 1,
                 transmission_per_million: 1_000_000,
                 combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
             }],
             cases: (1..=count / 2)
                 .map(|person| Case {

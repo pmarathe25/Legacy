@@ -28,6 +28,9 @@ pub struct Strain {
     /// Probability for an actual combat strike; zero disables this route.
     #[serde(default)]
     pub combat_transmission_per_million: u32,
+    /// Probability for a newborn to acquire this infection from its mother.
+    #[serde(default)]
+    pub birth_transmission_per_million: u32,
 }
 /// A completed course of this medicine clears the specified infection.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,6 +98,7 @@ impl Disease {
                 || strain.end().is_none()
                 || strain.transmission_per_million > 1_000_000
                 || strain.combat_transmission_per_million > 1_000_000
+                || strain.birth_transmission_per_million > 1_000_000
         }) {
             return Err("invalid disease strain".into());
         }
@@ -128,6 +132,103 @@ impl Disease {
             return Err("invalid disease event".into());
         }
         Ok(())
+    }
+    /// Admit infections from actual staged births using the prior generation.
+    /// `births` contains unique (child, mother) IDs already validated by the host.
+    /// Newborns cannot transmit or take disease damage in this boundary.
+    pub fn admit_births_validated(
+        &mut self,
+        previous: &Disease,
+        births: &[(u64, u64)],
+        seed: u64,
+        tick: u64,
+    ) {
+        if births.is_empty()
+            || previous.cases.is_empty()
+            || tick == 0
+            || !previous
+                .strains
+                .iter()
+                .any(|s| s.birth_transmission_per_million > 0)
+        {
+            return;
+        }
+        let now = tick - 1;
+        let index = previous
+            .cases
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+            .then(|| {
+                let mut rows: Vec<_> = previous.cases.par_iter().collect();
+                rows.par_sort_unstable_by_key(|case| case.person);
+                rows
+            });
+        let infections: Vec<_> = births
+            .par_iter()
+            .filter_map(|&(child, mother)| {
+                let case = if let Some(cases) = &index {
+                    cases
+                        .binary_search_by_key(&mother, |case| case.person)
+                        .ok()
+                        .map(|i| cases[i])
+                } else {
+                    previous
+                        .cases
+                        .binary_search_by_key(&mother, |case| case.person)
+                        .ok()
+                        .map(|i| &previous.cases[i])
+                }?;
+                let strain = previous
+                    .strains
+                    .iter()
+                    .find(|strain| strain.id == case.strain)?;
+                let age = now.checked_sub(case.infected_at)?;
+                if !strain.contagious(age)
+                    || game_parallel_genetics::random(seed ^ 0x6269727468 ^ mother, child, tick)
+                        % 1_000_000
+                        >= u64::from(strain.birth_transmission_per_million)
+                {
+                    return None;
+                }
+                Some(Case {
+                    person: child,
+                    strain: strain.id,
+                    infected_at: tick,
+                    source: Some(mother),
+                })
+            })
+            .collect();
+        if infections.is_empty() {
+            return;
+        }
+        self.events
+            .par_extend(infections.par_iter().map(|case| Event {
+                tick,
+                person: case.person,
+                strain: case.strain,
+                source: case.source,
+                kind: EventKind::Infected,
+            }));
+        self.cases.par_extend(infections);
+        if self
+            .cases
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            self.cases.par_sort_unstable_by_key(|case| case.person);
+        }
+        self.events.par_sort_unstable_by_key(|event| {
+            (
+                event.person,
+                event.strain,
+                match event.kind {
+                    EventKind::Recovered => 0,
+                    EventKind::Infected => 1,
+                    EventKind::Treated => 2,
+                },
+                event.source,
+            )
+        });
     }
     /// Evaluate all distinct contacts against the prior generation; newly infected
     /// people cannot transmit until a later generation.
@@ -410,6 +511,7 @@ mod tests {
                 damage_per_tick: 3,
                 transmission_per_million: 1_000_000,
                 combat_transmission_per_million: 0,
+                birth_transmission_per_million: 0,
             }],
             treatments: vec![],
             cases: vec![Case {
@@ -430,6 +532,90 @@ mod tests {
             pressured: None,
         }
     }
+    #[test]
+    fn birth_exposure_uses_only_contagious_prior_cases() {
+        let mut previous = state();
+        previous.strains[0].birth_transmission_per_million = 1_000_000;
+        let run = |workers, tick| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut next = previous.clone();
+                    next.admit_births_validated(&previous, &[(2, 1), (3, 2), (4, 9)], 7, tick);
+                    next
+                })
+        };
+        let exposed = run(1, 2);
+        assert_eq!(exposed, run(4, 2));
+        assert_eq!(
+            exposed
+                .cases
+                .iter()
+                .map(|c| (c.person, c.source))
+                .collect::<Vec<_>>(),
+            [(1, None), (2, Some(1))]
+        );
+        assert_eq!(exposed.cases[1].infected_at, 2);
+        assert_eq!(exposed.events[0].kind, EventKind::Infected);
+        assert_eq!(run(1, 1).cases.len(), 1); // Mother is still incubating.
+        let mut disabled = previous.clone();
+        disabled.strains[0].birth_transmission_per_million = 0;
+        let mut next = disabled.clone();
+        next.admit_births_validated(&disabled, &[(2, 1)], 7, 2);
+        assert_eq!(next, disabled);
+        let restored: Disease =
+            serde_json::from_str(&serde_json::to_string(&exposed).unwrap()).unwrap();
+        assert_eq!(restored, exposed);
+        let mut old_save = serde_json::to_value(&disabled).unwrap();
+        old_save["strains"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("birth_transmission_per_million");
+        assert_eq!(
+            serde_json::from_value::<Disease>(old_save).unwrap(),
+            disabled
+        );
+        let mut shuffled = previous.clone();
+        shuffled.cases.insert(
+            0,
+            Case {
+                person: 9,
+                strain: 1,
+                infected_at: 0,
+                source: None,
+            },
+        );
+        let mut sorted = shuffled.clone();
+        sorted.cases.sort_unstable_by_key(|case| case.person);
+        let mut from_shuffled = shuffled.clone();
+        let mut from_sorted = sorted.clone();
+        from_shuffled.admit_births_validated(&shuffled, &[(2, 1), (10, 9)], 7, 2);
+        from_sorted.admit_births_validated(&sorted, &[(2, 1), (10, 9)], 7, 2);
+        assert_eq!(from_shuffled, from_sorted);
+        let mut mixed = previous.clone();
+        mixed.strains[0].birth_transmission_per_million = 500_000;
+        let births: Vec<_> = (2..10_002).map(|child| (child, 1)).collect();
+        let run_many = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut next = mixed.clone();
+                    next.admit_births_validated(&mixed, &births, 7, 2);
+                    next
+                })
+        };
+        let many = run_many(1);
+        assert_eq!(many, run_many(4));
+        assert!((4_000..6_000).contains(&many.events.len()));
+        let mut invalid = previous;
+        invalid.strains[0].birth_transmission_per_million = 1_000_001;
+        assert!(invalid.validate(&HashSet::from([1]), 1).is_err());
+    }
+
     #[test]
     fn disabled_transmission_still_validates_contacts_and_progresses_illness() {
         let people = [Person { id: 1, health: 100 }, Person { id: 2, health: 100 }];

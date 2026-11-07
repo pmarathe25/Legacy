@@ -4,6 +4,17 @@ fn world() -> World {
     World::from_toml(include_str!("../../../../content/parallel/disease.toml")).unwrap()
 }
 #[test]
+fn unsupported_birth_transmission_is_rejected() {
+    let mut state = world();
+    state.disease.as_mut().unwrap().strains[0].birth_transmission_per_million = 1;
+    assert!(
+        Kernel::compile(state)
+            .err()
+            .unwrap()
+            .contains("birth transmission")
+    );
+}
+#[test]
 fn exposure_incubation_damage_and_reload_share_one_world() {
     let mut state = world();
     state.rules.recovery = 0;
@@ -182,6 +193,7 @@ fn staged_disease_matches_validated_reference_for_sparse_shuffled_cases() {
             damage_per_tick: 3,
             transmission_per_million: 800_000,
             combat_transmission_per_million: 0,
+            birth_transmission_per_million: 0,
         },
         DiseaseStrain {
             id: 2,
@@ -192,6 +204,7 @@ fn staged_disease_matches_validated_reference_for_sparse_shuffled_cases() {
             damage_per_tick: 1,
             transmission_per_million: 600_000,
             combat_transmission_per_million: 0,
+            birth_transmission_per_million: 0,
         },
     ];
     disease.cases = (0..200)

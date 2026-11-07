@@ -22,6 +22,14 @@ pub fn compile(mut world: World) -> Result<Imported, String> {
         return Err("preset institutions are not supported by the parallel simulation".into());
     }
     world.validate()?;
+    if world.disease.as_ref().is_some_and(|disease| {
+        disease
+            .strains
+            .iter()
+            .any(|strain| strain.birth_transmission_per_million > 0)
+    }) {
+        return Err("birth transmission is not supported by the fused host".into());
+    }
     if let Some(conflict) = &mut world.conflict {
         conflict.encounters.par_iter_mut().for_each(|fight| {
             if fight
