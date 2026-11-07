@@ -42,6 +42,7 @@ pub fn configure(skills: &mut Skills, categories: &[RecipeCategory]) -> Result<(
                 completions_per_level: training.completions_per_level,
                 max_level: training.max_level,
                 work_per_level: training.work_per_level,
+                practice_each_tick: training.practice_each_tick,
             });
         }
         for &recipe in recipes.iter() {

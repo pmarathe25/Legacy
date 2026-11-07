@@ -1759,6 +1759,7 @@ fn authored_craft_categories_share_practice_across_real_recipes() {
             completions_per_level: 2,
             max_level: 3,
             work_per_level: 1,
+            practice_each_tick: false,
         }),
         records: vec![],
         events: vec![],

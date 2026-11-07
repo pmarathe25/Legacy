@@ -15367,6 +15367,7 @@ fn training_rules(work_per_level: u32) -> Skills {
             completions_per_level: 1,
             max_level: 1,
             work_per_level,
+            practice_each_tick: false,
         }],
         aliases: vec![],
         catalog_training: None,
@@ -15394,6 +15395,34 @@ fn concentrated_work_learning_is_identical_across_workers() {
                 }
                 let state = world.snapshot();
                 assert_eq!(state.skills.as_ref().unwrap().records.len(), 1024);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn concentrated_partial_work_learning_is_deterministic() {
+    let mut initial = concentrated(4096);
+    initial.physical.recipes[0].ticks = 10;
+    let mut skills = training_rules(1);
+    skills.rules[0].practice_each_tick = true;
+    skills.rules[0].completions_per_level = 2;
+    initial.skills = Some(skills);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1024);
+                assert!(world.advance().unwrap().finished.is_empty());
+                let state = world.snapshot();
+                let records = &state.skills.as_ref().unwrap().records;
+                assert_eq!(records.len(), 1024);
+                assert!(records.iter().all(|row| row.completions == 1));
+                assert!(state.physical.work.iter().all(|row| row.job.remaining == 9));
                 state
             })
     };
@@ -15598,6 +15627,67 @@ fn controlled_work_uses_actual_inputs_and_advances_only_when_chosen() {
                 assert_eq!(world.tick(), 6);
                 assert!(world.start_work(2, 1, 1).is_err());
                 world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn unfinished_work_can_teach_without_counting_pauses_or_completion_twice() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.people[0].controlled = true;
+    initial.people[0].seek_meals = false;
+    initial.people[0].hunger = 0;
+    initial.rules.max_work_hunger = 100;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.physical.recipes[0].ticks = 10;
+    let mut skills = training_rules(1);
+    skills.rules[0].practice_each_tick = true;
+    skills.rules[0].completions_per_level = 2;
+    skills.rules[0].max_level = 2;
+    initial.skills = Some(skills);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.start_work(1, 1, 1).unwrap().started, vec![1]);
+                world.advance().unwrap();
+                assert!(world.snapshot().skills.as_ref().unwrap().records.is_empty());
+                let stale = world.prepare().unwrap();
+                assert!(world.continue_work(1).unwrap().finished.is_empty());
+                assert!(world.commit(stale).is_err());
+                let saved = world.snapshot();
+                assert_eq!(saved.physical.work[0].job.remaining, 9);
+                assert_eq!(saved.skills.as_ref().unwrap().records[0].completions, 1);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let mut abandoned = saved.clone();
+                abandoned.people[0].controlled = false;
+                abandoned.people[0].willing_to_work = false;
+                let mut abandoned = Economy::compile(abandoned).unwrap();
+                assert_eq!(abandoned.advance().unwrap().abandoned, vec![1]);
+                assert_eq!(
+                    abandoned.snapshot().skills.unwrap().records[0].completions,
+                    1
+                );
+                for remaining in [8, 6, 4, 2, 0] {
+                    let events = world.continue_work(1).unwrap();
+                    restored.continue_work(1).unwrap();
+                    assert_eq!(world.snapshot(), restored.snapshot());
+                    assert_eq!(world.snapshot().physical.work[0].job.remaining, remaining);
+                    assert_eq!(!events.finished.is_empty(), remaining == 0);
+                }
+                let state = world.snapshot();
+                let record = &state.skills.as_ref().unwrap().records[0];
+                assert_eq!(record.completions, 6);
+                assert!(record.credited_jobs.is_empty());
+                state
             })
     };
     assert_eq!(run(1), run(4));
@@ -15869,7 +15959,14 @@ fn concentrated_skills_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let mut initial = concentrated(count);
-    initial.skills = Some(training_rules(1));
+    let practice = std::env::var_os("LEGACY_PRACTICE").is_some();
+    let mut skills = training_rules(1);
+    if practice {
+        initial.physical.recipes[0].ticks = 10;
+        skills.rules[0].practice_each_tick = true;
+        skills.rules[0].completions_per_level = 2;
+    }
+    initial.skills = Some(skills);
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -15883,13 +15980,16 @@ fn concentrated_skills_benchmark() {
                     world.advance().unwrap();
                 }
                 let elapsed = started.elapsed().as_secs_f64();
+                if practice {
+                    assert!(!world.snapshot().skills.unwrap().records.is_empty());
+                }
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=3 elapsed={:.6}",
+                "workers={workers} people={count} ticks=3 practice={practice} elapsed={:.6}",
                 samples[1]
             );
         });

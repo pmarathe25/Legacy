@@ -30,6 +30,15 @@ pub fn compile(mut world: World) -> Result<Imported, String> {
     }) {
         return Err("birth transmission is not supported by the fused host".into());
     }
+    if world.skills.as_ref().is_some_and(|skills| {
+        skills.rules.iter().any(|rule| rule.practice_each_tick)
+            || skills
+                .catalog_training
+                .as_ref()
+                .is_some_and(|rule| rule.practice_each_tick)
+    }) {
+        return Err("work practice is not supported by the fused host".into());
+    }
     if let Some(conflict) = &mut world.conflict {
         conflict.encounters.par_iter_mut().for_each(|fight| {
             if fight

@@ -8,6 +8,7 @@ fn skills() -> Skills {
             completions_per_level: 2,
             max_level: 3,
             work_per_level: 2,
+            practice_each_tick: false,
         }],
         records: vec![],
         aliases: vec![],
@@ -32,6 +33,18 @@ fn validate(state: &Skills, now: u64) {
     state
         .validate(&HashSet::from([11, 99]), &HashSet::from([7, 8]), now)
         .unwrap();
+}
+
+#[test]
+fn older_rules_keep_completion_based_learning() {
+    let mut value = serde_json::to_value(skills()).unwrap();
+    value["rules"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("practice_each_tick");
+    let restored: Skills = serde_json::from_value(value).unwrap();
+    assert!(!restored.rules[0].practice_each_tick);
+    validate(&restored, 0);
 }
 
 #[test]

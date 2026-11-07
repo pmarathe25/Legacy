@@ -8,6 +8,9 @@ pub struct Rule {
     pub completions_per_level: u32,
     pub max_level: u16,
     pub work_per_level: u32,
+    /// Count each boundary of real work as practice, including unfinished jobs.
+    #[serde(default)]
+    pub practice_each_tick: bool,
 }
 impl Rule {
     pub fn threshold(&self, level: u16) -> u64 {
@@ -32,12 +35,14 @@ impl Rule {
 pub struct Record {
     pub person: u64,
     pub recipe: u32,
+    /// Completed jobs, or worked boundaries for a practice-based rule.
     pub completions: u64,
     pub credited_jobs: Vec<Attribution>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Attribution {
+    /// The completion or practice boundary; the name is retained in saves.
     pub finished_at: u64,
     pub job: u64,
 }
@@ -73,4 +78,6 @@ pub struct CatalogTraining {
     pub completions_per_level: u32,
     pub max_level: u16,
     pub work_per_level: u32,
+    #[serde(default)]
+    pub practice_each_tick: bool,
 }

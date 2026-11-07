@@ -16,6 +16,7 @@ rules = []
 completions_per_level = 2
 max_level = 5
 work_per_level = 1
+practice_each_tick = true
 
 [knowledge]
 max_records = 4

@@ -4865,6 +4865,7 @@ impl Economy {
         let mut skills = game_parallel_economy_skills::advance(
             self.skills.as_ref(),
             self.physical.work(),
+            &rates,
             physical.events(),
             dynamics.as_ref().and_then(|d| d.social.as_ref()),
             &self.people,

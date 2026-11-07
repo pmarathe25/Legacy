@@ -26,6 +26,18 @@ fn reload(kernel: Kernel) -> Kernel {
 }
 
 #[test]
+fn fused_host_rejects_unsupported_work_practice() {
+    let mut state = world();
+    state.skills.as_mut().unwrap().rules[0].practice_each_tick = true;
+    assert!(
+        Kernel::compile(state)
+            .err()
+            .unwrap()
+            .contains("work practice")
+    );
+}
+
+#[test]
 fn finished_work_trains_only_its_worker_and_next_job_uses_committed_rate() {
     let mut kernel = Kernel::compile(world()).unwrap();
     start(&mut kernel, 1, 1, 1);
@@ -226,6 +238,7 @@ fn malformed_skill_worlds_and_unsupported_reference_hosts_reject_without_mutatio
             completions_per_level: 1,
             max_level: 1,
             work_per_level: 1,
+            practice_each_tick: false,
         }],
         records: vec![],
         aliases: vec![],

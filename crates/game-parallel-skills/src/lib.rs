@@ -182,7 +182,7 @@ impl Skills {
         Index { rates, aliases }
     }
 
-    /// Stage credits from newly finished jobs, never repeated storage-delivery attempts.
+    /// Stage credits for completed jobs or actual practice boundaries.
     /// The host supplies validated identities and publishes the returned state only
     /// after every owner prepares successfully. Repeated attribution is idempotent.
     pub fn prepare(&self, completions: &[Completion], tick: u64) -> Self {

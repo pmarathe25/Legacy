@@ -7,7 +7,7 @@ use game_parallel_skills::Completion;
 pub use game_parallel_skills::{Record, Rule, Skills, TeacherPolicy};
 use game_parallel_social::Social;
 use rayon::prelude::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 #[macro_export]
 macro_rules! continuing_work {
     ($world:expr, $meals:expr, $offers:expr) => {{
@@ -89,13 +89,26 @@ pub fn rates(
 pub fn advance(
     old: Option<&Skills>,
     work: &[Work],
+    rates: &[(u64, u64)],
     physical: &Events,
     social: Option<&Social>,
     people: &[Person],
     tick: u64,
 ) -> Option<Skills> {
     let old = old?;
-    let completions: Vec<_> = physical
+    let practicing: HashSet<_> = old
+        .rules
+        .iter()
+        .filter(|rule| rule.practice_each_tick)
+        .map(|rule| rule.recipe)
+        .collect();
+    let aliases: HashMap<_, _> = old
+        .aliases
+        .iter()
+        .map(|alias| (alias.recipe, alias.canonical))
+        .collect();
+    let uses_practice = |recipe| practicing.contains(aliases.get(&recipe).unwrap_or(&recipe));
+    let mut completions: Vec<_> = physical
         .finished
         .par_iter()
         .filter_map(|id| {
@@ -103,6 +116,9 @@ pub fn advance(
                 .binary_search_by_key(id, |w| w.job.id)
                 .ok()
                 .map(|i| &work[i])?;
+            if uses_practice(row.job.recipe) {
+                return None;
+            }
             Some(Completion {
                 job: *id,
                 worker: row.job.worker,
@@ -111,6 +127,22 @@ pub fn advance(
             })
         })
         .collect();
+    if !practicing.is_empty() {
+        completions.par_extend(rates.par_iter().filter_map(|&(id, rate)| {
+            let row = work
+                .binary_search_by_key(&id, |row| row.job.id)
+                .ok()
+                .map(|i| &work[i])?;
+            (rate > 0 && row.job.remaining > 0 && uses_practice(row.job.recipe)).then_some(
+                Completion {
+                    job: id,
+                    worker: row.job.worker,
+                    recipe: row.job.recipe,
+                    finished_at: tick,
+                },
+            )
+        }));
+    }
     let pairs: Vec<_> = social.map_or_else(Vec::new, |s| {
         s.events
             .par_iter()

@@ -9,12 +9,14 @@ fn skills() -> Skills {
             completions_per_level: 1,
             max_level: 4,
             work_per_level: 2,
+            practice_each_tick: false,
         }],
         aliases: vec![],
         catalog_training: Some(CatalogTraining {
             completions_per_level: 2,
             max_level: 3,
             work_per_level: 1,
+            practice_each_tick: true,
         }),
         records: vec![],
         events: vec![],
@@ -44,6 +46,22 @@ fn authored_categories_form_stable_groups_and_preserve_explicit_rules() {
     configure(&mut state, &rows).unwrap();
     assert_eq!(state.canonical(8), 7);
     assert_eq!(state.canonical(9), 9);
+    assert!(
+        !state
+            .rules
+            .iter()
+            .find(|rule| rule.recipe == 7)
+            .unwrap()
+            .practice_each_tick
+    );
+    assert!(
+        state
+            .rules
+            .iter()
+            .find(|rule| rule.recipe == 9)
+            .unwrap()
+            .practice_each_tick
+    );
     assert_eq!(
         state
             .rules
