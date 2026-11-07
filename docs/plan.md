@@ -2,16 +2,11 @@
 
 The goal is a complete, playable sandbox simulation of people, societies, and a reincarnating ruler, with graphics deferred. Implement the agreed mechanics in a modular Rust backend with a CLI and a public interface that a graphics engine can use later. Preserve room for an overarching story or long-term world change later. The original settlement prototype becomes the first economic milestone rather than the project's final scope.
 
-**Readiness:** Ready to begin implementation. The kernel, physical simulation, and performance comparison have a concrete starting task below. The full game still needs answers about combat, reincarnation details, social procedures, and other player-facing rules. Ask about those when their dependent work approaches; continue independent implementation. Do not silently turn an unanswered question into a game rule.
+**Status:** The repository contains a playable, parallel-first simulation with representative slices of several mechanics. The full game remains unfinished; the detailed documents describe intended behavior, including features that are not yet implemented. See the [runner documentation](../crates/game-economy-cli/README.md) for the current scenarios and commands.
 
 ## Start here
 
-1. Read this overview, then [the first coding task](design/implementation.md#first-coding-task). The repository currently contains design documents only; create the Rust workspace there described.
-2. Implement the small executable fixture, commands, advancement, and tests in that task. Start with simple typed storage as a comparison baseline, and introduce bounded parallel execution in the same initial slice.
-3. Compare Bevy ECS, Legion, and custom storage with that runnable workload before expanding the production engine. Keep one implementation after the comparison; retain useful tests and benchmarks.
-4. Continue through the [implementation stages](design/implementation.md#1-deterministic-concurrent-simulation-kernel), reading the relevant domain document as each feature is added. The [open questions](design/decisions.md#when-to-ask) identify which later behaviors need discussion.
-
-Do not begin by generating more plans, a generic engine framework, or scaffolding every future system. The first result should be runnable code with a test that exercises a real state transition.
+Read the current workspace and its executable tests for implemented behavior, then consult the relevant domain document when extending a mechanic. The [implementation stages](design/implementation.md#1-deterministic-concurrent-simulation-kernel) and [open questions](design/decisions.md#when-to-ask) provide historical design context. The previous simulation is available in git history; the workspace maintains one simulation implementation.
 
 ## Working agreement
 
