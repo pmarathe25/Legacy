@@ -1,4 +1,4 @@
-//! Resolve fully feasible single-leg transfers with exclusive sources in parallel.
+//! Resolve single-leg transfers with exclusive sources and shared destinations.
 use crate::independent_transfer::after;
 use game_parallel_lot_model::{
     Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, Spoilage, State, Transaction,
@@ -6,6 +6,7 @@ use game_parallel_lot_model::{
 };
 use game_parallel_lot_planning::Draft;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy)]
 struct Row {
@@ -18,6 +19,7 @@ struct Row {
 pub fn prepare(
     state: &State,
     instance: u64,
+    seed: u64,
     transactions: &[Transaction],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
@@ -103,29 +105,29 @@ pub fn prepare(
     if movement_ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
         return Ok(None);
     }
-    // This path avoids arbitration only when every source and destination can
-    // satisfy the whole batch. Any contested capacity uses the general planner.
-    if rows.par_iter().any(|row| {
-        let available: u128 = state.containers[row.source]
-            .lots
-            .iter()
-            .filter(|lot| {
-                lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
-            })
-            .map(|lot| u128::from(lot.quantity))
-            .sum();
-        available < u128::from(row.movement.quantity)
-    }) {
-        return Ok(None);
-    }
+    let source_valid: Vec<_> = rows
+        .par_iter()
+        .map(|row| {
+            let available: u128 = state.containers[row.source]
+                .lots
+                .iter()
+                .filter(|lot| {
+                    lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next)
+                })
+                .map(|lot| u128::from(lot.quantity))
+                .sum();
+            available >= u128::from(row.movement.quantity)
+        })
+        .collect();
     let mut amounts: Vec<_> = rows
         .par_iter()
-        .map(|row| (row.destination, row.movement.quantity))
+        .zip(source_valid.par_iter())
+        .filter_map(|(row, &valid)| valid.then_some((row.destination, row.movement.quantity)))
         .collect();
     if amounts.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
         amounts.par_sort_unstable_by_key(|row| row.0);
     }
-    if amounts.par_chunk_by(|a, b| a.0 == b.0).any(|group| {
+    let contested = amounts.par_chunk_by(|a, b| a.0 == b.0).any(|group| {
         let container = &state.containers[group[0].0];
         let used: u128 = if container.next_expiry.is_none_or(|at| at > next) {
             u128::from(container.used)
@@ -139,9 +141,60 @@ pub fn prepare(
         };
         let incoming: u128 = group.par_iter().map(|row| u128::from(row.1)).sum();
         used + incoming > u128::from(container.capacity)
-    }) {
-        return Ok(None);
-    }
+    });
+    let accepted: Vec<bool> = if contested {
+        let containers: Vec<_> = state.containers.par_iter().collect();
+        let used: Vec<_> = state
+            .containers
+            .par_iter()
+            .map(|container| {
+                if container.next_expiry.is_none_or(|at| at > next) {
+                    container.used
+                } else {
+                    container
+                        .lots
+                        .par_iter()
+                        .filter(|lot| lot.expires_at.is_none_or(|at| at > next))
+                        .map(|lot| lot.quantity)
+                        .sum()
+                }
+            })
+            .collect();
+        let flags: Vec<_> = (0..rows.len())
+            .into_par_iter()
+            .map(|_| AtomicBool::new(false))
+            .collect();
+        let candidates: Vec<_> = rows
+            .par_iter()
+            .zip(source_valid.par_iter())
+            .enumerate()
+            .filter_map(|(index, (row, &valid))| {
+                valid.then(|| game_parallel_lot_allocation::Destination {
+                    index,
+                    place: row.destination,
+                    rank: game_parallel_genetics::random(seed, row.transaction, next),
+                    transaction: row.transaction,
+                    id: row.movement.id,
+                    quantity: row.movement.quantity,
+                })
+            })
+            .collect();
+        // Sources never overlap destinations in this path, so no action has an
+        // outgoing credit at a contested destination.
+        game_parallel_lot_allocation::grant_destinations(
+            candidates,
+            &[],
+            &containers,
+            &used,
+            &flags,
+        );
+        flags
+            .into_par_iter()
+            .map(|flag| flag.load(Ordering::Relaxed))
+            .collect()
+    } else {
+        source_valid
+    };
     let mut spoiled: Vec<_> = state
         .containers
         .par_iter()
@@ -161,16 +214,17 @@ pub fn prepare(
     let chunk_size = rows.len().div_ceil(64).clamp(16, 2048);
     let parts: Vec<_> = rows
         .par_chunks(chunk_size)
-        .map(|chunk| {
+        .zip(accepted.par_chunks(chunk_size))
+        .map(|(chunk, decisions)| {
             let mut lots = Vec::with_capacity(chunk.len());
             let mut headers = Vec::with_capacity(chunk.len());
             let mut outcomes = Vec::with_capacity(chunk.len());
             let mut changes = Vec::with_capacity(chunk.len());
             let mut incoming = Vec::with_capacity(chunk.len());
-            for row in chunk {
+            for (row, &accepted) in chunk.iter().zip(decisions) {
                 let source = &state.containers[row.source];
                 let begin = lots.len();
-                let mut remaining = row.movement.quantity;
+                let mut remaining = if accepted { row.movement.quantity } else { 0 };
                 for lot in &source.lots {
                     if remaining == 0 {
                         break;
@@ -188,15 +242,23 @@ pub fn prepare(
                     }
                 }
                 debug_assert_eq!(remaining, 0);
-                headers.push((row.movement.id, true, begin..lots.len()));
+                headers.push((row.movement.id, accepted, begin..lots.len()));
                 outcomes.push(TransactionOutcome {
                     id: row.transaction,
-                    accepted: true,
+                    accepted,
                 });
-                changes.push((
-                    row.source,
-                    after(source, next, row.movement.good, row.movement.quantity, &[]),
-                ));
+                if accepted || source.next_expiry.is_some_and(|at| at <= next) {
+                    changes.push((
+                        row.source,
+                        after(
+                            source,
+                            next,
+                            row.movement.good,
+                            if accepted { row.movement.quantity } else { 0 },
+                            &[],
+                        ),
+                    ));
+                }
             }
             (OutcomeChunk { headers, lots }, outcomes, changes, incoming)
         })
@@ -270,13 +332,18 @@ pub fn prepare(
             )
         })
         .collect();
+    let changed_destinations: Vec<_> = if spoiled.is_empty() {
+        Vec::new()
+    } else {
+        destination_changes.par_iter().map(|row| row.0).collect()
+    };
     changes.par_extend(destination_changes);
     if !spoiled.is_empty() {
         changes.par_extend(state.containers.par_iter().enumerate().filter_map(
             |(index, container)| {
                 (container.next_expiry.is_some_and(|at| at <= next)
                     && sources.binary_search(&index).is_err()
-                    && destinations.binary_search(&index).is_err())
+                    && changed_destinations.binary_search(&index).is_err())
                 .then(|| (index, after(container, next, 0, 0, &[])))
             },
         ));
@@ -347,32 +414,48 @@ mod tests {
     }
 
     #[test]
-    fn fast_path_declines_contended_or_invalid_topologies() {
+    fn fast_path_handles_contention_and_declines_invalid_topologies() {
         let (state, actions) = fixture();
-        assert!(prepare(&state, 1, &actions, true).unwrap().is_some());
+        assert!(prepare(&state, 1, 17, &actions, true).unwrap().is_some());
         let mut changed = actions.clone();
         changed[1].movements[0].from = changed[0].movements[0].from;
-        assert!(prepare(&state, 1, &changed, true).unwrap().is_none());
+        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
         let mut changed = actions.clone();
         changed[0].movements[0].to = Some(Place::Person(2));
-        assert!(prepare(&state, 1, &changed, true).unwrap().is_none());
+        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
         let mut changed = actions.clone();
         changed[0].movements[0].to = Some(Place::Person(9999));
-        assert!(prepare(&state, 1, &changed, true).unwrap().is_none());
+        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
         let mut changed = actions.clone();
         changed[1].movements[0].id = changed[0].movements[0].id;
-        assert!(prepare(&state, 1, &changed, true).unwrap().is_none());
+        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
         let mut changed = actions.clone();
         changed[0].movements[0].quantity = 2;
-        assert!(prepare(&state, 1, &changed, true).unwrap().is_none());
+        let shortage = prepare(&state, 1, 17, &changed, true).unwrap().unwrap();
+        assert_eq!(
+            shortage
+                .transactions
+                .iter()
+                .filter(|row| !row.accepted)
+                .count(),
+            1
+        );
         let mut limited = state.clone();
         *limited.containers.last_mut().unwrap() =
             Container::new(Place::Person(1000), 127, vec![]).unwrap();
-        assert!(prepare(&limited, 1, &actions, true).unwrap().is_none());
+        let contested = prepare(&limited, 1, 17, &actions, true).unwrap().unwrap();
+        assert_eq!(
+            contested
+                .transactions
+                .iter()
+                .filter(|row| !row.accepted)
+                .count(),
+            1
+        );
         let mut changed = actions;
         let extra = changed[1].movements[0];
         changed[0].movements.push(extra);
-        assert!(prepare(&state, 1, &changed, true).unwrap().is_none());
+        assert!(prepare(&state, 1, 17, &changed, true).unwrap().is_none());
     }
 
     #[test]
@@ -393,6 +476,7 @@ mod tests {
         }
         *state.containers.last_mut().unwrap() =
             Container::new(Place::Person(1000), u64::MAX, vec![]).unwrap();
-        assert!(prepare(&state, 1, &actions, true).unwrap().is_none());
+        let result = prepare(&state, 1, 17, &actions, true).unwrap().unwrap();
+        assert!(result.transactions.iter().any(|row| !row.accepted));
     }
 }

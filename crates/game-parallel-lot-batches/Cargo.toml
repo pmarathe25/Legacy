@@ -11,4 +11,6 @@ profile = ["dep:game-diagnostics"]
 game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-parallel-lot-model = { path = "../game-parallel-lot-model" }
 game-parallel-lot-planning = { path = "../game-parallel-lot-planning" }
+game-parallel-lot-allocation = { path = "../game-parallel-lot-allocation" }
+game-parallel-genetics = { path = "../game-parallel-genetics" }
 rayon.workspace = true

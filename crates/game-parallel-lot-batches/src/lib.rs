@@ -140,7 +140,7 @@ fn prepare_impl(
     if partition
         && additions.is_empty()
         && compact.is_empty()
-        && let Some(draft) = fan_in::prepare(state, instance, transactions, advance)?
+        && let Some(draft) = fan_in::prepare(state, instance, seed, transactions, advance)?
     {
         return Ok((draft, additions));
     }

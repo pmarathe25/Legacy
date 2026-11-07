@@ -224,7 +224,15 @@ fn shared_destination_transfers_match_general_planning_and_preserve_receipts() {
                 from: Place::Person(id),
                 to: Some(Place::Person(if id % 2 == 0 { 1000 } else { 1001 })),
                 good: if id % 3 == 0 { 2 } else { 1 },
-                quantity: 3,
+                quantity: if id % 3 == 0 {
+                    if id % 5 == 0 { 4 } else { 2 }
+                } else if id % 5 == 0 {
+                    5
+                } else if id % 7 == 0 {
+                    1
+                } else {
+                    3
+                },
             }],
             creations: vec![],
         });
@@ -236,68 +244,146 @@ fn shared_destination_transfers_match_general_planning_and_preserve_receipts() {
     ));
     initial.push(container(Place::Person(1001), 1000, vec![lot(1, 2, None)]));
     initial.push(container(Place::Person(9999), 10, vec![lot(1, 2, Some(1))]));
-    let run =
-        |workers, reverse: bool, advance: bool, limited: bool, overlap: bool, shortage: bool| {
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(workers)
-                .build()
-                .unwrap()
-                .install(|| {
-                    let mut actions = actions.clone();
-                    let mut holders = initial.clone();
-                    if limited {
-                        *holders
-                            .iter_mut()
-                            .find(|row| row.place == Place::Person(1000))
-                            .unwrap() = container(Place::Person(1000), 10, vec![lot(1, 2, None)]);
-                    }
-                    if overlap {
-                        actions[1].movements[0].from = actions[0].movements[0].from;
-                    }
-                    if shortage {
-                        actions[0].movements[0].quantity = 50;
-                    }
-                    if reverse {
-                        actions.reverse();
-                    }
-                    let mut fast = store(holders.clone());
-                    let mut reference = store(holders);
-                    let draft = fast
-                        .prepare_with_empty(17, &actions, vec![], advance)
-                        .unwrap();
-                    let stale = fast
-                        .prepare_with_empty(17, &actions, vec![], advance)
-                        .unwrap();
-                    let general = unpartitioned(&reference, 17, &actions, vec![], &[], advance);
-                    assert_eq!(draft.transactions(), general.transactions());
-                    assert_eq!(draft.outcomes(), general.outcomes());
-                    assert_eq!(draft.spoiled(), general.spoiled());
-                    let receipts = draft.outcomes();
-                    fast.commit(draft).unwrap();
-                    assert!(fast.commit(stale).is_err());
-                    reference.commit(general).unwrap();
-                    assert_eq!(fast.export(), reference.export());
-                    assert_eq!(
-                        Store::compile(fast.export()).unwrap().export(),
-                        fast.export()
-                    );
-                    assert_eq!(receipts.len(), actions.len());
+    let run = |workers,
+               seed,
+               reverse: bool,
+               advance: bool,
+               (limited, overlap, shortage): (bool, bool, u8)| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                let mut holders = initial.clone();
+                if limited {
+                    *holders
+                        .iter_mut()
+                        .find(|row| row.place == Place::Person(1000))
+                        .unwrap() = container(Place::Person(1000), 10, vec![lot(1, 2, None)]);
+                }
+                if overlap {
+                    actions[1].movements[0].from = actions[0].movements[0].from;
+                }
+                if shortage == 1 {
+                    actions[0].movements[0].quantity = 50;
+                } else if shortage == 2 {
+                    actions
+                        .iter_mut()
+                        .for_each(|action| action.movements[0].quantity = 50);
+                }
+                if reverse {
+                    actions.reverse();
+                }
+                let mut fast = store(holders.clone());
+                let mut reference = store(holders);
+                let draft = fast
+                    .prepare_with_empty(seed, &actions, vec![], advance)
+                    .unwrap();
+                let stale = fast
+                    .prepare_with_empty(seed, &actions, vec![], advance)
+                    .unwrap();
+                let general = unpartitioned(&reference, seed, &actions, vec![], &[], advance);
+                assert_eq!(draft.transactions(), general.transactions());
+                assert_eq!(draft.outcomes(), general.outcomes());
+                assert_eq!(draft.spoiled(), general.spoiled());
+                let receipts = draft.outcomes();
+                fast.commit(draft).unwrap();
+                assert!(fast.commit(stale).is_err());
+                reference.commit(general).unwrap();
+                assert_eq!(fast.export(), reference.export());
+                assert_eq!(
+                    Store::compile(fast.export()).unwrap().export(),
                     fast.export()
-                })
-        };
+                );
+                assert_eq!(receipts.len(), actions.len());
+                fast.export()
+            })
+    };
     for advance in [false, true] {
-        for (limited, overlap, shortage) in [
-            (false, false, false),
-            (true, false, false),
-            (false, true, false),
-            (false, false, true),
+        for case in [
+            (false, false, 0),
+            (true, false, 0),
+            (false, true, 0),
+            (false, false, 1),
+            (true, false, 1),
+            (false, false, 2),
         ] {
-            assert_eq!(
-                run(1, false, advance, limited, overlap, shortage),
-                run(4, true, advance, limited, overlap, shortage)
-            );
+            for seed in [1, 17, 919] {
+                assert_eq!(
+                    run(1, seed, false, advance, case),
+                    run(4, seed, true, advance, case)
+                );
+            }
         }
     }
+}
+
+#[test]
+#[ignore = "manual shared destination arbitration benchmark"]
+fn shared_destination_arbitration_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000u64);
+    assert!(count > 1);
+    let target = count + 1;
+    let mut holders: Vec<_> = (1..=count)
+        .map(|id| container(Place::Person(id), 1, vec![lot(1, 1, None)]))
+        .collect();
+    holders.push(container(Place::Person(target), count / 2, vec![]));
+    let actions: Vec<_> = (1..=count)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: Place::Person(id),
+                to: Some(Place::Person(target)),
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut fast_samples = Vec::new();
+            let mut general_samples = Vec::new();
+            for round in 0..4 {
+                let mut fast = store(holders.clone());
+                let mut general = store(holders.clone());
+                let start = std::time::Instant::now();
+                let draft = fast.prepare_with_empty(17, &actions, vec![], true).unwrap();
+                let fast_time = start.elapsed().as_secs_f64();
+                let start = std::time::Instant::now();
+                let reference = unpartitioned(&general, 17, &actions, vec![], &[], true);
+                let general_time = start.elapsed().as_secs_f64();
+                assert_eq!(draft.transactions(), reference.transactions());
+                assert_eq!(draft.outcomes(), reference.outcomes());
+                fast.commit(draft).unwrap();
+                general.commit(reference).unwrap();
+                assert_eq!(fast.export(), general.export());
+                if round > 0 {
+                    fast_samples.push(fast_time);
+                    general_samples.push(general_time);
+                }
+            }
+            fast_samples.sort_by(f64::total_cmp);
+            general_samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} transfers={count} capacity={} optimized={:.6} general={:.6}",
+                count / 2,
+                fast_samples[1],
+                general_samples[1]
+            );
+        });
 }
 
 #[test]

@@ -17054,23 +17054,32 @@ fn autonomous_delivery_workload(count: u64) -> State {
 fn concentrated_autonomous_deliveries_share_real_capacity_deterministically() {
     let count = 512;
     let initial = autonomous_delivery_workload(count);
-    let run = |workers| {
+    let run = |workers, capacity| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
-                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut state = initial.clone();
+                state.rules.carrying_capacity = capacity;
+                for container in &mut state.physical.custody.containers {
+                    if matches!(container.place, Place::Person(_)) {
+                        container.capacity = capacity;
+                    }
+                }
+                let mut world = Economy::compile(state).unwrap();
                 world.advance().unwrap();
                 let state = world.snapshot();
-                assert!(
+                assert_eq!(
                     state
                         .missions
                         .as_ref()
                         .unwrap()
                         .entries
                         .iter()
-                        .all(|mission| mission.objective_met)
+                        .filter(|mission| mission.objective_met)
+                        .count(),
+                    count.min(capacity) as usize
                 );
                 assert_eq!(
                     state
@@ -17084,12 +17093,14 @@ fn concentrated_autonomous_deliveries_share_real_capacity_deterministically() {
                         .iter()
                         .map(|lot| lot.quantity)
                         .sum::<u64>(),
-                    count
+                    count.min(capacity)
                 );
                 state
             })
     };
-    assert_eq!(run(1), run(4));
+    for capacity in [count / 2, count + 1] {
+        assert_eq!(run(1, capacity), run(4, capacity));
+    }
 }
 
 #[test]
@@ -17103,7 +17114,18 @@ fn concentrated_autonomous_delivery_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = autonomous_delivery_workload(count);
+    let capacity = std::env::var("LEGACY_CAPACITY")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(count + 1);
+    assert!(capacity > 0);
+    let mut initial = autonomous_delivery_workload(count);
+    initial.rules.carrying_capacity = capacity;
+    for container in &mut initial.physical.custody.containers {
+        if matches!(container.place, Place::Person(_)) {
+            container.capacity = capacity;
+        }
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -17116,14 +17138,16 @@ fn concentrated_autonomous_delivery_benchmark() {
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 let state = world.snapshot();
-                assert!(
+                assert_eq!(
                     state
                         .missions
                         .as_ref()
                         .unwrap()
                         .entries
                         .iter()
-                        .all(|mission| mission.objective_met)
+                        .filter(|mission| mission.objective_met)
+                        .count(),
+                    count.min(capacity) as usize
                 );
                 if round > 0 {
                     samples.push(elapsed);
@@ -17131,7 +17155,7 @@ fn concentrated_autonomous_delivery_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} deliveries={count} elapsed={:.6}",
+                "workers={workers} deliveries={count} capacity={capacity} elapsed={:.6}",
                 samples[1]
             );
             #[cfg(feature = "profile")]
