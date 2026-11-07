@@ -998,6 +998,7 @@ name = "game-opinions"
 version = "0.2.0"
 dependencies = [
  "game-agreements",
+ "game-diagnostics",
  "game-opinions-model",
  "game-social",
  "rayon",

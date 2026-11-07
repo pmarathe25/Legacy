@@ -3,7 +3,12 @@ name = "game-opinions"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+
+[features]
+profile = ["dep:game-diagnostics"]
+
 [dependencies]
+game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-agreements = { path = "../game-agreements" }
 game-opinions-model = { path = "../game-opinions-model" }
 rayon.workspace = true

@@ -5,7 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
-profile = ["dep:game-diagnostics", "game-families/profile", "game-lot-runtime/profile", "game-economy-taking/profile", "game-economy-work/profile", "game-economy-dynamics/profile"]
+profile = ["dep:game-diagnostics", "game-families/profile", "game-lot-runtime/profile", "game-economy-taking/profile", "game-economy-work/profile", "game-economy-dynamics/profile", "game-opinions/profile"]
 
 [dependencies]
 game-economy-taking = { path = "../game-economy-taking" }

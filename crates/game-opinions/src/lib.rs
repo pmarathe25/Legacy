@@ -654,6 +654,8 @@ impl Opinions {
         encounters: &[game_social::Encounter],
         tick: u64,
     ) {
+        #[cfg(feature = "profile")]
+        let mut social_phase = game_diagnostics::span("opinions.social.affinity");
         if self.tracks_affinity_encounters() && !encounters.is_empty() {
             let unpressured: Vec<_> = encounters
                 .par_iter()
@@ -673,6 +675,11 @@ impl Opinions {
                 .collect();
             harm::affinity(self, &unpressured, harm::AffinityKind::Encounter);
             harm::affinity(self, &pressured, harm::AffinityKind::PressuredEncounter);
+        }
+        #[cfg(feature = "profile")]
+        {
+            drop(social_phase);
+            social_phase = game_diagnostics::span("opinions.social.trust_prepare");
         }
         if (self.rules.encounter_gain == 0 || encounters.is_empty())
             && events
@@ -819,6 +826,11 @@ impl Opinions {
         } else {
             changes
         };
+        #[cfg(feature = "profile")]
+        {
+            drop(social_phase);
+            social_phase = game_diagnostics::span("opinions.social.trust_merge");
+        }
         if self.records.is_empty() {
             let rules = &self.rules;
             self.events = updates
@@ -921,6 +933,8 @@ impl Opinions {
             .collect();
         self.events = merged.par_iter().filter_map(|row| row.1.clone()).collect();
         self.records = merged.into_par_iter().map(|row| row.0).collect();
+        #[cfg(feature = "profile")]
+        drop(social_phase);
     }
 }
 
