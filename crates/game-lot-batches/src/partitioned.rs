@@ -14,6 +14,8 @@ pub fn prepare_transactions(
     additions: &[Container],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("physical.partitioned.classify");
     if transactions.len() < 256 {
         return Ok(None);
     }
@@ -124,6 +126,11 @@ pub fn prepare_transactions(
         .filter(|(_, eligible)| !**eligible)
         .map(|(row, _)| row.clone())
         .collect();
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.partitioned.resolve");
+    }
     let (fast, general) = rayon::join(
         || super::independent_transfer::prepare_flat(state, instance, &transfers, advance),
         || {
@@ -140,7 +147,15 @@ pub fn prepare_transactions(
     );
     let Some(fast) = fast? else { return Ok(None) };
     let (general, _) = general?;
-    Ok(Some(merge(state, additions, &transfers, fast, general)))
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.partitioned.merge");
+    }
+    let result = merge(state, additions, &transfers, fast, general);
+    #[cfg(feature = "profile")]
+    drop(phase);
+    Ok(Some(result))
 }
 
 fn merge(

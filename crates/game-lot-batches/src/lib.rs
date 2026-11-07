@@ -85,6 +85,8 @@ fn prepare_impl(
     compact: &[u64],
     partition: bool,
 ) -> Result<(Draft, Vec<Container>), String> {
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("physical.batches.validate");
     additions.par_sort_unstable_by_key(|row| row.place);
     if additions
         .par_windows(2)
@@ -126,6 +128,11 @@ fn prepare_impl(
     {
         return Err("empty physical transaction".into());
     }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.batches.partition");
+    }
     if partition
         && additions.is_empty()
         && let Some(draft) = independent::prepare(state, instance, transactions, &compact, advance)?
@@ -166,6 +173,11 @@ fn prepare_impl(
     {
         return Ok((draft, additions));
     }
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.batches.flatten");
+    }
     let moves: Vec<_> = transactions
         .par_iter()
         .flat_map_iter(|row| row.movements.iter().copied())
@@ -205,6 +217,11 @@ fn prepare_impl(
         .par_iter()
         .flat_map_iter(|row| std::iter::repeat_n(row.id, row.creations.len()))
         .collect();
+    #[cfg(feature = "profile")]
+    {
+        drop(phase);
+        phase = game_diagnostics::span("physical.batches.general");
+    }
     let draft = game_lot_planning::prepare(
         state,
         instance,
@@ -220,5 +237,7 @@ fn prepare_impl(
         }),
         advance,
     )?;
+    #[cfg(feature = "profile")]
+    drop(phase);
     Ok((draft, additions))
 }
