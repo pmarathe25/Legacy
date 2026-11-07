@@ -6,6 +6,8 @@ This runner currently exposes the composed economic slice, not the complete camp
 
 `remember-people on|off` changes whether the current person records new local encounters; `known-people` displays their own bounded memories of who they met, where, and when. A memory is not a live location. The administrative forms take a person ID; scenarios can set `remember_people` on an individual knowledge mind.
 
+An individual can choose to share their firsthand encounter memories with `people-reporting on|off PRESSURE|none`, or disable such reports with `people-reporting off`. `people-reports` shows the current person's bounded secondhand reports, including speaker and observation time, separately from direct memories. A listener applies their own existing report-reception judgment. Scenarios can set `people_reporting = { willing = true }` or configure a personal `pressure_threshold`; omitted settings leave encounter reporting disabled.
+
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
 
 `content/scenarios/economy-conflict-project.toml` adds a third person and tactical combat to the same project. A person in a fight cannot simultaneously work, while the other person's project and the rest of the world continue.

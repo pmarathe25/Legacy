@@ -21,6 +21,11 @@ pub struct Mind {
     pub remember_people: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub people_seen: Vec<SeenPerson>,
+    /// Independent willingness to report one's own past encounters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub people_reporting: Option<Reporting>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub people_reports: Vec<PersonReport>,
     /// A private choice to share, optionally motivated by pressure from the listener.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reporting: Option<Reporting>,
@@ -37,6 +42,15 @@ pub struct SeenPerson {
     pub person: u64,
     pub region: u64,
     pub observed_at: u64,
+}
+/// A statement about a past encounter, not a claim about the person's current location.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonReport {
+    pub person: u64,
+    pub region: u64,
+    pub observed_at: u64,
+    pub speaker: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -106,6 +120,7 @@ impl Knowledge {
                 || !minds.insert(mind.person)
                 || mind.records.len() > self.max_records
                 || mind.people_seen.len() > self.max_records
+                || mind.people_reports.len() > self.max_records
                 || mind
                     .misreport
                     .and_then(|p| p.target)
@@ -122,6 +137,19 @@ impl Knowledge {
                     || !seen_people.insert(seen.person)
             }) {
                 return Err("invalid personal encounter memory");
+            }
+            let mut reported_people = HashSet::new();
+            if mind.people_reports.iter().any(|report| {
+                report.person == mind.person
+                    || report.speaker == mind.person
+                    || report.speaker == report.person
+                    || !people.contains(&report.person)
+                    || !people.contains(&report.speaker)
+                    || !regions.contains(&report.region)
+                    || report.observed_at > now
+                    || !reported_people.insert(report.person)
+            }) {
+                return Err("invalid personal encounter report");
             }
             let mut recorded = HashSet::new();
             for r in &mind.records {
@@ -259,6 +287,7 @@ impl Knowledge {
                         .is_err()
                         || m.records.len() > self.max_records
                         || m.people_seen.len() > self.max_records
+                        || m.people_reports.len() > self.max_records
                         || m.misreport.and_then(|p| p.target).is_some_and(|id| {
                             id == m.person
                                 || observations
@@ -281,6 +310,21 @@ impl Knowledge {
                         || mind.people_seen[..i]
                             .iter()
                             .any(|old| old.person == seen.person)
+                }) || mind.people_reports.iter().enumerate().any(|(i, report)| {
+                    report.person == mind.person
+                        || report.speaker == mind.person
+                        || report.speaker == report.person
+                        || !regions.contains(&report.region)
+                        || report.observed_at > now
+                        || observations
+                            .binary_search_by_key(&report.person, |o| o.person)
+                            .is_err()
+                        || observations
+                            .binary_search_by_key(&report.speaker, |o| o.person)
+                            .is_err()
+                        || mind.people_reports[..i]
+                            .iter()
+                            .any(|old| old.person == report.person)
                 }) || mind.records.iter().enumerate().any(|(i, r)| {
                     !regions.contains(&r.region)
                         || observations
@@ -542,6 +586,66 @@ impl Knowledge {
                             false,
                         );
                     }
+                }
+                if let Some(partner) = partner
+                    && let Some(j) = mind_index(partner)
+                    && minds[j].people_reporting.is_some_and(|choice| {
+                        choice.willing
+                            || choice.pressure_threshold.is_some_and(|threshold| {
+                                pressure(partner, mind.person) >= threshold
+                            })
+                    })
+                    && let Some(seen) = minds[j]
+                        .people_seen
+                        .iter()
+                        .filter(|seen| seen.person != mind.person)
+                        .filter(|seen| {
+                            mind.people_seen
+                                .iter()
+                                .find(|old| old.person == seen.person)
+                                .is_none_or(|old| old.observed_at < seen.observed_at)
+                        })
+                        .filter(|seen| {
+                            mind.people_reports
+                                .iter()
+                                .find(|old| old.person == seen.person)
+                                .is_none_or(|old| {
+                                    (old.observed_at, old.speaker) < (seen.observed_at, partner)
+                                })
+                        })
+                        .max_by_key(|seen| (seen.observed_at, seen.person))
+                {
+                    let report = PersonReport {
+                        person: seen.person,
+                        region: seen.region,
+                        observed_at: seen.observed_at,
+                        speaker: partner,
+                    };
+                    if let Some(old) = mind
+                        .people_reports
+                        .iter_mut()
+                        .find(|old| old.person == seen.person)
+                    {
+                        *old = report;
+                    } else {
+                        if mind.people_reports.len() == self.max_records {
+                            let (oldest, old) = mind
+                                .people_reports
+                                .iter()
+                                .enumerate()
+                                .min_by_key(|(_, row)| (row.observed_at, row.person, row.speaker))
+                                .expect("positive memory capacity");
+                            if (report.observed_at, report.person, report.speaker)
+                                > (old.observed_at, old.person, old.speaker)
+                            {
+                                mind.people_reports.remove(oldest);
+                            }
+                        }
+                        if mind.people_reports.len() < self.max_records {
+                            mind.people_reports.push(report);
+                        }
+                    }
+                    mind.people_reports.sort_unstable_by_key(|row| row.person);
                 }
                 mind.records.sort_unstable_by_key(|r| r.region);
                 mind

@@ -25,7 +25,7 @@ use game_economy_family as family;
 pub use game_economy_family::Families;
 pub use game_economy_fatigue::Fatigue;
 pub use game_economy_goals::{Dream, Dreams, Goal, Goals, Learning};
-pub use game_economy_knowledge::{Knowledge, Misreport, Reporting, SeenPerson};
+pub use game_economy_knowledge::{Knowledge, Misreport, PersonReport, Reporting, SeenPerson};
 pub use game_economy_local_transport::goal::Preference as GoalFetchPreference;
 pub use game_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,

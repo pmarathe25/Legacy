@@ -971,6 +971,74 @@ fn playable_campaign_exposes_only_the_rulers_encounter_memories() {
 }
 
 #[test]
+fn playable_encounter_report_retains_the_witness_and_time() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = scenario(
+                    &root.join("content/scenarios/economy-campaign.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                initial
+                    .people
+                    .iter_mut()
+                    .find(|person| person.id == 99)
+                    .unwrap()
+                    .region = Some(1);
+                let mind = initial
+                    .knowledge
+                    .as_mut()
+                    .unwrap()
+                    .minds
+                    .iter_mut()
+                    .find(|mind| mind.person == 2)
+                    .unwrap();
+                mind.remember_people = true;
+                mind.people_reporting = Some(game_economy::Reporting {
+                    willing: true,
+                    pressure_threshold: None,
+                });
+                let mut world = game_economy::Economy::compile(initial).unwrap();
+                assert!(world.meet(2, 99).unwrap());
+                let seen = world.known_people(2).unwrap();
+                let memory = seen.iter().find(|seen| seen.person == 99).unwrap();
+                let timestamp = memory.observed_at;
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                assert!(Player::new(&mut restored).meet(2).unwrap());
+                let reports = Player::new(&mut world).people_reports().unwrap();
+                assert!(reports.iter().any(|report| report.person == 99
+                    && report.region == 1
+                    && report.observed_at == timestamp
+                    && report.speaker == 2));
+                assert!(
+                    !Player::new(&mut world)
+                        .known_people()
+                        .unwrap()
+                        .iter()
+                        .any(|seen| seen.person == 99)
+                );
+                assert!(
+                    game_economy_cli_commands::player::handle(&mut world, &["people-reports"])
+                        .unwrap()
+                );
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_campaign_advances_consistently_across_workers_and_reload() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

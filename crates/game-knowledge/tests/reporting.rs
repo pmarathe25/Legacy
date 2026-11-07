@@ -14,6 +14,8 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
                     pressure_threshold: Some(4),
                 }),
                 remember_people: false,
+                people_reporting: None,
+                people_reports: vec![],
                 people_seen: vec![],
                 misreport: Some(Misreport {
                     target: Some(2),
@@ -31,6 +33,8 @@ fn speaker_can_withhold_or_report_under_their_own_pressure() {
                 person: 2,
                 reporting: None,
                 remember_people: false,
+                people_reporting: None,
+                people_reports: vec![],
                 people_seen: vec![],
                 misreport: None,
                 records: vec![],

@@ -1130,6 +1130,15 @@ impl<'a> Player<'a> {
     pub fn known_people(&self) -> Result<Vec<game_economy::SeenPerson>, String> {
         self.world.known_people(self.current()?)
     }
+    pub fn people_reports(&self) -> Result<Vec<game_economy::PersonReport>, String> {
+        self.world.people_reports(self.current()?)
+    }
+    pub fn set_people_reporting(
+        &mut self,
+        choice: Option<game_economy::Reporting>,
+    ) -> Result<(), String> {
+        self.world.set_people_reporting(self.current()?, choice)
+    }
     pub fn set_food_report_reception(
         &mut self,
         reception: Option<game_economy::ReportReception>,

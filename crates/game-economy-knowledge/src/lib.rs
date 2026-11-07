@@ -2,7 +2,7 @@
 use game_economy_person::Person;
 use game_families::Families;
 use game_knowledge::Observation;
-pub use game_knowledge::{Knowledge, Mind, Misreport, Record, Reporting, SeenPerson};
+pub use game_knowledge::{Knowledge, Mind, Misreport, PersonReport, Record, Reporting, SeenPerson};
 use game_lots::{Place, View};
 use game_opinions::Opinions;
 use game_production_model::Good;
@@ -104,6 +104,9 @@ pub fn advance(
         .any(|mind| {
             mind.reporting
                 .is_some_and(|policy| !policy.willing && policy.pressure_threshold.is_some())
+                || mind
+                    .people_reporting
+                    .is_some_and(|policy| !policy.willing && policy.pressure_threshold.is_some())
         })
         .then(|| opinions.map(Opinions::index))
         .flatten();
@@ -142,6 +145,8 @@ pub fn inherit(knowledge: &mut Option<Knowledge>, family: &Families, births: &[u
             person,
             reporting: None,
             remember_people: false,
+            people_reporting: None,
+            people_reports: vec![],
             people_seen: vec![],
             misreport: None,
             records: vec![],
@@ -239,6 +244,41 @@ macro_rules! knowledge_methods {
                 .iter()
                 .find(|mind| mind.person == person)
                 .map(|mind| mind.people_seen.clone())
+                .ok_or("person has no mind".into())
+        }
+        /// Choose independently whether to share firsthand encounter memories.
+        pub fn set_people_reporting(
+            &mut self,
+            person: u64,
+            choice: Option<$crate::Reporting>,
+        ) -> Result<(), String> {
+            if !self.people.iter().any(|p| p.id == person && p.health > 0) {
+                return Err("unknown or deceased person".into());
+            }
+            let mind = self
+                .knowledge
+                .as_mut()
+                .ok_or("knowledge is disabled")?
+                .minds
+                .iter_mut()
+                .find(|mind| mind.person == person)
+                .ok_or("person has no mind")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mind.people_reporting = choice;
+            self.epoch = epoch;
+            Ok(())
+        }
+        pub fn people_reports(&self, person: u64) -> Result<Vec<$crate::PersonReport>, String> {
+            self.knowledge
+                .as_ref()
+                .ok_or("knowledge is disabled")?
+                .minds
+                .iter()
+                .find(|mind| mind.person == person)
+                .map(|mind| mind.people_reports.clone())
                 .ok_or("person has no mind".into())
         }
         /// Set this person's own willingness and pressure response for future reports.
