@@ -150,16 +150,18 @@ fn merge(
     mut fast: Draft,
     mut general: Draft,
 ) -> Draft {
+    let mut fast_changes = std::mem::take(&mut fast.changes).into_flat();
+    let general_changes = std::mem::take(&mut general.changes).into_flat();
     if !additions.is_empty() {
-        fast.changes.par_iter_mut().for_each(|row| {
+        fast_changes.par_iter_mut().for_each(|row| {
             row.0 += additions.partition_point(|addition| addition.place < row.1.place);
         });
     }
     let mut changes = if fast.spoiled.is_empty() {
         // Without boundary-wide expiry, each planner changes only its own
         // exclusive endpoints, so no ownership filtering is necessary.
-        let mut changes = fast.changes;
-        changes.par_extend(general.changes);
+        let mut changes = fast_changes;
+        changes.par_extend(general_changes);
         changes
     } else {
         let mut independent_endpoints: Vec<_> = transfers
@@ -174,21 +176,19 @@ fn merge(
             })
             .collect();
         independent_endpoints.par_sort_unstable();
-        let mut changes: Vec<_> = fast
-            .changes
+        let mut changes: Vec<_> = fast_changes
             .into_par_iter()
             .filter(|row| independent_endpoints.binary_search(&row.0).is_ok())
             .collect();
         changes.par_extend(
-            general
-                .changes
+            general_changes
                 .into_par_iter()
                 .filter(|row| independent_endpoints.binary_search(&row.0).is_err()),
         );
         changes
     };
     changes.par_sort_unstable_by_key(|row| row.0);
-    general.changes = changes;
+    general.changes = changes.into();
     general.outcomes.append(fast.outcomes);
     general.outcomes.sort_by_id();
     general.transactions.par_extend(fast.transactions);

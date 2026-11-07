@@ -529,6 +529,67 @@ fn many_interleaved_dated_cohorts_match_the_general_arbiter() {
 }
 
 #[test]
+fn ordered_change_runs_support_later_custody_addition_and_retirement() {
+    let (holders, transfers) = many_cohort_transfers(128, 4);
+    let actions: Vec<_> = transfers
+        .iter()
+        .map(|row| Transaction {
+            id: row.action,
+            movements: vec![row.movement],
+            creations: vec![],
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut fast = store(holders.clone());
+                let mut general = store(holders.clone());
+                let mut staged = fast
+                    .prepare_flat_transfers(&transfers, true)
+                    .unwrap()
+                    .unwrap();
+                let stale = fast
+                    .prepare_flat_transfers(&transfers, true)
+                    .unwrap()
+                    .unwrap();
+                assert!(matches!(
+                    &staged.inner.changes,
+                    game_parallel_lot_planning::Changes::Runs(_)
+                ));
+                fast.add_empty_in(&mut staged, vec![]).unwrap();
+                fast.retire_in(&mut staged, vec![]).unwrap();
+                assert!(matches!(
+                    &staged.inner.changes,
+                    game_parallel_lot_planning::Changes::Runs(_)
+                ));
+                let added = vec![
+                    container(Place::Inventory(10), 10, vec![]),
+                    container(Place::Person(900), 10, vec![]),
+                ];
+                fast.add_empty_in(&mut staged, added.clone()).unwrap();
+                let mut reference = unpartitioned(&general, 7, &actions, added, &[], true);
+                assert_eq!(staged.outcomes(), reference.outcomes());
+                assert_eq!(staged.spoiled(), reference.spoiled());
+                fast.retire_in(&mut staged, vec![Place::Person(1)]).unwrap();
+                general
+                    .retire_in(&mut reference, vec![Place::Person(1)])
+                    .unwrap();
+                fast.commit(staged).unwrap();
+                assert!(fast.commit(stale).is_err());
+                general.commit(reference).unwrap();
+                let state = fast.export();
+                assert_eq!(state, general.export());
+                assert_eq!(Store::compile(state.clone()).unwrap().export(), state);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn mixed_atomic_actions_match_general_arbitration() {
     let (mut initial, transfers) = many_cohort_transfers(256, 8);
     initial.extend([

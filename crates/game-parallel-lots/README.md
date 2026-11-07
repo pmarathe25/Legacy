@@ -14,6 +14,8 @@ Parallel preparation of physical lot movements and expiry. Claims are arbitrated
 
 Prepared outcomes retain dated lots in batch-owned arenas. `take_outcome_batch` moves that storage to a composed owner, whose borrowed receipt views stay valid for the lifetime of the batch. `outcomes` and `take_receipts` materialize independently owned outcomes for callers that need them. Receipt arenas are transient and do not change custody serialization.
 
+When independent source and destination ranges are each ordered and disjoint, changed containers remain in ordered chunks through publication. Custody additions and retirements can materialize the chunks when they need a flat index; empty requests leave them intact. Other layouts continue through the general sorted-change path.
+
 `prepare_partitioned_flat` also separates transfers whose endpoints are exclusive from those that share a source or destination. The shared group uses the general arbiter with the original action identities and seed. Both groups remain one atomic draft, with expiry applied once. Unsupported layouts still return no specialized draft.
 
 The normal transaction path can similarly isolate exclusive single-leg transfers when other actions consume goods, create lots, contain multiple legs, or use newly staged custody. An entire complex transaction stays in the general arbiter, and every source and destination it touches excludes overlapping transfers from the fast group. Transfers involving new custody also stay in the general group. The ignored `mixed_atomic_action_benchmark` compares both paths; `LEGACY_ATTEMPTS` and `LEGACY_WORKERS` select the workload and worker count, and `LEGACY_ADDITIONS` stages new custody.

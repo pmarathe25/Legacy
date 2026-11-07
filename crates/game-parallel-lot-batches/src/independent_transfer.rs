@@ -3,7 +3,7 @@ use game_parallel_lot_model::{
     Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State,
     Transaction, TransactionOutcome, key,
 };
-use game_parallel_lot_planning::Draft;
+use game_parallel_lot_planning::{Changes, Draft};
 use rayon::prelude::*;
 
 #[derive(Clone, Copy)]
@@ -368,31 +368,11 @@ fn prepare_rows(
         .into_par_iter()
         .map(|(transactions, sources, destinations)| (transactions, (sources, destinations)))
         .unzip();
-    let (source_parts, destination_parts): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
-    let (mut outcomes, (mut transaction_outcomes, (mut sources, mut destinations))): (
-        OutcomeBatch,
-        (Vec<_>, (Vec<_>, Vec<_>)),
-    ) = rayon::join(
+    let (mut source_parts, mut destination_parts): (Vec<_>, Vec<_>) = rest.into_par_iter().unzip();
+    let (mut outcomes, mut transaction_outcomes): (OutcomeBatch, Vec<_>) = rayon::join(
         || OutcomeBatch::from_chunks(outcome_parts),
-        || {
-            rayon::join(
-                || transaction_parts.into_par_iter().flatten().collect(),
-                || {
-                    rayon::join(
-                        || source_parts.into_par_iter().flatten().collect(),
-                        || destination_parts.into_par_iter().flatten().collect(),
-                    )
-                },
-            )
-        },
+        || transaction_parts.into_par_iter().flatten().collect(),
     );
-    let mut changes = if separated == Some(false) {
-        destinations.append(&mut sources);
-        destinations
-    } else {
-        sources.append(&mut destinations);
-        sources
-    };
     #[cfg(feature = "profile")]
     {
         drop(phase);
@@ -421,15 +401,29 @@ fn prepare_rows(
             .collect()
     };
     let already_ordered = separated.is_some() && extra.is_empty();
-    changes.par_extend(extra);
     #[cfg(feature = "profile")]
     {
         drop(phase);
         phase = game_diagnostics::span("physical.independent.sort");
     }
-    if !already_ordered {
-        changes.par_sort_unstable_by_key(|row| row.0);
-    }
+    let changes = if already_ordered {
+        if separated == Some(false) {
+            destination_parts.append(&mut source_parts);
+            Changes::ordered_runs(destination_parts)
+        } else {
+            source_parts.append(&mut destination_parts);
+            Changes::ordered_runs(source_parts)
+        }
+    } else {
+        let (mut sources, destinations): (Vec<_>, Vec<_>) = rayon::join(
+            || source_parts.into_par_iter().flatten().collect(),
+            || destination_parts.into_par_iter().flatten().collect(),
+        );
+        sources.par_extend(destinations);
+        sources.par_extend(extra);
+        sources.par_sort_unstable_by_key(|row| row.0);
+        sources.into()
+    };
     outcomes.sort_by_id();
     if transaction_outcomes
         .par_windows(2)

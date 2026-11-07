@@ -391,16 +391,22 @@ impl Store {
         containers: Vec<Container>,
     ) -> Result<(), String> {
         self.validate_commit(draft)?;
+        if containers.is_empty() {
+            return Ok(());
+        }
         game_parallel_lot_allocation::additions::add(
             &self.state,
             &mut draft.additions,
-            &mut draft.inner.changes,
+            draft.inner.changes.flat_mut(),
             containers,
         )
     }
     /// Retire containers only if their post-transaction state will be empty.
     pub fn retire_in(&self, draft: &mut Draft, mut places: Vec<Place>) -> Result<(), String> {
         self.validate_commit(draft)?;
+        if places.is_empty() && draft.retire.is_empty() {
+            return Ok(());
+        }
         places.extend_from_slice(&draft.retire);
         places.par_sort_unstable();
         if places.par_windows(2).any(|pair| pair[0] == pair[1]) {
@@ -415,17 +421,14 @@ impl Store {
         if !draft.additions.is_empty() {
             containers.par_sort_unstable_by_key(|row| row.place);
         }
+        let changes = draft.inner.changes.flat_mut();
         if places.par_iter().any(|place| {
             let Ok(index) = containers.binary_search_by_key(place, |row| row.place) else {
                 return true;
             };
-            draft
-                .inner
-                .changes
+            changes
                 .binary_search_by_key(&index, |row| row.0)
-                .map_or(containers[index].used != 0, |i| {
-                    draft.inner.changes[i].1.used != 0
-                })
+                .map_or(containers[index].used != 0, |i| changes[i].1.used != 0)
         }) {
             return Err("missing or nonempty retired custody".into());
         }
@@ -450,9 +453,17 @@ impl Store {
                 .containers
                 .par_sort_unstable_by_key(|row| row.place);
         }
-        let mut changes = draft.changes;
-        publish(&mut self.state.containers, &mut changes, 0);
-        changes.into_par_iter().for_each(drop);
+        match draft.changes {
+            game_parallel_lot_planning::Changes::Empty => {}
+            game_parallel_lot_planning::Changes::Flat(mut changes) => {
+                publish(&mut self.state.containers, &mut changes, 0);
+                changes.into_par_iter().for_each(drop);
+            }
+            game_parallel_lot_planning::Changes::Runs(mut runs) => {
+                publish_runs(&mut self.state.containers, &mut runs, 0);
+                runs.into_par_iter().flat_map_iter(|run| run).for_each(drop);
+            }
+        }
         if !retire.is_empty() {
             self.state.containers = std::mem::take(&mut self.state.containers)
                 .into_par_iter()
@@ -463,6 +474,24 @@ impl Store {
         self.state.revision = revision;
         Ok((draft.outcomes.into_owned(), draft.spoiled))
     }
+}
+
+fn publish_runs(containers: &mut [Container], runs: &mut [Vec<(usize, Container)>], base: usize) {
+    if runs.is_empty() {
+        return;
+    }
+    if runs.len() == 1 {
+        publish(containers, &mut runs[0], base);
+        return;
+    }
+    let middle = runs.len() / 2;
+    let split = runs[middle][0].0;
+    let (left, right) = containers.split_at_mut(split - base);
+    let (first, second) = runs.split_at_mut(middle);
+    rayon::join(
+        || publish_runs(left, first, base),
+        || publish_runs(right, second, split),
+    );
 }
 
 fn publish(containers: &mut [Container], changes: &mut [(usize, Container)], base: usize) {

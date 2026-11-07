@@ -661,7 +661,7 @@ pub fn prepare(
         base_tick: state.tick,
         base_revision: state.revision,
         next_tick: next,
-        changes,
+        changes: changes.into(),
         outcomes: game_parallel_lot_model::OutcomeBatch::from_outcomes(outcomes),
         spoiled,
         creations: creation_outcomes,

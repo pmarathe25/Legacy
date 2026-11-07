@@ -1,5 +1,7 @@
 //! Snapshot planning for physical custody.
+mod changes;
 mod prepare;
+pub use changes::Changes;
 pub use game_parallel_lot_allocation::prefixes;
 use game_parallel_lot_model::{Container, OutcomeBatch, Spoilage, TransactionOutcome};
 pub use prepare::prepare;
@@ -20,7 +22,7 @@ pub struct Draft {
     pub base_tick: u64,
     pub base_revision: u64,
     pub next_tick: u64,
-    pub changes: Vec<(usize, Container)>,
+    pub changes: Changes,
     pub outcomes: OutcomeBatch,
     pub spoiled: Vec<Spoilage>,
     pub creations: Vec<(u64, bool)>,
