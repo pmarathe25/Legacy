@@ -93,7 +93,7 @@ Physical work sites can limit concurrent jobs. Slots remain occupied by paused j
 Named stores within a region have separate physical custody and capacities. A person can pick up goods and later deposit them in another store or regional stock, or stop while still carrying them. Each action takes a boundary; this model does not yet represent walking distances within a region.
 
 Hungry people who choose to seek meals may obtain an actual portion from a locally observed named store when it is their best available source. They carry the food before consuming it; regional stock claims apply to regional custody rather than to a separate store.
-The ignored `concentrated_named_food_benchmark` measures many hungry people competing for local stores. Set `LEGACY_PEOPLE`, `LEGACY_STORES`, and `LEGACY_WORKERS` to vary population, store count, and concurrency; population and half-population must divide evenly among stores.
+The ignored `concentrated_named_food_benchmark` measures many hungry people competing for local stores. Set `LEGACY_PEOPLE`, `LEGACY_STORES`, and `LEGACY_WORKERS` to vary population, store count, and concurrency; population and half-population must divide evenly among stores. Add `--features profile` and `LEGACY_PROFILE` for phase timings.
 
 People with an enabled personal goal-fetching preference can obtain missing inputs for their own active work goals from locally observed stores, physically carrying and depositing the goods before work can begin. They may stop and retain what they carry.
 When input planning is enabled, they can also seek supplies for intermediate recipes in a bounded dependency search.

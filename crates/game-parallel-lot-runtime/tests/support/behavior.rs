@@ -885,20 +885,28 @@ fn flat_transfers_match_general_runtime_and_rollback() {
                     actions.reverse();
                 }
                 let mut flat = Runtime::compile(snapshot.clone()).unwrap();
+                let mut partitioned = Runtime::compile(snapshot.clone()).unwrap();
                 let mut general = Runtime::compile(snapshot.clone()).unwrap();
                 let before = flat.snapshot();
                 let draft = flat.prepare_flat_transfers(&transfers).unwrap().unwrap();
                 let stale = flat.prepare_flat_transfers(&transfers).unwrap().unwrap();
                 assert_eq!(flat.snapshot(), before);
                 let other = general.prepare_advance(&[], &actions, 19).unwrap();
+                let direct = partitioned
+                    .prepare_partitioned_flat_transfers(&transfers, 19)
+                    .unwrap()
+                    .unwrap();
                 assert!(
                     draft.events() == other.events(),
                     "flat and general receipts differ"
                 );
+                assert_eq!(direct.events(), other.events());
                 let events = flat.commit_advance(draft).unwrap();
                 assert!(flat.commit_advance(stale).is_err());
                 general.commit_advance(other).unwrap();
+                partitioned.commit_advance(direct).unwrap();
                 assert_eq!(flat.snapshot(), general.snapshot());
+                assert_eq!(partitioned.snapshot(), general.snapshot());
                 (flat.snapshot(), events)
             })
     };
@@ -911,6 +919,20 @@ fn flat_transfers_match_general_runtime_and_rollback() {
         Runtime::compile(snapshot.clone())
             .unwrap()
             .prepare_flat_transfers(&duplicate)
+            .is_err()
+    );
+    assert!(
+        Runtime::compile(snapshot.clone())
+            .unwrap()
+            .prepare_partitioned_flat_transfers(&duplicate, 19)
+            .is_err()
+    );
+    let mut invalid_good = transfers.clone();
+    invalid_good[0].movement.good = 999;
+    assert!(
+        Runtime::compile(snapshot.clone())
+            .unwrap()
+            .prepare_partitioned_flat_transfers(&invalid_good, 19)
             .is_err()
     );
     let mut overlap = transfers;

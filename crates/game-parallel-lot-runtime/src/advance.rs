@@ -208,11 +208,20 @@ impl Runtime {
         transfers: &[SimpleTransfer],
         seed: u64,
     ) -> Result<Option<AdvanceDraft>, String> {
-        if let Some(draft) = self.prepare_flat_transfers(transfers)? {
-            return Ok(Some(draft));
-        }
-        if !self.work.is_empty() || transfers.len() < 256 {
+        if !self.work.is_empty() {
             return Ok(None);
+        }
+        if transfers.len() < 256 {
+            return self.prepare_flat_transfers(transfers);
+        }
+        if transfers.par_iter().any(|row| {
+            !self.catalog.contains(row.movement.good)
+                || row
+                    .movement
+                    .to
+                    .is_some_and(|place| matches!(place, Place::JobInput(_) | Place::JobOutput(_)))
+        }) {
+            return Err("invalid external physical action".into());
         }
         let mut ordered = transfers.to_vec();
         if ordered
