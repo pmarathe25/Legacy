@@ -11,7 +11,9 @@ use rayon::prelude::*;
 pub use reactions::{Interpretation, ObservedTaking, Reaction, Witness};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
-pub use testimony::{Belief as ReportBelief, Reception, Report, ReportPolicy, Stance};
+pub use testimony::{
+    Belief as ReportBelief, Reception, Report, ReportPolicy, ReportSource, Stance,
+};
 
 /// An individual's possible action; no policy obliges anyone to act.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

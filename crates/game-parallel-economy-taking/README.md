@@ -12,4 +12,6 @@ The actor or target can also use a personal attention entry to retain their own 
 
 `[[taking.report_policies]]` lets a person share a previously observed event during an actual encounter, voluntarily or under their own fear/obligation threshold. `claimed_outcome` may differ from their memory. `[[taking.receptions]]` gives each listener their own stance and separate signed responses to claims they believe, doubt, or leave unassessed; hearing a report does not establish its truth. Each recipient retains at most 64 latest reports, and repeated identical claims do not repeatedly change feelings.
 
+With `source = "heard"`, a policy forwards a previously received account instead of claiming direct observation; optional `heard_from` selects a particular prior speaker. The delivered statement names that immediate source, and the new listener forms their own belief. An account received in the current boundary cannot be forwarded until a later one.
+
 `taking_selection_benchmark` exercises independent attempts; set `LEGACY_SHARED` to make all attempts target one person and `LEGACY_WORKERS` or `LEGACY_PEOPLE` to vary execution. It measures proposal selection, not the complete world boundary.

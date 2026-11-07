@@ -21384,7 +21384,9 @@ fn nearby_witnesses_interpret_a_taking_independently() {
 
 #[test]
 fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
-    use game_parallel_economy_taking::{Reception, ReportBelief, ReportPolicy, Stance, Witness};
+    use game_parallel_economy_taking::{
+        Reception, ReportBelief, ReportPolicy, ReportSource, Stance, Witness,
+    };
     use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
     let mut initial = hunting_fixture();
     initial.hunting = None;
@@ -21397,7 +21399,16 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
         .as_mut()
         .unwrap()
         .participants
-        .retain(|p| p.person == 2 || p.person == 3);
+        .retain(|p| p.person == 2 || p.person == 3 || p.person == 4);
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .iter_mut()
+        .find(|p| p.person == 4)
+        .unwrap()
+        .willing = false;
     initial.dynamics = Some(dynamics);
     let opinions = initial.opinions.as_mut().unwrap();
     opinions.records.clear();
@@ -21417,14 +21428,28 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
             ..Default::default()
         }]
         .into(),
-        report_policies: vec![ReportPolicy {
-            person: 3,
-            recipient: 2,
-            actor: 1,
-            willing: true,
-            pressure_threshold: None,
-            claimed_outcome: Some(TakingOutcome::Resisted),
-        }]
+        report_policies: vec![
+            ReportPolicy {
+                person: 3,
+                recipient: 2,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: Some(TakingOutcome::Resisted),
+                source: Default::default(),
+                heard_from: None,
+            },
+            ReportPolicy {
+                person: 2,
+                recipient: 4,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+                source: ReportSource::Heard,
+                heard_from: Some(3),
+            },
+        ]
         .into(),
         receptions: vec![Reception {
             person: 2,
@@ -21476,6 +21501,26 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
                     (3, 1, 4, TakingOutcome::Resisted, ReportBelief::Believes)
                 );
                 assert!(world.taking_reports(1).is_empty());
+                assert!(world.taking_reports(4).is_empty());
+                world.set_social_choice(3, false).unwrap();
+                world.set_social_choice(4, true).unwrap();
+                world.advance().unwrap();
+                let relayed = world.taking_reports(4);
+                assert_eq!(relayed.len(), 1);
+                assert_eq!(
+                    (
+                        relayed[0].speaker,
+                        relayed[0].source_speaker,
+                        relayed[0].claimed_outcome,
+                        relayed[0].belief
+                    ),
+                    (
+                        2,
+                        Some(3),
+                        TakingOutcome::Resisted,
+                        ReportBelief::Unassessed
+                    )
+                );
                 let saved = world.snapshot();
                 assert_eq!(saved.opinions.as_ref().unwrap().index().affinity(2, 1), -3);
                 let restored = Economy::compile(
@@ -21530,6 +21575,8 @@ fn a_target_can_report_an_attempt_they_noticed() {
             willing: true,
             pressure_threshold: None,
             claimed_outcome: None,
+            source: Default::default(),
+            heard_from: None,
         }]
         .into(),
         receptions: vec![Reception {

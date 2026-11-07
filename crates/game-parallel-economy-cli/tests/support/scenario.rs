@@ -51,6 +51,22 @@ fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
         &["taking-report", "2", "99", "truthful"],
     )
     .unwrap();
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["taking-relay", "2", "99", "truthful"],
+    )
+    .unwrap();
+    assert!(
+        world
+            .snapshot()
+            .taking
+            .unwrap()
+            .report_policies
+            .iter()
+            .any(|p| p.person == 1
+                && p.actor == 99
+                && p.source == game_parallel_economy::TakingReportSource::Heard)
+    );
     assert_eq!(
         world.taking_reception(1).unwrap().stance,
         game_parallel_economy::TakingReportStance::Believe

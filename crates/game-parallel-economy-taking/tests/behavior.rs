@@ -611,6 +611,8 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
             willing: false,
             pressure_threshold: Some(3),
             claimed_outcome: Some(Outcome::Resisted),
+            source: Default::default(),
+            heard_from: None,
         }]
         .into(),
         receptions: vec![Reception {
@@ -684,6 +686,13 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
     );
     let saved: Taking = serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
     assert_eq!(saved, next);
+    let mut old_save = serde_json::to_value(&next).unwrap();
+    for policy in old_save["report_policies"].as_array_mut().unwrap() {
+        policy.as_object_mut().unwrap().remove("source");
+        policy.as_object_mut().unwrap().remove("heard_from");
+    }
+    let restored: Taking = serde_json::from_value(old_save).unwrap();
+    assert_eq!(restored, next);
     let mut repeated = next.clone();
     assert!(
         repeated
@@ -709,6 +718,87 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
     assert_eq!(
         (changes[0].observer, changes[0].target, changes[0].affinity),
         (4, 1, 5)
+    );
+    let mut source = next.clone();
+    source.report_policies_mut().push(ReportPolicy {
+        person: 4,
+        recipient: 5,
+        actor: 1,
+        willing: true,
+        pressure_threshold: None,
+        claimed_outcome: None,
+        source: game_parallel_economy_taking::ReportSource::Heard,
+        heard_from: Some(3),
+    });
+    let mut forwarded = source.clone();
+    assert!(
+        forwarded
+            .receive_reports(&source, &[(4, 5)], 2, &|_, _| (0, 0, 0))
+            .is_empty()
+    );
+    assert_eq!(forwarded.reports.len(), 1);
+    assert!(
+        forwarded
+            .receive_reports(&source, &[(4, 5)], 3, &|_, _| (0, 0, 0))
+            .is_empty()
+    );
+    let report = forwarded.reports.iter().find(|r| r.recipient == 5).unwrap();
+    assert_eq!(
+        (
+            report.speaker,
+            report.source_speaker,
+            report.claimed_outcome,
+            report.belief
+        ),
+        (4, Some(3), Outcome::Resisted, ReportBelief::Unassessed)
+    );
+    assert!(
+        forwarded
+            .validate(&HashSet::from([1, 2, 3, 4, 5]), &HashSet::from([1]), 3)
+            .is_ok()
+    );
+    let mut wrong_source = source.clone();
+    wrong_source
+        .report_policies_mut()
+        .last_mut()
+        .unwrap()
+        .heard_from = Some(2);
+    let mut none = wrong_source.clone();
+    none.receive_reports(&wrong_source, &[(4, 5)], 3, &|_, _| (0, 0, 0));
+    assert_eq!(none.reports.len(), 1);
+    let mut multiple = source.clone();
+    let mut earlier = multiple.reports[0].clone();
+    earlier.speaker = 2;
+    earlier.received_at = 1;
+    earlier.claimed_outcome = Outcome::Unavailable;
+    multiple.reports = vec![earlier, multiple.reports[0].clone()].into();
+    multiple
+        .report_policies_mut()
+        .last_mut()
+        .unwrap()
+        .heard_from = Some(2);
+    let mut selected = multiple.clone();
+    selected.receive_reports(&multiple, &[(4, 5)], 3, &|_, _| (0, 0, 0));
+    let report = selected.reports.iter().find(|r| r.recipient == 5).unwrap();
+    assert_eq!(
+        (report.source_speaker, report.claimed_outcome),
+        (Some(2), Outcome::Unavailable)
+    );
+    let mut doubtful = skeptical.clone();
+    doubtful
+        .report_policies_mut()
+        .push(source.report_policies.last().unwrap().clone());
+    let mut forwarded = doubtful.clone();
+    forwarded.receive_reports(&doubtful, &[(4, 5)], 3, &|_, _| (0, 0, 0));
+    assert_eq!(doubtful.reports[0].belief, ReportBelief::Doubts);
+    assert_eq!(
+        forwarded
+            .reports
+            .iter()
+            .find(|r| r.recipient == 5)
+            .unwrap()
+            .belief,
+        ReportBelief::Unassessed
     );
 }
 
@@ -743,6 +833,8 @@ fn concentrated_reports_are_bounded_and_deterministic() {
                 willing: true,
                 pressure_threshold: None,
                 claimed_outcome: None,
+                source: Default::default(),
+                heard_from: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -800,6 +892,8 @@ fn sparse_and_multiple_witness_keys_match_reversed_contacts() {
                 willing: true,
                 pressure_threshold: None,
                 claimed_outcome: None,
+                source: Default::default(),
+                heard_from: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -858,6 +952,8 @@ fn participants_can_report_their_own_experiences_only_if_noticed() {
                 willing: true,
                 pressure_threshold: None,
                 claimed_outcome: None,
+                source: Default::default(),
+                heard_from: None,
             },
             ReportPolicy {
                 person: 2,
@@ -866,6 +962,8 @@ fn participants_can_report_their_own_experiences_only_if_noticed() {
                 willing: true,
                 pressure_threshold: None,
                 claimed_outcome: None,
+                source: Default::default(),
+                heard_from: None,
             },
         ]
         .into(),
@@ -948,6 +1046,8 @@ fn testimony_benchmark() {
                 willing: true,
                 pressure_threshold: None,
                 claimed_outcome: None,
+                source: Default::default(),
+                heard_from: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -976,6 +1076,83 @@ fn testimony_benchmark() {
                 "workers={workers} reports={count} shared={shared} elapsed={:.6}",
                 samples[2]
             );
+        });
+}
+
+#[test]
+#[ignore = "manual relayed testimony benchmark"]
+fn relayed_testimony_benchmark() {
+    use game_parallel_economy_taking::{Report, ReportBelief, ReportPolicy, ReportSource};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let speakers = 3..count + 3;
+    let previous = Taking {
+        reports: speakers
+            .clone()
+            .map(|recipient| Report {
+                speaker: 2 * count + recipient,
+                recipient,
+                actor: 1,
+                target: 2,
+                good: 1,
+                quantity: 1,
+                observed_at: 0,
+                received_at: 1,
+                claimed_outcome: Outcome::Transferred,
+                belief: ReportBelief::Unassessed,
+                source_speaker: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        report_policies: speakers
+            .clone()
+            .map(|person| ReportPolicy {
+                person,
+                recipient: count + person,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+                source: ReportSource::Heard,
+                heard_from: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    };
+    let contacts: Vec<_> = speakers.map(|person| (person, count + person)).collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let mut next = previous.clone();
+                let start = std::time::Instant::now();
+                let changes = next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0));
+                let elapsed = start.elapsed().as_secs_f64();
+                assert!(changes.is_empty());
+                assert_eq!(next.reports.len(), 2 * count as usize);
+                assert_eq!(
+                    next.reports
+                        .iter()
+                        .filter(|r| r.source_speaker.is_some())
+                        .count(),
+                    count as usize
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!("workers={workers} relays={count} elapsed={:.6}", samples[2]);
         });
 }
 

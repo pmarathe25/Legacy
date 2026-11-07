@@ -1367,6 +1367,31 @@ impl<'a> Player<'a> {
                 willing: true,
                 pressure_threshold: None,
                 claimed_outcome,
+                source: game_parallel_economy::TakingReportSource::Observed,
+                heard_from: None,
+            }),
+        )
+    }
+    pub fn set_taking_relay(
+        &mut self,
+        recipient: u64,
+        actor: u64,
+        claimed_outcome: Option<game_parallel_economy::TakingOutcome>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        self.world.set_taking_report_policy(
+            person,
+            recipient,
+            actor,
+            Some(game_parallel_economy::TakingReportPolicy {
+                person,
+                recipient,
+                actor,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome,
+                source: game_parallel_economy::TakingReportSource::Heard,
+                heard_from: None,
             }),
         )
     }

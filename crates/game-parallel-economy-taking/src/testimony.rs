@@ -20,6 +20,19 @@ pub struct ReportPolicy {
     /// None repeats the memory; a selected outcome is a statement, not a fact.
     #[serde(default)]
     pub claimed_outcome: Option<Outcome>,
+    #[serde(default)]
+    pub source: ReportSource,
+    /// Optional immediate speaker to select when forwarding a received account.
+    #[serde(default)]
+    pub heard_from: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportSource {
+    #[default]
+    Observed,
+    Heard,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,6 +87,9 @@ pub struct Report {
     pub received_at: u64,
     pub claimed_outcome: Outcome,
     pub belief: Belief,
+    /// Immediate source of a relayed statement; absent for a direct observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_speaker: Option<u64>,
 }
 
 pub fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>, now: u64) -> bool {
@@ -99,6 +115,9 @@ pub fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>, now: u
                 || !people.contains(&p.recipient)
                 || !people.contains(&p.actor)
                 || p.person == p.recipient
+                || p.heard_from
+                    .is_some_and(|id| id == p.person || !people.contains(&id))
+                || (p.source == ReportSource::Observed && p.heard_from.is_some())
                 || p.pressure_threshold == Some(0)
         })
         && !owner
@@ -116,6 +135,8 @@ pub fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>, now: u
                 || r.quantity == 0
                 || r.observed_at > r.received_at
                 || r.received_at > now
+                || r.source_speaker
+                    .is_some_and(|id| id == r.speaker || !people.contains(&id))
         })
         && !reports
             .par_chunk_by(|a, b| a.0 == b.0)
@@ -147,7 +168,15 @@ impl Taking {
                 .par_windows(2)
                 .all(|p| p[0].0.checked_add(1) == Some(p[1].0))
         });
-        let mut witnesses: Vec<_> = previous.witnesses.par_iter().collect();
+        let mut witnesses: Vec<_> = if previous
+            .report_policies
+            .par_iter()
+            .any(|p| p.source == ReportSource::Observed)
+        {
+            previous.witnesses.par_iter().collect()
+        } else {
+            Vec::new()
+        };
         witnesses.par_sort_unstable_by_key(|w| (w.person, w.actor));
         let witness_base = witnesses.first().map(|w| w.person).filter(|_| {
             witnesses
@@ -157,7 +186,32 @@ impl Taking {
         let mut receptions: Vec<_> = previous.receptions.par_iter().collect();
         receptions.par_sort_unstable_by_key(|r| r.person);
         let mut prior: Vec<_> = previous.reports.par_iter().collect();
-        prior.par_sort_unstable_by_key(|r| (r.recipient, r.speaker, r.actor));
+        if prior.par_windows(2).any(|p| {
+            (p[0].recipient, p[0].speaker, p[0].actor) > (p[1].recipient, p[1].speaker, p[1].actor)
+        }) {
+            prior.par_sort_unstable_by_key(|r| (r.recipient, r.speaker, r.actor));
+        }
+        let mut heard: Vec<_> = if previous
+            .report_policies
+            .par_iter()
+            .any(|p| p.source == ReportSource::Heard)
+        {
+            previous.reports.par_iter().collect()
+        } else {
+            Vec::new()
+        };
+        let heard_key = |r: &&Report| (r.recipient, r.actor, Reverse(r.received_at), r.speaker);
+        if heard
+            .par_windows(2)
+            .any(|p| heard_key(&p[0]) > heard_key(&p[1]))
+        {
+            heard.par_sort_unstable_by_key(heard_key);
+        }
+        let heard_base = heard.first().map(|r| r.recipient).filter(|_| {
+            heard
+                .par_windows(2)
+                .all(|p| p[0].recipient.checked_add(1) == Some(p[1].recipient))
+        });
         let incoming: Vec<_> = previous
             .report_policies
             .par_iter()
@@ -183,41 +237,94 @@ impl Taking {
                 {
                     return None;
                 }
-                let witness = witness_base
-                    .and_then(|base| policy.person.checked_sub(base))
-                    .and_then(|offset| usize::try_from(offset).ok())
-                    .and_then(|index| witnesses.get(index).copied())
-                    .filter(|w| (w.person, w.actor) == (policy.person, policy.actor))
-                    .or_else(|| {
-                        witnesses
-                            .binary_search_by_key(&(policy.person, policy.actor), |w| {
-                                (w.person, w.actor)
-                            })
-                            .ok()
-                            .map(|i| witnesses[i])
-                    })?;
-                let seen = witness.last_seen.filter(|seen| seen.tick < tick)?;
-                let claimed_outcome = policy.claimed_outcome.unwrap_or(seen.outcome);
-                let key = (policy.recipient, policy.person, policy.actor);
-                if prior
-                    .binary_search_by_key(&key, |r| (r.recipient, r.speaker, r.actor))
-                    .ok()
-                    .is_some_and(|i| {
-                        let old = prior[i];
+                let (target, good, quantity, observed_at, outcome, source_speaker) = match policy
+                    .source
+                {
+                    ReportSource::Observed => {
+                        let witness = witness_base
+                            .and_then(|base| policy.person.checked_sub(base))
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .and_then(|index| witnesses.get(index).copied())
+                            .filter(|w| (w.person, w.actor) == (policy.person, policy.actor))
+                            .or_else(|| {
+                                witnesses
+                                    .binary_search_by_key(&(policy.person, policy.actor), |w| {
+                                        (w.person, w.actor)
+                                    })
+                                    .ok()
+                                    .map(|i| witnesses[i])
+                            })?;
+                        let seen = witness.last_seen.filter(|seen| seen.tick < tick)?;
                         (
-                            old.target,
-                            old.good,
-                            old.quantity,
-                            old.observed_at,
-                            old.claimed_outcome,
-                        ) == (
                             seen.target,
                             seen.good,
                             seen.quantity,
                             seen.tick,
-                            claimed_outcome,
+                            seen.outcome,
+                            None,
                         )
-                    })
+                    }
+                    ReportSource::Heard => {
+                        let key = (policy.person, policy.actor);
+                        let matches = |r: &&Report| {
+                            (r.recipient, r.actor) == key
+                                && r.received_at < tick
+                                && policy.heard_from.is_none_or(|speaker| speaker == r.speaker)
+                        };
+                        let report = heard_base
+                            .and_then(|base| policy.person.checked_sub(base))
+                            .and_then(|offset| usize::try_from(offset).ok())
+                            .and_then(|index| heard.get(index).copied())
+                            .filter(matches)
+                            .or_else(|| {
+                                let start = heard.partition_point(|r| (r.recipient, r.actor) < key);
+                                let end = heard.partition_point(|r| (r.recipient, r.actor) <= key);
+                                heard[start..end]
+                                    .iter()
+                                    .find(|report| matches(report))
+                                    .copied()
+                            })?;
+                        (
+                            report.target,
+                            report.good,
+                            report.quantity,
+                            report.observed_at,
+                            report.claimed_outcome,
+                            Some(report.speaker),
+                        )
+                    }
+                };
+                let claimed_outcome = policy.claimed_outcome.unwrap_or(outcome);
+                let key = (policy.recipient, policy.person, policy.actor);
+                let prior_range = prior
+                    .first()
+                    .zip(prior.last())
+                    .is_some_and(|(first, last)| {
+                        (first.recipient, first.speaker, first.actor) <= key
+                            && key <= (last.recipient, last.speaker, last.actor)
+                    });
+                if prior_range
+                    && prior
+                        .binary_search_by_key(&key, |r| (r.recipient, r.speaker, r.actor))
+                        .ok()
+                        .is_some_and(|i| {
+                            let old = prior[i];
+                            (
+                                old.target,
+                                old.good,
+                                old.quantity,
+                                old.observed_at,
+                                old.claimed_outcome,
+                                old.source_speaker,
+                            ) == (
+                                target,
+                                good,
+                                quantity,
+                                observed_at,
+                                claimed_outcome,
+                                source_speaker,
+                            )
+                        })
                 {
                     return None;
                 }
@@ -241,13 +348,14 @@ impl Taking {
                     speaker: policy.person,
                     recipient: policy.recipient,
                     actor: policy.actor,
-                    target: seen.target,
-                    good: seen.good,
-                    quantity: seen.quantity,
-                    observed_at: seen.tick,
+                    target,
+                    good,
+                    quantity,
+                    observed_at,
                     received_at: tick,
                     claimed_outcome,
                     belief,
+                    source_speaker,
                 })
             })
             .collect();
@@ -260,9 +368,13 @@ impl Taking {
             .cloned()
             .chain(incoming.into_par_iter())
             .collect();
-        combined.par_sort_unstable_by_key(|r| {
-            (r.recipient, r.speaker, r.actor, Reverse(r.received_at))
-        });
+        let report_key = |r: &Report| (r.recipient, r.speaker, r.actor, Reverse(r.received_at));
+        if combined
+            .par_windows(2)
+            .any(|p| report_key(&p[0]) > report_key(&p[1]))
+        {
+            combined.par_sort_unstable_by_key(report_key);
+        }
         let mut latest: Vec<_> = if combined.par_windows(2).all(|p| {
             (p[0].recipient, p[0].speaker, p[0].actor) != (p[1].recipient, p[1].speaker, p[1].actor)
         }) {

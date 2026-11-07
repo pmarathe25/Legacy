@@ -40,8 +40,8 @@ pub use game_parallel_economy_taking::{
     Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
     Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
     Reception as TakingReception, Report as TakingReport, ReportBelief as TakingReportBelief,
-    ReportPolicy as TakingReportPolicy, Response as TakingResponse, Stance as TakingReportStance,
-    Taking, Witness as TakingWitness,
+    ReportPolicy as TakingReportPolicy, ReportSource as TakingReportSource,
+    Response as TakingResponse, Stance as TakingReportStance, Taking, Witness as TakingWitness,
 };
 pub use game_parallel_economy_work::care::DependentCare;
 pub use game_parallel_economy_work::sites::{
@@ -1244,6 +1244,8 @@ impl Economy {
             || policy.as_ref().is_some_and(|p| {
                 (p.person, p.recipient, p.actor) != (person, recipient, actor)
                     || p.pressure_threshold == Some(0)
+                    || p.heard_from.is_some_and(|id| id == person || !exists(id))
+                    || (p.source == TakingReportSource::Observed && p.heard_from.is_some())
             })
         {
             return Err("invalid personal reporting preference".into());
