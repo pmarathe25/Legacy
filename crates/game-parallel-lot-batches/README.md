@@ -6,5 +6,5 @@ the same expiry, capacity, exact-cohort receipts, and atomic draft semantics. Sp
 paths also handle distinct sources feeding shared destinations and one shared source feeding
 distinct destinations, using the same seeded arbitration as the general planner. Other
 mixed or overlapping custody uses the general shared-resource planner.
-Shared-source single-leg transfers can also enter directly from flat action batches,
-without constructing a full transaction for each traveler.
+Shared-source and shared-destination single-leg transfers can also enter directly from
+flat action batches, without constructing a full transaction for each participant.

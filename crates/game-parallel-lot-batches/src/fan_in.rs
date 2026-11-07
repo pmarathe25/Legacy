@@ -1,8 +1,8 @@
 //! Resolve single-leg transfers with exclusive sources and shared destinations.
 use crate::independent_transfer::after;
 use game_parallel_lot_model::{
-    Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, Spoilage, State, Transaction,
-    TransactionOutcome, key,
+    Container, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, SimpleTransfer, Spoilage, State,
+    Transaction, TransactionOutcome, key,
 };
 use game_parallel_lot_planning::Draft;
 use rayon::prelude::*;
@@ -38,6 +38,51 @@ pub fn prepare(
     {
         return Ok(None);
     }
+    prepare_rows(
+        state,
+        instance,
+        seed,
+        transactions.len(),
+        |index| {
+            let transaction = &transactions[index];
+            (transaction.id, transaction.movements[0])
+        },
+        advance,
+    )
+}
+
+/// Action and movement identities have already been validated by the flat planner.
+pub fn prepare_flat(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    if transfers.len() < 128 {
+        return Ok(None);
+    }
+    prepare_rows(
+        state,
+        instance,
+        seed,
+        transfers.len(),
+        |index| {
+            let row = transfers[index];
+            (row.action, row.movement)
+        },
+        advance,
+    )
+}
+
+fn prepare_rows(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    len: usize,
+    row_at: impl Fn(usize) -> (u64, Movement) + Sync,
+    advance: bool,
+) -> Result<Option<Draft>, String> {
     let next = if advance {
         state.tick.checked_add(1).ok_or("lot tick overflow")?
     } else {
@@ -68,14 +113,14 @@ pub fn prepare(
             .binary_search_by_key(&place, |c| c.place)
             .ok()
     };
-    let rows: Option<Vec<_>> = transactions
-        .par_iter()
-        .map(|transaction| {
-            let movement = transaction.movements[0];
+    let rows: Option<Vec<_>> = (0..len)
+        .into_par_iter()
+        .map(|index| {
+            let (transaction, movement) = row_at(index);
             Some(Row {
                 source: find(movement.from)?,
                 destination: find(movement.to?)?,
-                transaction: transaction.id,
+                transaction,
                 movement,
             })
         })

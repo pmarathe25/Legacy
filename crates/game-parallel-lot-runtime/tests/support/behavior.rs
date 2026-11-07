@@ -1062,6 +1062,112 @@ fn shared_source_flat_runtime_matches_general_arbitration() {
 }
 
 #[test]
+fn shared_destination_flat_runtime_matches_general_arbitration() {
+    use game_parallel_lots::{Movement, SimpleTransfer};
+    let destination = Place::Person(1000);
+    let mut snapshot = runtime().snapshot();
+    let mut containers: Vec<_> = (1..=256)
+        .map(|id| {
+            Container::new(
+                Place::Person(id),
+                10,
+                vec![
+                    Lot {
+                        good: 1,
+                        quantity: 1,
+                        expires_at: Some(1),
+                    },
+                    Lot {
+                        good: 1,
+                        quantity: if id % 9 == 0 { 1 } else { 3 },
+                        expires_at: Some(3 + id % 2),
+                    },
+                ],
+            )
+            .unwrap()
+        })
+        .collect();
+    containers.push(
+        Container::new(
+            destination,
+            130,
+            vec![Lot {
+                good: 1,
+                quantity: 20,
+                expires_at: Some(1),
+            }],
+        )
+        .unwrap(),
+    );
+    containers.sort_unstable_by_key(|row| row.place);
+    snapshot.custody.containers = containers;
+    let transfers: Vec<_> = (1..=256)
+        .map(|id| SimpleTransfer {
+            action: id * 3,
+            movement: Movement {
+                id: 9000 - id,
+                from: Place::Person(id),
+                to: Some(destination),
+                good: 1,
+                quantity: 1 + id % 3,
+            },
+        })
+        .collect();
+    for seed in [1, 13, 27] {
+        let run = |workers, reverse, capacity| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut rows = transfers.clone();
+                    if reverse {
+                        rows.reverse();
+                    }
+                    let actions: Vec<_> = rows
+                        .iter()
+                        .map(|row| Transaction {
+                            id: row.action,
+                            movements: vec![row.movement],
+                            creations: vec![],
+                        })
+                        .collect();
+                    let mut initial = snapshot.clone();
+                    initial
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == destination)
+                        .unwrap()
+                        .capacity = capacity;
+                    let mut flat = Runtime::compile(initial.clone()).unwrap();
+                    let mut general = Runtime::compile(initial).unwrap();
+                    let before = flat.snapshot();
+                    let draft = flat
+                        .prepare_partitioned_flat_transfers(&rows, seed)
+                        .unwrap()
+                        .unwrap();
+                    let stale = flat
+                        .prepare_partitioned_flat_transfers(&rows, seed)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(flat.snapshot(), before);
+                    let reference = general.prepare_advance(&[], &actions, seed).unwrap();
+                    assert_eq!(draft.events(), reference.events());
+                    let events = flat.commit_advance(draft).unwrap();
+                    assert!(flat.commit_advance(stale).is_err());
+                    general.commit_advance(reference).unwrap();
+                    assert_eq!(flat.snapshot(), general.snapshot());
+                    (flat.snapshot(), events)
+                })
+        };
+        for capacity in [130, 1000] {
+            assert_eq!(run(1, false, capacity), run(4, true, capacity));
+        }
+    }
+}
+
+#[test]
 fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
     use game_parallel_lots::{Movement, SimpleTransfer};
     let mut snapshot = runtime().snapshot();

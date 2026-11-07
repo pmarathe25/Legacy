@@ -219,15 +219,18 @@ pub fn prepare(
     {
         return Ok(None);
     }
+    if let Some(draft) = super::fan_out::prepare_flat(state, instance, seed, transfers, advance)? {
+        return Ok(Some(draft));
+    }
+    if let Some(draft) = super::fan_in::prepare_flat(state, instance, seed, transfers, advance)? {
+        return Ok(Some(draft));
+    }
     let mut movement_ids: Vec<_> = transfers.par_iter().map(|row| row.movement.id).collect();
     if movement_ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
         movement_ids.par_sort_unstable();
     }
     if movement_ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
         return Ok(None);
-    }
-    if let Some(draft) = super::fan_out::prepare_flat(state, instance, seed, transfers, advance)? {
-        return Ok(Some(draft));
     }
     let mut endpoints: Vec<(Place, usize)> = transfers
         .par_iter()
