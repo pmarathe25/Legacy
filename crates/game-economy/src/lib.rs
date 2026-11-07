@@ -5537,7 +5537,11 @@ impl Economy {
                 .practices = Some(next);
         }
         let mut next_market = self.market.clone();
+        #[cfg(feature = "profile")]
+        let opinions_clone_phase = game_diagnostics::span("economy.opinions.clone");
         let mut next_opinions = game_economy_dynamics::next_opinions(&self.opinions);
+        #[cfg(feature = "profile")]
+        drop(opinions_clone_phase);
         let mut report_changes = Vec::new();
         if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking) {
             let active_complaints = previous.complaints.par_iter().any(|row| {
@@ -5844,7 +5848,11 @@ impl Economy {
                 next_opinions.as_mut(),
             )?;
         }
+        #[cfg(feature = "profile")]
+        let social_learning_phase = game_diagnostics::span("economy.opinions.social_learning");
         game_economy_dynamics::learn_social(&mut next_opinions, dynamics.as_ref(), tick);
+        #[cfg(feature = "profile")]
+        drop(social_learning_phase);
         if let Some(opinions) = next_opinions
             .as_mut()
             .filter(|o| o.tracks_report_discrepancy())

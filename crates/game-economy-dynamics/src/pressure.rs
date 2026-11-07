@@ -23,6 +23,10 @@ pub fn prepare(
     requested: Option<&Encounter>,
     access: Access<'_>,
 ) -> Result<Social, &'static str> {
+    #[cfg(feature = "profile")]
+    let selection_phase = game_diagnostics::span("dynamics.meetings.select");
+    #[cfg(feature = "profile")]
+    let mut stage = game_diagnostics::span("dynamics.select.directed");
     let (seed, tick) = clock;
     let can_speak = access.speak;
     let mut reserved: Vec<_> = requested
@@ -60,6 +64,11 @@ pub fn prepare(
             .as_ref()
             .is_none_or(|index| index.social(id, isolation, seed, tick))
     };
+    #[cfg(feature = "profile")]
+    {
+        drop(stage);
+        stage = game_diagnostics::span("dynamics.select.pressure");
+    }
     let mut pressured = if let Some(opinions) = opinions.filter(|o| {
         !o.records.is_empty()
             && !social.pressures.is_empty()
@@ -165,6 +174,11 @@ pub fn prepare(
     }
     let mut already_occupied: Vec<_> = pressured.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
     already_occupied.par_sort_unstable();
+    #[cfg(feature = "profile")]
+    {
+        drop(stage);
+        stage = game_diagnostics::span("dynamics.select.friendship");
+    }
     let friends = crate::friendship::Context {
         social,
         contacts,
@@ -177,6 +191,11 @@ pub fn prepare(
     }
     .prepare(&voluntary);
     pressured.par_extend(friends);
+    #[cfg(feature = "profile")]
+    {
+        drop(stage);
+        stage = game_diagnostics::span("dynamics.select.openings");
+    }
     if let Some(location) = access.opening {
         let mut occupied: Vec<_> = pressured.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
         occupied.par_sort_unstable();
@@ -192,8 +211,19 @@ pub fn prepare(
         .prepare(&voluntary);
         pressured.par_extend(conversations);
     }
+    #[cfg(feature = "profile")]
+    {
+        drop(stage);
+        stage = game_diagnostics::span("dynamics.select.general");
+    }
     if pressured.is_empty() {
         let selection = social.select_validated(contacts, seed, tick, voluntary)?;
+        #[cfg(feature = "profile")]
+        drop(stage);
+        #[cfg(feature = "profile")]
+        drop(selection_phase);
+        #[cfg(feature = "profile")]
+        let _history_phase = game_diagnostics::span("dynamics.meetings.history");
         return social.prepare_selection_validated(selection, tick);
     }
     let mut occupied: Vec<_> = pressured.par_iter().flat_map_iter(|e| [e.a, e.b]).collect();
@@ -212,5 +242,11 @@ pub fn prepare(
         .needs
         .as_ref()
         .map(|needs| needs.advance(&social.participants, contacts, &selection.events));
+    #[cfg(feature = "profile")]
+    drop(stage);
+    #[cfg(feature = "profile")]
+    drop(selection_phase);
+    #[cfg(feature = "profile")]
+    let _history_phase = game_diagnostics::span("dynamics.meetings.history");
     social.prepare_selection_validated(selection, tick)
 }

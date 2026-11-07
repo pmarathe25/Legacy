@@ -371,6 +371,7 @@ dependencies = [
 name = "game-economy-dynamics"
 version = "0.2.0"
 dependencies = [
+ "game-diagnostics",
  "game-disease",
  "game-economy-claims",
  "game-economy-person",

@@ -298,6 +298,8 @@ impl Dynamics {
         ),
         clock: Clock<'_>,
     ) -> Result<Self, String> {
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("dynamics.contacts");
         let Clock {
             seed,
             tick,
@@ -341,6 +343,11 @@ impl Dynamics {
             }
             encounter
         });
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("dynamics.meetings_and_history");
+        }
         let mut social = self
             .social
             .as_ref()
@@ -368,6 +375,11 @@ impl Dynamics {
                 .events
                 .par_iter_mut()
                 .for_each(|event| locality.restore(event));
+        }
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("dynamics.disease_and_damage");
         }
         let disease = self
             .disease
@@ -440,6 +452,8 @@ impl Dynamics {
                 }
             });
         }
+        #[cfg(feature = "profile")]
+        drop(phase);
         Ok(Self {
             social,
             personality: self.personality.clone(),
