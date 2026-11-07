@@ -6,9 +6,11 @@ use game_parallel_lot_model::{
 };
 use game_parallel_lot_planning::Draft;
 use rayon::prelude::*;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[derive(Clone, Copy)]
 struct Row {
+    original: usize,
     transaction: u64,
     movement: Movement,
     destination: usize,
@@ -87,9 +89,11 @@ pub fn prepare(
     };
     let rows: Option<Vec<_>> = transactions
         .par_iter()
-        .map(|transaction| {
+        .enumerate()
+        .map(|(original, transaction)| {
             let movement = transaction.movements[0];
             Some(Row {
+                original,
                 transaction: transaction.id,
                 movement,
                 destination: find(movement.to?)?,
@@ -166,6 +170,19 @@ pub fn prepare(
         .collect();
     let offsets = game_parallel_lot_allocation::prefixes(&accepted_amounts);
     let consumed: u64 = accepted_amounts.par_iter().sum();
+    // Restore input order without a second comparison sort. Each row has a
+    // unique original position, so these relaxed writes never conflict.
+    let inverse: Vec<_> = (0..rows.len())
+        .into_par_iter()
+        .map(|_| AtomicUsize::new(0))
+        .collect();
+    rows.par_iter().enumerate().for_each(|(rank, row)| {
+        inverse[row.original].store(rank, Ordering::Relaxed);
+    });
+    let positions: Vec<_> = inverse
+        .into_par_iter()
+        .map(|position| position.into_inner())
+        .collect();
     #[cfg(feature = "profile")]
     {
         drop(phase);
@@ -188,16 +205,17 @@ pub fn prepare(
         .collect();
     spoiled.par_sort_unstable_by_key(|row| (row.place, row.good, row.expires_at));
     let chunk_size = rows.len().div_ceil(64).clamp(16, 2048);
-    let parts: Vec<_> = rows
+    let parts: Vec<_> = positions
         .par_chunks(chunk_size)
-        .zip(accepted.par_chunks(chunk_size))
-        .zip(offsets.par_chunks(chunk_size))
-        .map(|((chunk, decisions), offsets)| {
+        .map(|chunk| {
             let mut arena = Vec::with_capacity(chunk.len());
             let mut headers = Vec::with_capacity(chunk.len());
             let mut outcomes = Vec::with_capacity(chunk.len());
             let mut changes = Vec::with_capacity(chunk.len());
-            for ((row, &accepted), &offset) in chunk.iter().zip(decisions).zip(offsets) {
+            for &position in chunk {
+                let row = &rows[position];
+                let accepted = accepted[position];
+                let offset = offsets[position];
                 let begin = arena.len();
                 if accepted {
                     let end = offset + u128::from(row.movement.quantity);
@@ -244,12 +262,17 @@ pub fn prepare(
     let mut chunks = Vec::with_capacity(parts.len());
     let mut outcomes = Vec::with_capacity(rows.len());
     let mut changes = Vec::with_capacity(rows.len() + 1);
+    let source_changed = consumed > 0 || source.next_expiry.is_some_and(|at| at <= next);
+    let source_first = source_index < destinations[0];
+    if source_changed && source_first {
+        changes.push((source_index, after(source, next, first.good, consumed, &[])));
+    }
     for (chunk, transactions, destinations) in parts {
         chunks.push(chunk);
         outcomes.extend(transactions);
         changes.extend(destinations);
     }
-    if consumed > 0 || source.next_expiry.is_some_and(|at| at <= next) {
+    if source_changed && !source_first {
         changes.push((source_index, after(source, next, first.good, consumed, &[])));
     }
     if !spoiled.is_empty() {
@@ -262,7 +285,9 @@ pub fn prepare(
             },
         ));
     }
-    changes.par_sort_unstable_by_key(|row| row.0);
+    if changes.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        changes.par_sort_unstable_by_key(|row| row.0);
+    }
     let mut receipts = OutcomeBatch::from_chunks(chunks);
     receipts.sort_by_id();
     if outcomes.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
