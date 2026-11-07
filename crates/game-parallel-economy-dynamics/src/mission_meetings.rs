@@ -5,6 +5,18 @@ use game_parallel_opinions::Opinions;
 use game_parallel_social::{Contact, Encounter, Social};
 use rayon::prelude::*;
 
+fn dense_base(first: Option<u64>, last: Option<u64>, len: usize) -> Option<u64> {
+    first.zip(last).and_then(|(first, last)| {
+        (last.checked_sub(first) == u64::try_from(len.saturating_sub(1)).ok()).then_some(first)
+    })
+}
+
+fn dense_offset(base: u64, person: u64) -> Option<usize> {
+    person
+        .checked_sub(base)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
 pub struct Context<'a> {
     pub missions: Option<&'a Missions>,
     pub people: &'a [Person],
@@ -35,24 +47,65 @@ impl Context<'_> {
             return vec![];
         }
         let mut participants: Vec<_> = self.social.participants.par_iter().collect();
-        participants.par_sort_unstable_by_key(|row| row.person);
+        if participants
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            participants.par_sort_unstable_by_key(|row| row.person);
+        }
         let mut policies: Vec<_> = self.social.pressures.par_iter().collect();
-        policies.par_sort_unstable_by_key(|row| row.person);
+        if policies
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            policies.par_sort_unstable_by_key(|row| row.person);
+        }
         let feelings = self
             .opinions
             .filter(|_| !policies.is_empty())
             .map(Opinions::index);
+        let contact_base = dense_base(
+            self.contacts.first().map(|row| row.person),
+            self.contacts.last().map(|row| row.person),
+            self.contacts.len(),
+        );
+        let participant_base = dense_base(
+            participants.first().map(|row| row.person),
+            participants.last().map(|row| row.person),
+            participants.len(),
+        );
+        let people_base = dense_base(
+            self.people.first().map(|row| row.id),
+            self.people.last().map(|row| row.id),
+            self.people.len(),
+        );
         let find_contact = |id| {
+            let index = contact_base.map_or_else(
+                || {
+                    self.contacts
+                        .binary_search_by_key(&id, |row| row.person)
+                        .ok()
+                },
+                |base| dense_offset(base, id),
+            )?;
             self.contacts
-                .binary_search_by_key(&id, |row| row.person)
-                .ok()
-                .map(|index| self.contacts[index])
+                .get(index)
+                .copied()
+                .filter(|row| row.person == id)
         };
         let find_participant = |id| {
+            let index = participant_base.map_or_else(
+                || {
+                    participants
+                        .binary_search_by_key(&id, |row| row.person)
+                        .ok()
+                },
+                |base| dense_offset(base, id),
+            )?;
             participants
-                .binary_search_by_key(&id, |row| row.person)
-                .ok()
-                .map(|index| participants[index])
+                .get(index)
+                .copied()
+                .filter(|row| row.person == id)
         };
         let eligible = |contact: Contact| {
             !contact.busy
@@ -75,11 +128,18 @@ impl Context<'_> {
                 {
                     return None;
                 }
+                let index = people_base.map_or_else(
+                    || {
+                        self.people
+                            .binary_search_by_key(&mission.person, |row| row.id)
+                            .ok()
+                    },
+                    |base| dense_offset(base, mission.person),
+                )?;
                 let person = self
                     .people
-                    .binary_search_by_key(&mission.person, |row| row.id)
-                    .ok()
-                    .map(|index| &self.people[index])?;
+                    .get(index)
+                    .filter(|row| row.id == mission.person)?;
                 if person.region != Some(mission.destination) {
                     return None;
                 }

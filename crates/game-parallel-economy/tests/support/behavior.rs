@@ -10688,7 +10688,7 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
     let mission = &mut initial.missions.as_mut().unwrap().entries[0];
     mission.phase = MissionPhase::Visiting;
     mission.remaining = 5;
-    let run = |workers, actor_willing, target_willing, actor_fear, fear, obligation| {
+    let run = |workers, actor_willing, target_willing, actor_fear, fear, obligation, sparse| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -10696,6 +10696,9 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
             .install(|| {
                 let mut state = initial.clone();
                 let social = state.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+                if sparse {
+                    social.participants.retain(|row| row.person != 2);
+                }
                 social
                     .participants
                     .iter_mut()
@@ -10773,10 +10776,14 @@ fn travelers_seek_their_meeting_objective_through_individual_choices() {
         (false, false, 5, 0, 5),
     ] {
         assert_eq!(
-            run(1, actor, target, actor_fear, fear, obligation),
-            run(4, actor, target, actor_fear, fear, obligation)
+            run(1, actor, target, actor_fear, fear, obligation, false),
+            run(4, actor, target, actor_fear, fear, obligation, false)
         );
     }
+    assert_eq!(
+        run(1, true, false, 0, 5, 0, true),
+        run(4, true, false, 0, 5, 0, true)
+    );
 }
 
 #[test]
