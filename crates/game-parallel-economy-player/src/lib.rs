@@ -1131,6 +1131,32 @@ impl<'a> Player<'a> {
     ) -> Result<Option<game_parallel_economy::ReportReception>, String> {
         self.world.food_report_reception(self.current()?)
     }
+    fn validate_meeting_target(&self, target: Option<u64>) -> Result<(), String> {
+        if let Some(target) = target {
+            let view = self.view()?;
+            if !view.nearby.contains(&target)
+                && !view.relationships.iter().any(|row| row.target == target)
+            {
+                return Err("person is not known".into());
+            }
+        }
+        Ok(())
+    }
+    pub fn set_social_affinity_weight(
+        &mut self,
+        target: Option<u64>,
+        weight: Option<i32>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        self.validate_meeting_target(target)?;
+        self.world
+            .set_social_affinity_weight(person, target, weight)
+    }
+    pub fn social_affinity_weight(&self, target: Option<u64>) -> Result<Option<i32>, String> {
+        let person = self.current()?;
+        self.validate_meeting_target(target)?;
+        self.world.social_affinity_weight(person, target)
+    }
     pub fn set_promise_trust_reactions(
         &mut self,
         reactions: Option<(i32, i32)>,

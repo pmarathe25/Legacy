@@ -2519,6 +2519,76 @@ fn player_can_offer_and_request_lessons() {
 }
 
 #[test]
+fn player_changes_only_their_own_social_affinity_preference() {
+    use game_parallel_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(&mut world, &["social-affinity", "-2"])
+            .unwrap()
+    );
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &["social-affinity", "2", "0"]
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        Player::new(&mut world)
+            .social_affinity_weight(None)
+            .unwrap(),
+        Some(-2)
+    );
+    assert_eq!(
+        Player::new(&mut world)
+            .social_affinity_weight(Some(2))
+            .unwrap(),
+        Some(0)
+    );
+    let before = world.snapshot();
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &["social-affinity", "999", "1"]
+        )
+        .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &["social-affinity", "99", "1"]
+        )
+        .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &["social-affinity", "2", "default"]
+        )
+        .unwrap()
+    );
+    assert_eq!(
+        Player::new(&mut world)
+            .social_affinity_weight(Some(2))
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        Player::new(&mut world)
+            .social_affinity_weight(None)
+            .unwrap(),
+        Some(-2)
+    );
+}
+
+#[test]
 fn authored_teaching_reactions_remain_individual_and_directional() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =

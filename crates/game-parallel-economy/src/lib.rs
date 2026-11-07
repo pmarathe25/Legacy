@@ -101,6 +101,7 @@ mod hauling;
 mod hunting;
 mod medical;
 mod mission_deliveries;
+mod social_preferences;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
 pub use giving::{
     Asking as FoodAsking, Giving, HelperAsking, Policy as GivingPolicy, Request as FoodRequest,

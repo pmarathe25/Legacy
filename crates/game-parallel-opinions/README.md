@@ -41,6 +41,8 @@ Personal changes combine simultaneous signed deltas before clamping. Sparse chan
 
 An optional signed `social_affinity_weight` controls whether a person seeks meetings with people they like, people they dislike, or neither on that basis. A relationship case can override the weight for a particular person. Without a setting, the existing preference for positive affinity remains; both people still make their own participation choices.
 
+The player can inspect or change their own general setting with `social-affinity` and set or clear a known person's override with `social-affinity PERSON WEIGHT|default`. Administrative commands accept the person whose preference is being changed as the first argument.
+
 When affinity is enabled, `affinity_site_use` and `affinity_site_destruction` are optional signed personal reactions to locally witnessed use or destruction of a claimed site. A `relationship_cases` entry can override either reaction for a particular actor using `site_use` or `site_destruction`. Absent reactions default to zero; either event can increase or decrease liking, and neither creates obligation.
 
 `affinity_site_salvage` independently controls a person's reaction to witnessing someone recover material from their claimed site's debris. A `relationship_cases` entry can override it for a particular actor with `site_salvage`; an absent setting has no effect. Failed recovery and actions outside the claimant's location are not observed.

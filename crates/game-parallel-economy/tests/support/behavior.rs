@@ -30174,6 +30174,54 @@ fn people_independently_weight_affinity_when_seeking_meetings() {
 }
 
 #[test]
+fn social_affinity_choices_are_changeable_and_preserve_other_personal_settings() {
+    let mut world = Economy::compile(fixture()).unwrap();
+    world
+        .set_opinion_sensitivity(OpinionSensitivity {
+            person: 1,
+            relationship_cases: vec![RelationshipCase {
+                target: 2,
+                help: Some(4),
+                ..Default::default()
+            }],
+            ..Default::default()
+        })
+        .unwrap();
+    let stale = world.prepare().unwrap();
+    world.set_social_affinity_weight(1, None, Some(-2)).unwrap();
+    assert!(world.commit(stale).is_err());
+    world
+        .set_social_affinity_weight(1, Some(2), Some(0))
+        .unwrap();
+    assert_eq!(world.social_affinity_weight(1, None).unwrap(), Some(-2));
+    assert_eq!(world.social_affinity_weight(1, Some(2)).unwrap(), Some(0));
+    let before = world.snapshot();
+    assert!(
+        world
+            .set_social_affinity_weight(1, Some(999), Some(1))
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    world.set_social_affinity_weight(1, Some(2), None).unwrap();
+    assert_eq!(world.social_affinity_weight(1, Some(2)).unwrap(), None);
+    let state = world.snapshot();
+    let sensitivity = state
+        .opinions
+        .as_ref()
+        .unwrap()
+        .sensitivities
+        .iter()
+        .find(|row| row.person == 1)
+        .unwrap();
+    assert_eq!(sensitivity.relationship_cases[0].help, Some(4));
+    assert_eq!(sensitivity.social_affinity_weight, Some(-2));
+    let restored =
+        Economy::compile(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(restored.snapshot(), state);
+}
+
+#[test]
 fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
     let mut initial = fixture();
     initial.autowork = None;
