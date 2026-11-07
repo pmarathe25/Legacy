@@ -9118,6 +9118,82 @@ fn personal_expedition_travels_and_returns_with_real_custody_and_can_be_cancelle
 }
 
 #[test]
+fn a_carrier_can_reconsider_after_personally_finding_an_empty_source() {
+    let mut initial = expedition_fixture();
+    initial.dynamics = None;
+    initial.missions = None;
+    initial.people[1].willing_to_work = false;
+    initial.hauling = Some(Hauling {
+        asking: vec![],
+        requests: vec![],
+        policies: vec![HaulingPolicy {
+            person: 2,
+            source: 2,
+            destination: 1,
+            good: 2,
+            quantity: 2,
+            willing: true,
+            empty_backoff: Some(20),
+            retry_at: 0,
+            requires_request: false,
+            request_pressure_threshold: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.hauling_empty_backoff(2).unwrap().1,
+                    0,
+                    "no remote knowledge of the empty stock"
+                );
+                for _ in 0..8 {
+                    if world.hauling_empty_backoff(2).unwrap().1 > 0 {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                let (delay, retry_at) = world.hauling_empty_backoff(2).unwrap();
+                assert_eq!(delay, Some(20));
+                assert!(retry_at > world.tick());
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(world.snapshot().people[1].region, Some(1));
+                assert_eq!(world.hauling_empty_backoff(2).unwrap().1, retry_at);
+                let stale = world.prepare().unwrap();
+                world.set_hauling_empty_backoff(2, None).unwrap();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.hauling_empty_backoff(2).unwrap(), (None, 0));
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    initial.hauling.as_mut().unwrap().policies[0].empty_backoff = None;
+    let mut world = Economy::compile(initial).unwrap();
+    for _ in 0..8 {
+        world.advance().unwrap();
+    }
+    assert_eq!(
+        world.snapshot().people[1].region,
+        Some(2),
+        "no response is imposed when unconfigured"
+    );
+    assert_eq!(world.hauling_empty_backoff(2).unwrap(), (None, 0));
+}
+
+#[test]
 fn autonomous_hauling_moves_real_goods_and_can_be_abandoned() {
     let mut initial = expedition_fixture();
     initial.dynamics = None;
@@ -9134,6 +9210,8 @@ fn autonomous_hauling_moves_real_goods_and_can_be_abandoned() {
             quantity: 2,
             willing: true,
             requires_request: false,
+            empty_backoff: None,
+            retry_at: 0,
             request_pressure_threshold: None,
             pressured_by: None,
             pressure_threshold: None,
@@ -9261,6 +9339,8 @@ fn hauling_requests_can_be_refused_followed_or_abandoned_without_a_contract() {
             quantity: 2,
             willing: false,
             requires_request: true,
+            empty_backoff: None,
+            retry_at: 0,
             request_pressure_threshold: Some(3),
             pressured_by: None,
             pressure_threshold: None,
@@ -9378,6 +9458,8 @@ fn autonomous_people_can_request_hauling_without_compelling_the_carrier() {
             quantity: 1,
             willing: true,
             requires_request: true,
+            empty_backoff: None,
+            retry_at: 0,
             request_pressure_threshold: None,
             pressured_by: None,
             pressure_threshold: None,
@@ -9492,6 +9574,8 @@ fn hauling_workload(count: u64) -> State {
                 quantity: 1,
                 willing: true,
                 requires_request: false,
+                empty_backoff: None,
+                retry_at: 0,
                 request_pressure_threshold: None,
                 pressured_by: None,
                 pressure_threshold: None,
@@ -9796,6 +9880,8 @@ fn hauling_respects_claims_and_does_not_deliver_spoiled_cargo() {
             quantity: 1,
             willing: true,
             requires_request: false,
+            empty_backoff: None,
+            retry_at: 0,
             request_pressure_threshold: None,
             pressured_by: None,
             pressure_threshold: None,
@@ -29420,6 +29506,8 @@ fn requested_hauling_follows_connected_paths_with_physical_cargo_and_reload() {
             quantity: 2,
             willing: true,
             requires_request: true,
+            empty_backoff: None,
+            retry_at: 0,
             request_pressure_threshold: None,
             pressured_by: None,
             pressure_threshold: None,

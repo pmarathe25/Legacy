@@ -1665,6 +1665,12 @@ impl<'a> Player<'a> {
             lifetime,
         )
     }
+    pub fn set_hauling_empty_backoff(&mut self, delay: Option<u64>) -> Result<(), String> {
+        self.world.set_hauling_empty_backoff(self.current()?, delay)
+    }
+    pub fn hauling_empty_backoff(&self) -> Result<(Option<u64>, u64), String> {
+        self.world.hauling_empty_backoff(self.current()?)
+    }
     pub fn treat_other(
         &mut self,
         patient: u64,

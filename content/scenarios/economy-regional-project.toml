@@ -108,7 +108,7 @@ enabled = true
 disregard_claims = false
 
 [hauling]
-policies = [{ person = 2, source = 2, destination = 1, good = "timber", quantity = 5, willing = true, requires_request = true }]
+policies = [{ person = 2, source = 2, destination = 1, good = "timber", quantity = 5, willing = true, requires_request = true, empty_backoff = 20 }]
 
 [local_transport]
 stores = []

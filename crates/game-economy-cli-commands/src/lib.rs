@@ -424,6 +424,17 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 _ => return Err("expected on or off".into()),
             },
         )?,
+        ["haul-empty", person] => println!(
+            "{:?}",
+            world.hauling_empty_backoff(person.parse().map_err(|_| "invalid person")?)?
+        ),
+        ["haul-empty", person, "off"] => {
+            world.set_hauling_empty_backoff(person.parse().map_err(|_| "invalid person")?, None)?
+        }
+        ["haul-empty", person, delay] => world.set_hauling_empty_backoff(
+            person.parse().map_err(|_| "invalid person")?,
+            Some(delay.parse().map_err(|_| "invalid backoff")?),
+        )?,
         ["haul", person, choice] => world.set_hauling_choice(
             person.parse().map_err(|_| "invalid person")?,
             match *choice {

@@ -75,7 +75,7 @@ fn playable_regional_project_requires_requested_physical_delivery() {
                         .any(|goal| goal.person == 2 && goal.progress > 0)
                 );
                 game_economy_player::Player::new(&mut world)
-                    .ask_haul(2, 2, 1, timber, 7)
+                    .ask_haul(2, 2, 1, timber, 40)
                     .unwrap();
                 let saved = serde_json::to_string(&world.snapshot()).unwrap();
                 let mut restored =
@@ -103,6 +103,19 @@ fn playable_regional_project_requires_requested_physical_delivery() {
                 }
                 let state = world.snapshot();
                 assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .hauling
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .iter()
+                        .any(|request| request.carrier == 2)
+                );
+                assert!(
+                    state.hauling.as_ref().unwrap().policies[0].retry_at
+                        > state.physical.custody.tick
+                );
                 assert!(
                     state
                         .goals

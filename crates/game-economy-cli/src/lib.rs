@@ -270,6 +270,8 @@ struct HaulingPolicyConfig {
     quantity: u64,
     willing: bool,
     #[serde(default)]
+    empty_backoff: Option<u64>,
+    #[serde(default)]
     requires_request: bool,
     #[serde(default)]
     request_pressure_threshold: Option<u64>,
@@ -1014,6 +1016,8 @@ pub fn scenario_with_options(
                             .ok_or_else(|| format!("unknown hauling good {}", p.good))?,
                         quantity: p.quantity,
                         willing: p.willing,
+                        empty_backoff: p.empty_backoff,
+                        retry_at: 0,
                         requires_request: p.requires_request,
                         request_pressure_threshold: p.request_pressure_threshold,
                         pressured_by: p.pressured_by,

@@ -579,6 +579,50 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Set this person's own response to finding an empty source.
+    pub fn set_hauling_empty_backoff(
+        &mut self,
+        person: u64,
+        delay: Option<u64>,
+    ) -> Result<(), String> {
+        if delay == Some(0) {
+            return Err("backoff must be positive".into());
+        }
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self.hauling.clone().ok_or("hauling is disabled")?;
+        let policy = next
+            .policies
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no hauling preference")?;
+        policy.empty_backoff = delay;
+        policy.retry_at = 0;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.hauling = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    pub fn hauling_empty_backoff(&self, person: u64) -> Result<(Option<u64>, u64), String> {
+        let policy = self
+            .hauling
+            .as_ref()
+            .ok_or("hauling is disabled")?
+            .policies
+            .iter()
+            .find(|policy| policy.person == person)
+            .ok_or("person has no hauling preference")?;
+        Ok((policy.empty_backoff, policy.retry_at))
+    }
     /// Administrative access; a player view must filter to their own requests.
     pub fn food_requests(&self) -> &[FoodRequest] {
         self.giving.as_ref().map_or(&[], |giving| &giving.requests)
@@ -3494,6 +3538,18 @@ impl Economy {
             })
             .transpose()?;
         if let Some(plan) = &hauling_plan {
+            if !plan.empty_returns.is_empty()
+                && let Some(hauling) = &mut next_hauling
+            {
+                hauling.policies.par_iter_mut().for_each(|policy| {
+                    if let Ok(index) = plan
+                        .empty_returns
+                        .binary_search_by_key(&policy.person, |row| row.0)
+                    {
+                        policy.retry_at = plan.empty_returns[index].1;
+                    }
+                });
+            }
             action_base = action_base
                 .checked_add(plan.actions.len() as u64)
                 .ok_or("action count overflow")?;

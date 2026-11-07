@@ -19,6 +19,11 @@ pub struct Policy {
     pub good: u32,
     pub quantity: u64,
     pub willing: bool,
+    /// Return toward the destination after finding the source empty, and wait before retrying.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub empty_backoff: Option<u64>,
+    #[serde(default)]
+    pub retry_at: u64,
     #[serde(default)]
     pub requires_request: bool,
     #[serde(default)]
@@ -174,6 +179,7 @@ impl Hauling {
                         .is_some_and(|id| id == p.person || !people.contains(&id))
                     || p.pressure_threshold == Some(0)
                     || p.request_pressure_threshold == Some(0)
+                    || p.empty_backoff == Some(0)
                     || p.pressured_by.is_some() != p.pressure_threshold.is_some()
             })
         {
@@ -254,6 +260,7 @@ pub struct Plan {
     pub actions: Vec<Transaction>,
     pub departures: Vec<Departure>,
     pub uses: Vec<Use>,
+    pub empty_returns: Vec<(u64, u64)>,
 }
 pub struct Context<'a> {
     pub owner: &'a Hauling,
@@ -387,6 +394,14 @@ impl Context<'_> {
                             region,
                             good: p.good,
                         })?;
+                        if stock.quantity(p.good) == 0 && p.empty_backoff.is_some() {
+                            return routes
+                                .get(&(region, p.destination))
+                                .map(|&(_, next)| (actor.id, None, Some(next)));
+                        }
+                        if self.tick < p.retry_at {
+                            return None;
+                        }
                         let amount = p
                             .quantity
                             .min(stock.quantity(p.good))
@@ -427,6 +442,9 @@ impl Context<'_> {
                             None,
                         ))
                     } else {
+                        if self.tick < p.retry_at {
+                            return None;
+                        }
                         let target = if carried > 0 { p.destination } else { p.source };
                         routes
                             .get(&(region, target))
@@ -435,6 +453,42 @@ impl Context<'_> {
                 })
                 .collect();
         choices.par_sort_unstable_by_key(|row| row.0);
+        let mut empty_returns: Vec<_> = self
+            .owner
+            .policies
+            .par_iter()
+            .filter_map(|policy| {
+                let delay = policy.empty_backoff?;
+                let index = choices
+                    .binary_search_by_key(&policy.person, |row| row.0)
+                    .ok()?;
+                choices[index].2?;
+                let actor = self
+                    .people
+                    .binary_search_by_key(&policy.person, |person| person.id)
+                    .ok()
+                    .map(|i| &self.people[i])?;
+                if actor.region != Some(policy.source)
+                    || self
+                        .view
+                        .container(Place::Person(actor.id))?
+                        .quantity(policy.good)
+                        != 0
+                    || self
+                        .view
+                        .container(Place::Stock {
+                            region: policy.source,
+                            good: policy.good,
+                        })?
+                        .quantity(policy.good)
+                        != 0
+                {
+                    return None;
+                }
+                Some((policy.person, self.tick.saturating_add(delay)))
+            })
+            .collect();
+        empty_returns.par_sort_unstable_by_key(|row| row.0);
         let transfers: Vec<_> = choices
             .par_iter()
             .filter_map(|&(person, movement, _)| movement.map(|m| (person, m)))
@@ -480,6 +534,7 @@ impl Context<'_> {
             actors: choices.par_iter().map(|row| row.0).collect(),
             actions,
             uses,
+            empty_returns,
             departures: choices
                 .par_iter()
                 .filter_map(|&(person, _, destination)| {
