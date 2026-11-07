@@ -38,7 +38,10 @@ impl Context<'_> {
         participants.par_sort_unstable_by_key(|row| row.person);
         let mut policies: Vec<_> = self.social.pressures.par_iter().collect();
         policies.par_sort_unstable_by_key(|row| row.person);
-        let feelings = self.opinions.map(Opinions::index);
+        let feelings = self
+            .opinions
+            .filter(|_| !policies.is_empty())
+            .map(Opinions::index);
         let find_contact = |id| {
             self.contacts
                 .binary_search_by_key(&id, |row| row.person)
@@ -114,6 +117,22 @@ impl Context<'_> {
             .collect();
         if candidates.is_empty() {
             return vec![];
+        }
+        let shared_target = candidates[0].2;
+        if candidates.par_iter().all(|row| row.2 == shared_target) {
+            // Each active mission has a distinct actor, and no one can target
+            // themselves. Only the target's deterministic choice is contested.
+            let &(_, actor, target, region, pressured) = candidates
+                .par_iter()
+                .min_by_key(|row| (row.0, row.1, row.2))
+                .expect("nonempty candidates");
+            return vec![Encounter {
+                tick: self.tick,
+                region,
+                a: actor.min(target),
+                b: actor.max(target),
+                pressured: pressured.then_some(target),
+            }];
         }
         // A proposal wins only if both people choose the same highest-priority
         // incident. This gives disjoint meetings without a serial matching pass.

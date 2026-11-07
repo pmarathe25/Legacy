@@ -17497,6 +17497,14 @@ fn meeting_objective_workload(count: u64) -> State {
 fn meeting_objectives_contend_without_double_booking_people() {
     let count = 512;
     let initial = meeting_objective_workload(count);
+    let expected = (1..=count)
+        .min_by_key(|&actor| {
+            (
+                game_parallel_genetics::random(initial.seed ^ actor, count + 1, 1),
+                actor,
+            )
+        })
+        .unwrap();
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -17516,6 +17524,17 @@ fn meeting_objectives_contend_without_double_booking_people() {
                         .filter(|row| row.objective_met)
                         .count(),
                     1
+                );
+                assert!(
+                    state
+                        .missions
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .find(|row| row.person == expected)
+                        .unwrap()
+                        .objective_met
                 );
                 let social = state.dynamics.as_ref().unwrap().social.as_ref().unwrap();
                 let mut participants: Vec<_> = social
