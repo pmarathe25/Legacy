@@ -2377,6 +2377,19 @@ fn player_can_set_a_delivery_objective_through_the_cli() {
     assert_eq!(preference.reserve, 2);
     assert_eq!(preference.pressure_threshold, Some(3));
     assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &[
+                "delivery-acquisition",
+                &id.to_string(),
+                "off",
+                "ignore",
+                "4"
+            ]
+        )
+        .unwrap()
+    );
+    assert!(
         game_parallel_economy_cli_commands::handle(
             &mut world,
             &[
@@ -2395,6 +2408,10 @@ fn player_can_set_a_delivery_objective_through_the_cli() {
         .unwrap();
     assert!(preference.willing);
     assert_eq!(preference.pressure_threshold, None);
+    let acquisition = preference.acquisition.unwrap();
+    assert!(!acquisition.willing);
+    assert!(acquisition.disregard_claims);
+    assert_eq!(acquisition.pressure_threshold, Some(4));
 }
 
 #[test]

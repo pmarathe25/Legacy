@@ -1,4 +1,5 @@
 //! Personal expeditions use the same travel and physical people as the economy.
+pub mod acquisition;
 use game_parallel_economy_person::{
     Person,
     travel::{Departure, Travel},
@@ -6,7 +7,8 @@ use game_parallel_economy_person::{
 use game_parallel_lot_runtime::Work;
 use game_parallel_lots::{Place, View};
 pub use game_parallel_missions::{
-    DeliveryPreference, Mission, Missions, Objective, Phase as MissionPhase, Start,
+    DeliveryAcquisition, DeliveryPreference, Mission, Missions, Objective, Phase as MissionPhase,
+    Start,
 };
 use game_parallel_missions::{Draft, Event, EventKind, Phase, routing::Routing};
 use game_parallel_production_model::PersonSnapshot;
@@ -368,7 +370,12 @@ macro_rules! mission_methods {
             id: u64,
             preference: Option<$crate::DeliveryPreference>,
         ) -> Result<(), String> {
-            if preference.is_some_and(|value| value.pressure_threshold == Some(0)) {
+            if preference.is_some_and(|value| {
+                value.pressure_threshold == Some(0)
+                    || value
+                        .acquisition
+                        .is_some_and(|choice| choice.pressure_threshold == Some(0))
+            }) {
                 return Err("delivery pressure threshold must be positive".into());
             }
             let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
@@ -390,6 +397,65 @@ macro_rules! mission_methods {
                 .checked_add(1)
                 .ok_or("economic generation overflow")?;
             mission.delivery_preference = preference;
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Change delivery motivation while retaining the separate acquisition choice.
+        pub fn set_mission_delivery_choices(
+            &mut self,
+            person: u64,
+            id: u64,
+            willing: bool,
+            reserve: u64,
+            pressure_threshold: Option<u64>,
+        ) -> Result<(), String> {
+            let mut preference = self
+                .missions
+                .as_ref()
+                .ok_or("expeditions are disabled")?
+                .entries
+                .iter()
+                .find(|m| m.id == id && m.person == person)
+                .ok_or("unknown personal expedition")?
+                .delivery_preference
+                .unwrap_or_default();
+            preference.willing = willing;
+            preference.reserve = reserve;
+            preference.pressure_threshold = pressure_threshold;
+            self.set_mission_delivery_preference(person, id, Some(preference))
+        }
+        /// Change the traveler's own choice to obtain missing goods locally.
+        pub fn set_mission_delivery_acquisition(
+            &mut self,
+            person: u64,
+            id: u64,
+            acquisition: Option<$crate::DeliveryAcquisition>,
+        ) -> Result<(), String> {
+            if acquisition.is_some_and(|choice| choice.pressure_threshold == Some(0)) {
+                return Err("delivery pressure threshold must be positive".into());
+            }
+            let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
+            let mission = missions
+                .entries
+                .iter_mut()
+                .find(|m| m.id == id && m.person == person)
+                .ok_or("unknown personal expedition")?;
+            if !matches!(mission.objective, Some($crate::Objective::Deliver { .. }))
+                || matches!(
+                    mission.phase,
+                    $crate::MissionPhase::Completed | $crate::MissionPhase::Failed
+                )
+            {
+                return Err("active delivery objective required".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            let mut preference = mission.delivery_preference.unwrap_or_default();
+            preference.acquisition = acquisition;
+            mission.delivery_preference =
+                (preference != $crate::DeliveryPreference::default()).then_some(preference);
             self.epoch = epoch;
             Ok(())
         }

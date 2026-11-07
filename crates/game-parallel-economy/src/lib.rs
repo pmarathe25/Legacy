@@ -20,6 +20,7 @@ pub use game_parallel_economy_confinement::{
 };
 pub use game_parallel_economy_dynamics::Dynamics;
 pub use game_parallel_economy_expeditions::{
+    DeliveryAcquisition as MissionDeliveryAcquisition,
     DeliveryPreference as MissionDeliveryPreference, MissionPhase, Missions, Start as MissionStart,
 };
 use game_parallel_economy_family as family;
@@ -3614,6 +3615,26 @@ impl Economy {
             claim_uses.par_extend(plan.uses.par_iter().copied());
             game_parallel_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
+        let mut expedition_acquisition = game_parallel_economy_expeditions::acquisition::Context {
+            missions: self.missions.as_ref(),
+            people: &self.people,
+            view: &view,
+            opinions: self.opinions.as_ref(),
+            claims: claims.as_ref(),
+            busy: &busy,
+            max_hunger: self.rules.max_work_hunger,
+        }
+        .prepare(action_base)?;
+        if !expedition_acquisition.actors.is_empty() {
+            action_base = action_base
+                .checked_add(expedition_acquisition.actions.len() as u64)
+                .ok_or("action count overflow")?;
+            claim_uses.par_extend(expedition_acquisition.uses.par_iter().copied());
+            game_parallel_economy_work::reserve(
+                &mut busy,
+                expedition_acquisition.actors.iter().copied(),
+            );
+        }
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -4234,6 +4255,7 @@ impl Economy {
         }
         actions.extend_from_slice(&treatment.actions);
         actions.append(&mut giving_plan.actions);
+        actions.append(&mut expedition_acquisition.actions);
         actions.extend_from_slice(&medical_plan.actions);
         if let Some(plan) = &hauling_plan {
             actions.extend_from_slice(&plan.actions);

@@ -1,6 +1,6 @@
 //! Personal health, claim and expedition commands.
 pub mod player;
-use game_parallel_economy::{Economy, MissionDeliveryPreference, MissionStart};
+use game_parallel_economy::{Economy, MissionDeliveryAcquisition, MissionStart};
 pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
     match words {
         ["take-from", person, target, good, quantity, escalation] => {
@@ -338,14 +338,12 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             } else {
                 Some(pressure.parse().map_err(|_| "invalid pressure threshold")?)
             };
-            world.set_mission_delivery_preference(
+            world.set_mission_delivery_choices(
                 person.parse().map_err(|_| "invalid person")?,
                 id.parse().map_err(|_| "invalid expedition")?,
-                Some(MissionDeliveryPreference {
-                    willing,
-                    pressure_threshold,
-                    reserve: reserve.parse().map_err(|_| "invalid reserve")?,
-                }),
+                willing,
+                reserve.parse().map_err(|_| "invalid reserve")?,
+                pressure_threshold,
             )?;
         }
         ["expedition-delivery-choice", person, id, "clear"] => world
@@ -354,6 +352,44 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 id.parse().map_err(|_| "invalid expedition")?,
                 None,
             )?,
+        ["expedition-acquisition", person, id, "clear"] => world.set_mission_delivery_acquisition(
+            person.parse().map_err(|_| "invalid person")?,
+            id.parse().map_err(|_| "invalid expedition")?,
+            None,
+        )?,
+        [
+            "expedition-acquisition",
+            person,
+            id,
+            willing,
+            claims,
+            pressure,
+        ] => {
+            let willing = match *willing {
+                "on" => true,
+                "off" => false,
+                _ => return Err("expected on or off".into()),
+            };
+            let disregard_claims = match *claims {
+                "respect" => false,
+                "ignore" => true,
+                _ => return Err("expected respect or ignore".into()),
+            };
+            let pressure_threshold = if *pressure == "none" {
+                None
+            } else {
+                Some(pressure.parse().map_err(|_| "invalid pressure threshold")?)
+            };
+            world.set_mission_delivery_acquisition(
+                person.parse().map_err(|_| "invalid person")?,
+                id.parse().map_err(|_| "invalid expedition")?,
+                Some(MissionDeliveryAcquisition {
+                    willing,
+                    disregard_claims,
+                    pressure_threshold,
+                }),
+            )?;
+        }
         ["invite-expedition", person, id, target] => {
             let joined = world.invite_mission(
                 person.parse().map_err(|_| "invalid person")?,

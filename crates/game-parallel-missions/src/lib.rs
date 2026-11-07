@@ -5,7 +5,8 @@ mod phase;
 pub use draft::Draft;
 pub mod routing;
 pub use game_parallel_missions_model::{
-    DeliveryPreference, Departure, Event, EventKind, Mission, Objective, Phase, Start,
+    DeliveryAcquisition, DeliveryPreference, Departure, Event, EventKind, Mission, Objective,
+    Phase, Start,
 };
 use game_parallel_production_model::{PersonSnapshot, person_index};
 use game_parallel_transport::Route;
@@ -84,9 +85,12 @@ impl Missions {
                     || (mission.objective.is_none() && mission.objective_met)
                     || (mission.delivery_preference.is_some()
                         && !matches!(mission.objective, Some(Objective::Deliver { .. })))
-                    || mission
-                        .delivery_preference
-                        .is_some_and(|preference| preference.pressure_threshold == Some(0))
+                    || mission.delivery_preference.is_some_and(|preference| {
+                        preference.pressure_threshold == Some(0)
+                            || preference
+                                .acquisition
+                                .is_some_and(|choice| choice.pressure_threshold == Some(0))
+                    })
                     || mission.id >= self.next_id
                     || !people.contains(&mission.person)
                     || mission.origin == mission.destination

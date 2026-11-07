@@ -47,6 +47,18 @@ pub struct DeliveryPreference {
     pub pressure_threshold: Option<u64>,
     #[serde(default)]
     pub reserve: u64,
+    /// A separate personal choice to obtain missing goods from local stock.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acquisition: Option<DeliveryAcquisition>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryAcquisition {
+    pub willing: bool,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pub disregard_claims: bool,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
