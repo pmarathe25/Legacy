@@ -3,7 +3,8 @@ use crate::{Batch, Draft};
 use game_lot_allocation as allocation;
 use game_lot_model::key;
 use game_lot_model::{
-    Container, Creation, Lot, Movement, Outcome, Place, Spoilage, State, TransactionOutcome,
+    Container, Creation, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, Spoilage, State,
+    TransactionOutcome,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -463,35 +464,53 @@ pub fn prepare(
             (group[0].source, group[0].movement.good, total, pieces)
         })
         .collect();
-    let mut pieces: Vec<_> = groups
+    let mut debits: Vec<_> = groups
         .par_iter()
-        .flat_map(|group| group.3.par_iter().cloned())
+        .filter(|row| row.2 > 0)
+        .map(|row| (row.0, row.1, row.2))
+        .collect();
+    debits.par_sort_unstable_by_key(|row| (row.0, row.1));
+    let mut pieces: Vec<_> = groups
+        .into_par_iter()
+        .flat_map_iter(|group| group.3)
         .collect();
     pieces.par_sort_unstable_by_key(|row| row.0);
     let piece_rows = &pieces;
-    let outcomes: Vec<_> = moves
+    // Bound shared arenas by both receipt count and lot count. A single very
+    // large receipt remains intact, but cannot retain unrelated receipts.
+    const MAX_RECEIPT_LOTS: usize = 4096;
+    let chunks: Vec<_> = moves
         .par_chunks(2048)
         .enumerate()
         .flat_map_iter(|(chunk, rows)| {
             let mut cursor = piece_rows.partition_point(|row| row.0 < chunk * 2048);
-            rows.iter()
-                .enumerate()
-                .map(move |(offset, movement)| {
-                    let index = chunk * 2048 + offset;
-                    let matched = piece_rows.get(cursor).filter(|row| row.0 == index);
-                    let lots = matched.map_or_else(Vec::new, |row| row.2.clone());
-                    if matched.is_some() {
-                        cursor += 1;
-                    }
-                    Outcome {
-                        id: movement.id,
-                        accepted: matched.is_some(),
-                        lots: lots.into(),
-                    }
-                })
-                .collect::<Vec<_>>()
+            let mut headers = Vec::with_capacity(rows.len());
+            let mut lots = Vec::new();
+            let mut chunks = Vec::new();
+            for (offset, movement) in rows.iter().enumerate() {
+                let index = chunk * 2048 + offset;
+                let matched = piece_rows.get(cursor).filter(|row| row.0 == index);
+                let count = matched.map_or(0, |row| row.2.len());
+                if !headers.is_empty() && lots.len().saturating_add(count) > MAX_RECEIPT_LOTS {
+                    chunks.push(OutcomeChunk {
+                        headers: std::mem::take(&mut headers),
+                        lots: std::mem::take(&mut lots),
+                    });
+                }
+                let begin = lots.len();
+                if let Some(row) = matched {
+                    lots.extend_from_slice(&row.2);
+                    cursor += 1;
+                }
+                headers.push((movement.id, matched.is_some(), begin..lots.len()));
+            }
+            if !headers.is_empty() {
+                chunks.push(OutcomeChunk { headers, lots });
+            }
+            chunks
         })
         .collect();
+    let mut outcomes = OutcomeBatch::from_chunks(chunks);
     let mut incoming: Vec<_> = pieces
         .par_iter()
         .flat_map_iter(|(_, destination, lots)| {
@@ -511,12 +530,6 @@ pub fn prepare(
             }),
     );
     incoming.par_sort_unstable_by_key(|row| (row.0, key(&row.1)));
-    let mut debits: Vec<_> = groups
-        .par_iter()
-        .filter(|row| row.2 > 0)
-        .map(|row| (row.0, row.1, row.2))
-        .collect();
-    debits.par_sort_unstable_by_key(|row| (row.0, row.1));
     // Only touched or expiring custody needs materializing. Searching every
     // unchanged container for incoming and outgoing lots scales with the
     // entire population even when activity is sparse.
@@ -648,15 +661,14 @@ pub fn prepare(
         })
         .collect();
     changes.par_sort_unstable_by_key(|row| row.0);
-    let mut outcomes = outcomes;
-    outcomes.par_sort_unstable_by_key(|row| row.id);
+    outcomes.sort_by_id();
     Ok(Draft {
         base_instance: instance,
         base_tick: state.tick,
         base_revision: state.revision,
         next_tick: next,
         changes: changes.into(),
-        outcomes: game_lot_model::OutcomeBatch::from_outcomes(outcomes),
+        outcomes,
         spoiled,
         creations: creation_outcomes,
         transactions: transaction_outcomes,

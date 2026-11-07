@@ -57,6 +57,182 @@ fn quantity(state: &State, place: Place, good: u32, expiry: Option<u64>) -> u64 
 }
 
 #[test]
+fn large_dated_receipt_preserves_neighboring_receipts() {
+    let initial = vec![
+        container(
+            Place::Inventory(1),
+            5000,
+            (2..5002).map(|at| lot(1, 1, Some(at))).collect(),
+        ),
+        container(Place::Inventory(2), 10, vec![lot(2, 1, None)]),
+        container(Place::Person(1), 5000, vec![]),
+        container(Place::Person(2), 10, vec![]),
+    ];
+    let actions = vec![
+        Transaction {
+            id: 1,
+            movements: vec![Movement {
+                id: 9,
+                from: Place::Inventory(1),
+                to: Some(Place::Person(1)),
+                good: 1,
+                quantity: 5000,
+            }],
+            creations: vec![],
+        },
+        Transaction {
+            id: 2,
+            movements: vec![Movement {
+                id: 3,
+                from: Place::Inventory(2),
+                to: Some(Place::Person(2)),
+                good: 2,
+                quantity: 1,
+            }],
+            creations: vec![],
+        },
+    ];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = store(initial.clone());
+                let draft = unpartitioned(&world, 1, &actions, vec![], &[], true);
+                let outcomes = draft.outcomes().to_vec();
+                assert_eq!((outcomes[0].id, outcomes[0].lots.len()), (3, 1));
+                assert_eq!((outcomes[1].id, outcomes[1].lots.len()), (9, 5000));
+                assert_eq!(outcomes[1].lots[0].expires_at, Some(2));
+                assert_eq!(outcomes[1].lots[4999].expires_at, Some(5001));
+                world.commit(draft).unwrap();
+                (world.export(), outcomes)
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn large_general_receipts_preserve_atomicity_compaction_and_dated_lots() {
+    let source = Place::Stock { region: 1, good: 1 };
+    let mut holders = vec![container(
+        source,
+        5000,
+        vec![lot(1, 2304, Some(2)), lot(1, 2304, Some(5))],
+    )];
+    holders.extend(
+        (1..=2304u64)
+            .map(|id| container(Place::Person(id), if id % 11 == 0 { 1 } else { 10 }, vec![])),
+    );
+    holders.push(container(Place::Person(9999), 10, vec![lot(3, 1, Some(1))]));
+    let mut actions: Vec<_> = (1..=2304u64)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id: 10000 - id,
+                from: source,
+                to: (id % 5 != 0).then_some(Place::Person(id)),
+                good: 1,
+                quantity: 2,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    actions.push(Transaction {
+        id: 5000,
+        movements: vec![
+            Movement {
+                id: 20001,
+                from: source,
+                to: Some(Place::Person(1)),
+                good: 1,
+                quantity: 1,
+            },
+            Movement {
+                id: 20002,
+                from: Place::Person(9999),
+                to: None,
+                good: 2,
+                quantity: 1,
+            },
+        ],
+        creations: vec![],
+    });
+    let compact: Vec<_> = (1..=2304u64).filter(|id| id % 5 == 0).collect();
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = store(holders.clone());
+                let mut ordered = actions.clone();
+                if reverse {
+                    ordered.reverse();
+                }
+                let draft = unpartitioned(&world, 17, &ordered, vec![], &compact, true);
+                let outcomes = draft.outcomes().to_vec();
+                let transactions = draft.transactions().to_vec();
+                let spoiled = draft.spoiled().to_vec();
+                assert_eq!(outcomes.len(), 2306);
+                assert!(outcomes.windows(2).all(|pair| pair[0].id < pair[1].id));
+                assert!(
+                    !transactions
+                        .iter()
+                        .find(|row| row.id == 5000)
+                        .unwrap()
+                        .accepted
+                );
+                assert!(
+                    outcomes
+                        .iter()
+                        .filter(|row| row.id == 20001 || row.id == 20002)
+                        .all(|row| !row.accepted && row.lots.is_empty())
+                );
+                assert!(
+                    outcomes
+                        .iter()
+                        .any(|row| row.accepted && row.lots.is_empty())
+                );
+                assert!(
+                    outcomes
+                        .iter()
+                        .any(|row| !row.accepted && row.lots.is_empty())
+                );
+                for action in actions.iter().take(2304) {
+                    let receipt = outcomes
+                        .iter()
+                        .find(|row| row.id == action.movements[0].id)
+                        .unwrap();
+                    if receipt.accepted && action.id % 5 != 0 {
+                        assert_eq!(receipt.lots.iter().map(|lot| lot.quantity).sum::<u64>(), 2);
+                        assert!(
+                            receipt
+                                .lots
+                                .iter()
+                                .all(|lot| lot.good == 1 && matches!(lot.expires_at, Some(2 | 5)))
+                        );
+                    }
+                    if action.id % 5 == 0 || !receipt.accepted {
+                        assert!(receipt.lots.is_empty());
+                    }
+                }
+                let serialized = serde_json::to_string(&outcomes).unwrap();
+                assert_eq!(
+                    serde_json::from_str::<Vec<crate::Outcome>>(&serialized).unwrap(),
+                    outcomes
+                );
+                world.commit(draft).unwrap();
+                (world.export(), outcomes, transactions, spoiled)
+            })
+    };
+    let reference = run(1, false);
+    for workers in [1, 2, 4, 6] {
+        assert_eq!(reference, run(workers, true));
+    }
+}
+
+#[test]
 fn compact_consumption_keeps_mixed_fefo_arbitration_and_atomic_state() {
     let source = Place::Stock { region: 1, good: 1 };
     let destination = Place::Person(1);
