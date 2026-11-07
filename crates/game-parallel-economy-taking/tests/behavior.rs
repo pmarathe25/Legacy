@@ -129,6 +129,11 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
     assert_eq!(physical.snapshot(), before);
     let events = plan.publish(draft.events(), &[]);
     assert_eq!(events[0].outcome, Outcome::Transferred);
+    let taken = plan.take_actions();
+    assert_eq!(taken.len(), 1);
+    assert!(plan.take_actions().is_empty());
+    assert!(plan.rebase(30).is_err());
+    assert_eq!(plan.publish(draft.events(), &[]), events);
     assert!(!events[0].noticed);
     let mut receipts = physical.commit_advance(draft).unwrap();
     receipts.physical_actions.insert(
@@ -159,7 +164,7 @@ fn unnoticed_taking_moves_only_admitted_possessions() {
     assert!(physical.custody(Place::Person(2)).unwrap().lots.is_empty());
     let mut blocked = runtime(0, 1);
     let draft = blocked
-        .prepare_with_choices(&[], &plan.actions, &[], &[], 7)
+        .prepare_with_choices(&[], &taken, &[], &[], 7)
         .unwrap();
     assert_eq!(
         plan.publish(draft.events(), &[])[0].outcome,

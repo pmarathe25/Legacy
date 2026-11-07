@@ -236,6 +236,7 @@ pub struct Plan {
     pending: Vec<Pending>,
     tick: u64,
     action_base: u64,
+    taken_count: Option<usize>,
 }
 
 pub struct Context<'a> {
@@ -511,13 +512,26 @@ impl Context<'_> {
             pending,
             tick: self.tick,
             action_base: self.action_base,
+            taken_count: None,
         })
     }
 }
 
 impl Plan {
+    /// Move physical actions to the host while retaining enough information to
+    /// interpret the resulting receipts without cloning any movement vectors.
+    pub fn take_actions(&mut self) -> Vec<Transaction> {
+        if self.taken_count.is_some() {
+            return Vec::new();
+        }
+        self.taken_count = Some(self.actions.len());
+        std::mem::take(&mut self.actions)
+    }
     /// Assign the host's final contiguous action range after other planners run.
     pub fn rebase(&mut self, base: u64) -> Result<(), &'static str> {
+        if self.taken_count.is_some() {
+            return Err("taking actions already transferred to host");
+        }
         base.checked_add(self.actions.len() as u64)
             .ok_or("taking action overflow")?;
         let previous = self.action_base;
@@ -540,9 +554,10 @@ impl Plan {
     pub fn publish(&self, events: &Events, started: &[(u64, u64)]) -> Vec<Event> {
         // A host normally returns sorted receipts for this contiguous action
         // range. Keep a general fallback for unordered or partial receipts.
+        let action_count = self.taken_count.unwrap_or(self.actions.len());
         let direct = self
             .action_base
-            .checked_add(self.actions.len() as u64)
+            .checked_add(action_count as u64)
             .and_then(|end| {
                 let rows = &events.physical_actions;
                 if rows.par_windows(2).any(|p| p[0].id >= p[1].id) {
@@ -551,7 +566,7 @@ impl Plan {
                 let begin = rows.partition_point(|row| row.id < self.action_base);
                 let finish = rows.partition_point(|row| row.id < end);
                 let selected = &rows[begin..finish];
-                (selected.len() == self.actions.len()
+                (selected.len() == action_count
                     && selected
                         .par_iter()
                         .enumerate()

@@ -4200,8 +4200,8 @@ impl Economy {
             profile_phase = game_diagnostics::span("economy.work_admission");
         }
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
-        if let Some(plan) = &taking_plan {
-            actions.par_extend(plan.actions.par_iter().cloned());
+        if let Some(plan) = &mut taking_plan {
+            actions.append(&mut plan.take_actions());
         }
         if let Some((_, _, action)) = &manual_animal_feed {
             actions.push(action.clone());
