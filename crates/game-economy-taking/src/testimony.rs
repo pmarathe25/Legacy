@@ -202,13 +202,19 @@ impl Taking {
         }
         #[cfg(feature = "profile")]
         let mut phase = game_diagnostics::span("taking.reports.index");
-        let mut contacts: Vec<_> = contacts.par_iter().copied().collect();
-        contacts.par_iter_mut().for_each(|(a, b)| {
-            if *a > *b {
-                std::mem::swap(a, b);
-            }
+        let ordered = (contacts.par_iter().any(|(a, b)| a > b)
+            || contacts.par_windows(2).any(|pair| pair[0] > pair[1]))
+        .then(|| {
+            let mut rows: Vec<_> = contacts.par_iter().copied().collect();
+            rows.par_iter_mut().for_each(|(a, b)| {
+                if *a > *b {
+                    std::mem::swap(a, b);
+                }
+            });
+            rows.par_sort_unstable();
+            rows
         });
-        contacts.par_sort_unstable();
+        let contacts = ordered.as_deref().unwrap_or(contacts);
         let contact_base = contacts.first().map(|pair| pair.0).filter(|_| {
             contacts
                 .par_windows(2)

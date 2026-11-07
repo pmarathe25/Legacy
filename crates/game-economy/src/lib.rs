@@ -5539,72 +5539,58 @@ impl Economy {
         let mut next_market = self.market.clone();
         let mut next_opinions = game_economy_dynamics::next_opinions(&self.opinions);
         let mut report_changes = Vec::new();
-        if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking)
-            && !previous.report_policies.is_empty()
-        {
-            let contacts: Vec<_> = dynamics
-                .as_ref()
-                .and_then(|d| d.social.as_ref())
-                .map_or(&[][..], |social| social.events.as_slice())
-                .par_iter()
-                .filter(|event| event.tick == tick)
-                .map(|event| (event.a, event.b))
-                .collect();
-            if !contacts.is_empty() {
-                let needs_feelings = previous
-                    .report_policies
-                    .par_iter()
-                    .any(|policy| !policy.willing && policy.pressure_threshold.is_some())
-                    || previous
-                        .receptions
-                        .par_iter()
-                        .any(|rule| matches!(rule.stance, TakingReportStance::TrustAtLeast(_)));
-                let opinions = self
-                    .opinions
-                    .as_ref()
-                    .filter(|_| needs_feelings)
-                    .map(Opinions::index);
-                let feelings = |listener, speaker| {
-                    opinions.as_ref().map_or((0, 0, 0), |index| {
-                        let (fear, obligation) = index.feelings(speaker, listener);
-                        (index.trust(listener, speaker), fear, obligation)
-                    })
-                };
-                report_changes = owner.receive_reports(previous, &contacts, tick, &feelings);
-            }
-        }
-        if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking)
-            && previous.complaints.par_iter().any(|row| {
+        if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking) {
+            let active_complaints = previous.complaints.par_iter().any(|row| {
                 row.decision == TakingComplaintDecision::Pending
                     || (row.decision == TakingComplaintDecision::Accepted
                         && row.answer.is_none()
                         && tick < row.expires_at)
-            })
-        {
-            let contacts: Vec<_> = dynamics
-                .as_ref()
-                .and_then(|d| d.social.as_ref())
-                .map_or(&[][..], |social| social.events.as_slice())
-                .par_iter()
-                .filter(|event| event.tick == tick)
-                .map(|event| (event.a, event.b))
-                .collect();
-            let opinions = self
-                .opinions
-                .as_ref()
-                .filter(|_| {
-                    previous
-                        .complaint_preferences
-                        .par_iter()
-                        .any(|p| !p.willing && p.pressure_threshold.is_some())
-                })
-                .map(Opinions::index);
-            owner.advance_complaints(previous, &contacts, tick, &|recipient, author| {
-                opinions.as_ref().map_or(0, |index| {
-                    let (fear, obligation) = index.feelings(recipient, author);
-                    fear.saturating_add(obligation)
-                })
             });
+            if !previous.report_policies.is_empty() || active_complaints {
+                let contacts: Vec<_> = dynamics
+                    .as_ref()
+                    .and_then(|d| d.social.as_ref())
+                    .map_or(&[][..], |social| social.events.as_slice())
+                    .par_iter()
+                    .filter(|event| event.tick == tick)
+                    .map(|event| (event.a, event.b))
+                    .collect();
+                let needs_feelings = (!previous.report_policies.is_empty()
+                    && (previous
+                        .report_policies
+                        .par_iter()
+                        .any(|policy| !policy.willing && policy.pressure_threshold.is_some())
+                        || previous.receptions.par_iter().any(|rule| {
+                            matches!(rule.stance, TakingReportStance::TrustAtLeast(_))
+                        })))
+                    || (active_complaints
+                        && previous
+                            .complaint_preferences
+                            .par_iter()
+                            .any(|p| !p.willing && p.pressure_threshold.is_some()));
+                let opinions = self
+                    .opinions
+                    .as_ref()
+                    .filter(|_| needs_feelings && !contacts.is_empty())
+                    .map(Opinions::index);
+                if !previous.report_policies.is_empty() && !contacts.is_empty() {
+                    let feelings = |listener, speaker| {
+                        opinions.as_ref().map_or((0, 0, 0), |index| {
+                            let (fear, obligation) = index.feelings(speaker, listener);
+                            (index.trust(listener, speaker), fear, obligation)
+                        })
+                    };
+                    report_changes = owner.receive_reports(previous, &contacts, tick, &feelings);
+                }
+                if active_complaints {
+                    owner.advance_complaints(previous, &contacts, tick, &|recipient, author| {
+                        opinions.as_ref().map_or(0, |index| {
+                            let (fear, obligation) = index.feelings(recipient, author);
+                            fear.saturating_add(obligation)
+                        })
+                    });
+                }
+            }
         }
         let mut witnessed_changes = Vec::new();
         if let Some(owner) = &mut next_taking

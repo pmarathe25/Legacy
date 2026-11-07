@@ -68,10 +68,18 @@ impl Taking {
         if self.inquiry_pursuit.is_empty() || self.complaints.is_empty() {
             return Vec::new();
         }
-        let mut pursuing: Vec<_> = self.inquiry_pursuit.par_iter().copied().collect();
-        if pursuing.par_windows(2).any(|pair| pair[0] > pair[1]) {
-            pursuing.par_sort_unstable();
-        }
+        let ordered = self
+            .inquiry_pursuit
+            .par_windows(2)
+            .any(|pair| pair[0] > pair[1])
+            .then(|| {
+                let mut rows: Vec<_> = self.inquiry_pursuit.par_iter().copied().collect();
+                rows.par_sort_unstable();
+                rows
+            });
+        let pursuing = ordered
+            .as_deref()
+            .unwrap_or(self.inquiry_pursuit.as_slice());
         self.complaints
             .par_iter()
             .filter_map(|c| {
@@ -140,11 +148,17 @@ impl Taking {
         if previous.complaints.is_empty() {
             return;
         }
-        let mut pairs: Vec<_> = contacts
-            .par_iter()
-            .map(|&(a, b)| (a.min(b), a.max(b)))
-            .collect();
-        pairs.par_sort_unstable();
+        let ordered = (contacts.par_iter().any(|(a, b)| a > b)
+            || contacts.par_windows(2).any(|pair| pair[0] > pair[1]))
+        .then(|| {
+            let mut rows: Vec<_> = contacts
+                .par_iter()
+                .map(|&(a, b)| (a.min(b), a.max(b)))
+                .collect();
+            rows.par_sort_unstable();
+            rows
+        });
+        let pairs = ordered.as_deref().unwrap_or(contacts);
         let mut preferences: Vec<_> = previous.complaint_preferences.par_iter().collect();
         preferences.par_sort_unstable_by_key(|row| row.person);
         let reports = &self.reports;

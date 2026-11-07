@@ -131,6 +131,8 @@ fn complaints_require_contact_and_personal_choice_and_expire() {
     let mut seeking = initial.clone();
     seeking.inquiry_pursuit = vec![1, 2].into();
     assert_eq!(seeking.inquiry_meetings(4), vec![(1, 2)]);
+    seeking.inquiry_pursuit = vec![2, 1].into();
+    assert_eq!(seeking.inquiry_meetings(4), vec![(1, 2)]);
     let mut accepted_seeking = accepted.clone();
     accepted_seeking.inquiry_pursuit = vec![1, 2].into();
     assert_eq!(accepted_seeking.inquiry_meetings(5), vec![(2, 3)]);
