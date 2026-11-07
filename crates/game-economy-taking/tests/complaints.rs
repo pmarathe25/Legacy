@@ -24,6 +24,7 @@ fn accepted_request_records_only_a_later_matching_event_statement() {
             expires_at: 8,
             decision: ComplaintDecision::Accepted,
             decided_at: Some(4),
+            previous_case: None,
             answer: None,
         }]
         .into(),
@@ -86,6 +87,7 @@ fn inquiry_assessments_follow_individual_subjective_preferences() {
                         expires_at: 8,
                         decision: ComplaintDecision::Accepted,
                         decided_at: Some(4),
+                        previous_case: None,
                         answer: None,
                     }]
                     .into(),
@@ -201,6 +203,7 @@ fn only_a_personally_known_earlier_report_can_influence_an_assessment() {
                         expires_at: 10,
                         decision: ComplaintDecision::Accepted,
                         decided_at: Some(6),
+                        previous_case: None,
                         answer: None,
                     }]
                     .into(),
@@ -266,6 +269,117 @@ fn only_a_personally_known_earlier_report_can_influence_an_assessment() {
 }
 
 #[test]
+fn a_prior_personal_case_can_influence_only_that_persons_later_assessment() {
+    use game_economy_taking::{AssessmentPreference, PersonalCase};
+    let account = ComplaintAccount {
+        actor: 4,
+        target: 1,
+        good: 1,
+        quantity: 2,
+        observed_at: 4,
+        outcome: Outcome::Transferred,
+        source: None,
+    };
+    let prior = PersonalCase {
+        person: 2,
+        account: ComplaintAccount {
+            observed_at: 1,
+            ..account
+        },
+        assessment: -5,
+        remembered_at: 3,
+    };
+    let run = |workers, prior: Option<PersonalCase>, scale: Option<i32>| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let previous = Taking {
+                    complaints: vec![Complaint {
+                        author: 1,
+                        recipient: 2,
+                        witness: 3,
+                        account,
+                        created_at: 5,
+                        expires_at: 10,
+                        decision: ComplaintDecision::Accepted,
+                        decided_at: Some(6),
+                        previous_case: prior.map(std::sync::Arc::new),
+                        answer: None,
+                    }]
+                    .into(),
+                    assessment_preferences: vec![AssessmentPreference {
+                        person: 2,
+                        matching_unassessed: Some(3),
+                        prior_assessment_scale: scale,
+                        ..Default::default()
+                    }]
+                    .into(),
+                    ..Default::default()
+                };
+                let mut next = previous.clone();
+                next.reports = vec![Report {
+                    speaker: 3,
+                    recipient: 2,
+                    actor: 4,
+                    target: 1,
+                    good: 1,
+                    quantity: 2,
+                    observed_at: 4,
+                    received_at: 7,
+                    claimed_outcome: Outcome::Transferred,
+                    belief: ReportBelief::Unassessed,
+                    source_speaker: None,
+                }]
+                .into();
+                next.advance_complaints(&previous, &[(2, 3)], 7, &|_, _| 0);
+                next.complaints[0].answer.clone().unwrap()
+            })
+    };
+    let answer = run(1, Some(prior), Some(-2));
+    assert_eq!(answer.assessment, Some(13));
+    assert_eq!(answer.prior_case, Some(prior));
+    assert_eq!(answer, run(4, Some(prior), Some(-2)));
+    assert_eq!(run(1, None, Some(-2)).assessment, Some(3));
+    assert_eq!(run(1, Some(prior), None).assessment, Some(3));
+    assert_eq!(
+        run(1, Some(PersonalCase { person: 1, ..prior }), Some(-2)).assessment,
+        Some(3)
+    );
+    assert_eq!(
+        run(
+            1,
+            Some(PersonalCase {
+                account: ComplaintAccount {
+                    actor: 3,
+                    ..prior.account
+                },
+                ..prior
+            }),
+            Some(-2)
+        )
+        .assessment,
+        Some(3)
+    );
+    assert_eq!(
+        run(
+            1,
+            Some(PersonalCase {
+                account: ComplaintAccount {
+                    observed_at: 4,
+                    ..prior.account
+                },
+                ..prior
+            }),
+            Some(-2)
+        )
+        .assessment,
+        Some(3)
+    );
+}
+
+#[test]
 fn complaints_require_contact_and_personal_choice_and_expire() {
     let account = ComplaintAccount {
         actor: 4,
@@ -286,6 +400,7 @@ fn complaints_require_contact_and_personal_choice_and_expire() {
             expires_at: 6,
             decision: ComplaintDecision::Pending,
             decided_at: None,
+            previous_case: None,
             answer: None,
         }]
         .into(),
@@ -381,6 +496,7 @@ fn many_independent_inquiry_requests_replay_across_workers() {
                 expires_at: 8,
                 decision: ComplaintDecision::Pending,
                 decided_at: None,
+                previous_case: None,
                 answer: None,
             }
         })
@@ -637,7 +753,7 @@ fn many_independent_inquiry_requests_replay_across_workers() {
 #[test]
 #[ignore = "manual synthetic personal precedent benchmark"]
 fn precedent_benchmark() {
-    use game_economy_taking::AssessmentPreference;
+    use game_economy_taking::{AssessmentPreference, PersonalCase};
     let count = std::env::var("LEGACY_PEOPLE")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -646,7 +762,8 @@ fn precedent_benchmark() {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(1);
-    let complaints: Vec<_> = (0..count)
+    let case_precedent = std::env::var_os("LEGACY_CASE_PRECEDENT").is_some();
+    let mut complaints: Vec<_> = (0..count)
         .map(|i| {
             let author = i * 4 + 1;
             Complaint {
@@ -666,10 +783,27 @@ fn precedent_benchmark() {
                 expires_at: 10,
                 decision: ComplaintDecision::Accepted,
                 decided_at: Some(5),
+                previous_case: None,
                 answer: None,
             }
         })
         .collect();
+    if case_precedent {
+        complaints.iter_mut().for_each(|c| {
+            c.previous_case = Some(
+                PersonalCase {
+                    person: c.recipient,
+                    account: ComplaintAccount {
+                        observed_at: 1,
+                        ..c.account
+                    },
+                    assessment: -1,
+                    remembered_at: 2,
+                }
+                .into(),
+            );
+        });
+    }
     let prior: Vec<_> = complaints
         .iter()
         .map(|c| Report {
@@ -702,6 +836,7 @@ fn precedent_benchmark() {
             person: c.recipient,
             matching_unassessed: Some(7),
             prior_actor_adjustment: Some(-2),
+            prior_assessment_scale: case_precedent.then_some(2),
             ..Default::default()
         })
         .collect::<Vec<_>>();
@@ -719,10 +854,10 @@ fn precedent_benchmark() {
             let now = std::time::Instant::now();
             next.advance_complaints(&previous, &[], 6, &|_, _| 0);
             let elapsed = now.elapsed().as_secs_f64();
-            assert_eq!(next.complaints.iter().filter(|c| c.answer.as_ref().is_some_and(|a| a.assessment == Some(5) && a.precedent.is_some())).count(), count as usize);
+            assert_eq!(next.complaints.iter().filter(|c| c.answer.as_ref().is_some_and(|a| a.assessment == Some(if case_precedent { 3 } else { 5 }) && a.precedent.is_some() && a.prior_case.is_some() == case_precedent)).count(), count as usize);
             if round > 0 { samples.push(elapsed); }
         }
         samples.sort_by(f64::total_cmp);
-        println!("workers={workers} synthetic_prior_reports={count} answered_cases={count} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6}", samples[0], samples[2], samples[4]);
+        println!("workers={workers} synthetic_prior_reports={count} case_precedent={case_precedent} answered_cases={count} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6}", samples[0], samples[2], samples[4]);
     });
 }

@@ -436,7 +436,7 @@ fn earlier_heard_case_can_personally_influence_a_later_inquiry() {
                 }
                 let answer = world.taking_inquiries(2).remove(0).answer.unwrap();
                 assert_eq!(answer.assessment, Some(-5));
-                assert_eq!(answer.precedent.unwrap().observed_at, first);
+                assert_eq!(answer.precedent.as_ref().unwrap().observed_at, first);
                 assert!(world.taking_inquiries(3)[0].answer.is_none());
                 assert_eq!(world.snapshot(), restored.snapshot());
                 for owner in [&mut world, &mut restored] {
@@ -461,6 +461,53 @@ fn earlier_heard_case_can_personally_influence_a_later_inquiry() {
                     ));
                 }
                 assert_eq!(world.snapshot(), restored.snapshot());
+                for owner in [&mut world, &mut restored] {
+                    owner.set_taking_choice(2, false).unwrap();
+                    owner.set_taking_choice(1, true).unwrap();
+                    owner.advance().unwrap();
+                    owner.set_taking_choice(1, false).unwrap();
+                    Player::new(owner)
+                        .set_taking_report_policy(2, 1, None)
+                        .unwrap();
+                    owner
+                        .set_taking_assessment_preference(
+                            2,
+                            Some(game_economy::TakingAssessmentPreference {
+                                person: 2,
+                                matching_unassessed: Some(3),
+                                prior_assessment_scale: Some(-2),
+                                ..Default::default()
+                            }),
+                        )
+                        .unwrap();
+                    Player::new(owner)
+                        .request_taking_inquiry(2, 3, 1, 12)
+                        .unwrap();
+                    assert!(owner.taking_inquiries(3)[0].previous_case.is_none());
+                    assert_eq!(owner.taking_case_memory(2).unwrap().assessment, -5);
+                    assert!(owner.taking_case_memory(3).is_none());
+                    assert!(Player::new(owner).meet(2).unwrap());
+                    assert_eq!(
+                        owner.taking_inquiries(2)[0]
+                            .previous_case
+                            .as_ref()
+                            .unwrap()
+                            .assessment,
+                        -5
+                    );
+                    Player::new(owner).set_taking_report(2, 1, None).unwrap();
+                    assert!(Player::new(owner).meet(2).unwrap());
+                    let new_answer = owner.taking_inquiries(2).remove(0).answer.unwrap();
+                    assert_eq!(new_answer.assessment, Some(13));
+                    assert_eq!(new_answer.prior_case.unwrap().assessment, -5);
+                    assert!(owner.taking_inquiries(3)[0].answer.is_none());
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let saved_again = serde_json::to_string(&world.snapshot()).unwrap();
+                let loaded =
+                    game_economy::Economy::compile(serde_json::from_str(&saved_again).unwrap())
+                        .unwrap();
+                assert_eq!(loaded.snapshot(), world.snapshot());
                 world.snapshot()
             })
     };
@@ -548,6 +595,14 @@ fn accepted_inquiry_records_a_later_witness_statement_privately() {
                     );
                     owner.revise_taking_assessment(2, Some(-4)).unwrap();
                 }
+                assert_eq!(
+                    before_invalid.taking.as_ref().unwrap().complaints[0]
+                        .answer
+                        .as_ref()
+                        .unwrap()
+                        .assessment,
+                    Some(-7)
+                );
                 let revised_save = serde_json::to_string(&world.snapshot()).unwrap();
                 let revised =
                     game_economy::Economy::compile(serde_json::from_str(&revised_save).unwrap())

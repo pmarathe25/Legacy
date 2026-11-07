@@ -54,6 +54,16 @@ a finding of fact. A manual revision clears the recorded basis. In player mode,
 `taking-precedent off` disables it; `taking-precedent DELTA any|believed|doubted|unassessed`
 sets it for future assessments.
 
+When a new inquiry replaces a completed one, the recipient privately retains
+their latest assessed case. If they have no new assessment, their previous
+retained case persists. This first slice keeps one such case per recipient;
+it is not a complete historical archive. `taking-case-memory` shows the
+controlled person's retained case even while a new request is pending.
+`taking-case-precedent SCALE` optionally applies that person's signed weight
+to their earlier assessment of the same actor in an earlier event; `off`
+disables it. A later answer records the case actually used. An author cannot
+see another person's retained case through the inquiry view.
+
 A taking policy can optionally set `assessment_at_least` or
 `assessment_at_most` for the actor's own assessment of an event attributed to
 its target. Without an applicable assessment, this condition does not motivate
@@ -66,6 +76,8 @@ The ignored `precedent_benchmark` exercises synthetic already-received reports
 and simultaneous answers. Run `cargo test --profile simulation -p game-economy-taking precedent_benchmark -- --ignored --nocapture`, setting
 `LEGACY_PEOPLE` and `LEGACY_WORKERS` as desired. It times only the inquiry
 update after setup and before result destruction, not a complete world boundary.
+Set `LEGACY_CASE_PRECEDENT=1` to add a synthetic retained judgment to every
+case and exercise both kinds of personal precedent.
 
 The ignored `assessment_selection_benchmark` measures selection for independent
 personal taking policies. Set `LEGACY_ASSESSMENT_CONDITION=1` to make them

@@ -176,7 +176,7 @@ fn main() {
                 Some(Complaint { author, recipient, witness: author, account: ComplaintAccount {
                     actor, target: seen.target, good: seen.good, quantity: seen.quantity,
                     observed_at: seen.tick, outcome: seen.outcome, source: None,
-                }, created_at: now, expires_at, decision: ComplaintDecision::Pending, decided_at: None, answer: None })
+                }, created_at: now, expires_at, decision: ComplaintDecision::Pending, decided_at: None, previous_case: None, answer: None })
             }).collect::<Vec<_>>();
             assert!(!complaints.is_empty(), "setup must produce actual witnessed takings");
             taking.complaints = complaints.into();

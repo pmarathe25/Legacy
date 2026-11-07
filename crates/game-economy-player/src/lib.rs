@@ -1525,6 +1525,9 @@ impl<'a> Player<'a> {
     pub fn taking_inquiries(&self) -> Result<Vec<game_economy::TakingComplaint>, String> {
         Ok(self.world.taking_inquiries(self.current()?))
     }
+    pub fn taking_case_memory(&self) -> Result<Option<game_economy::TakingPersonalCase>, String> {
+        Ok(self.world.taking_case_memory(self.current()?))
+    }
     pub fn set_taking_inquiry_pursuit(&mut self, enabled: bool) -> Result<(), String> {
         self.world
             .set_taking_inquiry_pursuit(self.current()?, enabled)
@@ -1564,6 +1567,17 @@ impl<'a> Player<'a> {
         preference.person = person;
         preference.prior_actor_adjustment = adjustment;
         preference.prior_belief = if adjustment.is_some() { belief } else { None };
+        self.world
+            .set_taking_assessment_preference(person, Some(preference))
+    }
+    pub fn set_taking_case_precedent(&mut self, scale: Option<i32>) -> Result<(), String> {
+        let person = self.current()?;
+        let mut preference = self
+            .world
+            .taking_assessment_preference(person)
+            .unwrap_or_default();
+        preference.person = person;
+        preference.prior_assessment_scale = scale;
         self.world
             .set_taking_assessment_preference(person, Some(preference))
     }

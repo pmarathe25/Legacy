@@ -2,7 +2,7 @@
 use crate::{Outcome, Report, Taking};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -40,9 +40,12 @@ pub struct Complaint {
     pub decision: Decision,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub decided_at: Option<u64>,
+    /// This recipient's previous personal case, carried across requests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_case: Option<Arc<PersonalCase>>,
     /// The investigator's later received statement; this is not proof of truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub answer: Option<Answer>,
+    pub answer: Option<Arc<Answer>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -57,6 +60,18 @@ pub struct Answer {
     /// The earlier personal report used as a precedent, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub precedent: Option<Report>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prior_case: Option<PersonalCase>,
+}
+
+/// A bounded private memory of a person's own earlier assessment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PersonalCase {
+    pub person: u64,
+    pub account: Account,
+    pub assessment: i32,
+    pub remembered_at: u64,
 }
 
 /// A person's own interpretation of a statement, including the choice to
@@ -84,6 +99,9 @@ pub struct AssessmentPreference {
     /// Restrict the reports this person chooses to consider, if desired.
     #[serde(default)]
     pub prior_belief: Option<crate::ReportBelief>,
+    /// A signed personal weight on a remembered judgment about the same actor.
+    #[serde(default)]
+    pub prior_assessment_scale: Option<i32>,
 }
 
 impl AssessmentPreference {
@@ -283,12 +301,24 @@ impl Taking {
                         *score = score.saturating_add(adjustment);
                         Some(prior.clone())
                     });
-                    next.answer = Some(Answer {
+                    let prior_case = preference.and_then(|p| {
+                        let scale = p.prior_assessment_scale?;
+                        let score = assessment.as_mut()?;
+                        let prior = complaint.previous_case.as_deref().filter(|prior| {
+                            prior.person == complaint.recipient
+                                && prior.account.actor == complaint.account.actor
+                                && prior.account.observed_at < complaint.account.observed_at
+                        })?;
+                        *score = score.saturating_add(prior.assessment.saturating_mul(scale));
+                        Some(*prior)
+                    });
+                    next.answer = Some(Arc::new(Answer {
                         matches_account,
                         assessment,
                         precedent,
+                        prior_case,
                         report: report.clone(),
-                    });
+                    }));
                     return Some((index, next));
                 }
                 if complaint.decision != Decision::Pending {
@@ -399,6 +429,20 @@ pub(crate) fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>,
                     .is_none_or(|source| source != c.author && people.contains(&source))
                 && c.created_at <= now
                 && c.expires_at > c.created_at
+                && c.previous_case.as_ref().is_none_or(|prior| {
+                    prior.person == c.recipient
+                        && prior.remembered_at <= c.created_at
+                        && prior.account.observed_at <= prior.remembered_at
+                        && people.contains(&prior.account.actor)
+                        && people.contains(&prior.account.target)
+                        && prior.account.actor != prior.account.target
+                        && goods.contains(&prior.account.good)
+                        && prior.account.quantity > 0
+                        && prior
+                            .account
+                            .source
+                            .is_none_or(|source| people.contains(&source))
+                })
                 && c.answer.as_ref().is_none_or(|answer| {
                     let report = &answer.report;
                     c.decision == Decision::Accepted
@@ -431,6 +475,11 @@ pub(crate) fn valid(owner: &Taking, people: &HashSet<u64>, goods: &HashSet<u32>,
                                 && prior.source_speaker.is_none_or(|source| {
                                     source != prior.speaker && people.contains(&source)
                                 })
+                        })
+                        && answer.prior_case.is_none_or(|prior| {
+                            Some(prior) == c.previous_case.as_deref().copied()
+                                && prior.account.actor == c.account.actor
+                                && prior.account.observed_at < c.account.observed_at
                         })
                         && answer.matches_account
                             == (report.target == c.account.target

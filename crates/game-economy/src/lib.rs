@@ -39,11 +39,11 @@ pub use game_economy_taking::{
     AssessmentPreference as TakingAssessmentPreference, Complaint as TakingComplaint,
     ComplaintDecision as TakingComplaintDecision, ComplaintPreference as TakingComplaintPreference,
     Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
-    Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
-    Reception as TakingReception, Report as TakingReport, ReportBelief as TakingReportBelief,
-    ReportDetails as TakingReportDetails, ReportPolicy as TakingReportPolicy,
-    ReportSource as TakingReportSource, Response as TakingResponse, Stance as TakingReportStance,
-    Taking, Witness as TakingWitness,
+    Outcome as TakingOutcome, PersonalCase as TakingPersonalCase, Policy as TakingPolicy,
+    Reaction as TakingReaction, Reception as TakingReception, Report as TakingReport,
+    ReportBelief as TakingReportBelief, ReportDetails as TakingReportDetails,
+    ReportPolicy as TakingReportPolicy, ReportSource as TakingReportSource,
+    Response as TakingResponse, Stance as TakingReportStance, Taking, Witness as TakingWitness,
 };
 pub use game_economy_work::care::DependentCare;
 pub use game_economy_work::sites::{
@@ -1397,6 +1397,25 @@ impl Economy {
             .epoch
             .checked_add(1)
             .ok_or("economic generation overflow")?;
+        let previous_case = owner
+            .complaints
+            .iter()
+            .find(|row| row.recipient == recipient)
+            .and_then(|row| {
+                row.answer
+                    .as_ref()
+                    .and_then(|answer| {
+                        answer.assessment.map(|assessment| {
+                            std::sync::Arc::new(game_economy_taking::PersonalCase {
+                                person: recipient,
+                                account: row.account,
+                                assessment,
+                                remembered_at: now,
+                            })
+                        })
+                    })
+                    .or_else(|| row.previous_case.clone())
+            });
         let complaints = owner.complaints_mut();
         complaints.retain(|row| row.recipient != recipient);
         complaints.push(TakingComplaint {
@@ -1408,6 +1427,7 @@ impl Economy {
             expires_at,
             decision: TakingComplaintDecision::Pending,
             decided_at: None,
+            previous_case,
             answer: None,
         });
         complaints.sort_unstable_by_key(|row| row.recipient);
@@ -1434,11 +1454,23 @@ impl Economy {
                     let mut visible = row.clone();
                     if row.recipient != person {
                         visible.answer = None;
+                        visible.previous_case = None;
                     }
                     visible
                 })
                 .collect()
         })
+    }
+    /// This person's retained prior case, independent of a new request's status.
+    pub fn taking_case_memory(&self, person: u64) -> Option<TakingPersonalCase> {
+        self.taking
+            .as_ref()?
+            .complaints
+            .iter()
+            .find(|row| row.recipient == person)?
+            .previous_case
+            .as_deref()
+            .copied()
     }
     /// Change only this person's response to future inquiry requests.
     pub fn set_taking_inquiry_preference(
@@ -1537,8 +1569,10 @@ impl Economy {
             .answer
             .as_mut()
             .expect("answer exists");
+        let answer = std::sync::Arc::make_mut(answer);
         answer.assessment = assessment;
         answer.precedent = None;
+        answer.prior_case = None;
         self.taking = Some(owner);
         self.epoch = epoch;
         Ok(())

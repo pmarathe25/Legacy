@@ -277,53 +277,50 @@ fn a_person_can_condition_a_taking_on_their_own_private_assessment() {
         expires_at: 8,
         decision: ComplaintDecision::Accepted,
         decided_at: Some(3),
-        answer: Some(ComplaintAnswer {
-            report: Report {
-                speaker: 4,
-                recipient: 1,
-                actor: 2,
-                target: 3,
-                good: 1,
-                quantity: 1,
-                observed_at: 1,
-                received_at: 4,
-                claimed_outcome: Outcome::Transferred,
-                belief: ReportBelief::Unassessed,
-                source_speaker: None,
-            },
-            matches_account: true,
-            assessment: Some(-4),
-            precedent: None,
-        }),
+        previous_case: None,
+        answer: Some(
+            ComplaintAnswer {
+                report: Report {
+                    speaker: 4,
+                    recipient: 1,
+                    actor: 2,
+                    target: 3,
+                    good: 1,
+                    quantity: 1,
+                    observed_at: 1,
+                    received_at: 4,
+                    claimed_outcome: Outcome::Transferred,
+                    belief: ReportBelief::Unassessed,
+                    source_speaker: None,
+                },
+                matches_account: true,
+                assessment: Some(-4),
+                precedent: None,
+                prior_case: None,
+            }
+            .into(),
+        ),
     }]
     .into();
     assert_eq!(plan(&owner, &people, None).actions.len(), 1);
     let own = owner.complaints[0].clone();
     let mut other = own.clone();
     other.recipient = 4;
-    other.answer.as_mut().unwrap().report.recipient = 4;
+    std::sync::Arc::make_mut(other.answer.as_mut().unwrap())
+        .report
+        .recipient = 4;
     owner.complaints = vec![other.clone(), own.clone()].into();
     assert_eq!(plan(&owner, &people, None).actions.len(), 1);
     owner.complaints = vec![other].into();
     assert!(plan(&owner, &people, None).actions.is_empty());
     owner.complaints = vec![own].into();
-    owner.complaints_mut()[0]
-        .answer
-        .as_mut()
-        .unwrap()
-        .assessment = Some(4);
+    std::sync::Arc::make_mut(owner.complaints_mut()[0].answer.as_mut().unwrap()).assessment =
+        Some(4);
     assert!(plan(&owner, &people, None).actions.is_empty());
-    owner.complaints_mut()[0]
-        .answer
-        .as_mut()
-        .unwrap()
-        .assessment = None;
+    std::sync::Arc::make_mut(owner.complaints_mut()[0].answer.as_mut().unwrap()).assessment = None;
     assert!(plan(&owner, &people, None).actions.is_empty());
-    owner.complaints_mut()[0]
-        .answer
-        .as_mut()
-        .unwrap()
-        .assessment = Some(-4);
+    std::sync::Arc::make_mut(owner.complaints_mut()[0].answer.as_mut().unwrap()).assessment =
+        Some(-4);
     owner.complaints_mut()[0].account.actor = 3;
     assert!(plan(&owner, &people, None).actions.is_empty());
     owner.complaints_mut()[0].account.actor = 2;
@@ -963,6 +960,7 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
         expires_at: 10,
         decision: game_economy_taking::ComplaintDecision::Accepted,
         decided_at: Some(3),
+        previous_case: None,
         answer: None,
     }]
     .into();

@@ -67,24 +67,29 @@ fn assessment_selection_benchmark() {
                 expires_at: 8,
                 decision: ComplaintDecision::Accepted,
                 decided_at: Some(3),
-                answer: Some(ComplaintAnswer {
-                    report: Report {
-                        speaker: target,
-                        recipient,
-                        actor: target,
-                        target: recipient,
-                        good: 1,
-                        quantity: 1,
-                        observed_at: 1,
-                        received_at: 4,
-                        claimed_outcome: Outcome::Transferred,
-                        belief: ReportBelief::Unassessed,
-                        source_speaker: None,
-                    },
-                    matches_account: true,
-                    assessment: Some(-4),
-                    precedent: None,
-                }),
+                previous_case: None,
+                answer: Some(
+                    ComplaintAnswer {
+                        report: Report {
+                            speaker: target,
+                            recipient,
+                            actor: target,
+                            target: recipient,
+                            good: 1,
+                            quantity: 1,
+                            observed_at: 1,
+                            received_at: 4,
+                            claimed_outcome: Outcome::Transferred,
+                            belief: ReportBelief::Unassessed,
+                            source_speaker: None,
+                        },
+                        matches_account: true,
+                        assessment: Some(-4),
+                        precedent: None,
+                        prior_case: None,
+                    }
+                    .into(),
+                ),
             }
         })
         .collect();

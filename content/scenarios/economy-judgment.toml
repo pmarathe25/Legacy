@@ -139,6 +139,7 @@ willing = true
 [[taking.assessment_preferences]]
 person = 2
 different_unassessed = -7
+prior_assessment_scale = -2
 
 [[taking.policies]]
 person = 2
