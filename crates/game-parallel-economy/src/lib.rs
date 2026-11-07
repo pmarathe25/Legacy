@@ -118,6 +118,7 @@ pub use game_parallel_purpose::Purpose;
 pub use gathering::{Gathering, Node as ResourceNode, Policy as GatherPolicy};
 pub use recovery::Rules as RecoveryRules;
 mod state;
+mod teaching;
 use game_parallel_autowork::Autowork;
 pub use game_parallel_economy_agriculture::{
     Agriculture, Crop, Field, Phase as CropPhase, Policy as FarmPolicy,
@@ -4867,7 +4868,10 @@ impl Economy {
             self.physical.work(),
             &rates,
             physical.events(),
-            dynamics.as_ref().and_then(|d| d.social.as_ref()),
+            (
+                dynamics.as_ref().and_then(|d| d.social.as_ref()),
+                self.opinions.as_ref(),
+            ),
             &self.people,
             tick,
         );

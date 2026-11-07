@@ -17,6 +17,14 @@ pub struct Job {
     pub remaining: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillView {
+    pub recipe: u32,
+    pub personal_rate: u64,
+    pub effective_rate: u64,
+    pub work_credits: u64,
+    pub lesson_credits: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct WorkSiteView {
     pub site: game_parallel_economy::WorkSite,
     pub occupied: u64,
@@ -714,6 +722,60 @@ impl<'a> Player<'a> {
             read.physical.recipes().to_vec(),
         ))
     }
+    /// The current person's skill and actively invoked capability only.
+    pub fn skills(&self) -> Result<Vec<SkillView>, String> {
+        let person = self.current()?;
+        let read = self.world.read();
+        let skills = read.skills.ok_or("skills are disabled")?;
+        let index = skills.index();
+        let records: std::collections::HashMap<_, _> = skills
+            .records
+            .par_iter()
+            .filter(|record| record.person == person)
+            .map(|record| (record.recipe, record.completions))
+            .collect();
+        let lessons = skills
+            .lessons
+            .par_iter()
+            .filter(|lesson| lesson.student == person)
+            .fold(std::collections::HashMap::new, |mut counts, lesson| {
+                *counts.entry(lesson.recipe).or_insert(0u64) += 1;
+                counts
+            })
+            .reduce(std::collections::HashMap::new, |mut a, b| {
+                for (recipe, count) in b {
+                    *a.entry(recipe).or_insert(0u64) += count;
+                }
+                a
+            });
+        let invocation = read
+            .campaign
+            .and_then(|campaign| campaign.lineage.invocation.as_ref())
+            .filter(|invocation| invocation.owner == Some(person));
+        let mut result: Vec<_> = skills
+            .rules
+            .par_iter()
+            .map(|rule| {
+                let personal_rate = index.rate(person, rule.recipe);
+                let effective_rate = invocation.map_or(personal_rate, |invocation| {
+                    invocation
+                        .active
+                        .iter()
+                        .map(|&life| index.rate(life, rule.recipe))
+                        .fold(personal_rate, u64::max)
+                });
+                SkillView {
+                    recipe: rule.recipe,
+                    personal_rate,
+                    effective_rate,
+                    work_credits: records.get(&rule.recipe).copied().unwrap_or(0),
+                    lesson_credits: lessons.get(&rule.recipe).copied().unwrap_or(0),
+                }
+            })
+            .collect();
+        result.par_sort_unstable_by_key(|row| row.recipe);
+        Ok(result)
+    }
     /// Work requirements for the same recipe catalog visible to the current person.
     pub fn work_requirements(
         &self,
@@ -893,6 +955,18 @@ impl<'a> Player<'a> {
             return Err("person is not present".into());
         }
         self.world.meet(self.current()?, target)
+    }
+    pub fn teach(&mut self, student: u64, recipe: u32) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&student) {
+            return Err("person is not present".into());
+        }
+        self.world.teach(self.current()?, student, recipe)
+    }
+    pub fn learn(&mut self, teacher: u64, recipe: u32) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&teacher) {
+            return Err("person is not present".into());
+        }
+        self.world.learn(self.current()?, teacher, recipe)
     }
     pub fn attack(&mut self, target: u64) -> Result<u64, String> {
         if !self.view()?.nearby.contains(&target) {

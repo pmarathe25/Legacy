@@ -3,6 +3,7 @@ use game_parallel_economy_campaign::Campaign;
 use game_parallel_economy_person::Person;
 use game_parallel_families::Families;
 use game_parallel_lot_runtime::{Events, Work};
+use game_parallel_opinions::Opinions;
 use game_parallel_skills::Completion;
 pub use game_parallel_skills::{Record, Rule, Skills, TeacherPolicy};
 use game_parallel_social::Social;
@@ -91,11 +92,12 @@ pub fn advance(
     work: &[Work],
     rates: &[(u64, u64)],
     physical: &Events,
-    social: Option<&Social>,
+    social: (Option<&Social>, Option<&Opinions>),
     people: &[Person],
     tick: u64,
 ) -> Option<Skills> {
     let old = old?;
+    let (social, opinions) = social;
     let practicing: HashSet<_> = old
         .rules
         .iter()
@@ -164,6 +166,39 @@ pub fn advance(
             .filter_map(|event| event.pressured.map(|person| (event.a, event.b, person)))
             .collect()
     });
+    // A person may willingly meet but still teach only because of their own
+    // fear or obligation toward the other participant.
+    if !pairs.is_empty()
+        && !old.teachers.is_empty()
+        && let (Some(social), Some(opinions)) = (social, opinions)
+    {
+        let mut policies: Vec<_> = social
+            .pressures
+            .par_iter()
+            .filter(|row| row.enabled)
+            .collect();
+        if !policies.is_empty() {
+            policies.par_sort_unstable_by_key(|row| row.person);
+            let feelings = opinions.index();
+            pressured.par_extend(
+                pairs
+                    .par_iter()
+                    .flat_map_iter(|&(a, b)| [(a, b), (b, a)])
+                    .filter_map(|(teacher, student)| {
+                        let policy = policies
+                            .binary_search_by_key(&teacher, |row| row.person)
+                            .ok()
+                            .map(|i| policies[i])?;
+                        let (fear, obligation) = feelings.feelings(teacher, student);
+                        policy.responds(fear, obligation).then_some((
+                            teacher.min(student),
+                            teacher.max(student),
+                            teacher,
+                        ))
+                    }),
+            );
+        }
+    }
     pressured.par_sort_unstable();
     let teaching = if pressured.is_empty()
         && old

@@ -2333,6 +2333,85 @@ fn campaign_guardians_share_people_travel_and_player_encounters() {
 }
 
 #[test]
+fn player_can_offer_and_request_lessons() {
+    use game_parallel_economy_player::Player;
+    use game_parallel_economy_skills::{Record, TeacherPolicy};
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let original = scenario(
+        &root.join("content/parallel/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    for (command, teacher, student) in [("teach", 1, 2), ("learn", 2, 1)] {
+        let mut state = original.clone();
+        let skills = state.skills.as_mut().unwrap();
+        let rule = &skills.rules[0];
+        let recipe = rule.recipe;
+        let cap = rule.threshold(rule.max_level);
+        skills
+            .records
+            .retain(|record| !(record.person == teacher && record.recipe == recipe));
+        skills.records.push(Record {
+            person: teacher,
+            recipe,
+            completions: cap,
+            credited_jobs: vec![],
+        });
+        skills
+            .teachers
+            .retain(|policy| !(policy.person == teacher && policy.recipe == recipe));
+        skills.teachers.push(TeacherPolicy {
+            person: teacher,
+            recipe,
+            enabled: true,
+            eligible_at: 0,
+        });
+        let mut world = game_parallel_economy::Economy::compile(state).unwrap();
+        let before = world.snapshot();
+        let own = Player::new(&mut world).skills().unwrap();
+        let row = own.iter().find(|row| row.recipe == recipe).unwrap();
+        assert_eq!(row.work_credits, if teacher == 1 { cap } else { 0 });
+        assert_eq!(row.lesson_credits, 0);
+        assert!(
+            game_parallel_economy_cli_commands::player::handle(&mut world, &["skills"]).unwrap()
+        );
+        assert_eq!(world.snapshot(), before);
+        let recipe_text = recipe.to_string();
+        assert!(
+            game_parallel_economy_cli_commands::player::handle(
+                &mut world,
+                &[command, "2", &recipe_text]
+            )
+            .unwrap()
+        );
+        let state = world.snapshot();
+        assert!(
+            state
+                .skills
+                .unwrap()
+                .lessons
+                .iter()
+                .any(|lesson| lesson.teacher == teacher
+                    && lesson.student == student
+                    && lesson.recipe == recipe)
+        );
+        if student == 1 {
+            assert_eq!(
+                Player::new(&mut world)
+                    .skills()
+                    .unwrap()
+                    .iter()
+                    .find(|row| row.recipe == recipe)
+                    .unwrap()
+                    .lesson_credits,
+                1
+            );
+        }
+    }
+}
+
+#[test]
 fn player_can_take_from_an_incapacitated_guardian_who_later_recovers() {
     use game_parallel_economy_player::Player;
     use game_parallel_lots::{Container, Lot, Place};

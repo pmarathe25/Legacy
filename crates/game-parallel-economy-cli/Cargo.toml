@@ -33,6 +33,7 @@ serde_json.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
+game-parallel-economy-skills = { path = "../game-parallel-economy-skills" }
 game-diagnostics = { path = "../game-diagnostics" }
 game-parallel-economy-player = { path = "../game-parallel-economy-player" }
 game-parallel-economy-knowledge = { path = "../game-parallel-economy-knowledge" }

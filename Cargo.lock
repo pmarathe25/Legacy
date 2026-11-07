@@ -3381,6 +3381,7 @@ dependencies = [
  "game-parallel-economy-dynamics",
  "game-parallel-economy-knowledge",
  "game-parallel-economy-player",
+ "game-parallel-economy-skills",
  "game-parallel-economy-taking",
  "game-parallel-families",
  "game-parallel-fatigue",
@@ -3641,6 +3642,7 @@ dependencies = [
  "game-parallel-goals",
  "game-parallel-lot-runtime",
  "game-parallel-purpose",
+ "game-parallel-skills",
 ]
 
 [[package]]
@@ -3651,6 +3653,7 @@ dependencies = [
  "game-parallel-economy-person",
  "game-parallel-families",
  "game-parallel-lot-runtime",
+ "game-parallel-opinions",
  "game-parallel-skills",
  "game-parallel-social",
  "rayon",

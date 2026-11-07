@@ -16110,6 +16110,79 @@ fn invoked_past_skill_improves_work_without_copying_a_record() {
 }
 
 #[test]
+fn invoked_past_skill_can_teach_without_becoming_personal_skill() {
+    use game_parallel_economy_campaign::{Invocation, InvocationRules};
+    use game_parallel_economy_skills::Record;
+    use game_parallel_social::Participant;
+    let mut initial = campaign_fixture();
+    initial.pending_food.clear();
+    initial.people[2].controlled = true;
+    initial.dynamics = expedition_fixture().dynamics;
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .push(Participant {
+            person: 3,
+            willing: true,
+        });
+    let mut skills = training_rules(3);
+    skills.records.push(Record {
+        person: 4,
+        recipe: 1,
+        completions: 1,
+        credited_jobs: vec![],
+    });
+    initial.skills = Some(skills);
+    initial.campaign.as_mut().unwrap().lineage.invocation = Some(Invocation {
+        rules: InvocationRules {
+            rate_per_life: 1,
+            recovery_per_tick: 1,
+            strain_threshold: 100,
+            loss_threshold: 200,
+            strain_consent_ticks: 2,
+            control_loss_ticks: 2,
+            strain_damage_per_tick: 0,
+            permanent_exposure_threshold: 0,
+            lifespan_loss_per_tick: 0,
+        },
+        owner: Some(3),
+        active: vec![4],
+        burden: 0,
+        exposure: 0,
+        strain_accepted_until: None,
+        lifespan_accepted_until: None,
+        loss_approved: false,
+        loss_triggered: false,
+        control_until: None,
+        pending: None,
+        revision: 0,
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.teach(3, 1, 1).unwrap());
+    let state = world.snapshot();
+    let skills = state.skills.as_ref().unwrap();
+    assert_eq!(skills.lessons.len(), 1);
+    assert_eq!(
+        (
+            skills.lessons[0].teacher,
+            skills.lessons[0].student,
+            skills.lessons[0].source_life
+        ),
+        (3, 1, Some(4))
+    );
+    assert!(skills.records.iter().all(|record| record.person != 3));
+    world.dismiss_invocation().unwrap();
+    let skills = world.snapshot().skills.unwrap();
+    assert_eq!(skills.index().rate(3, 1), 1);
+    assert_eq!(skills.index().rate(1, 1), 4);
+}
+
+#[test]
 fn skilled_person_can_teach_from_fear_despite_not_volunteering() {
     use game_parallel_economy_skills::{Record, TeacherPolicy};
     use game_parallel_social::{Participant, PressurePolicy, Rules as SocialRules, Social};
@@ -16176,28 +16249,159 @@ fn skilled_person_can_teach_from_fear_despite_not_volunteering() {
         eligible_at: 0,
     });
     initial.skills = Some(skills);
-    let run = |workers| {
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
+    for willing_to_meet in [false, true] {
+        initial
+            .dynamics
+            .as_mut()
             .unwrap()
-            .install(|| {
-                let mut world = Economy::compile(initial.clone()).unwrap();
-                world.advance().unwrap();
-                let state = world.snapshot();
-                let skills = state.skills.as_ref().unwrap();
-                assert_eq!(skills.lessons.len(), 1);
-                assert_eq!(
-                    (skills.lessons[0].teacher, skills.lessons[0].student),
-                    (2, 1)
-                );
-                assert!(!skills.teachers[0].enabled);
-                assert_eq!(skills.index().rate(1, 1), 3);
-                Economy::compile(state.clone()).unwrap();
-                state
-            })
+            .social
+            .as_mut()
+            .unwrap()
+            .participants[1]
+            .willing = willing_to_meet;
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let skills = state.skills.as_ref().unwrap();
+                    assert_eq!(skills.lessons.len(), 1);
+                    assert_eq!(
+                        (skills.lessons[0].teacher, skills.lessons[0].student),
+                        (2, 1)
+                    );
+                    assert!(!skills.teachers[0].enabled);
+                    assert_eq!(skills.index().rate(1, 1), 3);
+                    Economy::compile(state.clone()).unwrap();
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+fn controlled_lessons_use_real_meetings_and_personal_pressure() {
+    use game_parallel_economy_skills::{Record, TeacherPolicy};
+    use game_parallel_social::{Participant, PressurePolicy, Rules as SocialRules, Social};
+    let make = |actor_teaches: bool, target_willing: bool, fear, obligation| {
+        let mut initial = fixture();
+        initial.agreements = None;
+        initial.autowork = None;
+        initial.people[0].controlled = true;
+        for person in &mut initial.people {
+            person.seek_meals = false;
+            person.hunger = 0;
+        }
+        initial.opinions.as_mut().unwrap().records = vec![Opinion {
+            observer: 2,
+            target: 1,
+            trust: 0,
+            fear,
+            obligation,
+            affinity: 0,
+        }];
+        initial.dynamics = Some(Dynamics {
+            personality: None,
+            social: Some(Social {
+                rules: SocialRules {
+                    interval: 1,
+                    min_health: 1,
+                    max_hunger: 100,
+                    familiarity_gain: 1,
+                    familiarity_max: 10,
+                    relationship_retention: None,
+                },
+                participants: vec![
+                    Participant {
+                        person: 1,
+                        willing: true,
+                    },
+                    Participant {
+                        person: 2,
+                        willing: target_willing,
+                    },
+                ],
+                pressures: vec![PressurePolicy {
+                    person: 2,
+                    fear_at_least: Some(3),
+                    obligation_at_least: Some(3),
+                    enabled: true,
+                }],
+                relationships: vec![],
+                events: vec![],
+                needs: None,
+            }),
+            disease: None,
+            treatment: vec![],
+            claims: None,
+        });
+        let mut skills = training_rules(2);
+        skills.records.push(Record {
+            person: if actor_teaches { 1 } else { 2 },
+            recipe: 1,
+            completions: 1,
+            credited_jobs: vec![],
+        });
+        skills.teachers.push(TeacherPolicy {
+            person: 2,
+            recipe: 1,
+            enabled: false,
+            eligible_at: 0,
+        });
+        initial.skills = Some(skills);
+        initial
     };
-    assert_eq!(run(1), run(4));
+    for (actor_teaches, willing, fear, obligation, expected) in [
+        (false, true, 0, 0, false),
+        (false, true, 5, 0, true),
+        (false, true, 0, 5, true),
+        (true, false, 0, 0, false),
+        (true, false, 5, 0, true),
+    ] {
+        let initial = make(actor_teaches, willing, fear, obligation);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    let before = world.snapshot();
+                    assert!(world.teach(1, 2, 999).is_err());
+                    assert_eq!(world.snapshot(), before);
+                    let stale = world.prepare().unwrap();
+                    let learned = if actor_teaches {
+                        world.teach(1, 2, 1).unwrap()
+                    } else {
+                        world.learn(1, 2, 1).unwrap()
+                    };
+                    assert_eq!(learned, expected);
+                    assert!(world.commit(stale).is_err());
+                    assert_eq!(world.tick(), 1);
+                    let state = world.snapshot();
+                    let lessons = &state.skills.as_ref().unwrap().lessons;
+                    assert_eq!(lessons.len(), usize::from(expected));
+                    if expected {
+                        assert_eq!(
+                            (lessons[0].teacher, lessons[0].student),
+                            if actor_teaches { (1, 2) } else { (2, 1) }
+                        );
+                    }
+                    let restored = Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(restored.snapshot(), state);
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
 }
 
 fn expedition_workload(count: u64) -> State {

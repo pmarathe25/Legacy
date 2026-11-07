@@ -129,6 +129,22 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             )?;
             println!("meeting={}", if accepted { "accepted" } else { "declined" });
         }
+        ["teach", teacher, student, recipe] => println!(
+            "learned={}",
+            world.teach(
+                teacher.parse().map_err(|_| "invalid teacher")?,
+                student.parse().map_err(|_| "invalid student")?,
+                recipe.parse().map_err(|_| "invalid recipe")?,
+            )?
+        ),
+        ["learn", student, teacher, recipe] => println!(
+            "learned={}",
+            world.learn(
+                student.parse().map_err(|_| "invalid student")?,
+                teacher.parse().map_err(|_| "invalid teacher")?,
+                recipe.parse().map_err(|_| "invalid recipe")?,
+            )?
+        ),
         ["skills", person] => {
             let person: u64 = person.parse().map_err(|_| "invalid person")?;
             let state = world.snapshot();
