@@ -5583,6 +5583,8 @@ impl Economy {
                     report_changes = owner.receive_reports(previous, &contacts, tick, &feelings);
                 }
                 if active_complaints {
+                    #[cfg(feature = "profile")]
+                    let _inquiry_phase = game_diagnostics::span("economy.inquiries.update");
                     owner.advance_complaints(previous, &contacts, tick, &|recipient, author| {
                         opinions.as_ref().map_or(0, |index| {
                             let (fear, obligation) = index.feelings(recipient, author);

@@ -24,6 +24,8 @@ fn main() {
         .unwrap_or(20);
     let encounter_reports = std::env::var_os("LEGACY_ENCOUNTER_REPORTS").is_some();
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
+    let inquiry_pursuit =
+        taking_inquiries && std::env::var_os("LEGACY_DISABLE_INQUIRY_PURSUIT").is_none();
     assert!(people > 4 && ticks > 0 && reproduction <= 100);
     let profile =
         std::fs::read_to_string(root.join("content/scenarios/campaign-population.toml")).unwrap();
@@ -124,9 +126,9 @@ fn main() {
             let complaint_preferences = groups.iter().map(|&(_, _, recipient)| ComplaintPreference {
                 person: recipient, willing: true, pressure_threshold: None,
             }).collect::<Vec<_>>();
-            let mut inquiry_pursuit = groups.iter().flat_map(|&(_, author, recipient)| [author, recipient]).collect::<Vec<_>>();
-            inquiry_pursuit.sort_unstable();
-            initial.taking = Some(Taking { policies: policies.into(), responses: responses.into(), witnesses: witnesses.into(), report_policies: report_policies.into(), complaint_preferences: complaint_preferences.into(), inquiry_pursuit: inquiry_pursuit.into(), ..Default::default() });
+            let mut pursuing = if inquiry_pursuit { groups.iter().flat_map(|&(_, author, recipient)| [author, recipient]).collect::<Vec<_>>() } else { Vec::new() };
+            pursuing.sort_unstable();
+            initial.taking = Some(Taking { policies: policies.into(), responses: responses.into(), witnesses: witnesses.into(), report_policies: report_policies.into(), complaint_preferences: complaint_preferences.into(), inquiry_pursuit: pursuing.into(), ..Default::default() });
             let mut staged = game_economy::Economy::compile(initial).unwrap();
             staged.advance().unwrap();
             initial = staged.snapshot();
@@ -191,7 +193,7 @@ fn main() {
             if round > 0 { samples.push(elapsed); }
         }
         samples.sort_by(f64::total_cmp);
-        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
+        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_pursuit={inquiry_pursuit} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {
             for (name, measurement) in game_diagnostics::snapshot() {

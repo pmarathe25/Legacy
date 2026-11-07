@@ -183,10 +183,14 @@ macro_rules! prepare_dynamics {
         } else {
             Vec::new()
         };
+        #[cfg(feature = "profile")]
+        let inquiry_intents_phase = game_diagnostics::span("economy.inquiries.intents");
         let inquiry_meetings = $world
             .taking
             .as_ref()
             .map_or_else(Vec::new, |owner| owner.inquiry_meetings($tick));
+        #[cfg(feature = "profile")]
+        drop(inquiry_intents_phase);
         let mut next = $world
             .dynamics
             .as_ref()
