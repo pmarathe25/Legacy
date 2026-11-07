@@ -8,3 +8,6 @@ distinct destinations, using the same seeded arbitration as the general planner.
 mixed or overlapping custody uses the general shared-resource planner.
 Shared-source and shared-destination single-leg transfers can also enter directly from
 flat action batches, without constructing a full transaction for each participant.
+Independent shared sources with distinct destinations resolve as bounded parallel groups.
+Overlapping endpoints, mixed goods within one source, and oversized groups use the
+general planner; expiry and accepted cohort receipts remain identical.

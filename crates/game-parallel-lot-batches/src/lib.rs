@@ -4,6 +4,7 @@ use game_parallel_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
 mod fan_in;
 mod fan_out;
+mod grouped_sources;
 mod independent;
 mod independent_transfer;
 mod partitioned;

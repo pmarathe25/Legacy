@@ -222,6 +222,10 @@ pub fn prepare(
     if let Some(draft) = super::fan_out::prepare_flat(state, instance, seed, transfers, advance)? {
         return Ok(Some(draft));
     }
+    if let Some(draft) = super::grouped_sources::prepare(state, instance, seed, transfers, advance)?
+    {
+        return Ok(Some(draft));
+    }
     if let Some(draft) = super::fan_in::prepare_flat(state, instance, seed, transfers, advance)? {
         return Ok(Some(draft));
     }
