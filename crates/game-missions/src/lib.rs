@@ -65,6 +65,7 @@ impl Missions {
                 (mission.party_opt_in && mission.party_compliant)
                     || (mission.party_compliant && mission.party.is_none())
                     || mission.objective.is_some_and(|objective| match objective {
+                        Objective::ObserveFood => false,
                         Objective::Meet { person } => {
                             person == mission.person || !people.contains(&person)
                         }

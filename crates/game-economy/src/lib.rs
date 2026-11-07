@@ -5205,6 +5205,43 @@ impl Economy {
         } else {
             Vec::new()
         };
+        let observation_tick = self.tick();
+        let observation_people = &self.people;
+        let mut mission_observations: Vec<(u64, u64)> =
+            if self.missions.as_ref().is_some_and(|owner| {
+                owner.entries.par_iter().any(|mission| {
+                    matches!(
+                        mission.objective,
+                        Some(game_economy_expeditions::Objective::ObserveFood)
+                    ) && !mission.objective_met
+                })
+            }) {
+                knowledge.as_ref().map_or_else(Vec::new, |owner| {
+                    owner
+                        .minds
+                        .par_iter()
+                        .flat_map_iter(|mind| {
+                            let location = observation_people
+                                .binary_search_by_key(&mind.person, |person| person.id)
+                                .ok()
+                                .and_then(|index| {
+                                    let person = &observation_people[index];
+                                    (person.health > 0).then_some(person.region).flatten()
+                                });
+                            mind.records.iter().filter_map(move |record| {
+                                (record.observed_at == observation_tick
+                                    && record.witness == mind.person
+                                    && record.learned_from.is_none()
+                                    && location == Some(record.region))
+                                .then_some((mind.person, record.region))
+                            })
+                        })
+                        .collect()
+                })
+            } else {
+                Vec::new()
+            };
+        mission_observations.par_sort_unstable();
         let missions = game_economy_expeditions::finish_world!(
             self,
             expedition,
@@ -5213,6 +5250,7 @@ impl Economy {
             dynamics,
             mission_gifts,
             held,
+            mission_observations,
             tick
         );
         #[cfg(feature = "profile")]

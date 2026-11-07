@@ -10724,6 +10724,117 @@ fn expedition_delivery_counts_actual_gifts_and_preserves_partial_progress() {
 }
 
 #[test]
+fn expedition_observation_requires_personal_fresh_evidence_at_destination() {
+    use game_economy_knowledge::{Knowledge, Mind, Record};
+    let mut initial = expedition_fixture();
+    initial.knowledge = Some(Knowledge {
+        max_records: 4,
+        minds: vec![Mind {
+            person: 1,
+            reporting: None,
+            misreport: None,
+            records: vec![Record {
+                region: 2,
+                food: 99,
+                observed_at: 0,
+                witness: 2,
+                learned_from: Some(2),
+            }],
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let id = world
+                    .start_mission(MissionStart {
+                        person: 1,
+                        destination: 2,
+                        visit_ticks: 1,
+                    })
+                    .unwrap();
+                world.set_mission_food_observation(1, id).unwrap();
+                assert!(!world.snapshot().missions.as_ref().unwrap().entries[0].objective_met);
+                world.advance().unwrap();
+                assert!(
+                    !world.snapshot().missions.as_ref().unwrap().entries[0].objective_met,
+                    "a prior report is not a direct observation"
+                );
+                for _ in 0..8 {
+                    if world.snapshot().missions.as_ref().unwrap().entries[0].objective_met {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert!(state.missions.as_ref().unwrap().entries[0].objective_met);
+                let record = world
+                    .known_food(1)
+                    .unwrap()
+                    .into_iter()
+                    .find(|row| row.region == 2)
+                    .unwrap();
+                assert_eq!((record.witness, record.learned_from), (1, None));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..8 {
+                    if world.snapshot().missions.as_ref().unwrap().entries[0].phase
+                        == MissionPhase::Completed
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world.snapshot().missions.as_ref().unwrap().entries[0].phase,
+                    MissionPhase::Completed
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut stale = initial.clone();
+    let record = &mut stale.knowledge.as_mut().unwrap().minds[0].records[0];
+    record.witness = 1;
+    record.learned_from = None;
+    let mut world = Economy::compile(stale).unwrap();
+    let id = world
+        .start_mission(MissionStart {
+            person: 1,
+            destination: 2,
+            visit_ticks: 1,
+        })
+        .unwrap();
+    world.set_mission_food_observation(1, id).unwrap();
+    let mut state = world.snapshot();
+    state.missions.as_mut().unwrap().entries[0].phase = MissionPhase::Outbound;
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    assert!(
+        !world.snapshot().missions.as_ref().unwrap().entries[0].objective_met,
+        "a same-tick memory from another region is not a current observation"
+    );
+    let mut world = Economy::compile(expedition_fixture()).unwrap();
+    let id = world
+        .start_mission(MissionStart {
+            person: 1,
+            destination: 2,
+            visit_ticks: 1,
+        })
+        .unwrap();
+    let before = world.snapshot();
+    assert!(world.set_mission_food_observation(1, id).is_err());
+    assert_eq!(world.snapshot(), before);
+}
+
+#[test]
 fn expedition_meeting_goal_requires_a_real_local_encounter() {
     use game_social::Participant;
     let mut initial = expedition_fixture();

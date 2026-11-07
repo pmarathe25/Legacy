@@ -15,6 +15,38 @@ pub struct Gift {
     pub quantity: u64,
 }
 
+/// Credit only direct, current observations in the actual destination.
+pub fn observations(state: &mut Missions, observed: &[(u64, u64)], tick: u64) -> Vec<MissionEvent> {
+    if observed.is_empty() {
+        return Vec::new();
+    }
+    state
+        .entries
+        .par_iter_mut()
+        .filter_map(|mission| {
+            if !matches!(mission.objective, Some(MissionObjective::ObserveFood))
+                || mission.objective_met
+                || !matches!(
+                    mission.phase,
+                    MissionPhase::Outbound | MissionPhase::Visiting
+                )
+                || observed
+                    .binary_search(&(mission.person, mission.destination))
+                    .is_err()
+            {
+                return None;
+            }
+            mission.objective_met = true;
+            Some(MissionEvent {
+                tick,
+                mission: mission.id,
+                person: mission.person,
+                kind: MissionEventKind::ObjectiveMet,
+            })
+        })
+        .collect()
+}
+
 /// Credit accepted gifts at the destination, retaining partial progress.
 pub fn deliveries(state: &mut Missions, gifts: &[Gift], tick: u64) -> Vec<MissionEvent> {
     if gifts.is_empty()

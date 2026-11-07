@@ -63,6 +63,8 @@ pub struct DeliveryAcquisition {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Objective {
+    /// Personally observe food in the destination, retaining the resulting memory.
+    ObserveFood,
     Meet {
         person: u64,
     },

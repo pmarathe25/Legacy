@@ -2,6 +2,46 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_campaign_supports_an_observation_expedition() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-campaign.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let id = game_economy_player::Player::new(&mut world)
+                    .start_expedition(2, 1)
+                    .unwrap();
+                game_economy_cli_commands::player::handle(
+                    &mut world,
+                    &["observe-expedition", &id.to_string()],
+                )
+                .unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..16 {
+                    if world.snapshot().missions.as_ref().unwrap().entries[0].objective_met {
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert!(world.snapshot().missions.as_ref().unwrap().entries[0].objective_met);
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_campaign_advances_consistently_across_workers_and_reload() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

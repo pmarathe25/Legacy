@@ -1238,6 +1238,9 @@ impl<'a> Player<'a> {
     pub fn set_expedition_meeting(&mut self, id: u64, target: u64) -> Result<(), String> {
         self.world.set_mission_meeting(self.current()?, id, target)
     }
+    pub fn set_expedition_food_observation(&mut self, id: u64) -> Result<(), String> {
+        self.world.set_mission_food_observation(self.current()?, id)
+    }
     pub fn set_expedition_delivery(
         &mut self,
         id: u64,

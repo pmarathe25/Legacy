@@ -1,5 +1,7 @@
 # Personal expeditions over dated custody
 
+A traveler with a personal knowledge mind can set an objective to observe food at the destination. It is completed only after their own fresh local observation, not by an earlier report, another person's observation, or merely departing. The remembered observation can later be communicated under the traveler's own reporting choice.
+
 Stages individual expeditions against real routes, local availability and the economic world's travel state. Departures preserve actual personal goods and never move someone whose physical circumstances no longer permit the trip. A meeting goal requires a real local encounter. An invited companion may participate voluntarily or respond to directed fear or obligation; they reassess that choice during the journey and can stop participating. Cancellation leaves any ongoing physical journey intact. Expedition routes currently require durations representable as `u32` ticks.
 
 A traveler may deliberately seek the person named by their meeting objective at the destination, either willingly or because of their own fear or felt obligation. The other person independently responds according to their own willingness or directed fear or felt obligation. Both can act under pressure. Competing meeting attempts reserve each participant at most once; a refusal does not complete the objective.

@@ -307,6 +307,10 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             person.parse().map_err(|_| "invalid person")?,
             id.parse().map_err(|_| "invalid expedition")?,
         )?,
+        ["observe-expedition", person, id] => world.set_mission_food_observation(
+            person.parse().map_err(|_| "invalid person")?,
+            id.parse().map_err(|_| "invalid expedition")?,
+        )?,
         ["meet-expedition", person, id, target] => world.set_mission_meeting(
             person.parse().map_err(|_| "invalid person")?,
             id.parse().map_err(|_| "invalid expedition")?,

@@ -286,6 +286,34 @@ macro_rules! mission_methods {
             self.epoch = epoch;
             Ok(())
         }
+        /// Set a goal to personally observe food at the destination.
+        pub fn set_mission_food_observation(&mut self, person: u64, id: u64) -> Result<(), String> {
+            if self
+                .knowledge
+                .as_ref()
+                .is_none_or(|owner| !owner.minds.iter().any(|mind| mind.person == person))
+            {
+                return Err("food observation requires a personal knowledge mind".into());
+            }
+            let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
+            let mission = missions
+                .entries
+                .iter_mut()
+                .find(|m| m.id == id && m.person == person)
+                .ok_or("unknown personal expedition")?;
+            if mission.phase != $crate::MissionPhase::Ready {
+                return Err("objective must be set before departure".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mission.objective = Some($crate::Objective::ObserveFood);
+            mission.objective_met = false;
+            mission.delivery_preference = None;
+            self.epoch = epoch;
+            Ok(())
+        }
         pub fn set_mission_meeting(
             &mut self,
             person: u64,
@@ -648,6 +676,7 @@ pub struct FinishContext<'a> {
     pub source_people: &'a [Person],
     pub gifts: &'a [(u64, u64, u64, u32, u64)],
     pub held: &'a [u64],
+    pub observations: &'a [(u64, u64)],
     pub tick: u64,
 }
 
@@ -663,6 +692,7 @@ pub fn finish(
         source_people,
         gifts,
         held,
+        observations,
         tick,
     } = context;
     let Some(prepared) = prepared else {
@@ -738,6 +768,7 @@ pub fn finish(
         false
     };
     let mut meetings = game_mission_objectives::meetings(&mut next, encounters, tick);
+    let mut observed = game_mission_objectives::observations(&mut next, observations, tick);
     let gifts: Vec<_> = gifts
         .par_iter()
         .filter_map(|&(_, giver, recipient, good, quantity)| {
@@ -756,13 +787,14 @@ pub fn finish(
     let mut deliveries = game_mission_objectives::deliveries(&mut next, &gifts, tick);
     draft.publish(&mut next, &available, accepted, tick);
     next.events.append(&mut meetings);
+    next.events.append(&mut observed);
     next.events.append(&mut deliveries);
     next.events.extend(prepared.stopped);
     Some(next)
 }
 #[macro_export]
 macro_rules! finish_world {
-    ($world:expr, $draft:expr, $person:expr, $travel:expr, $dynamics:expr, $gifts:expr, $held:expr, $tick:expr) => {{
+    ($world:expr, $draft:expr, $person:expr, $travel:expr, $dynamics:expr, $gifts:expr, $held:expr, $observations:expr, $tick:expr) => {{
         let encounters = $dynamics
             .as_ref()
             .and_then(|d| d.social.as_ref())
@@ -777,6 +809,7 @@ macro_rules! finish_world {
                 source_people: &$world.people,
                 gifts: &$gifts,
                 held: &$held,
+                observations: &$observations,
                 tick: $tick,
             },
         )
