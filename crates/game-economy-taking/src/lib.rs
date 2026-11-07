@@ -45,6 +45,11 @@ pub struct Policy {
     pub affinity_at_least: Option<i32>,
     #[serde(default)]
     pub affinity_at_most: Option<i32>,
+    /// Optional conditions on this person's own assessment of an event by the target.
+    #[serde(default)]
+    pub assessment_at_least: Option<i32>,
+    #[serde(default)]
+    pub assessment_at_most: Option<i32>,
 }
 
 /// A target's own standing response, including a controlled person's preference.
@@ -216,6 +221,9 @@ impl Taking {
                     || p.pressure_threshold == Some(0)
                     || p.pressured_by
                         .is_some_and(|id| id == p.person || !people.contains(&id))
+                    || p.assessment_at_least
+                        .zip(p.assessment_at_most)
+                        .is_some_and(|(min, max)| min > max)
             })
             || self
                 .responses
@@ -322,15 +330,25 @@ impl Context<'_> {
             )?;
             Some(&self.people[index])
         };
-        let needs_feelings = self.owner.policies.par_iter().any(|p| {
-            p.pressure_threshold.is_some()
-                || p.affinity_at_least.is_some()
-                || p.affinity_at_most.is_some()
-        }) || self.owner.responses.par_iter().any(|p| {
-            p.resist_if_fear_at_least.is_some()
-                || p.resist_if_affinity_at_least.is_some()
-                || p.resist_if_affinity_at_most.is_some()
-        });
+        let (policy_feelings, needs_assessments) = self
+            .owner
+            .policies
+            .par_iter()
+            .map(|p| {
+                (
+                    p.pressure_threshold.is_some()
+                        || p.affinity_at_least.is_some()
+                        || p.affinity_at_most.is_some(),
+                    p.assessment_at_least.is_some() || p.assessment_at_most.is_some(),
+                )
+            })
+            .reduce(|| (false, false), |a, b| (a.0 || b.0, a.1 || b.1));
+        let needs_feelings = policy_feelings
+            || self.owner.responses.par_iter().any(|p| {
+                p.resist_if_fear_at_least.is_some()
+                    || p.resist_if_affinity_at_least.is_some()
+                    || p.resist_if_affinity_at_most.is_some()
+            });
         let feelings = self
             .opinions
             .filter(|_| needs_feelings)
@@ -339,6 +357,28 @@ impl Context<'_> {
         if responses.par_windows(2).any(|p| p[0].person > p[1].person) {
             responses.par_sort_unstable_by_key(|p| p.person);
         }
+        let assessments = needs_assessments.then(|| {
+            let mut rows: Vec<_> = self
+                .owner
+                .complaints
+                .par_iter()
+                .filter_map(|c| {
+                    c.answer
+                        .as_ref()?
+                        .assessment
+                        .map(|score| (c.recipient, c.account.actor, score))
+                })
+                .collect();
+            if rows.par_windows(2).any(|p| p[0].0 > p[1].0) {
+                rows.par_sort_unstable_by_key(|row| row.0);
+            }
+            rows
+        });
+        let dense_assessments = assessments.as_ref().and_then(|rows| {
+            rows.first().zip(rows.last()).and_then(|(first, last)| {
+                (last.0.checked_sub(first.0) == Some((rows.len() - 1) as u64)).then_some(first.0)
+            })
+        });
         let available = |intent: Intent, controlled: bool, recover_incapacitated: bool| {
             let actor = person(intent.actor)?;
             let target = person(intent.target)?;
@@ -378,9 +418,31 @@ impl Context<'_> {
                         .as_ref()
                         .map_or(0, |index| index.affinity(intent.actor, intent.target))
                 };
+                let assessment = || {
+                    assessments.as_ref().and_then(|rows| {
+                        dense_assessments
+                            .map_or_else(
+                                || rows.binary_search_by_key(&intent.actor, |row| row.0).ok(),
+                                |first| {
+                                    intent
+                                        .actor
+                                        .checked_sub(first)
+                                        .and_then(|i| usize::try_from(i).ok())
+                                        .filter(|&i| i < rows.len())
+                                },
+                            )
+                            .and_then(|i| (rows[i].1 == intent.target).then_some(rows[i].2))
+                    })
+                };
                 let willing = policy.willing
                     && policy.affinity_at_least.is_none_or(|v| affinity() >= v)
-                    && policy.affinity_at_most.is_none_or(|v| affinity() <= v);
+                    && policy.affinity_at_most.is_none_or(|v| affinity() <= v)
+                    && policy
+                        .assessment_at_least
+                        .is_none_or(|v| assessment().is_some_and(|score| score >= v))
+                    && policy
+                        .assessment_at_most
+                        .is_none_or(|v| assessment().is_some_and(|score| score <= v));
                 let pressured = policy
                     .pressured_by
                     .zip(policy.pressure_threshold)

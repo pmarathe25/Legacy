@@ -86,6 +86,10 @@ pub struct PolicyConfig {
     pub affinity_at_least: Option<i32>,
     #[serde(default)]
     pub affinity_at_most: Option<i32>,
+    #[serde(default)]
+    pub assessment_at_least: Option<i32>,
+    #[serde(default)]
+    pub assessment_at_most: Option<i32>,
 }
 
 impl Config {
@@ -107,6 +111,8 @@ impl Config {
                     pressure_threshold: p.pressure_threshold,
                     affinity_at_least: p.affinity_at_least,
                     affinity_at_most: p.affinity_at_most,
+                    assessment_at_least: p.assessment_at_least,
+                    assessment_at_most: p.assessment_at_most,
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;

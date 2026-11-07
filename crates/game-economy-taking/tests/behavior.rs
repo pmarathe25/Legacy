@@ -43,6 +43,8 @@ fn policy(person: u64, target: u64) -> Policy {
         pressure_threshold: None,
         affinity_at_least: None,
         affinity_at_most: None,
+        assessment_at_least: None,
+        assessment_at_most: None,
     }
 }
 
@@ -237,10 +239,96 @@ fn autonomous_recovery_requires_personal_choice_and_moves_real_possessions() {
 #[test]
 fn authored_policy_can_enable_incapacitated_recovery() {
     let config: game_economy_taking::content::Config = serde_json::from_str(
-        r#"{"policies":[{"person":1,"target":2,"good":"goods","quantity":1,"willing":true,"recover_incapacitated":true}]}"#,
+        r#"{"policies":[{"person":1,"target":2,"good":"goods","quantity":1,"willing":true,"recover_incapacitated":true,"assessment_at_most":-3}]}"#,
     ).unwrap();
     let owner = config.build(|good| (good == "goods").then_some(1)).unwrap();
     assert!(owner.policies[0].recover_incapacitated);
+    assert_eq!(owner.policies[0].assessment_at_most, Some(-3));
+}
+
+#[test]
+fn a_person_can_condition_a_taking_on_their_own_private_assessment() {
+    use game_economy_taking::{
+        Complaint, ComplaintAccount, ComplaintAnswer, ComplaintDecision, Report, ReportBelief,
+    };
+    let mut chosen = policy(1, 2);
+    chosen.assessment_at_most = Some(-3);
+    let account = ComplaintAccount {
+        actor: 2,
+        target: 3,
+        good: 1,
+        quantity: 1,
+        observed_at: 1,
+        outcome: Outcome::Transferred,
+        source: None,
+    };
+    let mut owner = Taking {
+        policies: vec![chosen].into(),
+        ..Default::default()
+    };
+    let people = people(4);
+    assert!(plan(&owner, &people, None).actions.is_empty());
+    owner.complaints = vec![Complaint {
+        author: 3,
+        recipient: 1,
+        witness: 4,
+        account,
+        created_at: 2,
+        expires_at: 8,
+        decision: ComplaintDecision::Accepted,
+        decided_at: Some(3),
+        answer: Some(ComplaintAnswer {
+            report: Report {
+                speaker: 4,
+                recipient: 1,
+                actor: 2,
+                target: 3,
+                good: 1,
+                quantity: 1,
+                observed_at: 1,
+                received_at: 4,
+                claimed_outcome: Outcome::Transferred,
+                belief: ReportBelief::Unassessed,
+                source_speaker: None,
+            },
+            matches_account: true,
+            assessment: Some(-4),
+            precedent: None,
+        }),
+    }]
+    .into();
+    assert_eq!(plan(&owner, &people, None).actions.len(), 1);
+    let own = owner.complaints[0].clone();
+    let mut other = own.clone();
+    other.recipient = 4;
+    other.answer.as_mut().unwrap().report.recipient = 4;
+    owner.complaints = vec![other.clone(), own.clone()].into();
+    assert_eq!(plan(&owner, &people, None).actions.len(), 1);
+    owner.complaints = vec![other].into();
+    assert!(plan(&owner, &people, None).actions.is_empty());
+    owner.complaints = vec![own].into();
+    owner.complaints_mut()[0]
+        .answer
+        .as_mut()
+        .unwrap()
+        .assessment = Some(4);
+    assert!(plan(&owner, &people, None).actions.is_empty());
+    owner.complaints_mut()[0]
+        .answer
+        .as_mut()
+        .unwrap()
+        .assessment = None;
+    assert!(plan(&owner, &people, None).actions.is_empty());
+    owner.complaints_mut()[0]
+        .answer
+        .as_mut()
+        .unwrap()
+        .assessment = Some(-4);
+    owner.complaints_mut()[0].account.actor = 3;
+    assert!(plan(&owner, &people, None).actions.is_empty());
+    owner.complaints_mut()[0].account.actor = 2;
+    owner.policies_mut()[0].willing = false;
+    assert!(plan(&owner, &people, None).actions.is_empty());
 }
 
 #[test]
@@ -510,6 +598,7 @@ fn fear_can_motivate_an_unwilling_actor_and_the_target_uses_their_own_affinity()
     use game_opinions::{AffinityRules, Opinion, Opinions, Rules};
     let mut actor = policy(1, 2);
     actor.willing = false;
+    actor.assessment_at_most = Some(-3);
     actor.pressured_by = Some(2);
     actor.pressure_threshold = Some(3);
     let owner = Taking {

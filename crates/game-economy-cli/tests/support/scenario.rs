@@ -383,7 +383,7 @@ fn earlier_heard_case_can_personally_influence_a_later_inquiry() {
             .unwrap()
             .install(|| {
                 let mut world = scenario(
-                    &root.join("content/scenarios/economy-testimony.toml"),
+                    &root.join("content/scenarios/economy-judgment.toml"),
                     &root.join("content"),
                 )
                 .unwrap();
@@ -438,6 +438,28 @@ fn earlier_heard_case_can_personally_influence_a_later_inquiry() {
                 assert_eq!(answer.assessment, Some(-5));
                 assert_eq!(answer.precedent.unwrap().observed_at, first);
                 assert!(world.taking_inquiries(3)[0].answer.is_none());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                for owner in [&mut world, &mut restored] {
+                    owner.set_taking_choice(2, false).unwrap();
+                    owner.advance().unwrap();
+                    assert!(
+                        owner
+                            .snapshot()
+                            .taking
+                            .as_ref()
+                            .unwrap()
+                            .events
+                            .iter()
+                            .all(|e| e.actor != 2)
+                    );
+                    owner.set_taking_choice(2, true).unwrap();
+                    owner.advance().unwrap();
+                    assert!(owner.snapshot().taking.as_ref().unwrap().events.iter().any(
+                        |e| e.actor == 2
+                            && e.target == 1
+                            && e.outcome == game_economy::TakingOutcome::Transferred
+                    ));
+                }
                 assert_eq!(world.snapshot(), restored.snapshot());
                 world.snapshot()
             })

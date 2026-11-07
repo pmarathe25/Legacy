@@ -140,7 +140,7 @@ fn main() {
             let policies = groups.iter().map(|&(actor, target, _)| Policy {
                 person: actor, target, good: bread, quantity: 1, willing: true, interval: 1, recover_incapacitated: false,
                 escalate: false, pressured_by: None, pressure_threshold: None,
-                affinity_at_least: None, affinity_at_most: None,
+                affinity_at_least: None, affinity_at_most: None, assessment_at_least: None, assessment_at_most: None,
             }).collect::<Vec<_>>();
             let responses = groups.iter().map(|&(_, target, _)| Response {
                 person: target, notices: true, resist: false,

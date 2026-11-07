@@ -54,7 +54,21 @@ a finding of fact. A manual revision clears the recorded basis. In player mode,
 `taking-precedent off` disables it; `taking-precedent DELTA any|believed|doubted|unassessed`
 sets it for future assessments.
 
+A taking policy can optionally set `assessment_at_least` or
+`assessment_at_most` for the actor's own assessment of an event attributed to
+its target. Without an applicable assessment, this condition does not motivate
+the voluntary action. The person may turn their willingness off; separately
+configured fear or obligation can still motivate them. The action is an
+individual physical attempt, not an automatic sentence, verdict, or right to
+the goods, and the target may notice and resist as usual.
+
 The ignored `precedent_benchmark` exercises synthetic already-received reports
 and simultaneous answers. Run `cargo test --profile simulation -p game-economy-taking precedent_benchmark -- --ignored --nocapture`, setting
 `LEGACY_PEOPLE` and `LEGACY_WORKERS` as desired. It times only the inquiry
 update after setup and before result destruction, not a complete world boundary.
+
+The ignored `assessment_selection_benchmark` measures selection for independent
+personal taking policies. Set `LEGACY_ASSESSMENT_CONDITION=1` to make them
+consult synthetic personal assessments, and use `LEGACY_PEOPLE` for the number
+of actors and `LEGACY_WORKERS` for concurrency. Like the precedent benchmark,
+it excludes setup, physical execution, and result destruction.
