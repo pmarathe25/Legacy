@@ -825,6 +825,176 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
 }
 
 #[test]
+fn listeners_compare_accounts_with_their_own_memories_and_choose_reactions() {
+    use game_parallel_economy_taking::{
+        Event, Reception, ReportPolicy, ReportSource, Stance, Witness,
+    };
+    use game_parallel_opinions::SubjectiveReaction;
+    let mut previous = Taking {
+        witnesses: (3..=6)
+            .map(|person| Witness {
+                person,
+                actor: 1,
+                notices: person != 6,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        report_policies: (4..=6)
+            .map(|recipient| ReportPolicy {
+                person: 3,
+                recipient,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: Some(Outcome::Resisted),
+                source: ReportSource::Observed,
+                heard_from: None,
+                details: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        receptions: vec![
+            Reception {
+                person: 4,
+                stance: Stance::Unassessed,
+                matching_toward_speaker: Some(SubjectiveReaction {
+                    affinity: -2,
+                    ..Default::default()
+                }),
+                different_toward_speaker: Some(SubjectiveReaction {
+                    affinity: 4,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Reception {
+                person: 5,
+                stance: Stance::Believe,
+                different_toward_speaker: Some(SubjectiveReaction {
+                    affinity: -3,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            Reception {
+                person: 6,
+                stance: Stance::Doubt,
+                different_toward_speaker: Some(SubjectiveReaction {
+                    affinity: 9,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    previous.observe_witnesses(
+        &[Event {
+            tick: 1,
+            actor: 1,
+            target: 2,
+            good: 1,
+            quantity: 1,
+            noticed: false,
+            outcome: Outcome::Transferred,
+        }],
+        &|_, _| true,
+    );
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = previous.clone();
+                let changes =
+                    next.receive_reports(&previous, &[(3, 4), (3, 5), (3, 6)], 2, &|_, _| {
+                        (0, 0, 0)
+                    });
+                assert_eq!(
+                    changes
+                        .iter()
+                        .map(|c| (c.observer, c.target, c.affinity))
+                        .collect::<Vec<_>>(),
+                    [(4, 3, 4), (5, 3, -3)]
+                );
+                assert_eq!(
+                    next.reports.get(4)[0].belief,
+                    game_parallel_economy_taking::ReportBelief::Unassessed
+                );
+                assert!(
+                    next.witnesses
+                        .iter()
+                        .find(|w| w.person == 6)
+                        .unwrap()
+                        .last_seen
+                        .is_none()
+                );
+                let mut repeated = next.clone();
+                assert!(
+                    repeated
+                        .receive_reports(&next, &[(3, 4)], 3, &|_, _| (0, 0, 0))
+                        .is_empty()
+                );
+                let mut truthful = next.clone();
+                truthful
+                    .report_policies_mut()
+                    .iter_mut()
+                    .find(|p| p.recipient == 4)
+                    .unwrap()
+                    .claimed_outcome = None;
+                let mut corrected = truthful.clone();
+                let changes = corrected.receive_reports(&truthful, &[(3, 4)], 3, &|_, _| (0, 0, 0));
+                assert_eq!(
+                    (changes[0].observer, changes[0].target, changes[0].affinity),
+                    (4, 3, -2)
+                );
+                let mut relay = next.clone();
+                *relay.report_policies_mut() = vec![ReportPolicy {
+                    person: 4,
+                    recipient: 5,
+                    actor: 1,
+                    willing: true,
+                    pressure_threshold: None,
+                    claimed_outcome: None,
+                    source: ReportSource::Heard,
+                    heard_from: Some(3),
+                    details: None,
+                }];
+                let mut forwarded = relay.clone();
+                let changes = forwarded.receive_reports(&relay, &[(4, 5)], 3, &|_, _| (0, 0, 0));
+                assert_eq!(
+                    (changes[0].observer, changes[0].target, changes[0].affinity),
+                    (5, 4, -3)
+                );
+                let mut stale = relay.clone();
+                stale
+                    .witnesses_mut()
+                    .iter_mut()
+                    .find(|w| w.person == 5)
+                    .unwrap()
+                    .last_seen
+                    .as_mut()
+                    .unwrap()
+                    .tick = 0;
+                let mut no_comparison = stale.clone();
+                assert!(
+                    no_comparison
+                        .receive_reports(&stale, &[(4, 5)], 3, &|_, _| (0, 0, 0))
+                        .is_empty()
+                );
+                let saved: Taking =
+                    serde_json::from_str(&serde_json::to_string(&forwarded).unwrap()).unwrap();
+                assert_eq!(saved, forwarded);
+                (next, forwarded)
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn fabricated_details_remain_personal_statements_and_can_be_relayed() {
     use game_parallel_economy_taking::{
         Event, Interpretation, Reception, ReportDetails, ReportPolicy, ReportSource, Stance,

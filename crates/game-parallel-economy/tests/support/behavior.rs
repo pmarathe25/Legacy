@@ -21486,14 +21486,17 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
         harm_change_per_damage: 0,
     });
     initial.taking = Some(Taking {
-        witnesses: vec![Witness {
-            person: 3,
-            actor: 1,
-            target: Some(4),
-            notices: true,
-            ..Default::default()
-        }]
-        .into(),
+        witnesses: vec![2, 3]
+            .into_iter()
+            .map(|person| Witness {
+                person,
+                actor: 1,
+                target: Some(4),
+                notices: true,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
         report_policies: vec![
             ReportPolicy {
                 person: 3,
@@ -21522,6 +21525,10 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
         receptions: vec![Reception {
             person: 2,
             stance: Stance::Believe,
+            different_toward_speaker: Some(SubjectiveReaction {
+                affinity: 2,
+                ..Default::default()
+            }),
             toward_actor: TakingInterpretation {
                 resisted: Some(SubjectiveReaction {
                     affinity: -3,
@@ -21597,6 +21604,7 @@ fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
                 );
                 let saved = world.snapshot();
                 assert_eq!(saved.opinions.as_ref().unwrap().index().affinity(2, 1), -3);
+                assert_eq!(saved.opinions.as_ref().unwrap().index().affinity(2, 3), 2);
                 let restored = Economy::compile(
                     serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
                 )

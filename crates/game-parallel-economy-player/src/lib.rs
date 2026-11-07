@@ -1413,6 +1413,30 @@ impl<'a> Player<'a> {
         self.world
             .set_taking_report_policy(person, recipient, actor, Some(policy))
     }
+    pub fn taking_report_reception(
+        &self,
+    ) -> Result<Option<&game_parallel_economy::TakingReception>, String> {
+        Ok(self.world.taking_reception(self.current()?))
+    }
+    pub fn set_taking_report_comparison(
+        &mut self,
+        matching: bool,
+        reaction: Option<game_parallel_economy::SubjectiveReaction>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        let mut reception = self.world.taking_reception(person).cloned().unwrap_or(
+            game_parallel_economy::TakingReception {
+                person,
+                ..Default::default()
+            },
+        );
+        if matching {
+            reception.matching_toward_speaker = reaction;
+        } else {
+            reception.different_toward_speaker = reaction;
+        }
+        self.world.set_taking_reception(person, Some(reception))
+    }
     pub fn set_taking_report_stance(
         &mut self,
         stance: game_parallel_economy::TakingReportStance,

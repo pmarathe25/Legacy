@@ -19,3 +19,5 @@ Retained reports use immutable recipient-keyed pages, sharing unchanged pages ac
 `taking_selection_benchmark` exercises independent attempts; set `LEGACY_SHARED` to make all attempts target one person and `LEGACY_WORKERS` or `LEGACY_PEOPLE` to vary execution. It measures proposal selection, not the complete world boundary.
 
 The owner hands simple taking actions to the physical host as flat movements. Independent batches can be staged without per-action movement allocations; mixed or contested physical work uses the general transaction arbiter.
+
+A listener can set `matching_toward_speaker` and `different_toward_speaker` to signed reactions when a received account refers to the same event in that listener's own direct memory. An absent memory or a different observation time gives no comparison reaction. Each person chooses these responses independently; a difference does not establish intent or force belief.

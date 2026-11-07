@@ -1,6 +1,6 @@
 //! Personal statements about remembered events; belief is owned by the listener.
 use crate::{Interpretation, Outcome, Taking};
-use game_parallel_opinions::PersonalChange;
+use game_parallel_opinions::{PersonalChange, SubjectiveReaction};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{cmp::Reverse, collections::HashSet};
@@ -86,6 +86,12 @@ pub struct Reception {
     pub unassessed_toward_actor: Interpretation,
     #[serde(default)]
     pub unassessed_toward_target: Interpretation,
+    /// This listener's reaction to a statement matching their own memory.
+    #[serde(default)]
+    pub matching_toward_speaker: Option<SubjectiveReaction>,
+    /// This listener's reaction when the statement differs from their memory.
+    #[serde(default)]
+    pub different_toward_speaker: Option<SubjectiveReaction>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,7 +200,9 @@ impl Taking {
             .report_policies
             .par_iter()
             .any(|p| p.source == ReportSource::Observed)
-        {
+            || previous.receptions.par_iter().any(|r| {
+                r.matching_toward_speaker.is_some() || r.different_toward_speaker.is_some()
+            }) {
             previous.witnesses.par_iter().collect()
         } else {
             Vec::new()
@@ -205,6 +213,19 @@ impl Taking {
                 .par_windows(2)
                 .all(|p| p[0].person.checked_add(1) == Some(p[1].person))
         });
+        let witness_for = |person: u64, actor: u64| {
+            witness_base
+                .and_then(|base| person.checked_sub(base))
+                .and_then(|offset| usize::try_from(offset).ok())
+                .and_then(|index| witnesses.get(index).copied())
+                .filter(|w| (w.person, w.actor) == (person, actor))
+                .or_else(|| {
+                    witnesses
+                        .binary_search_by_key(&(person, actor), |w| (w.person, w.actor))
+                        .ok()
+                        .map(|index| witnesses[index])
+                })
+        };
         let mut receptions: Vec<_> = previous.receptions.par_iter().collect();
         receptions.par_sort_unstable_by_key(|r| r.person);
         let dense = (previous.report_policies.len() >= 4096
@@ -246,19 +267,7 @@ impl Taking {
             let (target, good, quantity, observed_at, outcome, source_speaker) = match policy.source
             {
                 ReportSource::Observed => {
-                    let witness = witness_base
-                        .and_then(|base| policy.person.checked_sub(base))
-                        .and_then(|offset| usize::try_from(offset).ok())
-                        .and_then(|index| witnesses.get(index).copied())
-                        .filter(|w| (w.person, w.actor) == (policy.person, policy.actor))
-                        .or_else(|| {
-                            witnesses
-                                .binary_search_by_key(&(policy.person, policy.actor), |w| {
-                                    (w.person, w.actor)
-                                })
-                                .ok()
-                                .map(|i| witnesses[i])
-                        })?;
+                    let witness = witness_for(policy.person, policy.actor)?;
                     let seen = witness.last_seen.filter(|seen| seen.tick < tick)?;
                     (
                         seen.target,
@@ -438,17 +447,39 @@ impl Taking {
                             (r.unassessed_toward_actor, r.unassessed_toward_target)
                         }
                     });
-                    let make =
-                        |target, value: Option<game_parallel_opinions::SubjectiveReaction>| {
-                            value.map(|v| PersonalChange {
-                                observer: report.recipient,
-                                target,
-                                trust: v.trust,
-                                affinity: v.affinity,
-                                fear: v.fear,
-                                obligation: v.obligation,
-                            })
-                        };
+                    let comparison = rule.and_then(|rule| {
+                        if rule.matching_toward_speaker.is_none()
+                            && rule.different_toward_speaker.is_none()
+                        {
+                            return None;
+                        }
+                        let seen = witness_for(report.recipient, report.actor)?.last_seen?;
+                        if seen.tick != report.observed_at {
+                            return None;
+                        }
+                        if (seen.target, seen.good, seen.quantity, seen.outcome)
+                            == (
+                                report.target,
+                                report.good,
+                                report.quantity,
+                                report.claimed_outcome,
+                            )
+                        {
+                            rule.matching_toward_speaker
+                        } else {
+                            rule.different_toward_speaker
+                        }
+                    });
+                    let make = |target, value: Option<SubjectiveReaction>| {
+                        value.map(|v| PersonalChange {
+                            observer: report.recipient,
+                            target,
+                            trust: v.trust,
+                            affinity: v.affinity,
+                            fear: v.fear,
+                            obligation: v.obligation,
+                        })
+                    };
                     [
                         make(
                             report.actor,
@@ -460,6 +491,7 @@ impl Taking {
                             interpretations
                                 .and_then(|(_, target)| target.get(report.claimed_outcome)),
                         ),
+                        make(report.speaker, comparison),
                     ]
                     .into_iter()
                     .flatten()
