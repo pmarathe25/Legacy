@@ -796,6 +796,49 @@ fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
             .is_empty()
     );
     assert_eq!(repeated.reports, next.reports);
+    let mut inquiring = next.clone();
+    inquiring.complaints = vec![game_economy_taking::Complaint {
+        author: 2,
+        recipient: 4,
+        witness: 3,
+        account: game_economy_taking::ComplaintAccount {
+            actor: 1,
+            target: 2,
+            good: 1,
+            quantity: 1,
+            observed_at: 1,
+            outcome: Outcome::Transferred,
+            source: None,
+        },
+        created_at: 2,
+        expires_at: 10,
+        decision: game_economy_taking::ComplaintDecision::Accepted,
+        decided_at: Some(3),
+        answer: None,
+    }]
+    .into();
+    let mut refused = inquiring.clone();
+    assert!(
+        refused
+            .receive_reports(&inquiring, &[(3, 4)], 4, &|_, _| (3, 2, 0))
+            .is_empty()
+    );
+    assert_eq!(refused.reports, inquiring.reports);
+    let mut answered = inquiring.clone();
+    let changes = answered.receive_reports(&inquiring, &[(3, 4)], 4, &|_, _| (3, 3, 0));
+    assert!(
+        changes.is_empty(),
+        "repeated testimony must not repeat reactions"
+    );
+    assert_eq!(answered.reports.get(4)[0].received_at, 4);
+    answered.advance_complaints(&inquiring, &[(3, 4)], 4, &|_, _| 3);
+    assert!(
+        !answered.complaints[0]
+            .answer
+            .as_ref()
+            .unwrap()
+            .matches_account
+    );
     let mut skeptical = previous.clone();
     let changes = skeptical.receive_reports(&previous, &[(3, 4)], 2, &|_, _| (-1, 3, 0));
     assert!(changes.is_empty());

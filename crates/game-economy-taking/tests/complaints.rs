@@ -244,4 +244,79 @@ fn many_independent_inquiry_requests_replay_across_workers() {
     );
     assert_eq!(answered, answer(4));
     assert_eq!(answered, answer(6));
+    let mut with_history = one.clone();
+    with_history.witnesses = one
+        .complaints
+        .iter()
+        .map(|c| game_economy_taking::Witness {
+            person: c.witness,
+            actor: c.account.actor,
+            notices: true,
+            last_seen: Some(game_economy_taking::ObservedTaking {
+                tick: c.account.observed_at,
+                target: c.account.target,
+                good: c.account.good,
+                quantity: c.account.quantity,
+                outcome: c.account.outcome,
+            }),
+            ..Default::default()
+        })
+        .collect::<Vec<_>>()
+        .into();
+    with_history.report_policies = one
+        .complaints
+        .iter()
+        .map(|c| game_economy_taking::ReportPolicy {
+            person: c.witness,
+            recipient: c.recipient,
+            actor: c.account.actor,
+            willing: true,
+            pressure_threshold: None,
+            claimed_outcome: None,
+            source: Default::default(),
+            heard_from: None,
+            details: None,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    with_history.reports = reports
+        .iter()
+        .cloned()
+        .map(|mut report| {
+            report.received_at = 2;
+            report
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let witness_contacts = one
+        .complaints
+        .iter()
+        .map(|c| (c.witness, c.recipient))
+        .collect::<Vec<_>>();
+    let repeat = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = with_history.clone();
+                assert!(
+                    next.receive_reports(&with_history, &witness_contacts, 4, &|_, _| (0, 0, 0))
+                        .is_empty()
+                );
+                next.advance_complaints(&with_history, &witness_contacts, 4, &|_, _| 0);
+                next
+            })
+    };
+    let repeated = repeat(1);
+    assert_eq!(
+        repeated
+            .complaints
+            .iter()
+            .filter(|c| c.answer.is_some())
+            .count(),
+        count as usize / 2
+    );
+    assert_eq!(repeated, repeat(4));
+    assert_eq!(repeated, repeat(6));
 }

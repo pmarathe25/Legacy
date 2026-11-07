@@ -7,6 +7,24 @@ use std::{cmp::Reverse, collections::HashSet};
 
 const MAX_REPORTS: usize = 64;
 
+fn same_statement(a: &Report, b: &Report) -> bool {
+    (
+        a.target,
+        a.good,
+        a.quantity,
+        a.observed_at,
+        a.claimed_outcome,
+        a.source_speaker,
+    ) == (
+        b.target,
+        b.good,
+        b.quantity,
+        b.observed_at,
+        b.claimed_outcome,
+        b.source_speaker,
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReportPolicy {
@@ -237,6 +255,28 @@ impl Taking {
                 .as_ref()
                 .map_or_else(|| previous.reports.get(person), |index| index.get(person))
         };
+        // Accepted inquiries can request a fresh statement even when an
+        // identical account was heard earlier. Build keyed lookups once;
+        // never search all inquiries for every reporting policy.
+        let mut inquiry_keys: Vec<_> = previous
+            .complaints
+            .par_iter()
+            .filter(|c| {
+                c.decision == crate::ComplaintDecision::Accepted
+                    && c.answer.is_none()
+                    && tick < c.expires_at
+                    && c.decided_at.is_some_and(|at| at < tick)
+            })
+            .map(|c| {
+                (
+                    c.recipient,
+                    c.witness,
+                    c.account.actor,
+                    c.account.observed_at,
+                )
+            })
+            .collect();
+        inquiry_keys.par_sort_unstable();
         #[cfg(feature = "profile")]
         {
             drop(phase);
@@ -310,7 +350,7 @@ impl Taking {
                 .unwrap_or(quantity);
             let claimed_outcome = policy.claimed_outcome.unwrap_or(outcome);
             let prior = reports_for(policy.recipient);
-            if prior
+            let repeated = prior
                 .binary_search_by_key(&(policy.person, policy.actor), |r| (r.speaker, r.actor))
                 .ok()
                 .is_some_and(|i| {
@@ -330,7 +370,11 @@ impl Taking {
                         claimed_outcome,
                         source_speaker,
                     )
-                })
+                });
+            if repeated
+                && inquiry_keys
+                    .binary_search(&(policy.recipient, policy.person, policy.actor, observed_at))
+                    .is_err()
             {
                 return None;
             }
@@ -429,7 +473,9 @@ impl Taking {
                     let new = before
                         .binary_search_by_key(&key, |row| (row.speaker, row.actor))
                         .ok()
-                        .is_none_or(|i| before[i].received_at < r.received_at);
+                        .is_none_or(|i| {
+                            before[i].received_at < r.received_at && !same_statement(&before[i], r)
+                        });
                     new && after
                         .binary_search_by_key(&key, |row| (row.speaker, row.actor))
                         .ok()

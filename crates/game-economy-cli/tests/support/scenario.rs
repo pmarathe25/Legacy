@@ -348,6 +348,12 @@ fn accepted_inquiry_records_a_later_witness_statement_privately() {
                     .unwrap();
                 world.advance().unwrap();
                 world.advance().unwrap();
+                world.set_taking_choice(1, false).unwrap();
+                Player::new(&mut world)
+                    .set_taking_report(2, 1, Some(game_economy::TakingOutcome::Resisted))
+                    .unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                assert_eq!(world.taking_reports(2).len(), 1);
                 Player::new(&mut world)
                     .request_taking_inquiry(2, 3, 1, 12)
                     .unwrap();
@@ -365,9 +371,6 @@ fn accepted_inquiry_records_a_later_witness_statement_privately() {
                 let mut restored =
                     game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
                 for owner in [&mut world, &mut restored] {
-                    Player::new(owner)
-                        .set_taking_report(2, 1, Some(game_economy::TakingOutcome::Resisted))
-                        .unwrap();
                     assert!(Player::new(owner).meet(2).unwrap());
                 }
                 let investigator = world.taking_inquiries(2).remove(0);
