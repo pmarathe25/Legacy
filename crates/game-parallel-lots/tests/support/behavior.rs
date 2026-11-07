@@ -206,6 +206,9 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 let mut actions = actions.clone();
                 if overlap {
                     actions[1].movements[0].from = actions[0].movements[0].from;
+                    actions[3].movements[0].to = actions[2].movements[0].to;
+                    actions[4].movements[0].to = Some(actions[5].movements[0].from);
+                    actions[6].movements[0].from = actions[2].movements[0].to.unwrap();
                 }
                 if reverse {
                     actions.reverse();
@@ -218,6 +221,7 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 }
                 let mut fast = store(holders.clone());
                 let mut flat = store(holders.clone());
+                let mut partitioned = store(holders.clone());
                 let mut general = store(holders);
                 let transfers: Vec<_> = actions
                     .iter()
@@ -228,6 +232,10 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                     .collect();
                 let flat_draft = flat.prepare_flat_transfers(&transfers, advance).unwrap();
                 assert_eq!(flat_draft.is_none(), overlap);
+                let partitioned_draft = partitioned
+                    .prepare_partitioned_flat(13, &transfers, advance)
+                    .unwrap()
+                    .unwrap();
                 let staged = fast
                     .prepare_with_empty(13, &actions, vec![], advance)
                     .unwrap();
@@ -246,6 +254,10 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                 assert_eq!(staged.transactions(), full.transactions());
                 assert_eq!(staged.outcomes(), full.outcomes());
                 assert_eq!(staged.spoiled(), full.spoiled());
+                assert_eq!(partitioned_draft.transactions(), full.transactions());
+                assert_eq!(partitioned_draft.outcomes(), full.outcomes());
+                assert_eq!(partitioned_draft.spoiled(), full.spoiled());
+                partitioned.commit(partitioned_draft).unwrap();
                 if let Some(flat_draft) = flat_draft {
                     assert_eq!(flat_draft.transactions(), full.transactions());
                     assert_eq!(flat_draft.outcomes(), full.outcomes());
@@ -261,6 +273,7 @@ fn independent_transfers_match_general_transactions_with_expiry_and_capacity() {
                     .containers
                     .retain(|c| c.place != Place::Inventory(99999));
                 assert_eq!(result, expected);
+                assert_eq!(partitioned.export(), result);
                 if !overlap {
                     assert_eq!(flat.export(), result);
                 }
@@ -1677,5 +1690,84 @@ fn independent_transfer_benchmark() {
                 "workers={workers} transfers={count} prepare={:.6}",
                 samples[2]
             );
+        });
+}
+
+#[test]
+#[ignore = "manual mixed physical transfer benchmark"]
+fn partitioned_transfer_benchmark() {
+    let count = std::env::var("LEGACY_ATTEMPTS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let mut initial = Vec::with_capacity((count * 2) as usize);
+    let mut actions = Vec::with_capacity(count as usize);
+    for id in 1..=count {
+        initial.push(container(Place::Person(id), 10, vec![lot(1, 1, Some(5))]));
+        actions.push(Transaction {
+            id,
+            movements: vec![Movement {
+                id,
+                from: Place::Person(if id == 2 { 1 } else { id }),
+                to: Some(Place::Person(count + id)),
+                good: 1,
+                quantity: 1,
+            }],
+            creations: vec![],
+        });
+    }
+    initial.extend((count + 1..=count * 2).map(|id| container(Place::Person(id), 10, vec![])));
+    let transfers: Vec<_> = actions
+        .iter()
+        .map(|action| crate::SimpleTransfer {
+            action: action.id,
+            movement: action.movements[0],
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let owner = store(initial);
+            let general = owner
+                .prepare_with_empty(13, &actions, vec![], true)
+                .unwrap();
+            let partitioned = owner
+                .prepare_partitioned_flat(13, &transfers, true)
+                .unwrap()
+                .unwrap();
+            assert_eq!(general.transactions(), partitioned.transactions());
+            assert_eq!(general.outcomes(), partitioned.outcomes());
+            for mode in ["general", "partitioned"] {
+                let mut samples = Vec::new();
+                for round in 0..5 {
+                    let start = std::time::Instant::now();
+                    let result = if mode == "general" {
+                        owner
+                            .prepare_with_empty(13, &actions, vec![], true)
+                            .unwrap()
+                    } else {
+                        owner
+                            .prepare_partitioned_flat(13, &transfers, true)
+                            .unwrap()
+                            .unwrap()
+                    };
+                    let elapsed = start.elapsed().as_secs_f64();
+                    assert_eq!(result.transactions().len(), count as usize);
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} transfers={count} mode={mode} prepare={:.6}",
+                    samples[2]
+                );
+            }
         });
 }

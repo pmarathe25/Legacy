@@ -336,6 +336,27 @@ impl Store {
             retire: Vec::new(),
         }))
     }
+    /// Attempt a flat batch with exclusive and contested transfer partitions.
+    /// Returns `None` when the complete batch needs the general arbiter.
+    pub fn prepare_partitioned_flat(
+        &self,
+        seed: u64,
+        transfers: &[SimpleTransfer],
+        advance: bool,
+    ) -> Result<Option<Draft>, String> {
+        Ok(game_parallel_lot_batches::prepare_partitioned_flat(
+            &self.state,
+            self.instance,
+            seed,
+            transfers,
+            advance,
+        )?
+        .map(|inner| Draft {
+            inner,
+            additions: Vec::new(),
+            retire: Vec::new(),
+        }))
+    }
     /// Check this owner before publishing any part of a composed generation.
     pub fn validate_commit(&self, draft: &Draft) -> Result<(), String> {
         let inner = &draft.inner;

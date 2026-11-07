@@ -195,6 +195,96 @@ impl Runtime {
             },
         }))
     }
+    /// Resolve flat transfers with a shared endpoint by preserving the same
+    /// composed action identities used by the general arbiter.
+    pub fn prepare_partitioned_flat_transfers(
+        &self,
+        transfers: &[SimpleTransfer],
+        seed: u64,
+    ) -> Result<Option<AdvanceDraft>, String> {
+        if let Some(draft) = self.prepare_flat_transfers(transfers)? {
+            return Ok(Some(draft));
+        }
+        if !self.work.is_empty() || transfers.len() < 256 {
+            return Ok(None);
+        }
+        let mut ordered = transfers.to_vec();
+        if ordered
+            .par_windows(2)
+            .any(|pair| pair[0].action > pair[1].action)
+        {
+            ordered.par_sort_unstable_by_key(|row| row.action);
+        }
+        if ordered.first().is_some_and(|row| row.action == 0)
+            || ordered
+                .par_windows(2)
+                .any(|pair| pair[0].action == pair[1].action)
+            || u64::try_from(ordered.len()).is_err()
+        {
+            return Err("invalid or duplicate physical action key".into());
+        }
+        let normalized: Vec<_> = ordered
+            .par_iter()
+            .enumerate()
+            .map(|(index, row)| {
+                let id = index as u64 + 1;
+                let mut movement = row.movement;
+                movement.id = id;
+                SimpleTransfer {
+                    action: id,
+                    movement,
+                }
+            })
+            .collect();
+        let Some(mut custody) = self
+            .store
+            .prepare_partitioned_flat(seed, &normalized, true)?
+        else {
+            return Ok(None);
+        };
+        let tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
+        let physical_actions = custody
+            .transactions()
+            .par_iter()
+            .map(|row| TransactionOutcome {
+                id: ordered[(row.id - 1) as usize].action,
+                accepted: row.accepted,
+            })
+            .collect();
+        let (outcomes, spoiled) = custody.take_receipts();
+        let physical_movements = outcomes
+            .into_par_iter()
+            .map(|mut movement| {
+                let original = ordered[(movement.id - 1) as usize];
+                movement.id = original.movement.id;
+                ExternalReceipt {
+                    action: original.action,
+                    request: original.movement,
+                    movement,
+                }
+            })
+            .collect();
+        Ok(Some(AdvanceDraft {
+            epoch: self.epoch,
+            custody,
+            work: Vec::new(),
+            events: Events {
+                tick,
+                started: Vec::new(),
+                start_denied: Vec::new(),
+                abandoned: Vec::new(),
+                finished: Vec::new(),
+                delivered: Vec::new(),
+                output_lost: Vec::new(),
+                interrupted: Vec::new(),
+                returned: Vec::new(),
+                empty_returns: Vec::new(),
+                spoiled,
+                physical_actions,
+                physical_movements,
+            },
+        }))
+    }
     /// Prepare all owners against the same generation without publishing.
     pub fn prepare_advance(
         &self,

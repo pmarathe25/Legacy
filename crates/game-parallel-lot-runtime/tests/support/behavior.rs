@@ -912,6 +912,48 @@ fn flat_transfers_match_general_runtime_and_rollback() {
     );
     let mut overlap = transfers;
     overlap[1].movement.from = overlap[0].movement.from;
+    overlap[3].movement.to = overlap[2].movement.to;
+    overlap[4].movement.to = Some(overlap[5].movement.from);
+    for seed in [1, 13, 27] {
+        let run_mixed = |workers, reverse| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut rows = overlap.clone();
+                    if reverse {
+                        rows.reverse();
+                    }
+                    let actions: Vec<_> = rows
+                        .iter()
+                        .map(|row| Transaction {
+                            id: row.action,
+                            movements: vec![row.movement],
+                            creations: vec![],
+                        })
+                        .collect();
+                    let mut flat = Runtime::compile(snapshot.clone()).unwrap();
+                    let mut general = Runtime::compile(snapshot.clone()).unwrap();
+                    let before = flat.snapshot();
+                    let draft = flat
+                        .prepare_partitioned_flat_transfers(&rows, seed)
+                        .unwrap()
+                        .unwrap();
+                    assert_eq!(flat.snapshot(), before);
+                    let other = general.prepare_advance(&[], &actions, seed).unwrap();
+                    assert!(
+                        draft.events() == other.events(),
+                        "partitioned and general receipts differ"
+                    );
+                    let events = flat.commit_advance(draft).unwrap();
+                    general.commit_advance(other).unwrap();
+                    assert_eq!(flat.snapshot(), general.snapshot());
+                    (flat.snapshot(), events)
+                })
+        };
+        assert_eq!(run_mixed(1, false), run_mixed(4, true));
+    }
     assert!(
         Runtime::compile(snapshot)
             .unwrap()

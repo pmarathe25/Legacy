@@ -4,6 +4,7 @@ use game_parallel_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
 mod independent;
 mod independent_transfer;
+mod partitioned;
 
 /// Attempt a disjoint flat transfer batch; `None` requests the general arbiter.
 pub fn prepare_flat_transfers(
@@ -13,6 +14,17 @@ pub fn prepare_flat_transfers(
     advance: bool,
 ) -> Result<Option<Draft>, String> {
     independent_transfer::prepare_flat(state, instance, transfers, advance)
+}
+
+/// Resolve exclusive transfers separately from genuinely contested endpoints.
+pub fn prepare_partitioned_flat(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    partitioned::prepare(state, instance, seed, transfers, advance)
 }
 
 pub fn prepare(

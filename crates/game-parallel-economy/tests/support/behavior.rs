@@ -22040,6 +22040,53 @@ fn autonomous_takings_conserve_possessions_for_shared_and_independent_targets() 
 }
 
 #[test]
+fn controlled_gift_and_many_independent_takings_share_one_boundary() {
+    let mut initial = taking_workload(256, false);
+    initial.people[0].controlled = true;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.give(1, 2, 1, 1).unwrap());
+                let saved = world.snapshot();
+                assert_eq!(saved.taking.as_ref().unwrap().events.len(), 254);
+                assert!(
+                    saved
+                        .taking
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.outcome == TakingOutcome::Transferred)
+                );
+                let quantity = |person| {
+                    saved
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(person))
+                        .unwrap()
+                        .used
+                };
+                assert_eq!((quantity(1), quantity(2)), (0, 2));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 #[ignore = "manual complete-world taking benchmark"]
 fn taking_world_benchmark() {
     let count = std::env::var("LEGACY_ATTEMPTS")

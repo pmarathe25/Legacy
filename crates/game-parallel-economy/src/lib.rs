@@ -4397,8 +4397,7 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.physical");
         }
-        let flat = if taking_actions.len() >= 128
-            && actions.is_empty()
+        let flat = if taking_actions.len().saturating_add(actions.len()) >= 128
             && rates.is_empty()
             && starts.is_empty()
             && abandon.is_empty()
@@ -4406,8 +4405,28 @@ impl Economy {
             && hunting_plan.yields.is_empty()
             && compact.is_empty()
             && staged_custody.is_empty()
-        {
-            self.physical.prepare_flat_transfers(&taking_actions)?
+            && actions.par_iter().all(|action| {
+                action.movements.len() == 1
+                    && action.creations.is_empty()
+                    && action.movements[0].to.is_some()
+            }) {
+            let combined =
+                (!actions.is_empty()).then(|| {
+                    taking_actions
+                        .par_iter()
+                        .copied()
+                        .chain(actions.par_iter().map(|action| {
+                            game_parallel_lots::SimpleTransfer {
+                                action: action.id,
+                                movement: action.movements[0],
+                            }
+                        }))
+                        .collect::<Vec<_>>()
+                });
+            self.physical.prepare_partitioned_flat_transfers(
+                combined.as_deref().unwrap_or(&taking_actions),
+                self.seed,
+            )?
         } else {
             None
         };
