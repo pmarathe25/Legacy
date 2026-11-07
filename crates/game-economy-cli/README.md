@@ -4,6 +4,8 @@ Run `cargo run -p game-economy-cli`, optionally passing a scenario TOML path. Th
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
+Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
+
 `observe-expedition ID` sets a personal goal to observe food at the destination before departure. The traveler must have a knowledge mind and must actually observe there; an old report is insufficient. The administrative form is `observe-expedition PERSON ID`.
 
 `food-reporting on|off PRESSURE|none` sets the current person's willingness to send remembered food reports and their optional fear-plus-obligation threshold. `food-reporting default` restores the default. The administrative runner adds a person ID after the command. Scenario knowledge minds may set the same `reporting` fields; listeners still decide independently whether to accept a statement.
