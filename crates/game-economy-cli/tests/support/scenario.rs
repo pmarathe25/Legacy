@@ -2,6 +2,120 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_conflict_does_not_stop_other_peoples_project() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-conflict-project.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                game_economy_player::Player::new(&mut world)
+                    .attack(3)
+                    .unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..20 {
+                    let state = world.snapshot();
+                    assert!(
+                        state
+                            .combat
+                            .as_ref()
+                            .unwrap()
+                            .conflict
+                            .encounters
+                            .iter()
+                            .any(|encounter| encounter
+                                .fighters
+                                .iter()
+                                .any(|fighter| fighter.person == 3))
+                    );
+                    assert!(state.physical.work.iter().all(|work| work.job.worker != 3));
+                    if state.goals.as_ref().is_some_and(|goals| {
+                        goals
+                            .people
+                            .iter()
+                            .any(|goal| goal.person == 2 && goal.progress > 0)
+                    }) {
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress == 1)
+                );
+                assert!(
+                    !state
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 3 && goal.progress > 0)
+                );
+                assert!(
+                    state
+                        .people
+                        .iter()
+                        .find(|person| person.id == 3)
+                        .unwrap()
+                        .health
+                        < 100
+                );
+                let injury = state
+                    .people
+                    .iter()
+                    .find(|person| person.id == 3)
+                    .unwrap()
+                    .health;
+                game_economy_player::Player::new(&mut world)
+                    .combat_order(game_economy_combat::Order::Retreat)
+                    .unwrap();
+                game_economy_player::Player::new(&mut restored)
+                    .combat_order(game_economy_combat::Order::Retreat)
+                    .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert!(
+                    game_economy_player::Player::new(&mut world)
+                        .view()
+                        .unwrap()
+                        .battle
+                        .is_none()
+                );
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .people
+                        .iter()
+                        .find(|person| person.id == 3)
+                        .unwrap()
+                        .health
+                        <= injury
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_regional_project_requires_requested_physical_delivery() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
