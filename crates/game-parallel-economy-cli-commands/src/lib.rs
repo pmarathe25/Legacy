@@ -1,6 +1,6 @@
 //! Personal health, claim and expedition commands.
 pub mod player;
-use game_parallel_economy::{Economy, MissionStart};
+use game_parallel_economy::{Economy, MissionDeliveryPreference, MissionStart};
 pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
     match words {
         ["take-from", person, target, good, quantity, escalation] => {
@@ -312,6 +312,48 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             id.parse().map_err(|_| "invalid expedition")?,
             target.parse().map_err(|_| "invalid target")?,
         )?,
+        ["deliver-expedition", person, id, recipient, good, quantity] => world
+            .set_mission_delivery(
+                person.parse().map_err(|_| "invalid person")?,
+                id.parse().map_err(|_| "invalid expedition")?,
+                recipient.parse().map_err(|_| "invalid recipient")?,
+                good.parse().map_err(|_| "invalid good")?,
+                quantity.parse().map_err(|_| "invalid quantity")?,
+            )?,
+        [
+            "expedition-delivery-choice",
+            person,
+            id,
+            willing,
+            reserve,
+            pressure,
+        ] => {
+            let willing = match *willing {
+                "on" => true,
+                "off" => false,
+                _ => return Err("expected on or off".into()),
+            };
+            let pressure_threshold = if *pressure == "none" {
+                None
+            } else {
+                Some(pressure.parse().map_err(|_| "invalid pressure threshold")?)
+            };
+            world.set_mission_delivery_preference(
+                person.parse().map_err(|_| "invalid person")?,
+                id.parse().map_err(|_| "invalid expedition")?,
+                Some(MissionDeliveryPreference {
+                    willing,
+                    pressure_threshold,
+                    reserve: reserve.parse().map_err(|_| "invalid reserve")?,
+                }),
+            )?;
+        }
+        ["expedition-delivery-choice", person, id, "clear"] => world
+            .set_mission_delivery_preference(
+                person.parse().map_err(|_| "invalid person")?,
+                id.parse().map_err(|_| "invalid expedition")?,
+                None,
+            )?,
         ["invite-expedition", person, id, target] => {
             let joined = world.invite_mission(
                 person.parse().map_err(|_| "invalid person")?,

@@ -123,6 +123,7 @@ fn failed_generation_does_not_publish_a_sparse_visit_phase_edit() {
             party_compliant: false,
             objective: None,
             objective_met: false,
+            delivery_preference: None,
             origin: 1,
             destination: 2,
             visit_ticks: 1,

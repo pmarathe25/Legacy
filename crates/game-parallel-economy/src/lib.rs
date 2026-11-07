@@ -19,7 +19,9 @@ pub use game_parallel_economy_confinement::{
     ReleasePolicy as ConfinementReleasePolicy,
 };
 pub use game_parallel_economy_dynamics::Dynamics;
-pub use game_parallel_economy_expeditions::{MissionPhase, Missions, Start as MissionStart};
+pub use game_parallel_economy_expeditions::{
+    DeliveryPreference as MissionDeliveryPreference, MissionPhase, Missions, Start as MissionStart,
+};
 use game_parallel_economy_family as family;
 pub use game_parallel_economy_family::Families;
 pub use game_parallel_economy_fatigue::Fatigue;
@@ -2982,6 +2984,7 @@ impl Economy {
             .then(|| game_parallel_economy_work::exclude_sorted(&busy, &reserved_can_give));
         let giving_plan = giving::Context {
             owner: self.giving.as_ref(),
+            missions: self.missions.as_ref(),
             people: &self.people,
             opinions: self.opinions.as_ref(),
             work_requests: self

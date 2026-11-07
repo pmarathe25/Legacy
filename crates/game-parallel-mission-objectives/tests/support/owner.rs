@@ -17,6 +17,7 @@ fn mission(person: u64) -> Mission {
             person: person + 100_000,
         }),
         objective_met: false,
+        delivery_preference: None,
     }
 }
 #[test]

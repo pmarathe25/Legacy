@@ -35,6 +35,18 @@ pub struct Mission {
     pub objective: Option<Objective>,
     #[serde(default)]
     pub objective_met: bool,
+    /// The person's own changeable preference for carrying out a delivery objective.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_preference: Option<DeliveryPreference>,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeliveryPreference {
+    pub willing: bool,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+    #[serde(default)]
+    pub reserve: u64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

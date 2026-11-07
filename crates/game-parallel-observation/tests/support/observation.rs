@@ -407,6 +407,7 @@ fn view_only_exposes_the_rulers_own_expeditions() {
         party_compliant: false,
         objective: None,
         objective_met: false,
+        delivery_preference: None,
         origin: 1,
         destination: 2,
         visit_ticks: 1,

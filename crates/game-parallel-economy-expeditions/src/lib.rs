@@ -5,8 +5,10 @@ use game_parallel_economy_person::{
 };
 use game_parallel_lot_runtime::Work;
 use game_parallel_lots::{Place, View};
+pub use game_parallel_missions::{
+    DeliveryPreference, Mission, Missions, Objective, Phase as MissionPhase, Start,
+};
 use game_parallel_missions::{Draft, Event, EventKind, Phase, routing::Routing};
-pub use game_parallel_missions::{Mission, Missions, Objective, Phase as MissionPhase, Start};
 use game_parallel_production_model::PersonSnapshot;
 use game_parallel_transport::Route;
 use rayon::prelude::*;
@@ -130,6 +132,7 @@ pub fn start(
         phase: Phase::Ready,
         objective: None,
         objective_met: false,
+        delivery_preference: None,
     });
     Ok((next, id))
 }
@@ -312,6 +315,7 @@ macro_rules! mission_methods {
                 .ok_or("economic generation overflow")?;
             mission.objective = Some($crate::Objective::Meet { person: target });
             mission.objective_met = false;
+            mission.delivery_preference = None;
             self.epoch = epoch;
             Ok(())
         }
@@ -353,6 +357,39 @@ macro_rules! mission_methods {
                 delivered: 0,
             });
             mission.objective_met = false;
+            mission.delivery_preference = None;
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Change this traveler's own willingness, pressure sensitivity, and reserve.
+        pub fn set_mission_delivery_preference(
+            &mut self,
+            person: u64,
+            id: u64,
+            preference: Option<$crate::DeliveryPreference>,
+        ) -> Result<(), String> {
+            if preference.is_some_and(|value| value.pressure_threshold == Some(0)) {
+                return Err("delivery pressure threshold must be positive".into());
+            }
+            let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
+            let mission = missions
+                .entries
+                .iter_mut()
+                .find(|m| m.id == id && m.person == person)
+                .ok_or("unknown personal expedition")?;
+            if !matches!(mission.objective, Some($crate::Objective::Deliver { .. }))
+                || matches!(
+                    mission.phase,
+                    $crate::MissionPhase::Completed | $crate::MissionPhase::Failed
+                )
+            {
+                return Err("active delivery objective required".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            mission.delivery_preference = preference;
             self.epoch = epoch;
             Ok(())
         }

@@ -1221,6 +1221,14 @@ impl<'a> Player<'a> {
         self.world
             .set_mission_delivery(self.current()?, id, recipient, good, quantity)
     }
+    pub fn set_expedition_delivery_preference(
+        &mut self,
+        id: u64,
+        preference: Option<game_parallel_economy::MissionDeliveryPreference>,
+    ) -> Result<(), String> {
+        self.world
+            .set_mission_delivery_preference(self.current()?, id, preference)
+    }
     pub fn invite_expedition(&mut self, id: u64, target: u64) -> Result<Option<u64>, String> {
         if !self.view()?.nearby.contains(&target) {
             return Err("person is not present".into());

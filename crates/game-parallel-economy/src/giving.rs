@@ -530,6 +530,7 @@ pub struct Plan {
 }
 pub struct Context<'a> {
     pub owner: Option<&'a Giving>,
+    pub missions: Option<&'a game_parallel_economy_expeditions::Missions>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
     pub work_requests: Option<&'a game_parallel_autowork::requests::Requests>,
@@ -847,6 +848,8 @@ impl Context<'_> {
                 .par_iter()
                 .map(|row| (row.0, row.1, row.2, row.3)),
         );
+        let mission_choices = crate::mission_deliveries::choices(self, &chosen, opinions.as_ref());
+        chosen.par_extend(mission_choices);
         // A remembered helper can become the target of an unsolicited personal offer.
         // Existing requested help takes priority, so each person still chooses one action.
         let mut already_chosen: Vec<_> = chosen.par_iter().map(|row| row.0).collect();

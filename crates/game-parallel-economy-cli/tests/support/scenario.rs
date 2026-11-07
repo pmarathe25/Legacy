@@ -2363,6 +2363,38 @@ fn player_can_set_a_delivery_objective_through_the_cli() {
     assert_eq!(objective["good"], good);
     assert_eq!(objective["quantity"], 3);
     assert_eq!(objective["delivered"], 0);
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &["delivery-choice", &id.to_string(), "off", "2", "3"]
+        )
+        .unwrap()
+    );
+    let preference = world.snapshot().missions.unwrap().entries[0]
+        .delivery_preference
+        .unwrap();
+    assert!(!preference.willing);
+    assert_eq!(preference.reserve, 2);
+    assert_eq!(preference.pressure_threshold, Some(3));
+    assert!(
+        game_parallel_economy_cli_commands::handle(
+            &mut world,
+            &[
+                "expedition-delivery-choice",
+                "1",
+                &id.to_string(),
+                "on",
+                "0",
+                "none"
+            ]
+        )
+        .unwrap()
+    );
+    let preference = world.snapshot().missions.unwrap().entries[0]
+        .delivery_preference
+        .unwrap();
+    assert!(preference.willing);
+    assert_eq!(preference.pressure_threshold, None);
 }
 
 #[test]

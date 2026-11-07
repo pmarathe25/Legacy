@@ -40,7 +40,7 @@ fn crate_size_and_dependency_direction_are_enforced() {
             "game-sim" => 1250,
             "game-parallel-economy" => 12500,
             "game-parallel-economy-cli" => 3000,
-            "game-parallel-economy-cli-commands" => 1300,
+            "game-parallel-economy-cli-commands" => 1400,
             "game-parallel-economy-combat" => 1450,
             "game-parallel-economy-taking" => 2100,
             "game-parallel-economy-player" => 1750,

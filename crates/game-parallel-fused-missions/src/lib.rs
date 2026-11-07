@@ -274,6 +274,7 @@ macro_rules! mission_methods {
                 party_compliant: false,
                 objective: None,
                 objective_met: false,
+                delivery_preference: None,
                 origin,
                 destination: request.destination,
                 visit_ticks: request.visit_ticks,

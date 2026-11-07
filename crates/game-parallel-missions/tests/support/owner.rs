@@ -11,6 +11,7 @@ fn owner() -> Missions {
             party_compliant: false,
             objective: None,
             objective_met: false,
+            delivery_preference: None,
             origin: 1,
             destination: 2,
             visit_ticks: 2,

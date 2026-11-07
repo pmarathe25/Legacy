@@ -9934,6 +9934,177 @@ fn initially_willing_companion_can_change_their_mind() {
 }
 
 #[test]
+fn autonomous_delivery_remains_a_personal_choice_with_reserves_and_pressure() {
+    use game_parallel_economy_expeditions::Objective;
+    let mut initial = expedition_fixture();
+    initial.people[2].region = Some(2);
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 1,
+        target: 3,
+        trust: 0,
+        affinity: 0,
+        fear: 5,
+        obligation: 0,
+    }];
+    *initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap() = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            good: 2,
+            quantity: 3,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers, fear, obligation| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.opinions.as_mut().unwrap().records[0].fear = fear;
+                state.opinions.as_mut().unwrap().records[0].obligation = obligation;
+                let mut world = Economy::compile(state).unwrap();
+                let id = world
+                    .start_mission(MissionStart {
+                        person: 1,
+                        destination: 2,
+                        visit_ticks: 10,
+                    })
+                    .unwrap();
+                world.set_mission_delivery(1, id, 3, 2, 3).unwrap();
+                assert!(
+                    world
+                        .set_mission_delivery_preference(
+                            1,
+                            id,
+                            Some(MissionDeliveryPreference {
+                                willing: false,
+                                pressure_threshold: Some(0),
+                                reserve: 0,
+                            })
+                        )
+                        .is_err()
+                );
+                world
+                    .set_mission_delivery_preference(
+                        1,
+                        id,
+                        Some(MissionDeliveryPreference {
+                            willing: true,
+                            pressure_threshold: None,
+                            reserve: 1,
+                        }),
+                    )
+                    .unwrap();
+                for _ in 0..8 {
+                    if world.snapshot().people[0].region == Some(2) {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().missions.as_ref().unwrap().entries[0].objective,
+                    Some(Objective::Deliver {
+                        person: 3,
+                        good: 2,
+                        quantity: 3,
+                        delivered: 2
+                    })
+                );
+                let state = world.snapshot();
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut world = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world
+                    .set_mission_delivery_preference(
+                        1,
+                        id,
+                        Some(MissionDeliveryPreference {
+                            willing: false,
+                            pressure_threshold: None,
+                            reserve: 0,
+                        }),
+                    )
+                    .unwrap();
+                world.advance().unwrap();
+                assert_eq!(
+                    world.snapshot().missions.as_ref().unwrap().entries[0].objective,
+                    Some(Objective::Deliver {
+                        person: 3,
+                        good: 2,
+                        quantity: 3,
+                        delivered: 2
+                    })
+                );
+                world
+                    .set_mission_delivery_preference(
+                        1,
+                        id,
+                        Some(MissionDeliveryPreference {
+                            willing: false,
+                            pressure_threshold: Some(3),
+                            reserve: 0,
+                        }),
+                    )
+                    .unwrap();
+                world.advance().unwrap();
+                if fear == 0 && obligation == 0 {
+                    assert_eq!(
+                        world.snapshot().missions.as_ref().unwrap().entries[0].objective,
+                        Some(Objective::Deliver {
+                            person: 3,
+                            good: 2,
+                            quantity: 3,
+                            delivered: 2
+                        })
+                    );
+                    world
+                        .set_mission_delivery_preference(
+                            1,
+                            id,
+                            Some(MissionDeliveryPreference {
+                                willing: true,
+                                pressure_threshold: None,
+                                reserve: 0,
+                            }),
+                        )
+                        .unwrap();
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert!(state.missions.as_ref().unwrap().entries[0].objective_met);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(3))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == 2)
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    3
+                );
+                state
+            })
+    };
+    for (fear, obligation) in [(5, 0), (0, 5), (0, 0)] {
+        assert_eq!(run(1, fear, obligation), run(4, fear, obligation));
+    }
+}
+
+#[test]
 fn expedition_delivery_counts_actual_gifts_and_preserves_partial_progress() {
     use game_parallel_economy_expeditions::Objective;
     let mut initial = expedition_fixture();
@@ -16762,6 +16933,7 @@ fn expedition_workload(count: u64) -> State {
                 phase: MissionPhase::Ready,
                 objective: None,
                 objective_met: false,
+                delivery_preference: None,
             })
             .collect(),
         events: vec![],
@@ -16829,6 +17001,146 @@ fn concentrated_expeditions_benchmark() {
                 "workers={workers} people={count} ticks=1 elapsed={:.6}",
                 samples[1]
             );
+        });
+}
+
+fn autonomous_delivery_workload(count: u64) -> State {
+    use game_parallel_economy_expeditions::Objective;
+    let mut state = expedition_workload(count + 1);
+    state.rules.carrying_capacity = count + 1;
+    for person in &mut state.people {
+        person.region = Some(2);
+    }
+    for container in &mut state.physical.custody.containers {
+        if let Place::Person(person) = container.place {
+            *container = Container::new(
+                Place::Person(person),
+                count + 1,
+                if person <= count {
+                    vec![Lot {
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }]
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap();
+        }
+    }
+    let missions = state.missions.as_mut().unwrap();
+    missions.entries.pop();
+    for mission in &mut missions.entries {
+        mission.phase = MissionPhase::Visiting;
+        mission.visit_ticks = 5;
+        mission.remaining = 5;
+        mission.objective = Some(Objective::Deliver {
+            person: count + 1,
+            good: 2,
+            quantity: 1,
+            delivered: 0,
+        });
+        mission.delivery_preference = Some(MissionDeliveryPreference {
+            willing: true,
+            pressure_threshold: None,
+            reserve: 0,
+        });
+    }
+    state
+}
+
+#[test]
+fn concentrated_autonomous_deliveries_share_real_capacity_deterministically() {
+    let count = 512;
+    let initial = autonomous_delivery_workload(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .missions
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .all(|mission| mission.objective_met)
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(count + 1))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    count
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "manual concentrated autonomous delivery benchmark"]
+fn concentrated_autonomous_delivery_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(100_000u64);
+    let initial = autonomous_delivery_workload(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .missions
+                        .as_ref()
+                        .unwrap()
+                        .entries
+                        .iter()
+                        .all(|mission| mission.objective_met)
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} deliveries={count} elapsed={:.6}",
+                samples[1]
+            );
+            #[cfg(feature = "profile")]
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!(
+                    "{name}: {:.3} ms/call",
+                    measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                );
+            }
         });
 }
 
