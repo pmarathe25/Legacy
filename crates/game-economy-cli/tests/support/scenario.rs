@@ -2,6 +2,103 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_care_uses_real_medicine_and_can_transmit_illness_during_a_project() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, willing: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let world = scenario(
+                    &root.join("content/scenarios/economy-care-project.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut initial = world.snapshot();
+                initial.medical.as_mut().unwrap().policies[0].willing = willing;
+                let medicine = initial
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "medicine")
+                    .unwrap()
+                    .id;
+                let mut world = game_economy::Economy::compile(initial).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let cases = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .disease
+                    .as_ref()
+                    .unwrap()
+                    .cases;
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == game_lots::Place::Person(3))
+                    .unwrap();
+                let held = holder
+                    .lots
+                    .iter()
+                    .filter(|lot| lot.good == medicine)
+                    .map(|lot| lot.quantity)
+                    .sum::<u64>();
+                if !willing {
+                    assert!(cases.iter().any(|case| case.person == 2));
+                    assert!(!cases.iter().any(|case| case.person == 3));
+                    assert_eq!(held, 1);
+                    return state;
+                }
+                assert!(!cases.iter().any(|case| case.person == 2));
+                assert!(
+                    cases
+                        .iter()
+                        .any(|case| case.person == 3 && case.source == Some(2))
+                );
+                assert_eq!(held, 0);
+                assert!(state.physical.work.iter().all(|work| work.job.worker != 2));
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..20 {
+                    if world
+                        .snapshot()
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress == 1)
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress == 1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn playable_community_forms_personal_proposals_without_compelling_acceptance() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers, approve: bool| {

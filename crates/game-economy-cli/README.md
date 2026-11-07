@@ -10,6 +10,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-conflict-project.toml` adds a third person and tactical combat to the same project. A person in a fight cannot simultaneously work, while the other person's project and the rest of the world continue.
 
+`content/scenarios/economy-care-project.toml` adds an infectious illness and a caregiver with real medicine. The caregiver may choose to treat the worker; contact can transmit the illness, and successful treatment consumes the medicine.
+
 `content/scenarios/economy-succession.toml` starts with a dying ruler and an existing pregnancy. Time continues through the succession gap; a successor can arise only from an actual eligible birth, and the embodied guardians must travel to them.
 
 `content/scenarios/economy-community.toml` lets two neighbors encounter shortages and actual help while the player observes as a third person. A neighbor may construct a food-aid proposal from personal experience; the other independently evaluates it and chooses later actions. The proposal itself creates no goods or binding institution.
