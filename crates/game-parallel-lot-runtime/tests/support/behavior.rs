@@ -866,7 +866,7 @@ fn flat_transfers_match_general_runtime_and_rollback() {
             creations: vec![],
         })
         .collect();
-    let run = |workers, reverse| {
+    let run = |workers, reverse, aligned| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
@@ -874,6 +874,12 @@ fn flat_transfers_match_general_runtime_and_rollback() {
             .install(|| {
                 let mut transfers = transfers.clone();
                 let mut actions = actions.clone();
+                if aligned {
+                    for (transfer, action) in transfers.iter_mut().zip(&mut actions) {
+                        transfer.movement.id = transfer.action + 100;
+                        action.movements[0].id = transfer.movement.id;
+                    }
+                }
                 if reverse {
                     transfers.reverse();
                     actions.reverse();
@@ -896,7 +902,9 @@ fn flat_transfers_match_general_runtime_and_rollback() {
                 (flat.snapshot(), events)
             })
     };
-    assert_eq!(run(1, false), run(4, true));
+    for aligned in [false, true] {
+        assert_eq!(run(1, false, aligned), run(4, true, aligned));
+    }
     let mut duplicate = transfers.clone();
     duplicate[1].action = duplicate[0].action;
     assert!(

@@ -131,36 +131,53 @@ impl Runtime {
         };
         let tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
         let physical_actions = custody.transactions().par_iter().copied().collect();
-        let mut keys: Vec<_> = transfers
-            .par_iter()
-            .map(|row| (row.movement.id, row.action, row.movement))
-            .collect();
-        if keys.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
-            keys.par_sort_unstable_by_key(|row| row.0);
-        }
         let (outcomes, spoiled) = custody.take_outcome_batch();
         let (headers, arenas) = outcomes.into_parts();
-        let headers: Vec<ExternalReceiptHeader> = headers
-            .into_par_iter()
-            .chunks(2048)
-            .flat_map_iter(|chunk| {
-                let mut cursor = keys.partition_point(|row| row.0 < chunk[0].id);
-                let keys = &keys;
-                chunk.into_iter().filter_map(move |movement| {
-                    while cursor < keys.len() && keys[cursor].0 < movement.id {
+        let aligned = headers.len() == transfers.len()
+            && headers
+                .par_iter()
+                .zip(transfers.par_iter())
+                .all(|(header, transfer)| header.id == transfer.movement.id);
+        let headers: Vec<ExternalReceiptHeader> = if aligned {
+            headers
+                .into_par_iter()
+                .zip(transfers.par_iter())
+                .map(|(movement, transfer)| ExternalReceiptHeader {
+                    action: transfer.action,
+                    request: transfer.movement,
+                    movement,
+                })
+                .collect()
+        } else {
+            let mut keys: Vec<_> = transfers
+                .par_iter()
+                .map(|row| (row.movement.id, row.action, row.movement))
+                .collect();
+            if keys.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+                keys.par_sort_unstable_by_key(|row| row.0);
+            }
+            headers
+                .into_par_iter()
+                .chunks(2048)
+                .flat_map_iter(|chunk| {
+                    let mut cursor = keys.partition_point(|row| row.0 < chunk[0].id);
+                    let keys = &keys;
+                    chunk.into_iter().filter_map(move |movement| {
+                        while cursor < keys.len() && keys[cursor].0 < movement.id {
+                            cursor += 1;
+                        }
+                        let &(_, action, request) =
+                            keys.get(cursor).filter(|row| row.0 == movement.id)?;
                         cursor += 1;
-                    }
-                    let &(_, action, request) =
-                        keys.get(cursor).filter(|row| row.0 == movement.id)?;
-                    cursor += 1;
-                    Some(ExternalReceiptHeader {
-                        action,
-                        request,
-                        movement,
+                        Some(ExternalReceiptHeader {
+                            action,
+                            request,
+                            movement,
+                        })
                     })
                 })
-            })
-            .collect();
+                .collect()
+        };
         let mut physical_movements = ExternalReceiptBatch::from_parts(headers, arenas);
         physical_movements.sort_by_action();
         Ok(Some(AdvanceDraft {
