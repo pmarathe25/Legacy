@@ -57,6 +57,117 @@ fn quantity(state: &State, place: Place, good: u32, expiry: Option<u64>) -> u64 
 }
 
 #[test]
+fn small_custody_combines_dated_incoming_after_atomic_debits() {
+    let first = Place::Person(1);
+    let second = Place::Person(2);
+    let initial = vec![
+        container(
+            first,
+            20,
+            vec![
+                lot(1, 1, Some(1)),
+                lot(1, 3, Some(2)),
+                lot(1, 4, Some(5)),
+                lot(2, 2, None),
+            ],
+        ),
+        container(second, 20, vec![lot(1, 4, Some(5)), lot(2, 1, None)]),
+    ];
+    let actions = vec![
+        Transaction {
+            id: 1,
+            movements: vec![Movement {
+                id: 1,
+                from: first,
+                to: Some(second),
+                good: 1,
+                quantity: 4,
+            }],
+            creations: vec![],
+        },
+        Transaction {
+            id: 2,
+            movements: vec![Movement {
+                id: 2,
+                from: second,
+                to: Some(first),
+                good: 1,
+                quantity: 2,
+            }],
+            creations: vec![],
+        },
+        Transaction {
+            id: 3,
+            movements: vec![
+                Movement {
+                    id: 3,
+                    from: first,
+                    to: Some(second),
+                    good: 2,
+                    quantity: 1,
+                },
+                Movement {
+                    id: 4,
+                    from: second,
+                    to: None,
+                    good: 9,
+                    quantity: 1,
+                },
+            ],
+            creations: vec![],
+        },
+    ];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = store(initial.clone());
+                let draft = unpartitioned(&world, 1, &actions, vec![], &[], true);
+                assert!(
+                    draft
+                        .transactions()
+                        .iter()
+                        .find(|row| row.id == 1)
+                        .unwrap()
+                        .accepted
+                );
+                assert!(
+                    draft
+                        .transactions()
+                        .iter()
+                        .find(|row| row.id == 2)
+                        .unwrap()
+                        .accepted
+                );
+                assert!(
+                    !draft
+                        .transactions()
+                        .iter()
+                        .find(|row| row.id == 3)
+                        .unwrap()
+                        .accepted
+                );
+                let outcomes = draft.outcomes().to_vec();
+                world.commit(draft).unwrap();
+                let state = world.export();
+                assert_eq!(quantity(&state, first, 1, Some(2)), 0);
+                assert_eq!(quantity(&state, first, 1, Some(5)), 5);
+                assert_eq!(quantity(&state, first, 2, None), 2);
+                assert_eq!(quantity(&state, second, 1, Some(2)), 3);
+                assert_eq!(quantity(&state, second, 1, Some(5)), 3);
+                assert_eq!(quantity(&state, second, 2, None), 1);
+                (state, outcomes)
+            })
+    };
+    let expected = run(1);
+    for workers in [2, 4, 6] {
+        assert_eq!(expected, run(workers));
+    }
+}
+
+#[test]
 fn large_dated_receipt_preserves_neighboring_receipts() {
     let initial = vec![
         container(

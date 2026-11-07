@@ -626,6 +626,58 @@ pub fn prepare(
                     },
                 );
             }
+            // Parallelize across small containers instead of starting several
+            // nested parallel scans for each handful of lots. Large custody
+            // retains the inner-parallel path below.
+            if container.lots.len().saturating_add(a1 - a0) <= 64 {
+                let mut lots = Vec::with_capacity(container.lots.len() + a1 - a0);
+                let mut good = None;
+                let mut remaining = 0;
+                for lot in container.lots.iter().filter(|lot| live(lot, next)) {
+                    if good != Some(lot.good) {
+                        good = Some(lot.good);
+                        remaining = debits[d0..d1]
+                            .binary_search_by_key(&lot.good, |row| row.1)
+                            .ok()
+                            .map_or(0, |i| debits[d0 + i].2);
+                    }
+                    let consumed = remaining.min(lot.quantity);
+                    remaining -= consumed;
+                    if consumed < lot.quantity {
+                        lots.push(Lot {
+                            good: lot.good,
+                            quantity: lot.quantity - consumed,
+                            expires_at: lot.expires_at,
+                        });
+                    }
+                }
+                lots.extend(incoming[a0..a1].iter().map(|row| row.1.clone()));
+                lots.sort_unstable_by_key(key);
+                let mut merged: Vec<Lot> = Vec::with_capacity(lots.len());
+                for lot in lots {
+                    if let Some(last) = merged.last_mut().filter(|last| key(last) == key(&lot)) {
+                        last.quantity =
+                            (u128::from(last.quantity) + u128::from(lot.quantity)) as u64;
+                    } else {
+                        merged.push(lot);
+                    }
+                }
+                let used = merged
+                    .iter()
+                    .map(|lot| u128::from(lot.quantity))
+                    .sum::<u128>() as u64;
+                let next_expiry = merged.iter().filter_map(|lot| lot.expires_at).min();
+                return (
+                    index,
+                    Container {
+                        place: container.place,
+                        capacity: container.capacity,
+                        lots: merged,
+                        used,
+                        next_expiry,
+                    },
+                );
+            }
             let live_lots: Vec<_> = container
                 .lots
                 .par_iter()
