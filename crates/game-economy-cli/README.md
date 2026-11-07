@@ -12,6 +12,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-succession.toml` starts with a dying ruler and an existing pregnancy. Time continues through the succession gap; a successor can arise only from an actual eligible birth, and the embodied guardians must travel to them.
 
+`content/scenarios/economy-community.toml` lets two neighbors encounter shortages and actual help while the player observes as a third person. A neighbor may construct a food-aid proposal from personal experience; the other independently evaluates it and chooses later actions. The proposal itself creates no goods or binding institution.
+
 `content/scenarios/economy-regional-project.toml` moves the timber to a second region. Use `catalog` to find its good ID, then `ask-haul 2 2 1 GOOD 40` to request ongoing help for forty ticks. The carrier's own choices govern the journey and transfer; the request creates neither a contract nor goods. After finding the source empty, this person chooses to return and wait before retrying, leaving time to pursue their own project.
 
 A hauling policy can set `empty_backoff` to a positive number of ticks. When that person actually finds their source empty, they may return toward the destination and wait before another attempt. Omit it to leave that response unconfigured. `haul-empty off|TICKS` changes the current person's preference; the administrative form is `haul-empty PERSON off|TICKS`. An already-started physical journey continues.

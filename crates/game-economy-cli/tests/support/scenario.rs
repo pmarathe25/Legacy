@@ -2,6 +2,87 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_community_forms_personal_proposals_without_compelling_acceptance() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, approve: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let world = scenario(
+                    &root.join("content/scenarios/economy-community.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut initial = world.snapshot();
+                if !approve {
+                    let mind = &mut initial
+                        .giving
+                        .as_mut()
+                        .unwrap()
+                        .practices
+                        .as_mut()
+                        .unwrap()
+                        .minds[1];
+                    mind.approve = false;
+                    mind.willing = false;
+                }
+                let mut world = game_economy::Economy::compile(initial).unwrap();
+                assert!(
+                    game_economy_player::Player::new(&mut world)
+                        .view()
+                        .unwrap()
+                        .practices
+                        .is_none()
+                );
+                world.advance().unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                let mut result = None;
+                for _ in 0..30 {
+                    let state = world.snapshot();
+                    let minds = &state
+                        .giving
+                        .as_ref()
+                        .unwrap()
+                        .practices
+                        .as_ref()
+                        .unwrap()
+                        .minds;
+                    if let Some(item) = minds[1]
+                        .inbox
+                        .iter()
+                        .find(|item| item.decision != game_economy::PracticeDecision::Pending)
+                    {
+                        assert!(!minds[0].authored.is_empty());
+                        result = Some(item.decision);
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    result,
+                    Some(if approve {
+                        game_economy::PracticeDecision::Adopted
+                    } else {
+                        game_economy::PracticeDecision::Declined
+                    }),
+                    "minds={:?}",
+                    state.giving.as_ref().unwrap().practices
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
