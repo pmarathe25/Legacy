@@ -25222,6 +25222,121 @@ fn concentrated_combat(count: u64) -> State {
     state
 }
 
+fn independent_combats(count: u64) -> State {
+    use game_conflict::{Encounter, Fighter, Order};
+    use game_tactics::{Battle, Placement, Point};
+    let mut state = concentrated_combat(count * 2);
+    let combat = state.combat.as_mut().unwrap();
+    combat.conflict.next_id = count + 1;
+    combat.conflict.encounters = (0..count)
+        .map(|i| {
+            let defender = i * 2 + 1;
+            let attacker = defender + 1;
+            Encounter {
+                id: i + 1,
+                region: 1,
+                fighters: vec![
+                    Fighter {
+                        person: defender,
+                        side: 0,
+                        order: Order::Defend,
+                    },
+                    Fighter {
+                        person: attacker,
+                        side: 1,
+                        order: Order::Attack { target: defender },
+                    },
+                ],
+            }
+        })
+        .collect();
+    combat.tactics.battles = (0..count)
+        .map(|i| Battle {
+            encounter: i + 1,
+            region: 1,
+            people: vec![
+                Placement {
+                    person: i * 2 + 1,
+                    position: Point { x: 0, y: 0 },
+                    last_move: None,
+                },
+                Placement {
+                    person: i * 2 + 2,
+                    position: Point { x: 1, y: 0 },
+                    last_move: None,
+                },
+            ],
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn many_independent_tactical_encounters_advance_and_reload_together() {
+    let count = 1024;
+    let initial = independent_combats(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                let events = &saved.combat.as_ref().unwrap().conflict.events;
+                assert_eq!(events.len(), count as usize);
+                assert!(
+                    events
+                        .iter()
+                        .all(|e| e.damage == 1 && e.attacker == e.target + 1)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(world.snapshot().physical.custody.tick, 2);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "manual independent tactical encounters benchmark"]
+fn independent_combat_benchmark() {
+    let count = std::env::var("LEGACY_ENCOUNTERS")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(5000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let initial = independent_combats(count);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut compile_samples = Vec::new();
+        let mut advance_samples = Vec::new();
+        for round in 0..4 {
+            let state = initial.clone();
+            let started = std::time::Instant::now();
+            let mut world = Economy::compile(state).unwrap();
+            let compile = started.elapsed().as_secs_f64();
+            let started = std::time::Instant::now();
+            for _ in 0..3 { world.advance().unwrap(); }
+            let advance = started.elapsed().as_secs_f64();
+            assert_eq!(world.snapshot().combat.unwrap().conflict.events.len(), count as usize);
+            if round > 0 { compile_samples.push(compile); advance_samples.push(advance); }
+        }
+        compile_samples.sort_by(f64::total_cmp);
+        advance_samples.sort_by(f64::total_cmp);
+        println!("workers={workers} encounters={count} people={} ticks=3 compile_median={:.6} advance_median={:.6}", count * 2, compile_samples[1], advance_samples[1]);
+    });
+}
+
 fn concentrated_pursuit(count: u64) -> State {
     use game_economy_combat::{Reaction, Response};
     use game_tactics::{Map, Rules};
@@ -25532,8 +25647,12 @@ fn concentrated_combat_benchmark() {
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut compile_samples = Vec::new();
             for round in 0..4 {
-                let mut world = Economy::compile(initial.clone()).unwrap();
+                let state = initial.clone();
+                let started = std::time::Instant::now();
+                let mut world = Economy::compile(state).unwrap();
+                let compiled = started.elapsed().as_secs_f64();
                 let started = std::time::Instant::now();
                 for _ in 0..3 {
                     world.advance().unwrap();
@@ -25553,13 +25672,15 @@ fn concentrated_combat_benchmark() {
                     );
                 }
                 if round > 0 {
+                    compile_samples.push(compiled);
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
+            compile_samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} disease={disease} ticks=3 elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} disease={disease} ticks=3 compile_median={:.6} elapsed={:.6}",
+                compile_samples[1], samples[1]
             );
         });
 }

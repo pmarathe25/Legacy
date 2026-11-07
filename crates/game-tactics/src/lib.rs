@@ -54,33 +54,84 @@ pub struct Move {
 }
 impl Tactics {
     pub fn validate(&self, now: u64) -> Result<(), &'static str> {
-        use std::collections::HashSet;
-        let mut regions = HashSet::new();
+        use std::collections::{HashMap, HashSet};
+        let mut regions = HashMap::new();
         for map in &self.maps {
             map.validate()?;
-            if !regions.insert(map.region) {
+            if regions.insert(map.region, map).is_some() {
                 return Err("duplicate tactical map");
             }
         }
-        let mut battles = HashSet::new();
-        let mut participants = HashSet::new();
-        for battle in &self.battles {
-            let map = self
-                .maps
-                .iter()
-                .find(|map| map.region == battle.region)
-                .ok_or("missing tactical map")?;
-            let mut locations = HashSet::new();
-            if !battles.insert(battle.encounter)
-                || battle.people.iter().any(|person| {
-                    !participants.insert(person.person)
-                        || !map.open(person.position)
-                        || !locations.insert((person.position.x, person.position.y))
-                        || person.last_move.is_some_and(|tick| tick > now)
+        if self
+            .battles
+            .par_iter()
+            .any(|battle| !regions.contains_key(&battle.region))
+        {
+            return Err("missing tactical map");
+        }
+        let mut battles: Vec<_> = self
+            .battles
+            .par_iter()
+            .map(|battle| battle.encounter)
+            .collect();
+        if battles.par_windows(2).any(|p| p[0] > p[1]) {
+            battles.par_sort_unstable();
+        }
+        if battles.par_windows(2).any(|p| p[0] == p[1]) {
+            return Err("invalid tactical placement");
+        }
+        let mut participants: Vec<_> = if self
+            .battles
+            .par_iter()
+            .any(|battle| battle.people.len() >= 4096)
+        {
+            self.battles
+                .par_iter()
+                .flat_map(|battle| battle.people.par_iter().map(|p| p.person))
+                .collect()
+        } else {
+            self.battles
+                .par_iter()
+                .flat_map_iter(|battle| battle.people.iter().map(|p| p.person))
+                .collect()
+        };
+        if participants.par_windows(2).any(|p| p[0] > p[1]) {
+            participants.par_sort_unstable();
+        }
+        if participants.par_windows(2).any(|p| p[0] == p[1]) {
+            return Err("invalid tactical placement");
+        }
+        let invalid = self.battles.par_iter().any(|battle| {
+            let map = regions[&battle.region];
+            let bad = |person: &Placement| {
+                !map.open(person.position) || person.last_move.is_some_and(|tick| tick > now)
+            };
+            if battle.people.len() <= 32 {
+                battle.people.iter().enumerate().any(|(i, person)| {
+                    bad(person)
+                        || battle.people[..i]
+                            .iter()
+                            .any(|other| other.position == person.position)
                 })
-            {
-                return Err("invalid tactical placement");
+            } else if battle.people.len() >= 4096 {
+                let mut positions: Vec<_> = battle
+                    .people
+                    .par_iter()
+                    .map(|p| (p.position.x, p.position.y))
+                    .collect();
+                if positions.par_windows(2).any(|pair| pair[0] > pair[1]) {
+                    positions.par_sort_unstable();
+                }
+                battle.people.par_iter().any(bad) || positions.par_windows(2).any(|p| p[0] == p[1])
+            } else {
+                let mut positions = HashSet::new();
+                battle.people.iter().any(|person| {
+                    bad(person) || !positions.insert((person.position.x, person.position.y))
+                })
             }
+        });
+        if invalid {
+            return Err("invalid tactical placement");
         }
         Ok(())
     }
@@ -134,24 +185,56 @@ impl Tactics {
         {
             return Err("invalid tactical encounter set".into());
         }
-        for fight in &conflict.encounters {
-            let battle = self
-                .battles
-                .iter()
-                .find(|battle| battle.encounter == fight.id)
-                .ok_or("missing tactical encounter")?;
-            if battle.region != fight.region || battle.people.len() != fight.fighters.len() {
-                return Err("invalid tactical encounter participants".into());
-            }
-            let people: std::collections::HashSet<_> =
-                battle.people.iter().map(|person| person.person).collect();
-            if fight
-                .fighters
-                .iter()
-                .any(|fighter| !people.contains(&fighter.person))
-            {
-                return Err("invalid tactical encounter participants".into());
-            }
+        let mut battles: Vec<_> = self.battles.par_iter().collect();
+        if battles
+            .par_windows(2)
+            .any(|pair| pair[0].encounter > pair[1].encounter)
+        {
+            battles.par_sort_unstable_by_key(|battle| battle.encounter);
+        }
+        let error = conflict
+            .encounters
+            .par_iter()
+            .map(|fight| {
+                let Some(battle) = battles
+                    .binary_search_by_key(&fight.id, |battle| battle.encounter)
+                    .ok()
+                    .map(|index| battles[index])
+                else {
+                    return Some("missing tactical encounter");
+                };
+                if battle.region != fight.region || battle.people.len() != fight.fighters.len() {
+                    return Some("invalid tactical encounter participants");
+                }
+                let missing = if battle.people.len() <= 32 {
+                    fight
+                        .fighters
+                        .iter()
+                        .any(|fighter| !battle.people.iter().any(|p| p.person == fighter.person))
+                } else {
+                    let people: std::collections::HashSet<_> = if battle.people.len() >= 4096 {
+                        battle.people.par_iter().map(|p| p.person).collect()
+                    } else {
+                        battle.people.iter().map(|p| p.person).collect()
+                    };
+                    if fight.fighters.len() >= 4096 {
+                        fight
+                            .fighters
+                            .par_iter()
+                            .any(|fighter| !people.contains(&fighter.person))
+                    } else {
+                        fight
+                            .fighters
+                            .iter()
+                            .any(|fighter| !people.contains(&fighter.person))
+                    }
+                };
+                missing.then_some("invalid tactical encounter participants")
+            })
+            .find_first(Option::is_some)
+            .flatten();
+        if let Some(error) = error {
+            return Err(error.into());
         }
         Ok(())
     }

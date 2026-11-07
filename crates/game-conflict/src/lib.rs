@@ -59,38 +59,83 @@ impl Conflict {
         if self.damage == 0 || self.next_id == 0 {
             return Err("invalid conflict rules".into());
         }
-        let mut ids = HashSet::new();
-        let mut actors = HashSet::new();
-        for fight in &self.encounters {
-            if fight.id >= self.next_id
-                || !ids.insert(fight.id)
-                || !regions.contains(&fight.region)
-                || fight.fighters.len() < 2
-            {
-                return Err("invalid encounter".into());
-            }
-            let sides_by_person: HashMap<_, _> = fight
-                .fighters
+        if self.encounters.par_iter().any(|fight| {
+            fight.id >= self.next_id || !regions.contains(&fight.region) || fight.fighters.len() < 2
+        }) {
+            return Err("invalid encounter".into());
+        }
+        let mut ids: Vec<_> = self.encounters.par_iter().map(|fight| fight.id).collect();
+        if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            ids.par_sort_unstable();
+        }
+        if ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("invalid encounter".into());
+        }
+        let mut actors: Vec<_> = if self
+            .encounters
+            .par_iter()
+            .any(|fight| fight.fighters.len() >= 4096)
+        {
+            self.encounters
                 .par_iter()
-                .map(|fighter| (fighter.person, fighter.side))
-                .collect();
-            let mut sides = HashSet::new();
-            for fighter in &fight.fighters {
-                if !people.contains(&fighter.person) || !actors.insert(fighter.person) {
-                    return Err("invalid encounter actor".into());
-                }
-                sides.insert(fighter.side);
-                if let Order::Attack { target } = fighter.order
-                    && !sides_by_person
-                        .get(&target)
-                        .is_some_and(|&side| side != fighter.side)
-                {
-                    return Err("invalid attack target".into());
-                }
+                .flat_map(|fight| fight.fighters.par_iter().map(|fighter| fighter.person))
+                .collect()
+        } else {
+            self.encounters
+                .par_iter()
+                .flat_map_iter(|fight| fight.fighters.iter().map(|fighter| fighter.person))
+                .collect()
+        };
+        if actors.par_iter().any(|actor| !people.contains(actor)) {
+            return Err("invalid encounter actor".into());
+        }
+        if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            actors.par_sort_unstable();
+        }
+        if actors.par_windows(2).any(|pair| pair[0] == pair[1]) {
+            return Err("invalid encounter actor".into());
+        }
+        let invalid_target = self.encounters.par_iter().any(|fight| {
+            if fight.fighters.len() <= 32 {
+                fight.fighters.iter().any(|fighter| match fighter.order {
+                    Order::Attack { target } => !fight
+                        .fighters
+                        .iter()
+                        .any(|other| other.person == target && other.side != fighter.side),
+                    _ => false,
+                })
+            } else {
+                let sides: HashMap<_, _> = fight
+                    .fighters
+                    .par_iter()
+                    .map(|f| (f.person, f.side))
+                    .collect();
+                fight
+                    .fighters
+                    .par_iter()
+                    .any(|fighter| match fighter.order {
+                        Order::Attack { target } => {
+                            !sides.get(&target).is_some_and(|&side| side != fighter.side)
+                        }
+                        _ => false,
+                    })
             }
-            if sides.len() < 2 {
-                return Err("encounter needs opposing sides".into());
+        });
+        if invalid_target {
+            return Err("invalid attack target".into());
+        }
+        if self.encounters.par_iter().any(|fight| {
+            let first = fight.fighters[0].side;
+            if fight.fighters.len() >= 4096 {
+                fight
+                    .fighters
+                    .par_iter()
+                    .all(|fighter| fighter.side == first)
+            } else {
+                fight.fighters.iter().all(|fighter| fighter.side == first)
             }
+        }) {
+            return Err("encounter needs opposing sides".into());
         }
         if self.events.par_iter().any(|event| {
             event.tick > tick

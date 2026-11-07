@@ -1,5 +1,133 @@
 use super::*;
 #[test]
+fn unordered_independent_battles_validate_against_their_own_encounters() {
+    use game_conflict::{Conflict, Encounter, Fighter, Order};
+    let count = 1024;
+    let rules = Rules {
+        width: 10,
+        height: 10,
+        obstacle_count: 0,
+        max_obstacle_size: 1,
+        movement: 1,
+        attack_range: 1,
+    };
+    let mut tactics = Tactics {
+        maps: vec![Map::generate(1, 1, rules).unwrap()],
+        battles: (1..=count)
+            .rev()
+            .map(|id| Battle {
+                encounter: id,
+                region: 1,
+                people: vec![
+                    Placement {
+                        person: id * 2 - 1,
+                        position: Point { x: 0, y: 0 },
+                        last_move: None,
+                    },
+                    Placement {
+                        person: id * 2,
+                        position: Point { x: 0, y: 1 },
+                        last_move: None,
+                    },
+                ],
+            })
+            .collect(),
+    };
+    let conflict = Conflict {
+        damage: 1,
+        next_id: count + 1,
+        events: vec![],
+        encounters: (1..=count)
+            .map(|id| Encounter {
+                id,
+                region: 1,
+                fighters: vec![
+                    Fighter {
+                        person: id * 2 - 1,
+                        side: 0,
+                        order: Order::Defend,
+                    },
+                    Fighter {
+                        person: id * 2,
+                        side: 1,
+                        order: Order::Attack { target: id * 2 - 1 },
+                    },
+                ],
+            })
+            .collect(),
+    };
+    let regions = [1].into_iter().collect();
+    let validate = |workers, tactics: &Tactics| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| tactics.validate_world(&conflict, &regions, 0))
+    };
+    assert!(validate(1, &tactics).is_ok());
+    assert!(validate(4, &tactics).is_ok());
+    let mut invalid = tactics.clone();
+    invalid.battles[0].people[1].position = invalid.battles[0].people[0].position;
+    assert_eq!(validate(1, &invalid), validate(4, &invalid));
+    assert!(validate(1, &invalid).is_err());
+    invalid = tactics.clone();
+    invalid.battles[0].people[0].last_move = Some(1);
+    assert!(validate(4, &invalid).is_err());
+    invalid = tactics.clone();
+    invalid.battles[0].people[0].person = invalid.battles[1].people[0].person;
+    assert!(validate(4, &invalid).is_err());
+    invalid = tactics.clone();
+    invalid.battles[0].region = 2;
+    assert!(validate(4, &invalid).is_err());
+    tactics.battles[0].encounter = count + 1;
+    assert_eq!(validate(1, &tactics), validate(4, &tactics));
+    assert!(validate(1, &tactics).is_err());
+    tactics.battles[0].encounter = count;
+    tactics.battles[0].people[0].person = count * 2 + 1;
+    assert_eq!(validate(1, &tactics), validate(4, &tactics));
+    assert!(validate(1, &tactics).is_err());
+}
+
+#[test]
+fn large_unordered_battle_positions_are_validated_across_workers() {
+    let rules = Rules {
+        width: 5000,
+        height: 4,
+        obstacle_count: 0,
+        max_obstacle_size: 1,
+        movement: 1,
+        attack_range: 1,
+    };
+    let mut tactics = Tactics {
+        maps: vec![Map::generate(1, 1, rules).unwrap()],
+        battles: vec![Battle {
+            encounter: 1,
+            region: 1,
+            people: (0..4097)
+                .rev()
+                .map(|x| Placement {
+                    person: u64::from(x) + 1,
+                    position: Point { x, y: 0 },
+                    last_move: None,
+                })
+                .collect(),
+        }],
+    };
+    let validate = |workers, state: &Tactics| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| state.validate(0))
+    };
+    assert!(validate(1, &tactics).is_ok());
+    assert!(validate(4, &tactics).is_ok());
+    tactics.battles[0].people[0].position = tactics.battles[0].people[1].position;
+    assert_eq!(validate(1, &tactics), validate(4, &tactics));
+    assert!(validate(1, &tactics).is_err());
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn many_small_battle_index_benchmark() {
     let workers: usize = std::env::var("LEGACY_WORKERS")

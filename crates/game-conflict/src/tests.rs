@@ -1,6 +1,99 @@
 use crate::{Conflict, Encounter, Fighter, Order, finish};
 
 #[test]
+fn validation_rejects_invalid_membership_and_attacks_across_worker_counts() {
+    let count = 256;
+    let good = Conflict {
+        damage: 1,
+        next_id: count + 1,
+        events: vec![],
+        encounters: (1..=count)
+            .rev()
+            .map(|id| Encounter {
+                id,
+                region: 1,
+                fighters: vec![
+                    Fighter {
+                        person: id * 2,
+                        side: 1,
+                        order: Order::Attack { target: id * 2 - 1 },
+                    },
+                    Fighter {
+                        person: id * 2 - 1,
+                        side: 0,
+                        order: Order::Defend,
+                    },
+                ],
+            })
+            .collect(),
+    };
+    let people = (1..=count * 2).collect();
+    let regions = [1].into_iter().collect();
+    let validate = |workers, state: &Conflict| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| state.validate(&people, &regions, 0))
+    };
+    assert!(validate(1, &good).is_ok());
+    assert!(validate(4, &good).is_ok());
+    let mut invalid = good.clone();
+    invalid.encounters[1].id = invalid.encounters[0].id;
+    assert_eq!(validate(1, &invalid).unwrap_err(), "invalid encounter");
+    assert_eq!(validate(1, &invalid), validate(4, &invalid));
+    invalid = good.clone();
+    invalid.encounters[1].fighters[0].person = invalid.encounters[0].fighters[0].person;
+    assert_eq!(
+        validate(1, &invalid).unwrap_err(),
+        "invalid encounter actor"
+    );
+    assert_eq!(validate(1, &invalid), validate(4, &invalid));
+    invalid = good.clone();
+    invalid.encounters[0].fighters[0].order = Order::Attack { target: 999999 };
+    assert_eq!(validate(1, &invalid).unwrap_err(), "invalid attack target");
+    assert_eq!(validate(1, &invalid), validate(4, &invalid));
+    invalid = good.clone();
+    invalid.encounters[0].fighters[0].side = 0;
+    invalid.encounters[0].fighters[0].order = Order::Defend;
+    assert_eq!(
+        validate(1, &invalid).unwrap_err(),
+        "encounter needs opposing sides"
+    );
+    assert_eq!(validate(1, &invalid), validate(4, &invalid));
+}
+
+#[test]
+fn validation_checks_attacks_in_a_large_encounter() {
+    let mut state = Conflict {
+        damage: 1,
+        next_id: 2,
+        events: vec![],
+        encounters: vec![Encounter {
+            id: 1,
+            region: 1,
+            fighters: (1..=64)
+                .map(|person| Fighter {
+                    person,
+                    side: u32::from(person > 32),
+                    order: Order::Attack {
+                        target: if person > 32 { 1 } else { 33 },
+                    },
+                })
+                .collect(),
+        }],
+    };
+    let people = (1..=64).collect();
+    let regions = [1].into_iter().collect();
+    assert!(state.validate(&people, &regions, 0).is_ok());
+    state.encounters[0].fighters[0].order = Order::Attack { target: 2 };
+    assert_eq!(
+        state.validate(&people, &regions, 0).unwrap_err(),
+        "invalid attack target"
+    );
+}
+
+#[test]
 #[ignore = "performance measurement"]
 fn many_small_encounter_actor_index_benchmark() {
     let workers: usize = std::env::var("LEGACY_WORKERS")

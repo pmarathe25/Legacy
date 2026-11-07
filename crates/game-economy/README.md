@@ -18,6 +18,11 @@ People may attempt to take goods from another living person's custody. The targe
 
 The ignored `taking_world_benchmark` measures the complete boundary for `LEGACY_ATTEMPTS` attempts and twice as many people. Set `LEGACY_SHARED` for one target, `LEGACY_RECOVERY` to make targets incapacitated and enable personal recovery, and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings. The benchmark is an isolated synthetic boundary rather than a complete campaign.
 
+The ignored `independent_combat_benchmark` stages many separate two-person
+encounters in the same world and reports import and three-boundary times
+separately. Set `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` to vary the workload.
+It is a synthetic tactical workload, not a complete war or mixed campaign.
+
 The ignored `concentrated_autonomous_delivery_benchmark` measures a full boundary with `LEGACY_PEOPLE` travelers giving to one recipient. Set `LEGACY_CAPACITY` below the population to exercise capacity contention and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings.
 
 The ignored `concentrated_expedition_acquisition_benchmark` measures travelers independently seeking one shared stock. Set `LEGACY_PEOPLE`, `LEGACY_STOCK`, and `LEGACY_WORKERS` to vary population, available goods, and concurrency; `LEGACY_NAMED_STORE` selects a shared named store. Profile timings use the same flags.
