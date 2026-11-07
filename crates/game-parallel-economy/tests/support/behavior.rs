@@ -7152,6 +7152,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -29949,6 +29950,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -30073,6 +30075,105 @@ fn friends_seek_each_other_only_while_both_choose_to_meet() {
 }
 
 #[test]
+fn people_independently_weight_affinity_when_seeking_meetings() {
+    use game_parallel_social::Participant;
+    let mut initial = expedition_fixture();
+    initial.missions = None;
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.rules.affinity = Some(game_parallel_opinions::AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.records = vec![
+        Opinion {
+            observer: 1,
+            target: 2,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: -2,
+        },
+        Opinion {
+            observer: 1,
+            target: 3,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: 5,
+        },
+    ];
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants = (1..=4)
+        .map(|person| Participant {
+            person,
+            willing: true,
+        })
+        .collect();
+    let run = |workers, weight, particular: Option<i32>| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.opinions.as_mut().unwrap().sensitivities = vec![OpinionSensitivity {
+                    person: 1,
+                    social_affinity_weight: weight,
+                    relationship_cases: particular
+                        .map(|value| {
+                            vec![RelationshipCase {
+                                target: 3,
+                                social_affinity_weight: Some(value),
+                                ..Default::default()
+                            }]
+                        })
+                        .unwrap_or_default(),
+                    ..Default::default()
+                }]
+                .into();
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let event = state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events
+                    .iter()
+                    .find(|event| event.a == 1 || event.b == 1)
+                    .unwrap();
+                let expected = if weight == Some(-1) && particular.is_none() {
+                    2
+                } else {
+                    3
+                };
+                assert_eq!((event.a, event.b), (1, expected));
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    for (weight, particular) in [(None, None), (Some(-1), None), (Some(-1), Some(1))] {
+        assert_eq!(run(1, weight, particular), run(4, weight, particular));
+    }
+}
+
+#[test]
 fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
     let mut initial = fixture();
     initial.autowork = None;
@@ -30128,6 +30229,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -30267,7 +30369,24 @@ fn affinity_social_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = affinity_social_workload(count);
+    let mut initial = affinity_social_workload(count);
+    let negative = std::env::var_os("LEGACY_NEGATIVE_SOCIAL").is_some();
+    if negative {
+        let opinions = initial.opinions.as_mut().unwrap();
+        for row in &mut opinions.records {
+            row.affinity = -5;
+        }
+        opinions.sensitivities = opinions
+            .records
+            .iter()
+            .map(|row| OpinionSensitivity {
+                person: row.observer,
+                social_affinity_weight: Some(-1),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into();
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -30278,13 +30397,21 @@ fn affinity_social_benchmark() {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                let events = &world.snapshot().dynamics.unwrap().social.unwrap().events;
+                assert!(
+                    events
+                        .iter()
+                        .all(|event| event.a % 2 == 1 && event.b == event.a + 1)
+                );
+                assert_eq!(events.len(), count as usize / 2);
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                "workers={workers} people={count} negative={negative} ticks=1 elapsed={:.6}",
                 samples[1]
             );
         });
@@ -30312,6 +30439,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_harm_per_damage: Some(2),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -30336,6 +30464,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         harm_per_damage: Some(-1),
         encounter: None,
         pressured_encounter: None,
+        social_affinity_weight: None,
         stock_use: None,
         stock_use_trust: None,
         site_use: None,
@@ -30402,6 +30531,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_harm_per_damage: Some(1),
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -30500,6 +30630,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -30686,6 +30817,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
@@ -30942,6 +31074,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -31102,6 +31235,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -31323,6 +31457,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
@@ -32205,6 +32340,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
@@ -32225,6 +32361,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     harm_per_damage: None,
                     encounter: None,
                     pressured_encounter: None,
+                    social_affinity_weight: None,
                     stock_use: None,
                     stock_use_trust: None,
                     site_use: None,
@@ -32718,6 +32855,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             affinity_harm_per_damage: None,
             affinity_encounter: None,
             affinity_pressured_encounter: None,
+            social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
             affinity_site_destruction: None,
@@ -36276,6 +36414,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: Some(rate),
         affinity_site_destruction: None,
@@ -36299,6 +36438,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         harm_per_damage: None,
         encounter: None,
         pressured_encounter: None,
+        social_affinity_weight: None,
         stock_use: None,
         stock_use_trust: None,
         site_use: Some(6),
@@ -36604,6 +36744,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: Some(5),
@@ -37859,6 +38000,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         affinity_harm_per_damage: None,
         affinity_encounter: None,
         affinity_pressured_encounter: None,
+        social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
         affinity_site_destruction: None,
@@ -37882,6 +38024,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         harm_per_damage: None,
         encounter: None,
         pressured_encounter: None,
+        social_affinity_weight: None,
         stock_use: None,
         stock_use_trust: None,
         site_use: None,
@@ -38716,6 +38859,7 @@ fn concentrated_site_salvage_benchmark() {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                social_affinity_weight: None,
                 affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,

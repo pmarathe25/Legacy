@@ -4597,7 +4597,7 @@ fn authored_site_claims_remain_personal_and_private_to_the_ruler() {
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = format!(
-        "{source}\n[work_sites]\nsites = [{{ id = 7, region = 1, kind = \"workshop\", capacity = 1 }}]\nrequirements = []\n[[dynamics.claims.site_claims]]\nperson = 2\nsite = 7\n[[opinions.sensitivities]]\nperson = 1\naffinity_stock_use = 5\ntrust_stock_use = -3\naffinity_site_use = 3\naffinity_site_destruction = -2\n[[opinions.sensitivities.relationship_cases]]\ntarget = 2\nstock_use = 0\nstock_use_trust = 2\nsite_use = -4\n"
+        "{source}\n[work_sites]\nsites = [{{ id = 7, region = 1, kind = \"workshop\", capacity = 1 }}]\nrequirements = []\n[[dynamics.claims.site_claims]]\nperson = 2\nsite = 7\n[[opinions.sensitivities]]\nperson = 1\naffinity_stock_use = 5\ntrust_stock_use = -3\nsocial_affinity_weight = -1\naffinity_site_use = 3\naffinity_site_destruction = -2\n[[opinions.sensitivities.relationship_cases]]\ntarget = 2\nstock_use = 0\nstock_use_trust = 2\nsocial_affinity_weight = 0\nsite_use = -4\n"
     );
     let path = std::env::temp_dir().join(format!("legacy-site-claims-{}.toml", std::process::id()));
     std::fs::write(&path, configured).unwrap();
@@ -4624,6 +4624,11 @@ fn authored_site_claims_remain_personal_and_private_to_the_ruler() {
     assert_eq!(sensitivity.relationship_cases[0].stock_use, Some(0));
     assert_eq!(sensitivity.trust_stock_use, Some(-3));
     assert_eq!(sensitivity.relationship_cases[0].stock_use_trust, Some(2));
+    assert_eq!(sensitivity.social_affinity_weight, Some(-1));
+    assert_eq!(
+        sensitivity.relationship_cases[0].social_affinity_weight,
+        Some(0)
+    );
     let mut player = game_parallel_economy_player::Player::new(&mut world);
     assert!(player.view().unwrap().site_claims.is_empty());
     player.claim_site(7).unwrap();

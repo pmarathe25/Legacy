@@ -56,6 +56,13 @@ pub fn compile(mut world: World) -> Result<Imported, String> {
     {
         return Err("teaching reactions are not supported by the fused host".into());
     }
+    if world
+        .opinions
+        .as_ref()
+        .is_some_and(|opinions| opinions.tracks_social_affinity_weights())
+    {
+        return Err("personal social affinity weights are not supported by the fused host".into());
+    }
     if let Some(conflict) = &mut world.conflict {
         conflict.encounters.par_iter_mut().for_each(|fight| {
             if fight

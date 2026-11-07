@@ -31,6 +31,43 @@ impl Context<'_> {
             .collect();
         participants.par_sort_unstable();
         let index = opinions.index();
+        let mut weights: Vec<_> = opinions
+            .sensitivities
+            .par_iter()
+            .filter_map(|row| {
+                row.social_affinity_weight
+                    .map(|weight| (row.person, weight))
+            })
+            .collect();
+        if weights.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            weights.par_sort_unstable_by_key(|row| row.0);
+        }
+        let mut cases: Vec<_> = opinions
+            .sensitivities
+            .par_iter()
+            .flat_map_iter(|person| {
+                person.relationship_cases.iter().filter_map(move |case| {
+                    case.social_affinity_weight
+                        .map(|weight| ((person.person, case.target), weight))
+                })
+            })
+            .collect();
+        if cases.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            cases.par_sort_unstable_by_key(|row| row.0);
+        }
+        let score = |observer, target, affinity: i32| {
+            let specific = cases
+                .binary_search_by_key(&(observer, target), |row| row.0)
+                .ok()
+                .map(|index| cases[index].1);
+            let general = || {
+                weights
+                    .binary_search_by_key(&observer, |row| row.0)
+                    .ok()
+                    .map(|index| weights[index].1)
+            };
+            i64::from(affinity) * i64::from(specific.or_else(general).unwrap_or(1))
+        };
         let eligible = |id: u64| {
             let contact = self
                 .contacts
@@ -55,7 +92,7 @@ impl Context<'_> {
             .records
             .par_iter()
             .filter_map(|record| {
-                if record.affinity <= 0 {
+                if score(record.observer, record.target, record.affinity) <= 0 {
                     return None;
                 }
                 let a = record.observer.min(record.target);
@@ -68,8 +105,8 @@ impl Context<'_> {
                 {
                     return None;
                 }
-                let forward = index.affinity(a, b);
-                let reverse = index.affinity(b, a);
+                let forward = score(a, b, index.affinity(a, b));
+                let reverse = score(b, a, index.affinity(b, a));
                 Some((
                     a,
                     b,

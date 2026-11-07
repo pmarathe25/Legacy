@@ -6,6 +6,8 @@ Regional exposure uses finite shelter and authored seasons; seasonal planting, g
 
 Social isolation and sociability influence individual voluntary encounters; personal fear or obligation may independently motivate a response. Newborns can inherit dispositions without inheriting other people’s relationships.
 
+For affinity-guided meetings, each person can give affinity a positive, negative, or zero weight and override it for particular people. The ignored `affinity_social_benchmark` measures this selection; set `LEGACY_NEGATIVE_SOCIAL` to exercise people seeking those they dislike and `LEGACY_WORKERS` to vary concurrency.
+
 Individuals can gather finite or renewable local resources, subject to personal choice or social pressure and actual stock capacity. Only successfully delivered output depletes a site or supports a personal claim. Health can recover under authored rules, with rest providing an additional benefit. Purpose deprivation tracks completed work and blocked goals.
 
 Optional individual wildlife grazes the same finite resource nodes after staged human gathering and regrowth. Each animal ages, feeds, can starve, and may reproduce with a local mate; young inherit diploid traits from actual parents. The animal generation and resource deductions commit atomically. Controlled people can observe local animals without seeing their hidden genetics or pregnancies.

@@ -118,6 +118,15 @@ impl Index<'_> {
     }
 }
 impl Opinions {
+    pub fn tracks_social_affinity_weights(&self) -> bool {
+        self.sensitivities.par_iter().any(|row| {
+            row.social_affinity_weight.is_some()
+                || row
+                    .relationship_cases
+                    .iter()
+                    .any(|case| case.social_affinity_weight.is_some())
+        })
+    }
     pub fn tracks_teaching_reactions(&self) -> bool {
         self.sensitivities.par_iter().any(|row| {
             row.teaching_reaction.is_some()
@@ -339,6 +348,7 @@ impl Opinions {
                 affinity_harm_per_damage: None,
                 affinity_encounter: None,
                 affinity_pressured_encounter: None,
+                social_affinity_weight: None,
                 affinity_stock_use: None,
                 affinity_site_use: None,
                 affinity_site_destruction: None,
