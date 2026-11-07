@@ -249,6 +249,86 @@ fn playable_victim_reports_a_taking_without_deciding_what_the_listener_believes(
 }
 
 #[test]
+fn personal_inquiry_preserves_the_account_and_requires_contact_and_choice() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, willing| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-testimony.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert!(
+                    Player::new(&mut world)
+                        .request_taking_inquiry(2, 1, 1, 10)
+                        .is_err()
+                );
+                world.advance().unwrap();
+                world.advance().unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                world
+                    .set_taking_inquiry_preference(
+                        2,
+                        Some(game_economy::TakingComplaintPreference {
+                            person: 2,
+                            willing,
+                            pressure_threshold: None,
+                        }),
+                    )
+                    .unwrap();
+                Player::new(&mut world)
+                    .request_taking_inquiry(2, 1, 1, 10)
+                    .unwrap();
+                let pending = Player::new(&mut world).taking_inquiries().unwrap()[0].clone();
+                assert_eq!(pending.account.source, Some(2));
+                assert_eq!(
+                    pending.account.outcome,
+                    game_economy::TakingOutcome::Resisted
+                );
+                assert!(world.taking_inquiries(2).is_empty());
+                assert!(
+                    Player::new(&mut world)
+                        .request_taking_inquiry(2, 1, 1, 10)
+                        .is_err()
+                );
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                // The next taking may alter the victim's memory; it must not rewrite the request.
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(
+                    Player::new(&mut world).taking_inquiries().unwrap()[0].account,
+                    pending.account
+                );
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                assert!(Player::new(&mut restored).meet(2).unwrap());
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let inquiry = Player::new(&mut world).taking_inquiries().unwrap()[0].clone();
+                assert_eq!(inquiry.account, pending.account);
+                assert_eq!(
+                    inquiry.decision,
+                    if willing {
+                        game_economy::TakingComplaintDecision::Accepted
+                    } else {
+                        game_economy::TakingComplaintDecision::Declined
+                    }
+                );
+                assert_eq!(world.taking_inquiries(2).len(), 1);
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
 fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

@@ -1522,6 +1522,35 @@ impl<'a> Player<'a> {
     pub fn taking_reports(&self) -> Result<Vec<&game_economy::TakingReport>, String> {
         Ok(self.world.taking_reports(self.current()?))
     }
+    pub fn taking_inquiries(&self) -> Result<Vec<&game_economy::TakingComplaint>, String> {
+        Ok(self.world.taking_inquiries(self.current()?))
+    }
+    pub fn request_taking_inquiry(
+        &mut self,
+        recipient: u64,
+        witness: u64,
+        actor: u64,
+        lifetime: u64,
+    ) -> Result<(), String> {
+        self.world
+            .request_taking_inquiry(self.current()?, recipient, witness, actor, lifetime)
+    }
+    pub fn set_taking_inquiry_preference(
+        &mut self,
+        willing: Option<(bool, Option<u64>)>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        self.world.set_taking_inquiry_preference(
+            person,
+            willing.map(
+                |(willing, pressure_threshold)| game_economy::TakingComplaintPreference {
+                    person,
+                    willing,
+                    pressure_threshold,
+                },
+            ),
+        )
+    }
     pub fn set_taking_report_policy(
         &mut self,
         recipient: u64,

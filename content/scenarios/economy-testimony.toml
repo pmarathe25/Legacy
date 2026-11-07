@@ -130,3 +130,7 @@ claimed_outcome = "resisted"
 [[taking.receptions]]
 person = 3
 stance = "doubt"
+
+[[taking.complaint_preferences]]
+person = 2
+willing = true

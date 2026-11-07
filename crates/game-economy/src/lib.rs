@@ -36,12 +36,13 @@ pub use game_economy_person::travel::{Colocation, Departure, Journey, Route, Tra
 pub use game_economy_promises::{Decision as PromiseDecision, Proposal as PromiseProposal};
 pub use game_economy_skills::Skills;
 pub use game_economy_taking::{
-    Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
-    Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
-    Reception as TakingReception, Report as TakingReport, ReportBelief as TakingReportBelief,
-    ReportDetails as TakingReportDetails, ReportPolicy as TakingReportPolicy,
-    ReportSource as TakingReportSource, Response as TakingResponse, Stance as TakingReportStance,
-    Taking, Witness as TakingWitness,
+    Complaint as TakingComplaint, ComplaintDecision as TakingComplaintDecision,
+    ComplaintPreference as TakingComplaintPreference, Event as TakingEvent, Intent as TakingIntent,
+    Interpretation as TakingInterpretation, Outcome as TakingOutcome, Policy as TakingPolicy,
+    Reaction as TakingReaction, Reception as TakingReception, Report as TakingReport,
+    ReportBelief as TakingReportBelief, ReportDetails as TakingReportDetails,
+    ReportPolicy as TakingReportPolicy, ReportSource as TakingReportSource,
+    Response as TakingResponse, Stance as TakingReportStance, Taking, Witness as TakingWitness,
 };
 pub use game_economy_work::care::DependentCare;
 pub use game_economy_work::sites::{
@@ -1349,6 +1350,113 @@ impl Economy {
             rows.push(rule);
         }
         rows.par_sort_unstable_by_key(|row| row.person);
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Record a request based on an account already held by its author.
+    /// The recipient can decide only after a later actual encounter.
+    pub fn request_taking_inquiry(
+        &mut self,
+        author: u64,
+        recipient: u64,
+        witness: u64,
+        actor: u64,
+        lifetime: u64,
+    ) -> Result<(), String> {
+        game_economy_campaign::preflight!(self);
+        if author == recipient
+            || witness == recipient
+            || lifetime == 0
+            || [author, recipient, witness].into_iter().any(|id| {
+                self.people
+                    .binary_search_by_key(&id, |p| p.id)
+                    .ok()
+                    .is_none_or(|i| self.people[i].health == 0)
+            })
+        {
+            return Err(
+                "inquiry requires distinct living participants and a positive lifetime".into(),
+            );
+        }
+        let mut owner = self.taking.clone().ok_or("taking is disabled")?;
+        let account = owner
+            .complaint_account(author, actor)
+            .ok_or("person has no remembered account")?;
+        let now = self.tick();
+        let expires_at = now
+            .checked_add(lifetime)
+            .ok_or("inquiry deadline overflow")?;
+        if owner.complaints.iter().any(|row| {
+            row.recipient == recipient && row.decision == TakingComplaintDecision::Pending
+        }) {
+            return Err("recipient already has a pending inquiry".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let complaints = owner.complaints_mut();
+        complaints.retain(|row| row.recipient != recipient);
+        complaints.push(TakingComplaint {
+            author,
+            recipient,
+            witness,
+            account,
+            created_at: now,
+            expires_at,
+            decision: TakingComplaintDecision::Pending,
+            decided_at: None,
+        });
+        complaints.sort_unstable_by_key(|row| row.recipient);
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// View only requests authored by or addressed to this person.
+    pub fn taking_inquiries(&self, person: u64) -> Vec<&TakingComplaint> {
+        self.taking.as_ref().map_or_else(Vec::new, |owner| {
+            owner
+                .complaints
+                .iter()
+                .filter(|row| {
+                    row.author == person
+                        || (row.recipient == person
+                            && matches!(
+                                row.decision,
+                                TakingComplaintDecision::Accepted
+                                    | TakingComplaintDecision::Declined
+                            ))
+                })
+                .collect()
+        })
+    }
+    /// Change only this person's response to future inquiry requests.
+    pub fn set_taking_inquiry_preference(
+        &mut self,
+        person: u64,
+        preference: Option<TakingComplaintPreference>,
+    ) -> Result<(), String> {
+        if preference.is_some_and(|p| p.person != person)
+            || self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("invalid inquiry preference".into());
+        }
+        let mut owner = self.taking.clone().ok_or("taking is disabled")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let preferences = owner.complaint_preferences_mut();
+        preferences.retain(|row| row.person != person);
+        if let Some(preference) = preference {
+            preferences.push(preference);
+        }
+        preferences.sort_unstable_by_key(|row| row.person);
         self.taking = Some(owner);
         self.epoch = epoch;
         Ok(())
@@ -5407,6 +5515,37 @@ impl Economy {
                 };
                 report_changes = owner.receive_reports(previous, &contacts, tick, &feelings);
             }
+        }
+        if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking)
+            && previous
+                .complaints
+                .par_iter()
+                .any(|row| row.decision == TakingComplaintDecision::Pending)
+        {
+            let contacts: Vec<_> = dynamics
+                .as_ref()
+                .and_then(|d| d.social.as_ref())
+                .map_or(&[][..], |social| social.events.as_slice())
+                .par_iter()
+                .filter(|event| event.tick == tick)
+                .map(|event| (event.a, event.b))
+                .collect();
+            let opinions = self
+                .opinions
+                .as_ref()
+                .filter(|_| {
+                    previous
+                        .complaint_preferences
+                        .par_iter()
+                        .any(|p| !p.willing && p.pressure_threshold.is_some())
+                })
+                .map(Opinions::index);
+            owner.advance_complaints(previous, &contacts, tick, &|recipient, author| {
+                opinions.as_ref().map_or(0, |index| {
+                    let (fear, obligation) = index.feelings(recipient, author);
+                    fear.saturating_add(obligation)
+                })
+            });
         }
         let mut witnessed_changes = Vec::new();
         if let Some(owner) = &mut next_taking

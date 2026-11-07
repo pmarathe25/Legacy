@@ -13,6 +13,8 @@ fn one() -> u64 {
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default)]
+    pub complaint_preferences: Vec<crate::ComplaintPreference>,
+    #[serde(default)]
     pub policies: Vec<PolicyConfig>,
     #[serde(default)]
     pub responses: Vec<Response>,
@@ -135,6 +137,8 @@ impl Config {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Taking {
+            complaints: Default::default(),
+            complaint_preferences: self.complaint_preferences.into(),
             policies: policies.into(),
             responses: self.responses.into(),
             reactions: self.reactions.into(),

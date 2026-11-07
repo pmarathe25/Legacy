@@ -1,8 +1,13 @@
 //! Individual attempts to take real possessions, with independent resistance.
+mod complaints;
 pub mod content;
 mod reactions;
 mod report_store;
 mod testimony;
+pub use complaints::{
+    Account as ComplaintAccount, Complaint, Decision as ComplaintDecision,
+    Preference as ComplaintPreference,
+};
 use game_economy_person::{Person, travel::Colocation};
 use game_genetics::random;
 use game_lot_runtime::Events;
@@ -80,6 +85,10 @@ pub struct Event {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Taking {
+    #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
+    pub complaints: Arc<Vec<Complaint>>,
+    #[serde(default, skip_serializing_if = "arc_vec_is_empty")]
+    pub complaint_preferences: Arc<Vec<ComplaintPreference>>,
     #[serde(default)]
     pub policies: Arc<Vec<Policy>>,
     #[serde(default)]
@@ -104,8 +113,17 @@ fn detach<T: Clone + Send + Sync>(shared: &mut Arc<Vec<T>>) -> &mut Vec<T> {
     }
     Arc::get_mut(shared).expect("exclusive taking generation")
 }
+fn arc_vec_is_empty<T>(rows: &Arc<Vec<T>>) -> bool {
+    rows.is_empty()
+}
 
 impl Taking {
+    pub fn complaints_mut(&mut self) -> &mut Vec<Complaint> {
+        detach(&mut self.complaints)
+    }
+    pub fn complaint_preferences_mut(&mut self) -> &mut Vec<ComplaintPreference> {
+        detach(&mut self.complaint_preferences)
+    }
     pub fn policies_mut(&mut self) -> &mut Vec<Policy> {
         detach(&mut self.policies)
     }
@@ -149,6 +167,7 @@ impl Taking {
             .collect();
         witnesses.par_sort_unstable();
         if !testimony::valid(self, people, goods, now)
+            || !complaints::valid(self, people, goods, now)
             || actors.par_windows(2).any(|p| p[0] == p[1])
             || responders.par_windows(2).any(|p| p[0] == p[1])
             || reactions.par_windows(2).any(|p| p[0] == p[1])
