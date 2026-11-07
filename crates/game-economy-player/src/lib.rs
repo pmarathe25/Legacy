@@ -1542,6 +1542,10 @@ impl<'a> Player<'a> {
             }),
         )
     }
+    pub fn revise_taking_assessment(&mut self, assessment: Option<i32>) -> Result<(), String> {
+        self.world
+            .revise_taking_assessment(self.current()?, assessment)
+    }
     pub fn request_taking_inquiry(
         &mut self,
         recipient: u64,

@@ -385,6 +385,35 @@ fn accepted_inquiry_records_a_later_witness_statement_privately() {
                 );
                 assert!(!answer.matches_account);
                 assert_eq!(answer.assessment, Some(-7));
+                let before_invalid = world.snapshot();
+                assert!(world.revise_taking_assessment(3, Some(12)).is_err());
+                assert_eq!(world.snapshot(), before_invalid);
+                for owner in [&mut world, &mut restored] {
+                    owner.revise_taking_assessment(2, Some(12)).unwrap();
+                    assert_eq!(
+                        owner.taking_inquiries(2)[0]
+                            .answer
+                            .as_ref()
+                            .unwrap()
+                            .assessment,
+                        Some(12)
+                    );
+                    owner.revise_taking_assessment(2, None).unwrap();
+                    assert_eq!(
+                        owner.taking_inquiries(2)[0]
+                            .answer
+                            .as_ref()
+                            .unwrap()
+                            .assessment,
+                        None
+                    );
+                    owner.revise_taking_assessment(2, Some(-4)).unwrap();
+                }
+                let revised_save = serde_json::to_string(&world.snapshot()).unwrap();
+                let revised =
+                    game_economy::Economy::compile(serde_json::from_str(&revised_save).unwrap())
+                        .unwrap();
+                assert_eq!(revised.snapshot(), world.snapshot());
                 assert!(
                     Player::new(&mut world).taking_inquiries().unwrap()[0]
                         .answer

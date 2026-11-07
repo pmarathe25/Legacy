@@ -32,3 +32,5 @@ The player can set future interpretations with `taking-assessment` followed by
 six scores (matching believed, doubted, unassessed, then different believed,
 doubted, unassessed), using `none` to withhold a judgment, or `clear` to remove
 the preference.
+`taking-assessment-now SCORE|none` lets the current recipient revise or
+withdraw their existing assessment without changing the testimony itself.

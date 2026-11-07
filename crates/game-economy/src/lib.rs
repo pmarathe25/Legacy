@@ -1500,6 +1500,39 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Revise or withdraw only this person's assessment of their received answer.
+    pub fn revise_taking_assessment(
+        &mut self,
+        person: u64,
+        assessment: Option<i32>,
+    ) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut owner = self.taking.clone().ok_or("taking is disabled")?;
+        let index = owner
+            .complaints
+            .iter()
+            .position(|c| c.recipient == person && c.answer.is_some())
+            .ok_or("person has no received inquiry answer")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        owner.complaints_mut()[index]
+            .answer
+            .as_mut()
+            .expect("answer exists")
+            .assessment = assessment;
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Choose whether this person seeks contacts for their own inquiries.
     pub fn set_taking_inquiry_pursuit(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
