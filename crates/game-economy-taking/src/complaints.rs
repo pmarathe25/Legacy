@@ -162,11 +162,11 @@ impl Taking {
         let mut preferences: Vec<_> = previous.complaint_preferences.par_iter().collect();
         preferences.par_sort_unstable_by_key(|row| row.person);
         let reports = &self.reports;
-        self.complaints = previous
+        let mut updates: Vec<_> = previous
             .complaints
             .par_iter()
-            .cloned()
-            .map(|mut complaint| {
+            .enumerate()
+            .filter_map(|(index, complaint)| {
                 if complaint.decision == Decision::Accepted
                     && complaint.answer.is_none()
                     && tick < complaint.expires_at
@@ -178,20 +178,24 @@ impl Taking {
                             && report.received_at == tick
                     })
                 {
-                    complaint.answer = Some(Answer {
+                    let mut next = complaint.clone();
+                    next.answer = Some(Answer {
                         matches_account: report.target == complaint.account.target
                             && report.good == complaint.account.good
                             && report.quantity == complaint.account.quantity
                             && report.claimed_outcome == complaint.account.outcome,
                         report: report.clone(),
                     });
+                    return Some((index, next));
                 }
                 if complaint.decision != Decision::Pending {
-                    return complaint;
+                    return None;
                 }
                 if tick >= complaint.expires_at {
-                    complaint.decision = Decision::Expired;
-                    complaint.decided_at = Some(tick);
+                    let mut next = complaint.clone();
+                    next.decision = Decision::Expired;
+                    next.decided_at = Some(tick);
+                    return Some((index, next));
                 } else if complaint.created_at < tick
                     && pairs
                         .binary_search(&(
@@ -209,18 +213,38 @@ impl Taking {
                             || preference.pressure_threshold.is_some_and(|threshold| {
                                 pressure(complaint.recipient, complaint.author) >= threshold
                             });
-                        complaint.decision = if accepts {
+                        let mut next = complaint.clone();
+                        next.decision = if accepts {
                             Decision::Accepted
                         } else {
                             Decision::Declined
                         };
-                        complaint.decided_at = Some(tick);
+                        next.decided_at = Some(tick);
+                        return Some((index, next));
                     }
                 }
-                complaint
+                None
             })
-            .collect::<Vec<_>>()
-            .into();
+            .collect();
+        if updates.is_empty() {
+            self.complaints = std::sync::Arc::clone(&previous.complaints);
+            return;
+        }
+        if updates.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            updates.par_sort_unstable_by_key(|row| row.0);
+        }
+        let mut next: Vec<_> = previous.complaints.par_iter().cloned().collect();
+        next.par_chunks_mut(1024)
+            .enumerate()
+            .for_each(|(chunk_index, chunk)| {
+                let start = chunk_index * 1024;
+                let first = updates.partition_point(|row| row.0 < start);
+                let last = updates.partition_point(|row| row.0 < start + chunk.len());
+                for (index, replacement) in &updates[first..last] {
+                    chunk[*index - start] = replacement.clone();
+                }
+            });
+        self.complaints = next.into();
     }
 }
 

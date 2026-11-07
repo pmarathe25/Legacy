@@ -116,11 +116,20 @@ fn complaints_require_contact_and_personal_choice_and_expire() {
         run(1, false, 9).complaints[0].decision,
         ComplaintDecision::Pending
     );
+    let unchanged = run(1, false, 9);
+    assert!(std::sync::Arc::ptr_eq(
+        &initial.complaints,
+        &unchanged.complaints
+    ));
     assert_eq!(
         run(1, true, 2).complaints[0].decision,
         ComplaintDecision::Declined
     );
     let accepted = run(1, true, 3);
+    assert!(!std::sync::Arc::ptr_eq(
+        &initial.complaints,
+        &accepted.complaints
+    ));
     assert_eq!(accepted.complaints[0].decision, ComplaintDecision::Accepted);
     assert_eq!(accepted.complaints[0].account, account);
     assert_eq!(accepted, run(4, true, 3));
