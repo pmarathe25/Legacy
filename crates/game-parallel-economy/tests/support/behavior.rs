@@ -10053,6 +10053,144 @@ fn travelers_choose_whether_to_obtain_delivery_goods_and_respect_claims() {
 }
 
 #[test]
+fn travelers_can_obtain_delivery_goods_from_a_local_named_store() {
+    let mut initial = expedition_fixture();
+    initial.people[2].region = Some(2);
+    for place in [Place::Person(1), Place::Stock { region: 1, good: 2 }] {
+        let holder = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == place)
+            .unwrap();
+        *holder = Container::new(place, 10, vec![]).unwrap();
+    }
+    for id in [10, 11] {
+        initial.physical.custody.containers.push(
+            Container::new(
+                Place::Inventory(id),
+                10,
+                vec![Lot {
+                    good: 2,
+                    quantity: 3,
+                    expires_at: None,
+                }],
+            )
+            .unwrap(),
+        );
+    }
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![
+            LocalStore {
+                id: 10,
+                region: 1,
+                name: "local".into(),
+            },
+            LocalStore {
+                id: 11,
+                region: 2,
+                name: "distant".into(),
+            },
+        ],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+    });
+    let run = |workers, willing| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let id = world
+                    .start_mission(MissionStart {
+                        person: 1,
+                        destination: 2,
+                        visit_ticks: 6,
+                    })
+                    .unwrap();
+                world.set_mission_delivery(1, id, 3, 2, 2).unwrap();
+                world
+                    .set_mission_delivery_choices(1, id, true, 1, None)
+                    .unwrap();
+                world
+                    .set_mission_delivery_acquisition(
+                        1,
+                        id,
+                        Some(MissionDeliveryAcquisition {
+                            willing,
+                            pressure_threshold: None,
+                            disregard_claims: false,
+                        }),
+                    )
+                    .unwrap();
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                let amount = |place| {
+                    saved
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == place)
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == 2)
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>()
+                };
+                assert_eq!(amount(Place::Inventory(10)), if willing { 0 } else { 3 });
+                assert_eq!(amount(Place::Inventory(11)), 3);
+                assert_eq!(amount(Place::Person(1)), if willing { 3 } else { 0 });
+                if willing {
+                    let mut restored = Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    for _ in 0..12 {
+                        if world.snapshot().missions.as_ref().unwrap().entries[0].objective_met {
+                            break;
+                        }
+                        world.advance().unwrap();
+                        restored.advance().unwrap();
+                    }
+                    assert_eq!(world.snapshot(), restored.snapshot());
+                    let state = world.snapshot();
+                    assert!(state.missions.as_ref().unwrap().entries[0].objective_met);
+                    let held = |person| {
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place == Place::Person(person))
+                            .unwrap()
+                            .lots
+                            .iter()
+                            .filter(|lot| lot.good == 2)
+                            .map(|lot| lot.quantity)
+                            .sum::<u64>()
+                    };
+                    assert_eq!(held(1), 1);
+                    assert_eq!(held(3), 2);
+                }
+                world.snapshot()
+            })
+    };
+    for willing in [false, true] {
+        assert_eq!(run(1, willing), run(4, willing));
+    }
+}
+
+#[test]
 fn travelers_can_obtain_and_deliver_supplies_across_save_and_reload() {
     let mut initial = expedition_fixture();
     initial.people[2].region = Some(2);
@@ -17241,16 +17379,62 @@ fn autonomous_acquisition_workload(count: u64, available: u64) -> State {
     state
 }
 
+fn use_named_acquisition_store(state: &mut State, available: u64) {
+    let place = Place::Stock { region: 1, good: 2 };
+    let regional = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == place)
+        .unwrap();
+    *regional = Container::new(place, regional.capacity, vec![]).unwrap();
+    state.physical.custody.containers.push(
+        Container::new(
+            Place::Inventory(1),
+            available.max(1),
+            if available == 0 {
+                vec![]
+            } else {
+                vec![Lot {
+                    good: 2,
+                    quantity: available,
+                    expires_at: None,
+                }]
+            },
+        )
+        .unwrap(),
+    );
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    state.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "source".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+    });
+}
+
 #[test]
 fn travelers_compete_for_shared_stock_deterministically() {
     let count = 512u64;
-    let initial = autonomous_acquisition_workload(count, count / 2);
-    let run = |workers| {
+    let run = |workers, named| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
+                let mut initial = autonomous_acquisition_workload(count, count / 2);
+                if named {
+                    use_named_acquisition_store(&mut initial, count / 2);
+                }
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 world.advance().unwrap();
                 let state = world.snapshot();
@@ -17277,7 +17461,9 @@ fn travelers_compete_for_shared_stock_deterministically() {
                 state
             })
     };
-    assert_eq!(run(1), run(4));
+    for named in [false, true] {
+        assert_eq!(run(1, named), run(4, named));
+    }
 }
 
 #[test]
@@ -17296,7 +17482,10 @@ fn concentrated_expedition_acquisition_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(count / 2);
     assert!(count > 0 && available <= count);
-    let initial = autonomous_acquisition_workload(count, available);
+    let mut initial = autonomous_acquisition_workload(count, available);
+    if std::env::var_os("LEGACY_NAMED_STORE").is_some() {
+        use_named_acquisition_store(&mut initial, available);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()

@@ -1,6 +1,7 @@
-//! Individual travelers may choose to obtain missing goods from local stock.
+//! Individual travelers may choose to obtain missing goods from local custody.
 use crate::{MissionPhase, Missions, Objective};
 use game_parallel_economy_claims::{Index as Claims, Use};
+use game_parallel_economy_local_transport::Store;
 use game_parallel_economy_person::Person;
 use game_parallel_lots::{Movement, Place, Transaction, View};
 use game_parallel_opinions::Opinions;
@@ -10,6 +11,7 @@ pub struct Context<'a> {
     pub missions: Option<&'a Missions>,
     pub people: &'a [Person],
     pub view: &'a View,
+    pub stores: &'a [Store],
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a Claims<'a>>,
     pub busy: &'a [u64],
@@ -49,6 +51,23 @@ impl Context<'_> {
             .opinions
             .filter(|_| needs_opinions)
             .map(Opinions::index);
+        let mut store_stock: Vec<_> = self
+            .stores
+            .par_iter()
+            .flat_map_iter(|store| {
+                self.view
+                    .container(Place::Inventory(store.id))
+                    .into_iter()
+                    .flat_map(move |holder| {
+                        holder
+                            .goods
+                            .iter()
+                            .filter(|good| good.quantity > 0)
+                            .map(move |good| (store.region, good.good, store.id, good.quantity))
+                    })
+            })
+            .collect();
+        store_stock.par_sort_unstable_by_key(|row| (row.0, row.1, row.2));
         let mut rows: Vec<_> = entries
             .par_iter()
             .filter_map(|mission| {
@@ -91,24 +110,40 @@ impl Context<'_> {
                         fear.saturating_add(obligation) >= threshold
                     })
                 });
-                if !(choice.willing || pressured)
-                    || (!choice.disregard_claims
-                        && self
-                            .claims
-                            .is_some_and(|index| !index.allows(person.id, region, good)))
-                {
+                if !(choice.willing || pressured) {
                     return None;
                 }
                 let holder = self.view.container(Place::Person(person.id))?;
-                let stock = self.view.container(Place::Stock { region, good })?;
                 let needed = quantity
                     .saturating_sub(delivered)
                     .saturating_add(preference.reserve)
                     .saturating_sub(holder.quantity(good));
-                let quantity = needed
-                    .min(stock.quantity(good))
-                    .min(holder.capacity.saturating_sub(holder.used));
-                (quantity > 0).then_some((person.id, region, good, quantity))
+                let needed = needed.min(holder.capacity.saturating_sub(holder.used));
+                if needed == 0 {
+                    return None;
+                }
+                let regional = Place::Stock { region, good };
+                let allowed = choice.disregard_claims
+                    || self
+                        .claims
+                        .is_none_or(|index| index.allows(person.id, region, good));
+                let regional_quantity = self
+                    .view
+                    .container(regional)
+                    .map_or(0, |stock| stock.quantity(good));
+                let (source, available) = if allowed && regional_quantity > 0 {
+                    (regional, regional_quantity)
+                } else {
+                    let start = store_stock.partition_point(|row| (row.0, row.1) < (region, good));
+                    let end = store_stock.partition_point(|row| (row.0, row.1) <= (region, good));
+                    if start == end {
+                        return None;
+                    }
+                    let selected = start + (person.id % (end - start) as u64) as usize;
+                    let (_, _, id, available) = store_stock[selected];
+                    (Place::Inventory(id), available)
+                };
+                Some((person.id, region, good, needed.min(available), source))
             })
             .collect();
         rows.par_sort_unstable_by_key(|row| row.0);
@@ -117,13 +152,13 @@ impl Context<'_> {
         let actions = rows
             .par_iter()
             .enumerate()
-            .map(|(index, &(person, region, good, quantity))| {
+            .map(|(index, &(person, _, good, quantity, source))| {
                 let id = base + index as u64;
                 Transaction {
                     id,
                     movements: vec![Movement {
                         id,
-                        from: Place::Stock { region, good },
+                        from: source,
                         to: Some(Place::Person(person)),
                         good,
                         quantity,
@@ -136,13 +171,15 @@ impl Context<'_> {
         let uses = rows
             .par_iter()
             .enumerate()
-            .map(|(index, &(person, region, good, quantity))| Use {
-                action: base + index as u64,
-                person,
-                region,
-                good,
-                quantity,
-                job: false,
+            .filter_map(|(index, &(person, region, good, quantity, source))| {
+                matches!(source, Place::Stock { .. }).then_some(Use {
+                    action: base + index as u64,
+                    person,
+                    region,
+                    good,
+                    quantity,
+                    job: false,
+                })
             })
             .collect();
         Ok(Plan {

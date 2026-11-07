@@ -3619,6 +3619,10 @@ impl Economy {
             missions: self.missions.as_ref(),
             people: &self.people,
             view: &view,
+            stores: self
+                .local_transport
+                .as_ref()
+                .map_or(&[], |owner| owner.stores.as_slice()),
             opinions: self.opinions.as_ref(),
             claims: claims.as_ref(),
             busy: &busy,

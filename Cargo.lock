@@ -3476,6 +3476,7 @@ name = "game-parallel-economy-expeditions"
 version = "0.2.0"
 dependencies = [
  "game-parallel-economy-claims",
+ "game-parallel-economy-local-transport",
  "game-parallel-economy-person",
  "game-parallel-lot-runtime",
  "game-parallel-lots",
