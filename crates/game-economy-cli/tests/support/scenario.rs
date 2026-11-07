@@ -180,6 +180,75 @@ fn playable_community_forms_personal_proposals_without_compelling_acceptance() {
 }
 
 #[test]
+fn playable_victim_reports_a_taking_without_deciding_what_the_listener_believes() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-testimony.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                assert!(Player::new(&mut world).taking_reports().unwrap().is_empty());
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let after_taking = world.snapshot();
+                let taking = after_taking.taking.as_ref().unwrap();
+                let seen = taking
+                    .witnesses
+                    .iter()
+                    .find(|w| w.person == 2 && w.actor == 1)
+                    .unwrap()
+                    .last_seen
+                    .expect("victim noticed the taking");
+                assert_eq!(seen.outcome, game_economy::TakingOutcome::Transferred);
+                assert!(Player::new(&mut world).taking_reports().unwrap().is_empty());
+                let saved = serde_json::to_string(&after_taking).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                assert!(Player::new(&mut restored).meet(2).unwrap());
+                let reports = Player::new(&mut world)
+                    .taking_reports()
+                    .unwrap()
+                    .into_iter()
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let account = reports
+                    .iter()
+                    .find(|report| report.speaker == 2 && report.actor == 1)
+                    .expect("the victim shared their account");
+                assert_eq!(account.observed_at, seen.tick);
+                assert_eq!(
+                    account.claimed_outcome,
+                    game_economy::TakingOutcome::Resisted
+                );
+                assert_eq!(account.belief, game_economy::TakingReportBelief::Doubts);
+                let now = world.snapshot();
+                assert_eq!(now, restored.snapshot());
+                assert_eq!(
+                    now.taking
+                        .as_ref()
+                        .unwrap()
+                        .witnesses
+                        .iter()
+                        .find(|w| w.person == 2 && w.actor == 1)
+                        .unwrap()
+                        .last_seen,
+                    Some(seen)
+                );
+                now
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_succession_waits_for_an_actual_birth_and_world_keeps_advancing() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
