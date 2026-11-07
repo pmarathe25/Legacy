@@ -2982,7 +2982,7 @@ impl Economy {
         }
         let giving_busy = (!reserved_can_give.is_empty())
             .then(|| game_parallel_economy_work::exclude_sorted(&busy, &reserved_can_give));
-        let giving_plan = giving::Context {
+        let mut giving_plan = giving::Context {
             owner: self.giving.as_ref(),
             missions: self.missions.as_ref(),
             people: &self.people,
@@ -4233,7 +4233,7 @@ impl Economy {
             actions.extend_from_slice(plan.actions());
         }
         actions.extend_from_slice(&treatment.actions);
-        actions.extend_from_slice(&giving_plan.actions);
+        actions.append(&mut giving_plan.actions);
         actions.extend_from_slice(&medical_plan.actions);
         if let Some(plan) = &hauling_plan {
             actions.extend_from_slice(&plan.actions);
@@ -5593,7 +5593,7 @@ impl Economy {
         }
         if let Some(opinions) = next_opinions
             .as_mut()
-            .filter(|o| !giving_plan.actions.is_empty() && o.tracks_help())
+            .filter(|o| giving_plan.has_actions() && o.tracks_help())
         {
             opinions.learn_help(&giving_plan.help(physical.events()));
         }

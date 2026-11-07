@@ -525,7 +525,7 @@ impl Giving {
 pub struct Plan {
     pub actors: Vec<u64>,
     pub actions: Vec<Transaction>,
-    records: Vec<(u64, u64, u64, u32)>,
+    records: Vec<(u64, u64, u64, u32, u64)>,
     work_gifts: Vec<(u64, u64, u64, u64)>,
 }
 pub struct Context<'a> {
@@ -941,7 +941,7 @@ impl Context<'_> {
         let records = chosen
             .par_iter()
             .enumerate()
-            .map(|(i, row)| (base + i as u64, row.0, row.1, row.2))
+            .map(|(i, row)| (base + i as u64, row.0, row.1, row.2, row.3))
             .collect();
         let mut work_gifts: Vec<_> = work_choices
             .par_iter()
@@ -983,6 +983,9 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    pub(crate) fn has_actions(&self) -> bool {
+        !self.records.is_empty()
+    }
     pub(crate) fn completed_work_gifts(&self, events: &Events) -> Vec<(u64, u64, u64)> {
         let accepted: HashSet<_> = events
             .physical_actions
@@ -997,6 +1000,25 @@ impl Plan {
             .collect()
     }
     pub(crate) fn practice_gifts(&self, events: &Events) -> Vec<(u64, u64, u64, u32, u64)> {
+        if let Some(first) = self.records.first()
+            && let Ok(start) = events
+                .physical_actions
+                .binary_search_by_key(&first.0, |row| row.id)
+            && let Some(end) = start.checked_add(self.records.len())
+            && let Some(outcomes) = events.physical_actions.get(start..end)
+            && self
+                .records
+                .par_iter()
+                .zip(outcomes.par_iter())
+                .all(|(record, outcome)| record.0 == outcome.id)
+        {
+            return self
+                .records
+                .par_iter()
+                .zip(outcomes.par_iter())
+                .filter_map(|(record, outcome)| outcome.accepted.then_some(*record))
+                .collect();
+        }
         let accepted: HashSet<_> = events
             .physical_actions
             .par_iter()
@@ -1005,17 +1027,8 @@ impl Plan {
             .collect();
         self.records
             .par_iter()
-            .zip(self.actions.par_iter())
-            .filter(|(record, _)| accepted.contains(&record.0))
-            .map(|(record, action)| {
-                (
-                    record.0,
-                    record.1,
-                    record.2,
-                    record.3,
-                    action.movements[0].quantity,
-                )
-            })
+            .filter(|record| accepted.contains(&record.0))
+            .copied()
             .collect()
     }
     /// Learn only from food that was actually received in this boundary.
@@ -1103,3 +1116,7 @@ impl Plan {
             .collect()
     }
 }
+
+#[cfg(test)]
+#[path = "../tests/support/giving_receipts.rs"]
+mod receipt_tests;
