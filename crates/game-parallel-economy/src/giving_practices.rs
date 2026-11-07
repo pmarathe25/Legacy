@@ -538,6 +538,43 @@ macro_rules! methods {
                 Ok(())
             })
         }
+        /// Change only this person's optional fear and obligation interpretations.
+        pub fn set_work_outcome_feelings(
+            &mut self,
+            person: u64,
+            kind: &str,
+            fear: Option<i64>,
+            obligation: Option<i64>,
+        ) -> Result<(), String> {
+            self.edit_practice(person, |mind| {
+                let work = mind
+                    .work
+                    .as_mut()
+                    .ok_or("person has no work practice mind")?;
+                let policy = std::sync::Arc::make_mut(work)
+                    .outcome_policy
+                    .as_mut()
+                    .ok_or("configure a work outcome first")?;
+                match kind {
+                    "missing" => {
+                        policy.missing_fear = fear.ok_or("missing reaction requires a value")?;
+                        policy.missing_obligation =
+                            obligation.ok_or("missing reaction requires a value")?;
+                    }
+                    "received" => {
+                        policy.received_fear = fear.ok_or("received reaction requires a value")?;
+                        policy.received_obligation =
+                            obligation.ok_or("received reaction requires a value")?;
+                    }
+                    "partial" => {
+                        policy.partial_fear = fear;
+                        policy.partial_obligation = obligation;
+                    }
+                    _ => return Err("expected missing, received, or partial".into()),
+                }
+                Ok(())
+            })
+        }
         pub fn set_work_practice_reserve(
             &mut self,
             person: u64,

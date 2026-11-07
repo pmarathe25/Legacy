@@ -22,6 +22,18 @@ pub struct Policy {
     pub partial_trust: Option<i32>,
     #[serde(default)]
     pub partial_affinity: Option<i32>,
+    #[serde(default)]
+    pub missing_fear: i64,
+    #[serde(default)]
+    pub missing_obligation: i64,
+    #[serde(default)]
+    pub received_fear: i64,
+    #[serde(default)]
+    pub received_obligation: i64,
+    #[serde(default)]
+    pub partial_fear: Option<i64>,
+    #[serde(default)]
+    pub partial_obligation: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -53,6 +65,8 @@ pub struct Reaction {
     pub target: u64,
     pub trust: i32,
     pub affinity: i32,
+    pub fear: i64,
+    pub obligation: i64,
 }
 
 /// Observe started and finished jobs and directly received gifts. Choices read
@@ -278,8 +292,14 @@ pub fn advance(
                 }
                 let reaction = if experience.received >= experience.proposal.quantity {
                     experience.assessed = true;
-                    work.outcome_policy
-                        .map(|policy| (policy.received_trust, policy.received_affinity))
+                    work.outcome_policy.map(|policy| {
+                        (
+                            policy.received_trust,
+                            policy.received_affinity,
+                            policy.received_fear,
+                            policy.received_obligation,
+                        )
+                    })
                 } else if let Some(policy) = work.outcome_policy.filter(|policy| {
                     tick > experience.started && tick.saturating_sub(completed) >= policy.wait_ticks
                 }) {
@@ -288,21 +308,34 @@ pub fn advance(
                         (
                             policy.partial_trust.unwrap_or(policy.missing_trust),
                             policy.partial_affinity.unwrap_or(policy.missing_affinity),
+                            policy.partial_fear.unwrap_or(policy.missing_fear),
+                            policy
+                                .partial_obligation
+                                .unwrap_or(policy.missing_obligation),
                         )
                     } else {
-                        (policy.missing_trust, policy.missing_affinity)
+                        (
+                            policy.missing_trust,
+                            policy.missing_affinity,
+                            policy.missing_fear,
+                            policy.missing_obligation,
+                        )
                     })
                 } else {
                     None
                 };
-                if let Some((trust, affinity)) =
-                    reaction.filter(|&(trust, affinity)| trust != 0 || affinity != 0)
+                if let Some((trust, affinity, fear, obligation)) =
+                    reaction.filter(|&(trust, affinity, fear, obligation)| {
+                        trust != 0 || affinity != 0 || fear != 0 || obligation != 0
+                    })
                 {
                     reactions.push(Reaction {
                         observer: person.person,
                         target: experience.proposal.author,
                         trust,
                         affinity,
+                        fear,
+                        obligation,
                     });
                 }
             }

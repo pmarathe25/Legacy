@@ -5421,8 +5421,8 @@ impl Economy {
                     target: reaction.target,
                     trust: reaction.trust,
                     affinity: reaction.affinity,
-                    fear: 0,
-                    obligation: 0,
+                    fear: reaction.fear,
+                    obligation: reaction.obligation,
                 })
                 .collect();
             opinions.apply_personal_changes(&changes, tick);

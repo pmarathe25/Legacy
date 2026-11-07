@@ -2706,6 +2706,23 @@ fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
         &["work-outcome", "2", "-1", "2", "4", "-5", "6", "default"],
     )
     .unwrap();
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["work-outcome-feelings", "received", "3", "4"],
+    )
+    .unwrap();
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["work-outcome-feelings", "partial", "default", "-2"],
+    )
+    .unwrap();
+    assert!(
+        game_parallel_economy_cli_commands::player::handle(
+            &mut world,
+            &["work-outcome-feelings", "missing", "default", "3"]
+        )
+        .is_err()
+    );
     let mut player = Player::new(&mut world);
     let configured = player
         .view()
@@ -2716,6 +2733,16 @@ fn player_can_offer_more_than_they_own_and_make_a_separate_work_request() {
         .unwrap()
         .outcome_policy
         .unwrap();
+    assert_eq!(
+        (
+            configured.received_fear,
+            configured.received_obligation,
+            configured.partial_fear,
+            configured.partial_obligation,
+            configured.missing_obligation
+        ),
+        (3, 4, None, Some(-2), 0)
+    );
     assert_eq!(
         (
             configured.missing_trust,

@@ -133,3 +133,5 @@ Use `taking-watch ACTOR on|off` to set personal attention, `taking-report RECIPI
 `taking-compare match|different TRUST AFFINITY FEAR OBLIGATION` sets the current person's reaction toward a speaker when the account matches or differs from their own memory of that event. Use `off` in place of the four changes to clear one reaction. The comparison does not decide whether the speaker intended to mislead.
 
 `work-outcome WAIT MISSING_TRUST MISSING_AFFINITY RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST PARTIAL_AFFINITY` sets a worker's signed reactions to their own work expectations. Use `default` for either partial reaction to reuse the corresponding missing reaction. The shorter existing form still sets only the missing reactions.
+
+`work-outcome-feelings missing|received|partial FEAR OBLIGATION` sets the current person's signed fear and obligation changes for those experiences. For a partial response, `default` reuses that person's missing value; a zero value explicitly suppresses it.

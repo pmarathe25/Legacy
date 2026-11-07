@@ -977,6 +977,15 @@ impl<'a> Player<'a> {
     ) -> Result<(), String> {
         self.world.set_work_outcome_policy(self.current()?, policy)
     }
+    pub fn set_work_outcome_feelings(
+        &mut self,
+        kind: &str,
+        fear: Option<i64>,
+        obligation: Option<i64>,
+    ) -> Result<(), String> {
+        self.world
+            .set_work_outcome_feelings(self.current()?, kind, fear, obligation)
+    }
     pub fn report_practice(
         &mut self,
         listener: u64,

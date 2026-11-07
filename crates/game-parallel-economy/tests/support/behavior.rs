@@ -17102,6 +17102,10 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                 missing_affinity: affinity_change,
                 received_trust: -trust_change,
                 received_affinity: -affinity_change,
+                missing_fear: 2,
+                missing_obligation: 1,
+                received_fear: 4,
+                received_obligation: 3,
                 ..Default::default()
             });
         state.opinions.as_mut().unwrap().rules.affinity =
@@ -17240,6 +17244,10 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
                     .iter()
                     .find(|row| row.observer == 2 && row.target == 1);
                 let actual = opinion.map_or((0, 0), |row| (row.trust, row.affinity));
+                assert_eq!(
+                    opinion.map_or((0, 0), |row| (row.fear, row.obligation)),
+                    if funded { (4, 3) } else { (2, 1) }
+                );
                 assert_eq!(
                     actual,
                     if funded {

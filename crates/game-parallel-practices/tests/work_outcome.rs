@@ -227,6 +227,12 @@ fn individuals_interpret_full_partial_and_missing_receipts_independently() {
     policy.received_affinity = -5;
     policy.partial_trust = Some(6);
     policy.partial_affinity = Some(-7);
+    policy.missing_fear = 2;
+    policy.missing_obligation = -4;
+    policy.received_fear = -2;
+    policy.received_obligation = 4;
+    policy.partial_fear = Some(3);
+    policy.partial_obligation = Some(-5);
     let start = Start {
         requester: 1,
         worker: 2,
@@ -259,18 +265,32 @@ fn individuals_interpret_full_partial_and_missing_receipts_independently() {
                 assert_eq!(
                     reactions
                         .iter()
-                        .map(|r| (r.observer, r.target, r.trust, r.affinity))
+                        .map(|r| (
+                            r.observer,
+                            r.target,
+                            r.trust,
+                            r.affinity,
+                            r.fear,
+                            r.obligation
+                        ))
                         .collect::<Vec<_>>(),
-                    [(2, 1, 6, -7)]
+                    [(2, 1, 6, -7, 3, -5)]
                 );
                 assert!(advance(&partial_reviewed, &[], &[], &[], 6).1.is_empty());
                 let (full_reviewed, reactions) = advance(&partial, &[], &[], &[gift(12, 1, 5)], 5);
                 assert_eq!(
                     reactions
                         .iter()
-                        .map(|r| (r.observer, r.target, r.trust, r.affinity))
+                        .map(|r| (
+                            r.observer,
+                            r.target,
+                            r.trust,
+                            r.affinity,
+                            r.fear,
+                            r.obligation
+                        ))
                         .collect::<Vec<_>>(),
-                    [(2, 1, 4, -5)]
+                    [(2, 1, 4, -5, -2, 4)]
                 );
                 assert!(advance(&full_reviewed, &[], &[], &[], 6).1.is_empty());
                 let (waiting, _) = advance(&completed, &[], &[], &[], 4);
@@ -278,9 +298,16 @@ fn individuals_interpret_full_partial_and_missing_receipts_independently() {
                 assert_eq!(
                     reactions
                         .iter()
-                        .map(|r| (r.observer, r.target, r.trust, r.affinity))
+                        .map(|r| (
+                            r.observer,
+                            r.target,
+                            r.trust,
+                            r.affinity,
+                            r.fear,
+                            r.obligation
+                        ))
                         .collect::<Vec<_>>(),
-                    [(2, 1, -3, 2)]
+                    [(2, 1, -3, 2, 2, -4)]
                 );
                 assert!(
                     advance(&missing, &[], &[], &[gift(13, 2, 6)], 6)
@@ -303,6 +330,12 @@ fn individuals_interpret_full_partial_and_missing_receipts_independently() {
         "received_affinity",
         "partial_trust",
         "partial_affinity",
+        "missing_fear",
+        "missing_obligation",
+        "received_fear",
+        "received_obligation",
+        "partial_fear",
+        "partial_obligation",
     ] {
         policy.remove(key);
     }
@@ -313,6 +346,17 @@ fn individuals_interpret_full_partial_and_missing_receipts_independently() {
         .unwrap()
         .outcome_policy
         .unwrap();
+    assert_eq!(
+        (
+            policy.missing_fear,
+            policy.missing_obligation,
+            policy.received_fear,
+            policy.received_obligation,
+            policy.partial_fear,
+            policy.partial_obligation
+        ),
+        (0, 0, 0, 0, None, None)
+    );
     assert_eq!(
         (
             policy.received_trust,
