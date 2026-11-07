@@ -590,6 +590,396 @@ fn many_witnesses_independently_interpret_one_event_across_workers() {
 }
 
 #[test]
+fn remembered_reports_can_be_false_and_listeners_choose_their_own_belief() {
+    use game_parallel_economy_taking::{
+        Event, Interpretation, Reception, ReportBelief, ReportPolicy, Stance, Witness,
+    };
+    use game_parallel_opinions::SubjectiveReaction;
+    use std::collections::HashSet;
+    let mut previous = Taking {
+        witnesses: vec![Witness {
+            person: 3,
+            actor: 1,
+            notices: true,
+            ..Default::default()
+        }]
+        .into(),
+        report_policies: vec![ReportPolicy {
+            person: 3,
+            recipient: 4,
+            actor: 1,
+            willing: false,
+            pressure_threshold: Some(3),
+            claimed_outcome: Some(Outcome::Resisted),
+        }]
+        .into(),
+        receptions: vec![Reception {
+            person: 4,
+            stance: Stance::TrustAtLeast(2),
+            toward_actor: Interpretation {
+                resisted: Some(SubjectiveReaction {
+                    affinity: -3,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            toward_target: Interpretation {
+                resisted: Some(SubjectiveReaction {
+                    affinity: 2,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    };
+    let event = Event {
+        tick: 1,
+        actor: 1,
+        target: 2,
+        good: 1,
+        quantity: 1,
+        noticed: false,
+        outcome: Outcome::Transferred,
+    };
+    previous.observe_witnesses(&[event], &|_, _| true);
+    let mut next = previous.clone();
+    assert!(
+        next.receive_reports(&previous, &[(3, 4)], 1, &|_, _| (3, 3, 0))
+            .is_empty()
+    );
+    assert!(
+        next.receive_reports(&previous, &[], 2, &|_, _| (3, 3, 0))
+            .is_empty()
+    );
+    assert!(next.reports.is_empty());
+    assert!(
+        next.receive_reports(&previous, &[(3, 4)], 2, &|_, _| (3, 2, 0))
+            .is_empty()
+    );
+    assert!(next.reports.is_empty());
+    let changes = next.receive_reports(&previous, &[(4, 3)], 2, &|_, _| (3, 0, 3));
+    assert_eq!(changes.len(), 2);
+    assert_eq!(
+        (changes[0].observer, changes[0].target, changes[0].affinity),
+        (4, 1, -3)
+    );
+    assert_eq!(
+        (changes[1].observer, changes[1].target, changes[1].affinity),
+        (4, 2, 2)
+    );
+    assert_eq!(
+        previous.witnesses[0].last_seen.unwrap().outcome,
+        Outcome::Transferred
+    );
+    assert_eq!(
+        (next.reports[0].claimed_outcome, next.reports[0].belief),
+        (Outcome::Resisted, ReportBelief::Believes)
+    );
+    assert!(
+        next.validate(&HashSet::from([1, 2, 3, 4]), &HashSet::from([1]), 2)
+            .is_ok()
+    );
+    let saved: Taking = serde_json::from_str(&serde_json::to_string(&next).unwrap()).unwrap();
+    assert_eq!(saved, next);
+    let mut repeated = next.clone();
+    assert!(
+        repeated
+            .receive_reports(&next, &[(3, 4)], 3, &|_, _| (3, 3, 0))
+            .is_empty()
+    );
+    assert_eq!(repeated.reports, next.reports);
+    let mut skeptical = previous.clone();
+    let changes = skeptical.receive_reports(&previous, &[(3, 4)], 2, &|_, _| (-1, 3, 0));
+    assert!(changes.is_empty());
+    assert_eq!(skeptical.reports[0].belief, ReportBelief::Doubts);
+    let mut predisposed = previous.clone();
+    predisposed.receptions_mut()[0].doubted_toward_actor = Interpretation {
+        resisted: Some(SubjectiveReaction {
+            affinity: 5,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut skeptical = predisposed.clone();
+    let changes = skeptical.receive_reports(&predisposed, &[(3, 4)], 2, &|_, _| (-1, 3, 0));
+    assert_eq!(changes.len(), 1);
+    assert_eq!(
+        (changes[0].observer, changes[0].target, changes[0].affinity),
+        (4, 1, 5)
+    );
+}
+
+#[test]
+fn concentrated_reports_are_bounded_and_deterministic() {
+    use game_parallel_economy_taking::{ObservedTaking, ReportPolicy, Witness};
+    let observers = 3..=1026;
+    let previous = Taking {
+        witnesses: observers
+            .clone()
+            .map(|person| Witness {
+                person,
+                actor: 1,
+                notices: true,
+                last_seen: Some(ObservedTaking {
+                    tick: 1,
+                    target: 2,
+                    good: 1,
+                    quantity: 1,
+                    outcome: Outcome::Transferred,
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        report_policies: observers
+            .clone()
+            .map(|person| ReportPolicy {
+                person,
+                recipient: 5000,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    };
+    let contacts: Vec<_> = observers.map(|person| (person, 5000)).collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = previous.clone();
+                assert!(
+                    next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0))
+                        .is_empty()
+                );
+                assert_eq!(next.reports.len(), 64);
+                assert_eq!(next.reports.first().unwrap().speaker, 3);
+                assert_eq!(next.reports.last().unwrap().speaker, 66);
+                next
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn sparse_and_multiple_witness_keys_match_reversed_contacts() {
+    use game_parallel_economy_taking::{ObservedTaking, ReportPolicy, Witness};
+    let observation = ObservedTaking {
+        tick: 1,
+        target: 2,
+        good: 1,
+        quantity: 1,
+        outcome: Outcome::Transferred,
+    };
+    let previous = Taking {
+        witnesses: [(30, 5), (10, 7), (10, 1)]
+            .into_iter()
+            .map(|(person, actor)| Witness {
+                person,
+                actor,
+                notices: true,
+                last_seen: Some(observation),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        report_policies: [(30, 3, 5), (10, 4, 7), (10, 3, 1)]
+            .into_iter()
+            .map(|(person, recipient, actor)| ReportPolicy {
+                person,
+                recipient,
+                actor,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    };
+    let contacts = [(30, 3), (10, 3), (10, 4)];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut next = previous.clone();
+                next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0));
+                assert_eq!(next.reports.len(), 3);
+                assert_eq!(
+                    next.reports
+                        .iter()
+                        .map(|r| (r.recipient, r.speaker, r.actor))
+                        .collect::<Vec<_>>(),
+                    vec![(3, 10, 1), (3, 30, 5), (4, 10, 7)]
+                );
+                next
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn participants_can_report_their_own_experiences_only_if_noticed() {
+    use game_parallel_economy_taking::{Event, ReportPolicy, Witness};
+    use std::collections::HashSet;
+    let mut previous = Taking {
+        witnesses: vec![
+            Witness {
+                person: 1,
+                actor: 1,
+                target: Some(2),
+                notices: true,
+                ..Default::default()
+            },
+            Witness {
+                person: 2,
+                actor: 1,
+                target: Some(2),
+                notices: true,
+                ..Default::default()
+            },
+        ]
+        .into(),
+        report_policies: vec![
+            ReportPolicy {
+                person: 1,
+                recipient: 3,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+            },
+            ReportPolicy {
+                person: 2,
+                recipient: 3,
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+            },
+        ]
+        .into(),
+        ..Default::default()
+    };
+    let mut event = Event {
+        tick: 1,
+        actor: 1,
+        target: 2,
+        good: 1,
+        quantity: 1,
+        noticed: false,
+        outcome: Outcome::Transferred,
+    };
+    assert!(
+        previous
+            .observe_witnesses(std::slice::from_ref(&event), &|_, _| true)
+            .is_empty()
+    );
+    assert!(previous.witnesses[0].last_seen.is_some());
+    assert!(previous.witnesses[1].last_seen.is_none());
+    event.noticed = true;
+    previous.observe_witnesses(&[event], &|_, _| true);
+    assert!(previous.witnesses[1].last_seen.is_some());
+    let mut next = previous.clone();
+    next.receive_reports(&previous, &[(1, 3), (2, 3)], 2, &|_, _| (0, 0, 0));
+    assert_eq!(next.reports.len(), 2);
+    assert_eq!((next.reports[0].speaker, next.reports[1].speaker), (1, 2));
+    assert!(
+        next.validate(&HashSet::from([1, 2, 3]), &HashSet::from([1]), 2)
+            .is_ok()
+    );
+}
+
+#[test]
+#[ignore = "manual personal testimony benchmark"]
+fn testimony_benchmark() {
+    use game_parallel_economy_taking::{ObservedTaking, ReportPolicy, Witness};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(100_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let shared = std::env::var_os("LEGACY_SHARED").is_some();
+    let speakers = 3..count + 3;
+    let recipient = |person| {
+        if shared {
+            2 * count + 10
+        } else {
+            count + person
+        }
+    };
+    let previous = Taking {
+        witnesses: speakers
+            .clone()
+            .map(|person| Witness {
+                person,
+                actor: 1,
+                notices: true,
+                last_seen: Some(ObservedTaking {
+                    tick: 1,
+                    target: 2,
+                    good: 1,
+                    quantity: 1,
+                    outcome: Outcome::Transferred,
+                }),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        report_policies: speakers
+            .clone()
+            .map(|person| ReportPolicy {
+                person,
+                recipient: recipient(person),
+                actor: 1,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    };
+    let contacts: Vec<_> = speakers.map(|person| (person, recipient(person))).collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let mut next = previous.clone();
+                let start = std::time::Instant::now();
+                let changes = next.receive_reports(&previous, &contacts, 2, &|_, _| (0, 0, 0));
+                let elapsed = start.elapsed().as_secs_f64();
+                assert!(changes.is_empty());
+                assert_eq!(next.reports.len(), if shared { 64 } else { count as usize });
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} reports={count} shared={shared} elapsed={:.6}",
+                samples[2]
+            );
+        });
+}
+
+#[test]
 #[ignore = "manual contested taking benchmark"]
 fn taking_selection_benchmark() {
     let count = std::env::var("LEGACY_PEOPLE")

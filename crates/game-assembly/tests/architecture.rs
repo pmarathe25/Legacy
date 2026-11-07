@@ -41,6 +41,7 @@ fn crate_size_and_dependency_direction_are_enforced() {
             "game-parallel-economy" => 12500,
             "game-parallel-economy-cli" => 3000,
             "game-parallel-economy-combat" => 1450,
+            "game-parallel-economy-taking" => 1450,
             "game-parallel-economy-player" => 1500,
             "game-parallel-practices" => 2200,
             "game-parallel-economy-work" => 1450,

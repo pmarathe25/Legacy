@@ -39,7 +39,9 @@ pub use game_parallel_economy_skills::Skills;
 pub use game_parallel_economy_taking::{
     Event as TakingEvent, Intent as TakingIntent, Interpretation as TakingInterpretation,
     Outcome as TakingOutcome, Policy as TakingPolicy, Reaction as TakingReaction,
-    Response as TakingResponse, Taking, Witness as TakingWitness,
+    Reception as TakingReception, Report as TakingReport, ReportBelief as TakingReportBelief,
+    ReportPolicy as TakingReportPolicy, Response as TakingResponse, Stance as TakingReportStance,
+    Taking, Witness as TakingWitness,
 };
 pub use game_parallel_economy_work::care::DependentCare;
 pub use game_parallel_economy_work::sites::{
@@ -1169,8 +1171,7 @@ impl Economy {
         rule: Option<TakingWitness>,
     ) -> Result<(), String> {
         let exists = |id| self.people.binary_search_by_key(&id, |p| p.id).is_ok();
-        if person == actor
-            || !exists(actor)
+        if !exists(actor)
             || self
                 .people
                 .binary_search_by_key(&person, |p| p.id)
@@ -1179,9 +1180,8 @@ impl Economy {
             || rule.as_ref().is_some_and(|r| {
                 r.person != person
                     || r.actor != actor
-                    || r.target.is_some_and(|target| {
-                        target == person || target == actor || !exists(target)
-                    })
+                    || r.target
+                        .is_some_and(|target| target == actor || !exists(target))
             })
         {
             return Err("invalid personal witnessing preference".into());
@@ -1214,6 +1214,90 @@ impl Economy {
             .witnesses
             .iter()
             .find(|row| row.person == person && row.actor == actor)
+    }
+    /// Reports are private to their recipient, and contain statements rather than world facts.
+    pub fn taking_reports(&self, person: u64) -> Vec<&TakingReport> {
+        self.taking.as_ref().map_or_else(Vec::new, |owner| {
+            owner
+                .reports
+                .iter()
+                .filter(|report| report.recipient == person)
+                .collect()
+        })
+    }
+    pub fn set_taking_report_policy(
+        &mut self,
+        person: u64,
+        recipient: u64,
+        actor: u64,
+        policy: Option<TakingReportPolicy>,
+    ) -> Result<(), String> {
+        let exists = |id| self.people.binary_search_by_key(&id, |p| p.id).is_ok();
+        if person == recipient
+            || !exists(recipient)
+            || !exists(actor)
+            || self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            || policy.as_ref().is_some_and(|p| {
+                (p.person, p.recipient, p.actor) != (person, recipient, actor)
+                    || p.pressure_threshold == Some(0)
+            })
+        {
+            return Err("invalid personal reporting preference".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let mut owner = self.taking.clone().unwrap_or_default();
+        let policies = owner.report_policies_mut();
+        policies.retain(|p| (p.person, p.recipient, p.actor) != (person, recipient, actor));
+        if let Some(policy) = policy {
+            policies.push(policy);
+        }
+        policies.par_sort_unstable_by_key(|p| (p.person, p.recipient, p.actor));
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
+    }
+    pub fn taking_reception(&self, person: u64) -> Option<&TakingReception> {
+        self.taking
+            .as_ref()?
+            .receptions
+            .iter()
+            .find(|row| row.person == person)
+    }
+    pub fn set_taking_reception(
+        &mut self,
+        person: u64,
+        rule: Option<TakingReception>,
+    ) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+            || rule.as_ref().is_some_and(|r| r.person != person)
+        {
+            return Err("invalid personal report reception".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        let mut owner = self.taking.clone().unwrap_or_default();
+        let rows = owner.receptions_mut();
+        rows.retain(|row| row.person != person);
+        if let Some(rule) = rule {
+            rows.push(rule);
+        }
+        rows.par_sort_unstable_by_key(|row| row.person);
+        self.taking = Some(owner);
+        self.epoch = epoch;
+        Ok(())
     }
     /// Change a person's voluntary inclination without removing personal pressure.
     pub fn set_taking_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
@@ -5141,6 +5225,41 @@ impl Economy {
         }
         let mut next_market = self.market.clone();
         let mut next_opinions = game_parallel_economy_dynamics::next_opinions(&self.opinions);
+        let mut report_changes = Vec::new();
+        if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking)
+            && !previous.report_policies.is_empty()
+        {
+            let contacts: Vec<_> = dynamics
+                .as_ref()
+                .and_then(|d| d.social.as_ref())
+                .map_or(&[][..], |social| social.events.as_slice())
+                .par_iter()
+                .filter(|event| event.tick == tick)
+                .map(|event| (event.a, event.b))
+                .collect();
+            if !contacts.is_empty() {
+                let needs_feelings = previous
+                    .report_policies
+                    .par_iter()
+                    .any(|policy| !policy.willing && policy.pressure_threshold.is_some())
+                    || previous
+                        .receptions
+                        .par_iter()
+                        .any(|rule| matches!(rule.stance, TakingReportStance::TrustAtLeast(_)));
+                let opinions = self
+                    .opinions
+                    .as_ref()
+                    .filter(|_| needs_feelings)
+                    .map(Opinions::index);
+                let feelings = |listener, speaker| {
+                    opinions.as_ref().map_or((0, 0, 0), |index| {
+                        let (fear, obligation) = index.feelings(speaker, listener);
+                        (index.trust(listener, speaker), fear, obligation)
+                    })
+                };
+                report_changes = owner.receive_reports(previous, &contacts, tick, &feelings);
+            }
+        }
         let mut witnessed_changes = Vec::new();
         if let Some(owner) = &mut next_taking
             && !owner.witnesses.is_empty()
@@ -5178,6 +5297,7 @@ impl Economy {
         if let (Some(opinions), Some(owner)) = (&mut next_opinions, &next_taking) {
             let mut changes = owner.personal_changes(&owner.events);
             changes.par_extend(witnessed_changes);
+            changes.par_extend(report_changes);
             opinions.apply_personal_changes(&changes, tick);
             if opinions.tracks_opposed_action_reactions() {
                 use game_parallel_opinions::{

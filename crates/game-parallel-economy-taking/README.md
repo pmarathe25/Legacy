@@ -8,4 +8,8 @@ Optional `[[taking.witnesses]]` entries describe a person's attention to a parti
 
 Each witness retains their most recent directly noticed taking by that actor. The observation belongs to that person, persists across saves, and is recorded even when relationship tracking is disabled. Changing attention cannot fabricate or rewrite it.
 
+The actor or target can also use a personal attention entry to retain their own experience. A target only remembers an attempt they actually noticed; participants use their own direct reaction rules rather than receiving a second witness reaction.
+
+`[[taking.report_policies]]` lets a person share a previously observed event during an actual encounter, voluntarily or under their own fear/obligation threshold. `claimed_outcome` may differ from their memory. `[[taking.receptions]]` gives each listener their own stance and separate signed responses to claims they believe, doubt, or leave unassessed; hearing a report does not establish its truth. Each recipient retains at most 64 latest reports, and repeated identical claims do not repeatedly change feelings.
+
 `taking_selection_benchmark` exercises independent attempts; set `LEGACY_SHARED` to make all attempts target one person and `LEGACY_WORKERS` or `LEGACY_PEOPLE` to vary execution. It measures proposal selection, not the complete world boundary.

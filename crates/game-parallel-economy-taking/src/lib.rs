@@ -1,6 +1,7 @@
 //! Individual attempts to take real possessions, with independent resistance.
 pub mod content;
 mod reactions;
+mod testimony;
 use game_parallel_economy_person::{Person, travel::Colocation};
 use game_parallel_genetics::random;
 use game_parallel_lot_runtime::Events;
@@ -10,6 +11,7 @@ use rayon::prelude::*;
 pub use reactions::{Interpretation, ObservedTaking, Reaction, Witness};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, sync::Arc};
+pub use testimony::{Belief as ReportBelief, Reception, Report, ReportPolicy, Stance};
 
 /// An individual's possible action; no policy obliges anyone to act.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,6 +85,12 @@ pub struct Taking {
     #[serde(default)]
     pub witnesses: Arc<Vec<Witness>>,
     #[serde(default)]
+    pub report_policies: Arc<Vec<ReportPolicy>>,
+    #[serde(default)]
+    pub receptions: Arc<Vec<Reception>>,
+    #[serde(default)]
+    pub reports: Arc<Vec<Report>>,
+    #[serde(default)]
     pub events: Vec<Event>,
 }
 
@@ -105,6 +113,12 @@ impl Taking {
     }
     pub fn witnesses_mut(&mut self) -> &mut Vec<Witness> {
         detach(&mut self.witnesses)
+    }
+    pub fn report_policies_mut(&mut self) -> &mut Vec<ReportPolicy> {
+        detach(&mut self.report_policies)
+    }
+    pub fn receptions_mut(&mut self) -> &mut Vec<Reception> {
+        detach(&mut self.receptions)
     }
 
     /// Check content and save data before an owner participates in the world.
@@ -130,20 +144,18 @@ impl Taking {
             .map(|w| (w.person, w.actor))
             .collect();
         witnesses.par_sort_unstable();
-        if actors.par_windows(2).any(|p| p[0] == p[1])
+        if !testimony::valid(self, people, goods, now)
+            || actors.par_windows(2).any(|p| p[0] == p[1])
             || responders.par_windows(2).any(|p| p[0] == p[1])
             || reactions.par_windows(2).any(|p| p[0] == p[1])
             || witnesses.par_windows(2).any(|p| p[0] == p[1])
             || self.witnesses.par_iter().any(|w| {
                 !people.contains(&w.person)
                     || !people.contains(&w.actor)
-                    || w.person == w.actor
-                    || w.target.is_some_and(|target| {
-                        target == w.person || target == w.actor || !people.contains(&target)
-                    })
+                    || w.target
+                        .is_some_and(|target| target == w.actor || !people.contains(&target))
                     || w.last_seen.is_some_and(|seen| {
                         seen.tick > now
-                            || seen.target == w.person
                             || seen.target == w.actor
                             || !people.contains(&seen.target)
                             || !goods.contains(&seen.good)

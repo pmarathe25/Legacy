@@ -7,7 +7,7 @@ fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
     let source =
         std::fs::read_to_string(root.join("content/parallel/economy-campaign.toml")).unwrap();
     let configured = format!(
-        "{source}\n[[taking.policies]]\nperson = 2\ntarget = 1\ngood = \"bread\"\nquantity = 1\nwilling = false\npressured_by = 1\npressure_threshold = 2\n\n[[taking.responses]]\nperson = 1\nnotices = true\nresist = false\n\n[[taking.reactions]]\nperson = 1\nother = 2\n[taking.reactions.as_target]\ntransferred = {{ affinity = 3 }}\n\n[[taking.witnesses]]\nperson = 99\nactor = 1\ntarget = 2\nnotices = true\n[taking.witnesses.toward_actor]\ntransferred = {{ affinity = -2 }}\n"
+        "{source}\n[[taking.policies]]\nperson = 2\ntarget = 1\ngood = \"bread\"\nquantity = 1\nwilling = false\npressured_by = 1\npressure_threshold = 2\n\n[[taking.responses]]\nperson = 1\nnotices = true\nresist = false\n\n[[taking.reactions]]\nperson = 1\nother = 2\n[taking.reactions.as_target]\ntransferred = {{ affinity = 3 }}\n\n[[taking.witnesses]]\nperson = 99\nactor = 1\ntarget = 2\nnotices = true\n[taking.witnesses.toward_actor]\ntransferred = {{ affinity = -2 }}\n\n[[taking.report_policies]]\nperson = 99\nrecipient = 2\nactor = 1\nwilling = true\nclaimed_outcome = \"resisted\"\n\n[[taking.receptions]]\nperson = 2\nstance = \"doubt\"\n"
     );
     let path = std::env::temp_dir().join(format!("legacy-taking-{}.toml", std::process::id()));
     std::fs::write(&path, configured).unwrap();
@@ -39,6 +39,21 @@ fn authored_taking_preferences_resolve_goods_and_keep_subjective_reactions() {
             .unwrap()
             .affinity,
         -2
+    );
+    assert_eq!(
+        taking.report_policies[0].claimed_outcome,
+        Some(game_parallel_economy::TakingOutcome::Resisted)
+    );
+    game_parallel_economy_cli_commands::player::handle(&mut world, &["taking-belief", "believe"])
+        .unwrap();
+    game_parallel_economy_cli_commands::player::handle(
+        &mut world,
+        &["taking-report", "2", "99", "truthful"],
+    )
+    .unwrap();
+    assert_eq!(
+        world.taking_reception(1).unwrap().stance,
+        game_parallel_economy::TakingReportStance::Believe
     );
     game_parallel_economy_cli_commands::player::handle(&mut world, &["taking-watch", "2", "on"])
         .unwrap();

@@ -17,7 +17,7 @@ pub struct Interpretation {
     pub conflict: Option<SubjectiveReaction>,
 }
 impl Interpretation {
-    fn get(self, outcome: Outcome) -> Option<SubjectiveReaction> {
+    pub(crate) fn get(self, outcome: Outcome) -> Option<SubjectiveReaction> {
         match outcome {
             Outcome::Transferred => self.transferred,
             Outcome::Unavailable => self.unavailable,
@@ -98,7 +98,7 @@ impl Taking {
                 let event = by_actor[first..last]
                     .iter()
                     .filter(|event| {
-                        rule.person != event.target
+                        (rule.person != event.target || event.noticed)
                             && rule.target.is_none_or(|target| target == event.target)
                     })
                     .max_by_key(|event| {
@@ -171,6 +171,7 @@ impl Taking {
                 by_actor[first..last].iter().flat_map(move |event| {
                     let visible = rule.target.is_none_or(|target| target == event.target)
                         && rule.person != event.target
+                        && rule.person != event.actor
                         && can_observe(rule.person, event.actor);
                     let change = |target, interpretation: Interpretation| {
                         let value = interpretation.get(event.outcome)?;

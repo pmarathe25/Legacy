@@ -1337,6 +1337,53 @@ impl<'a> Player<'a> {
         rule.notices = notices;
         self.world.set_taking_witness(person, actor, Some(rule))
     }
+    pub fn taking_reports(&self) -> Result<Vec<&game_parallel_economy::TakingReport>, String> {
+        Ok(self.world.taking_reports(self.current()?))
+    }
+    pub fn set_taking_report_policy(
+        &mut self,
+        recipient: u64,
+        actor: u64,
+        policy: Option<game_parallel_economy::TakingReportPolicy>,
+    ) -> Result<(), String> {
+        self.world
+            .set_taking_report_policy(self.current()?, recipient, actor, policy)
+    }
+    pub fn set_taking_report(
+        &mut self,
+        recipient: u64,
+        actor: u64,
+        claimed_outcome: Option<game_parallel_economy::TakingOutcome>,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        self.world.set_taking_report_policy(
+            person,
+            recipient,
+            actor,
+            Some(game_parallel_economy::TakingReportPolicy {
+                person,
+                recipient,
+                actor,
+                willing: true,
+                pressure_threshold: None,
+                claimed_outcome,
+            }),
+        )
+    }
+    pub fn set_taking_report_stance(
+        &mut self,
+        stance: game_parallel_economy::TakingReportStance,
+    ) -> Result<(), String> {
+        let person = self.current()?;
+        let mut reception = self.world.taking_reception(person).cloned().unwrap_or(
+            game_parallel_economy::TakingReception {
+                person,
+                ..Default::default()
+            },
+        );
+        reception.stance = stance;
+        self.world.set_taking_reception(person, Some(reception))
+    }
     pub fn gather(&mut self, node: u64) -> Result<bool, String> {
         if !self
             .view()?

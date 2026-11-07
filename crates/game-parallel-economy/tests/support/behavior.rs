@@ -21383,6 +21383,184 @@ fn nearby_witnesses_interpret_a_taking_independently() {
 }
 
 #[test]
+fn witnessed_taking_can_be_misreported_during_a_later_encounter() {
+    use game_parallel_economy_taking::{Reception, ReportBelief, ReportPolicy, Stance, Witness};
+    use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    let mut dynamics = disease_workload(4).dynamics.unwrap();
+    dynamics.disease = None;
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .retain(|p| p.person == 2 || p.person == 3);
+    initial.dynamics = Some(dynamics);
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    initial.taking = Some(Taking {
+        witnesses: vec![Witness {
+            person: 3,
+            actor: 1,
+            target: Some(4),
+            notices: true,
+            ..Default::default()
+        }]
+        .into(),
+        report_policies: vec![ReportPolicy {
+            person: 3,
+            recipient: 2,
+            actor: 1,
+            willing: true,
+            pressure_threshold: None,
+            claimed_outcome: Some(TakingOutcome::Resisted),
+        }]
+        .into(),
+        receptions: vec![Reception {
+            person: 2,
+            stance: Stance::Believe,
+            toward_actor: TakingInterpretation {
+                resisted: Some(SubjectiveReaction {
+                    affinity: -3,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(
+                    world.take_possessions(1, 4, 1, 1, false).unwrap(),
+                    TakingOutcome::Transferred
+                );
+                assert_eq!(
+                    world
+                        .taking_witness(3, 1)
+                        .unwrap()
+                        .last_seen
+                        .unwrap()
+                        .outcome,
+                    TakingOutcome::Transferred
+                );
+                assert!(world.taking_reports(2).is_empty());
+                world.advance().unwrap();
+                let reports = world.taking_reports(2);
+                assert_eq!(reports.len(), 1);
+                assert_eq!(
+                    (
+                        reports[0].speaker,
+                        reports[0].actor,
+                        reports[0].target,
+                        reports[0].claimed_outcome,
+                        reports[0].belief
+                    ),
+                    (3, 1, 4, TakingOutcome::Resisted, ReportBelief::Believes)
+                );
+                assert!(world.taking_reports(1).is_empty());
+                let saved = world.snapshot();
+                assert_eq!(saved.opinions.as_ref().unwrap().index().affinity(2, 1), -3);
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), saved);
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_target_can_report_an_attempt_they_noticed() {
+    use game_parallel_economy_taking::{Reception, ReportPolicy, Stance, Witness};
+    let mut initial = hunting_fixture();
+    initial.hunting = None;
+    initial.fauna = None;
+    initial.people[0].controlled = true;
+    let mut dynamics = disease_workload(4).dynamics.unwrap();
+    dynamics.disease = None;
+    dynamics
+        .social
+        .as_mut()
+        .unwrap()
+        .participants
+        .retain(|p| p.person == 2 || p.person == 4);
+    initial.dynamics = Some(dynamics);
+    initial.taking = Some(Taking {
+        responses: vec![TakingResponse {
+            person: 4,
+            notices: true,
+            resist: false,
+            resist_if_fear_at_least: None,
+            resist_if_affinity_at_least: None,
+            resist_if_affinity_at_most: None,
+        }]
+        .into(),
+        witnesses: vec![Witness {
+            person: 4,
+            actor: 1,
+            target: Some(4),
+            notices: true,
+            ..Default::default()
+        }]
+        .into(),
+        report_policies: vec![ReportPolicy {
+            person: 4,
+            recipient: 2,
+            actor: 1,
+            willing: true,
+            pressure_threshold: None,
+            claimed_outcome: None,
+        }]
+        .into(),
+        receptions: vec![Reception {
+            person: 2,
+            stance: Stance::Believe,
+            ..Default::default()
+        }]
+        .into(),
+        ..Default::default()
+    });
+    for notices in [false, true] {
+        let mut state = initial.clone();
+        state.taking.as_mut().unwrap().responses_mut()[0].notices = notices;
+        let mut world = Economy::compile(state).unwrap();
+        assert_eq!(
+            world.take_possessions(1, 4, 1, 1, false).unwrap(),
+            TakingOutcome::Transferred
+        );
+        assert_eq!(
+            world.taking_witness(4, 1).unwrap().last_seen.is_some(),
+            notices
+        );
+        world.advance().unwrap();
+        assert_eq!(world.taking_reports(2).len(), usize::from(notices));
+        if notices {
+            assert_eq!(world.taking_reports(2)[0].speaker, 4);
+        }
+    }
+}
+
+#[test]
 fn missing_goods_do_not_trigger_an_interpretation_of_a_successful_taking() {
     use game_parallel_opinions::{AffinityRules, SubjectiveReaction};
     let mut initial = hunting_fixture();
