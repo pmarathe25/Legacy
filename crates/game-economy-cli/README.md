@@ -32,6 +32,8 @@ Set `LEGACY_ENCOUNTER_REPORTS=1` to give every initial person a knowledge mind t
 
 Set `LEGACY_TAKING_INQUIRIES=1` to stage a boundary of real takings, create personal requests only from noticed accounts, and let the selected individuals choose to seek relevant contacts during subsequent mixed campaign boundaries. The output distinguishes accepted, declined, and expired requests as well as witness answers. A pending request count alone does not measure active decision or testimony throughput. This option changes the initial state and fingerprint.
 
+With inquiries enabled, `LEGACY_INQUIRY_ASSESSMENTS=1` also gives each recipient an individual interpretation for matching, unassessed testimony. The output counts completed personal assessments; this option changes the initial state and fingerprint.
+
 For a sparse-update comparison, also set `LEGACY_DISABLE_INQUIRY_PURSUIT=1`; people then do not deliberately seek these contacts, though incidental encounters can still occur. The benchmark reports whether pursuit is enabled.
 
 `LEGACY_SOCIAL_HISTORY_STRESS=1` creates an artificial longevity workload by extending lifespans and disabling hunger growth, exposure damage, purpose damage, and exhaustion damage. It reports living people, retained social relationships, directed opinions, and taking reports. This isolates growing history costs; it is not a balanced or mature economy. `LEGACY_SAMPLES` sets the number of timed samples after one warm-up (default three).
