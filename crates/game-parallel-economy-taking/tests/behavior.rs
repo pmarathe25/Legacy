@@ -327,6 +327,32 @@ fn a_hot_target_and_crossed_attempts_remain_disjoint_across_workers() {
 }
 
 #[test]
+fn distinct_targets_do_not_let_one_actor_take_twice() {
+    let people = people(5);
+    let run = |workers, reverse: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut policies = vec![policy(1, 3), policy(1, 4), policy(2, 5)];
+                if reverse {
+                    policies.reverse();
+                }
+                let owner = Taking {
+                    policies: policies.into(),
+                    ..Default::default()
+                };
+                let result = plan(&owner, &people, None);
+                assert_eq!(result.actors, vec![1, 2]);
+                assert_eq!(result.actions.len(), 2);
+                result.actions
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+}
+
+#[test]
 fn barriers_and_controlled_intent_have_physical_priority() {
     let mut people = people(3);
     people[0].controlled = true;

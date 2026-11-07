@@ -378,21 +378,26 @@ impl Context<'_> {
         }
         // Resolve a shared target with a parallel reduction before constructing
         // participant claims. A hot target does not serialize all contenders.
-        let mut choices: Vec<_> = choices
-            .par_chunk_by(|a, b| a.2.target == b.2.target)
-            .map(|group| {
-                if group.len() == 1 {
-                    group[0]
-                } else {
-                    *group
-                        .par_iter()
-                        .min_by_key(|(manual, priority, intent, _)| {
-                            (!manual, *priority, intent.actor, intent.target)
-                        })
-                        .expect("nonempty target group")
-                }
-            })
-            .collect();
+        if choices
+            .par_windows(2)
+            .any(|pair| pair[0].2.target == pair[1].2.target)
+        {
+            choices = choices
+                .par_chunk_by(|a, b| a.2.target == b.2.target)
+                .map(|group| {
+                    if group.len() == 1 {
+                        group[0]
+                    } else {
+                        *group
+                            .par_iter()
+                            .min_by_key(|(manual, priority, intent, _)| {
+                                (!manual, *priority, intent.actor, intent.target)
+                            })
+                            .expect("nonempty target group")
+                    }
+                })
+                .collect();
+        }
         let disjoint_ranges = choices
             .first()
             .zip(choices.last())
@@ -467,20 +472,25 @@ impl Context<'_> {
             pending.par_sort_unstable_by_key(|p| (p.intent.actor, p.intent.target));
         }
         // An unnoticed or unopposed target remains free to pursue other work.
-        let mut actors: Vec<_> = pending
-            .par_iter()
-            .flat_map_iter(|p| {
-                std::iter::once(p.intent.actor).chain(p.opposed.then_some(p.intent.target))
-            })
-            .collect();
-        if actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        let unopposed = pending.par_iter().all(|row| !row.opposed);
+        let mut actors: Vec<_> = if unopposed {
+            pending.par_iter().map(|p| p.intent.actor).collect()
+        } else {
+            pending
+                .par_iter()
+                .flat_map_iter(|p| {
+                    std::iter::once(p.intent.actor).chain(p.opposed.then_some(p.intent.target))
+                })
+                .collect()
+        };
+        if !unopposed && actors.par_windows(2).any(|pair| pair[0] > pair[1]) {
             actors.par_sort_unstable();
         }
         let mut targets: Vec<_> = pending.par_iter().map(|p| p.intent.target).collect();
         if targets.par_windows(2).any(|pair| pair[0] > pair[1]) {
             targets.par_sort_unstable();
         }
-        let actions: Vec<_> = if pending.par_iter().all(|row| !row.opposed) {
+        let actions: Vec<_> = if unopposed {
             let count = u64::try_from(pending.len()).map_err(|_| "taking action overflow")?;
             self.action_base
                 .checked_add(count)
