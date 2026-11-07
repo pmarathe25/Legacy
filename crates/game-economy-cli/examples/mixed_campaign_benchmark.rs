@@ -23,6 +23,7 @@ fn main() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(20);
     let encounter_reports = std::env::var_os("LEGACY_ENCOUNTER_REPORTS").is_some();
+    let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
     assert!(people > 4 && ticks > 0 && reproduction <= 100);
     let profile =
         std::fs::read_to_string(root.join("content/scenarios/campaign-population.toml")).unwrap();
@@ -96,6 +97,52 @@ fn main() {
             }
             knowledge.minds.sort_unstable_by_key(|mind| mind.person);
         }
+        if taking_inquiries {
+            use game_economy_taking::{Complaint, ComplaintAccount, ComplaintDecision, ComplaintPreference, Policy, ReportPolicy, Response, Taking, Witness};
+            let bread = initial.physical.goods.iter().find(|good| good.name == "bread").unwrap().id;
+            let mut groups = Vec::new();
+            for region in [1, 2] {
+                let ids: Vec<_> = initial.people.iter().filter(|p| p.id >= 1000 && p.region == Some(region)).map(|p| p.id).collect();
+                groups.extend(ids.as_chunks::<3>().0.iter().map(|&[a, b, c]| (a, b, c)));
+            }
+            let policies = groups.iter().map(|&(actor, target, _)| Policy {
+                person: actor, target, good: bread, quantity: 1, willing: true, interval: 1,
+                escalate: false, pressured_by: None, pressure_threshold: None,
+                affinity_at_least: None, affinity_at_most: None,
+            }).collect::<Vec<_>>();
+            let responses = groups.iter().map(|&(_, target, _)| Response {
+                person: target, notices: true, resist: false,
+                resist_if_fear_at_least: None, resist_if_affinity_at_least: None, resist_if_affinity_at_most: None,
+            }).collect::<Vec<_>>();
+            let witnesses = groups.iter().map(|&(actor, target, _)| Witness {
+                person: target, actor, notices: true, ..Default::default()
+            }).collect::<Vec<_>>();
+            let report_policies = groups.iter().map(|&(actor, target, recipient)| ReportPolicy {
+                person: target, recipient, actor, willing: true, pressure_threshold: None,
+                claimed_outcome: None, source: Default::default(), heard_from: None, details: None,
+            }).collect::<Vec<_>>();
+            let complaint_preferences = groups.iter().map(|&(_, _, recipient)| ComplaintPreference {
+                person: recipient, willing: true, pressure_threshold: None,
+            }).collect::<Vec<_>>();
+            initial.taking = Some(Taking { policies: policies.into(), responses: responses.into(), witnesses: witnesses.into(), report_policies: report_policies.into(), complaint_preferences: complaint_preferences.into(), ..Default::default() });
+            let mut staged = game_economy::Economy::compile(initial).unwrap();
+            staged.advance().unwrap();
+            initial = staged.snapshot();
+            let now = initial.physical.custody.tick;
+            let expires_at = now.checked_add(ticks as u64 + 2).unwrap();
+            let taking = initial.taking.as_mut().unwrap();
+            let observed: std::collections::HashMap<_, _> = taking.witnesses.iter().filter_map(|w| w.last_seen.map(|seen| ((w.actor, w.person), seen))).collect();
+            let complaints = groups.iter().filter_map(|&(actor, author, recipient)| {
+                let seen = observed.get(&(actor, author))?;
+                Some(Complaint { author, recipient, witness: author, account: ComplaintAccount {
+                    actor, target: seen.target, good: seen.good, quantity: seen.quantity,
+                    observed_at: seen.tick, outcome: seen.outcome, source: None,
+                }, created_at: now, expires_at, decision: ComplaintDecision::Pending, decided_at: None, answer: None })
+            }).collect::<Vec<_>>();
+            assert!(!complaints.is_empty(), "setup must produce actual witnessed takings");
+            taking.complaints = complaints.into();
+            taking.policies_mut().iter_mut().for_each(|policy| policy.willing = false);
+        }
         let mut samples = Vec::new();
         let mut expected = None;
         let mut final_population = 0;
@@ -103,6 +150,9 @@ fn main() {
         let mut delivered_jobs = 0;
         let mut remembered_encounters = 0;
         let mut encounter_statements = 0;
+        let mut inquiry_requests = 0;
+        let mut inquiry_decisions = 0;
+        let mut inquiry_answers = 0;
         for round in 0..4 {
             let mut world = game_economy::Economy::compile(initial.clone()).unwrap();
             let started = std::time::Instant::now();
@@ -121,13 +171,19 @@ fn main() {
                 remembered_encounters = minds.iter().map(|mind| mind.people_seen.len()).sum::<usize>();
                 encounter_statements = minds.iter().map(|mind| mind.people_reports.len()).sum::<usize>();
             }
+            if taking_inquiries {
+                let complaints = &state.taking.as_ref().unwrap().complaints;
+                inquiry_requests = complaints.len();
+                inquiry_decisions = complaints.iter().filter(|row| row.decision != game_economy_taking::ComplaintDecision::Pending).count();
+                inquiry_answers = complaints.iter().filter(|row| row.answer.is_some()).count();
+            }
             let bytes = serde_json::to_vec(&state).unwrap();
             let hash = bytes.iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
             if let Some(expected) = expected { assert_eq!(hash, expected, "repeated runs must match"); } else { expected = Some(hash); }
             if round > 0 { samples.push(elapsed); }
         }
         samples.sort_by(f64::total_cmp);
-        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
+        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {
             for (name, measurement) in game_diagnostics::snapshot() {
