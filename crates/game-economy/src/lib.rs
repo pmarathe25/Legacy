@@ -4361,6 +4361,8 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.work_admission");
         }
+        #[cfg(feature = "profile")]
+        let mut work_phase = game_diagnostics::span("economy.work.collect_actions");
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
         let taking_actions = taking_plan
             .as_mut()
@@ -4405,6 +4407,11 @@ impl Economy {
         // Animal care needs the acceptance receipt, not copies of consumed lot cohorts.
         compact.par_extend(animal_care_plan.actions.par_iter().map(|action| action.id));
         actions.append(&mut animal_care_plan.actions);
+        #[cfg(feature = "profile")]
+        {
+            drop(work_phase);
+            work_phase = game_diagnostics::span("economy.work.practice_requests");
+        }
         let practice_requests: Vec<_> = self
             .giving
             .as_ref()
@@ -4431,6 +4438,11 @@ impl Economy {
                     })
             })
             .collect();
+        #[cfg(feature = "profile")]
+        {
+            drop(work_phase);
+            work_phase = game_diagnostics::span("economy.work.plan");
+        }
         let mut work = game_economy_goals::prepare_work!(
             self,
             view,
@@ -4443,6 +4455,11 @@ impl Economy {
             work_offers,
             practice_requests
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(work_phase);
+            work_phase = game_diagnostics::span("economy.work.prepare_starts");
+        }
         let starts = game_economy_claims::work_actions!(work, claims, self, claim_uses, busy);
         let (starts, manual_job) = game_economy_interaction::work_starts!(
             self,
@@ -4513,6 +4530,11 @@ impl Economy {
                     .collect(),
             )
         };
+        #[cfg(feature = "profile")]
+        {
+            drop(work_phase);
+            work_phase = game_diagnostics::span("economy.work.sites_and_harvest");
+        }
         let mut site_disregards = work
             .as_ref()
             .map_or_else(Vec::new, |plan| plan.site_disregards.clone());
@@ -4553,6 +4575,8 @@ impl Economy {
         let staged_custody = construction_plan
             .as_ref()
             .map_or(&[][..], |plan| plan.custody.as_slice());
+        #[cfg(feature = "profile")]
+        drop(work_phase);
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);

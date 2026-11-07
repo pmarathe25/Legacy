@@ -154,6 +154,9 @@ fn main() {
         let mut encounter_statements = 0;
         let mut inquiry_requests = 0;
         let mut inquiry_decisions = 0;
+        let mut inquiry_accepted = 0;
+        let mut inquiry_declined = 0;
+        let mut inquiry_expired = 0;
         let mut inquiry_answers = 0;
         for round in 0..4 {
             let mut world = game_economy::Economy::compile(initial.clone()).unwrap();
@@ -177,6 +180,9 @@ fn main() {
                 let complaints = &state.taking.as_ref().unwrap().complaints;
                 inquiry_requests = complaints.len();
                 inquiry_decisions = complaints.iter().filter(|row| row.decision != game_economy_taking::ComplaintDecision::Pending).count();
+                inquiry_accepted = complaints.iter().filter(|row| row.decision == game_economy_taking::ComplaintDecision::Accepted).count();
+                inquiry_declined = complaints.iter().filter(|row| row.decision == game_economy_taking::ComplaintDecision::Declined).count();
+                inquiry_expired = complaints.iter().filter(|row| row.decision == game_economy_taking::ComplaintDecision::Expired).count();
                 inquiry_answers = complaints.iter().filter(|row| row.answer.is_some()).count();
             }
             let bytes = serde_json::to_vec(&state).unwrap();
@@ -185,7 +191,7 @@ fn main() {
             if round > 0 { samples.push(elapsed); }
         }
         samples.sort_by(f64::total_cmp);
-        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
+        println!("workers={workers} initial_people={people} final_people={final_population} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} started_jobs={started_jobs} delivered_jobs={delivered_jobs} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[1], samples[2], expected.unwrap());
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {
             for (name, measurement) in game_diagnostics::snapshot() {

@@ -251,6 +251,8 @@ pub struct Context<'a> {
 impl Context<'_> {
     pub fn prepare(&self) -> Result<Plan, String> {
         if self.auto.requests.is_none() && self.goals.is_none() {
+            #[cfg(feature = "profile")]
+            let _phase = game_diagnostics::span("work.context.simple");
             let mut busy = self.busy.to_vec();
             busy.extend_from_slice(self.unwilling);
             busy.par_sort_unstable();
@@ -304,6 +306,8 @@ impl Context<'_> {
                 asks: None,
             });
         }
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("work.context.requests");
         let request = self.auto.requests.as_ref().map(|owner| {
             owner.prepare_with_offers(
                 self.people,
@@ -335,6 +339,11 @@ impl Context<'_> {
             .transpose()
             .map_err(str::to_owned)?
             .flatten();
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("work.context.goals_and_busy");
+        }
         let mut goal_policies = self
             .preplanned_goals
             .is_none()
@@ -389,6 +398,11 @@ impl Context<'_> {
         }
         busy.par_sort_unstable();
         busy.dedup();
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("work.context.policies_and_claims");
+        }
         let mut policies: Vec<_> = base
             .policies
             .par_iter()
@@ -419,6 +433,11 @@ impl Context<'_> {
         let filtered =
             game_economy_claims::filter_work(&staged, self.people, self.production, self.claims);
         let base = filtered.as_ref().unwrap_or(&staged);
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("work.context.admission");
+        }
         let work = if let Some(sites) = self.sites.filter(|s| !s.requirements.is_empty()) {
             site_filter::plan(
                 sites,
@@ -438,6 +457,11 @@ impl Context<'_> {
         } else {
             base.plan_validated(self.people, self.production, &busy, self.max_job)?
         };
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("work.context.publish");
+        }
         if self.goals.is_some() {
             reserve(&mut busy, selected.iter().map(|row| row.worker));
         }
@@ -454,6 +478,8 @@ impl Context<'_> {
         if let Some(plan) = &work {
             reserve(&mut occupied, plan.actors.iter().copied());
         }
+        #[cfg(feature = "profile")]
+        drop(phase);
         Ok(Plan {
             work,
             ineligible: busy,

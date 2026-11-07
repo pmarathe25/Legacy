@@ -10,6 +10,8 @@ use rayon::prelude::*;
 #[macro_export]
 macro_rules! prepare_work {
     ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $tick:expr, $preplanned:expr, $site_classes:expr, $offers:expr, $practice_requests:expr) => {{
+        #[cfg(feature = "profile")]
+        let mut work_prepare_phase = game_diagnostics::span("economy.work.unwilling");
         let mut unwilling: Vec<_> = $world
             .people
             .par_iter()
@@ -25,9 +27,19 @@ macro_rules! prepare_work {
             unwilling.par_sort_unstable();
             unwilling.dedup();
         }
+        #[cfg(feature = "profile")]
+        {
+            drop(work_prepare_phase);
+            work_prepare_phase = game_diagnostics::span("economy.work.projection");
+        }
         let production =
             game_lot_projection::production(&$world.physical, &$view, $world.rules.max_work_hunger);
-        $world
+        #[cfg(feature = "profile")]
+        {
+            drop(work_prepare_phase);
+            work_prepare_phase = game_diagnostics::span("economy.work.context");
+        }
+        let result = $world
             .autowork
             .as_ref()
             .map(|auto| {
@@ -53,7 +65,10 @@ macro_rules! prepare_work {
                 }
                 .prepare()
             })
-            .transpose()?
+            .transpose()?;
+        #[cfg(feature = "profile")]
+        drop(work_prepare_phase);
+        result
     }};
 }
 use std::collections::HashSet;

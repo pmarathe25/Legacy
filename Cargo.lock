@@ -625,6 +625,7 @@ version = "0.2.0"
 dependencies = [
  "game-autowork",
  "game-dependent-care",
+ "game-diagnostics",
  "game-economy-claims",
  "game-economy-person",
  "game-families",
