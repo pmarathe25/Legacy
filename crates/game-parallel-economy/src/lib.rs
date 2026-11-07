@@ -97,6 +97,7 @@ mod giving_practices;
 mod hauling;
 mod hunting;
 mod medical;
+mod mission_deliveries;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
 pub use giving::{
     Asking as FoodAsking, Giving, HelperAsking, Policy as GivingPolicy, Request as FoodRequest,
@@ -5255,7 +5256,12 @@ impl Economy {
                 ) && !mission.objective_met
             })
         }) {
-            giving_plan.practice_gifts(physical.events())
+            let mut transfers = giving_plan.practice_gifts(physical.events());
+            transfers.par_extend(mission_deliveries::accepted_promises(
+                promises.delivery.as_ref(),
+                physical.events(),
+            ));
+            transfers
         } else {
             Vec::new()
         };

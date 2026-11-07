@@ -9979,6 +9979,46 @@ fn expedition_delivery_counts_actual_gifts_and_preserves_partial_progress() {
                     world.advance().unwrap();
                 }
                 assert_eq!(world.snapshot().people[0].region, Some(2));
+                let mut promised_state = world.snapshot();
+                promised_state.agreements = Some(Agreements {
+                    offering: vec![],
+                    work_offering: vec![],
+                    next_id: 2,
+                    policies: vec![],
+                    bulk_debtors: vec![],
+                    contracts: vec![Contract {
+                        id: 1,
+                        debtor: 1,
+                        creditor: 3,
+                        good: 2,
+                        quantity: 2,
+                        delivered: 0,
+                        due: world.tick() + 20,
+                        status: Status::Active,
+                    }],
+                    events: vec![],
+                });
+                let mut promised = Economy::compile(promised_state).unwrap();
+                promised.advance().unwrap();
+                assert_eq!(
+                    promised.snapshot().missions.unwrap().entries[0].objective,
+                    Some(Objective::Deliver {
+                        person: 3,
+                        good: 2,
+                        quantity: 3,
+                        delivered: 0
+                    })
+                );
+                assert!(promised.fulfill_promise(1, 1).unwrap());
+                assert_eq!(
+                    promised.snapshot().missions.unwrap().entries[0].objective,
+                    Some(Objective::Deliver {
+                        person: 3,
+                        good: 2,
+                        quantity: 3,
+                        delivered: 2
+                    })
+                );
                 let mut taken_state = world.snapshot();
                 taken_state.people[0].controlled = false;
                 taken_state.people[2].controlled = true;

@@ -4,7 +4,7 @@ Run `cargo run -p game-parallel-economy-cli`, optionally passing a scenario TOML
 
 This runner currently exposes the composed economic slice, not the complete campaign simulation.
 
-Use `deliver-expedition ID PERSON GOOD QUANTITY` before departure to set a personal delivery objective. Give real goods to that person at the destination; accepted partial gifts accumulate toward the target. The objective does not compel the traveler or create goods.
+Use `deliver-expedition ID PERSON GOOD QUANTITY` before departure to set a personal delivery objective. Give real goods to that person at the destination; accepted partial gifts and fulfilled promise transfers accumulate toward the target. The objective does not compel the traveler or create goods.
 
 `[[taking.policies]]` gives an individual a target, named good, quantity, willingness, interval, optional social pressure, and a choice to escalate resistance. `[[taking.responses]]` gives the target independent `notices` and `resist` preferences, with optional fear or affinity conditions. `[[taking.reactions]]` supplies optional signed `as_actor` or `as_target` interpretations for `transferred`, `unavailable`, `resisted`, or `conflict`; `other` makes a person-specific override. The player can use `take-from PERSON GOOD QUANTITY escalate|withdraw` and set a standing preference with `taking-response notice|unaware resist|no-default`. `no-default` leaves any separately configured conditional resistance intact. In administrative mode, these commands take the acting person's ID, and `taking-choice PERSON on|off` changes an autonomous person's willingness. A failed transfer does not move goods; a resisted attempt creates combat only when escalation is chosen and a local tactical encounter can start.
 
