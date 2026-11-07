@@ -108,9 +108,59 @@ impl Context<'_> {
                             .all(|pair| pair[0].person < pair[1].person))
                     .then_some(first.person)
                 });
+        // A small number of gaps should not force a binary search for every
+        // edge. Bound the table by population and keep sparse-ID fallback.
+        let near_dense =
+            self.contacts
+                .first()
+                .zip(self.contacts.last())
+                .and_then(|(first, last)| {
+                    let span = last.person.checked_sub(first.person)?.checked_add(1)?;
+                    let size = usize::try_from(span).ok()?;
+                    (eligible_contacts.is_some()
+                        && dense_base.is_none()
+                        && size <= self.contacts.len().saturating_mul(2)
+                        && self
+                            .contacts
+                            .par_windows(2)
+                            .all(|pair| pair[0].person < pair[1].person))
+                    .then(|| {
+                        let mut slots = vec![usize::MAX; size];
+                        slots
+                            .par_chunks_mut(1024)
+                            .enumerate()
+                            .for_each(|(chunk_index, chunk)| {
+                                let start = first.person + (chunk_index * 1024) as u64;
+                                let begin = self
+                                    .contacts
+                                    .partition_point(|contact| contact.person < start);
+                                for (index, contact) in self.contacts.iter().enumerate().skip(begin)
+                                {
+                                    let Some(offset) = contact.person.checked_sub(start) else {
+                                        continue;
+                                    };
+                                    let Ok(offset) = usize::try_from(offset) else {
+                                        break;
+                                    };
+                                    if offset >= chunk.len() {
+                                        break;
+                                    }
+                                    chunk[offset] = index;
+                                }
+                            });
+                        (first.person, slots)
+                    })
+                });
         let eligible = |id: u64| {
             let index = if let Some(base) = dense_base {
                 usize::try_from(id.checked_sub(base)?).ok()?
+            } else if let Some((base, slots)) = &near_dense {
+                let offset = usize::try_from(id.checked_sub(*base)?).ok()?;
+                let index = *slots.get(offset)?;
+                if index == usize::MAX {
+                    return None;
+                }
+                index
             } else {
                 self.contacts.binary_search_by_key(&id, |c| c.person).ok()?
             };
@@ -306,6 +356,33 @@ mod tests {
             first.iter().map(|e| (e.a, e.b)).collect::<Vec<_>>(),
             vec![(1, 3)]
         );
+        let mut near_contacts = contacts.clone();
+        near_contacts[2].person = 4;
+        let mut near_social = social.clone();
+        near_social.participants[2].person = 4;
+        let mut near_opinions = opinions.clone();
+        for record in &mut near_opinions.records {
+            if record.observer == 9 {
+                record.observer = 4;
+            }
+            if record.target == 9 {
+                record.target = 4;
+            }
+        }
+        near_opinions.records.push(Opinion {
+            observer: 1,
+            target: 2,
+            trust: 0,
+            fear: 0,
+            obligation: 0,
+            affinity: 9,
+        });
+        let near = run(1, &near_social, &near_opinions, &near_contacts);
+        assert_eq!(
+            near.iter().map(|e| (e.a, e.b)).collect::<Vec<_>>(),
+            vec![(1, 3)]
+        );
+        assert_eq!(near, run(4, &near_social, &near_opinions, &near_contacts));
         opinions.records.reverse();
         assert_eq!(first, run(4, &social, &opinions, &contacts));
         social.participants[1].willing = false;
