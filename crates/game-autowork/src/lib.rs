@@ -153,8 +153,15 @@ impl Autowork {
             .iter()
             .map(|i| (i.region, i))
             .collect();
-        let mut busy = busy.to_vec();
-        busy.par_sort_unstable();
+        // The composed work owner already supplies ordered IDs. Preserve the
+        // public API's support for unordered callers without copying that
+        // ordered hot path on every boundary.
+        let ordered_busy = busy.par_windows(2).any(|pair| pair[0] > pair[1]).then(|| {
+            let mut rows = busy.to_vec();
+            rows.par_sort_unstable();
+            rows
+        });
+        let busy = ordered_busy.as_deref().unwrap_or(busy);
         let mut intents: Vec<_> = self
             .policies
             .par_iter()
