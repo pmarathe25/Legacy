@@ -6,6 +6,8 @@ This runner currently exposes the composed economic slice, not the complete camp
 
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --player` for a small personal project. Another person independently plans to build a workshop, fetch timber from a local store, and make a tool; each step consumes or moves the actual materials.
 
+`content/scenarios/economy-regional-project.toml` moves the timber to a second region. Use `catalog` to find its good ID, then `ask-haul 2 2 1 GOOD 7` to request ongoing help for seven ticks. The carrier's own choices govern the journey and transfer; the request creates neither a contract nor goods. If the request expires after the return journey, the worker can independently put the timber into local stock for their own project.
+
 `observe-expedition ID` sets a personal goal to observe food at the destination before departure. The traveler must have a knowledge mind and must actually observe there; an old report is insufficient. The administrative form is `observe-expedition PERSON ID`.
 
 `food-reporting on|off PRESSURE|none` sets the current person's willingness to send remembered food reports and their optional fear-plus-obligation threshold. `food-reporting default` restores the default. The administrative runner adds a person ID after the command. Scenario knowledge minds may set the same `reporting` fields; listeners still decide independently whether to accept a statement.

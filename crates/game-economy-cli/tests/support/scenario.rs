@@ -2,6 +2,167 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn playable_regional_project_requires_requested_physical_delivery() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-regional-project.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let initial = world.snapshot();
+                let good = |name: &str| {
+                    initial
+                        .physical
+                        .goods
+                        .iter()
+                        .find(|row| row.name == name)
+                        .unwrap()
+                        .id
+                };
+                let timber = good("timber");
+                let tool = good("tool");
+                let mut refused = initial.clone();
+                refused.hauling.as_mut().unwrap().policies[0].willing = false;
+                let mut refused = game_economy::Economy::compile(refused).unwrap();
+                game_economy_player::Player::new(&mut refused)
+                    .ask_haul(2, 2, 1, timber, 7)
+                    .unwrap();
+                for _ in 0..12 {
+                    refused.advance().unwrap();
+                }
+                let refused = refused.snapshot();
+                assert_eq!(
+                    refused
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place
+                            == (game_lots::Place::Stock {
+                                region: 2,
+                                good: timber
+                            }))
+                        .unwrap()
+                        .used,
+                    5
+                );
+                assert!(
+                    !refused
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress > 0)
+                );
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                assert!(
+                    !world
+                        .snapshot()
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress > 0)
+                );
+                game_economy_player::Player::new(&mut world)
+                    .ask_haul(2, 2, 1, timber, 7)
+                    .unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..30 {
+                    if world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .any(|row| {
+                            row.place
+                                == (game_lots::Place::Stock {
+                                    region: 1,
+                                    good: tool,
+                                })
+                                && row.used == 1
+                        })
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress == 1),
+                    "people={:?} goals={:?} hauling={:?} travel={:?} sites={:?} timber={:?}",
+                    state.people,
+                    state.goals,
+                    state.hauling,
+                    state.travel,
+                    state.work_sites,
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .filter(|row| row.place
+                            == (game_lots::Place::Stock {
+                                region: 1,
+                                good: timber
+                            })
+                            || row.place
+                                == (game_lots::Place::Stock {
+                                    region: 2,
+                                    good: timber
+                                })
+                            || row.place == game_lots::Place::Person(2))
+                        .collect::<Vec<_>>()
+                );
+                assert!(state.physical.custody.containers.iter().any(|row| row.place
+                    == (game_lots::Place::Stock {
+                        region: 1,
+                        good: tool
+                    })
+                    && row.used == 1));
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place
+                            == (game_lots::Place::Stock {
+                                region: 2,
+                                good: timber
+                            }))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn playable_project_waits_for_missing_material_then_resumes() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {
