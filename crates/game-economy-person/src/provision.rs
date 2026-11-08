@@ -18,13 +18,16 @@ struct Sources {
     stores: std::ops::Range<usize>,
 }
 
+pub type LocalAccess<'a> = dyn Fn(u64, u64) -> Option<Place> + Sync + 'a;
+pub type AccessView<'a> = (&'a View, &'a [(u64, u64)], Option<&'a LocalAccess<'a>>);
+
 /// People select from stock visible at the next boundary. Competing attempts
 /// still require the physical store's shared-resource arbitration.
 pub fn prepare(
     people: &[Person],
     rules: &Rules,
     goods: &[Good],
-    (view, stores): (&View, &[(u64, u64)]),
+    (view, stores, local_access): AccessView<'_>,
     busy: &[u64],
     action_base: u64,
     consider: impl Fn(&Person, u64, u32) -> Option<u8> + Sync,
@@ -92,6 +95,7 @@ pub fn prepare(
             }
             let region = person.region?;
             let holding = view.container(Place::Person(person.id))?;
+            let location = local_access.map(|access| access(person.id, region));
             let first = sources.partition_point(|row| row.region < region);
             let last = sources.partition_point(|row| row.region <= region);
             sources[first..last]
@@ -100,8 +104,11 @@ pub fn prepare(
                 .filter_map(|row| {
                     let regional = row
                         .regional
-                        .then(|| consider(person, region, row.good))
-                        .flatten()
+                        .then_some(())
+                        .filter(|_| {
+                            location.is_none_or(|place| matches!(place, Some(Place::Stock { .. })))
+                        })
+                        .and_then(|_| consider(person, region, row.good))
                         .map(|rank| {
                             (
                                 rank,
@@ -112,10 +119,18 @@ pub fn prepare(
                                 },
                             )
                         });
-                    let store = (!row.stores.is_empty()).then(|| {
-                        let offset = (person.id % row.stores.len() as u64) as usize;
-                        (0, 1, Place::Inventory(stock[row.stores.start + offset].3))
-                    });
+                    let store = match location {
+                        Some(Some(Place::Inventory(id))) => stock[row.stores.clone()]
+                            .binary_search_by_key(&id, |source| source.3)
+                            .ok()
+                            .map(|_| (0, 1, Place::Inventory(id))),
+                        Some(_) => None,
+                        None if !row.stores.is_empty() => {
+                            let offset = (person.id % row.stores.len() as u64) as usize;
+                            Some((0, 1, Place::Inventory(stock[row.stores.start + offset].3)))
+                        }
+                        None => None,
+                    };
                     regional
                         .into_iter()
                         .chain(store)

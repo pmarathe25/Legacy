@@ -279,7 +279,6 @@ macro_rules! prepare_pickup {
         let stores: Vec<_> = $world
             .local_transport
             .as_ref()
-            .filter(|owner| owner.walking.is_none())
             .map_or_else(Vec::new, |owner| {
                 owner
                     .stores
@@ -287,11 +286,30 @@ macro_rules! prepare_pickup {
                     .map(|store| (store.region, store.id))
                     .collect()
             });
+        let walking = $world
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref());
+        let at = |person, region| match walking
+            .expect("access callback requires walking")
+            .location(person, region)
+        {
+            game_economy_local_transport::walking::Location::At {
+                endpoint: game_economy_local_transport::Endpoint::Stock,
+                ..
+            } => Some(game_lots::Place::Stock { region, good: 0 }),
+            game_economy_local_transport::walking::Location::At {
+                endpoint: game_economy_local_transport::Endpoint::Store { id },
+                ..
+            } => Some(game_lots::Place::Inventory(id)),
+            game_economy_local_transport::walking::Location::Walking { .. } => None,
+        };
+        let access = walking.map(|_| &at as &(dyn Fn(u64, u64) -> Option<game_lots::Place> + Sync));
         let plan = game_economy_person::provision::prepare(
             &$world.people,
             &$world.rules,
             $world.physical.goods(),
-            (&$view, &stores),
+            (&$view, &stores, access),
             &$busy,
             $base,
             |person, region, good| {

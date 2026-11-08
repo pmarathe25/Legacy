@@ -1230,6 +1230,58 @@ fn independent_text_readers(count: u64) -> State {
 }
 
 #[test]
+fn people_at_a_local_store_can_read_carried_pages() {
+    let mut initial = independent_text_readers(2);
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 10, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    initial.local_transport = Some(LocalTransport {
+        goal_fetchers: vec![],
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            positions: vec![LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+            events: vec![],
+        }),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert_eq!(writing.reads.len(), 2);
+                assert_eq!(writing.text_memories[0].person, 2);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn text_retention_is_personal_bounded_and_deterministic() {
     let initial = independent_text_readers(2048);
     let run = |threads| {
@@ -5189,6 +5241,94 @@ fn local_walking_fixture() -> State {
     state
 }
 
+fn local_social_fixture() -> State {
+    let mut initial = expedition_fixture();
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = true;
+    let local = local_walking_fixture();
+    initial.physical.custody.containers.extend(
+        local
+            .physical
+            .custody
+            .containers
+            .into_iter()
+            .filter(|container| matches!(container.place, Place::Inventory(_))),
+    );
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    let mut transport = local.local_transport.unwrap();
+    transport.walking.as_mut().unwrap().positions = [1, 2]
+        .into_iter()
+        .map(|person| LocalPosition {
+            person,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        })
+        .collect();
+    initial.local_transport = Some(transport);
+    initial
+}
+
+#[test]
+fn a_local_meeting_reserves_the_participants_before_carrying() {
+    let mut initial = local_social_fixture();
+    initial.people[0].controlled = true;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.meet(1, 2).unwrap());
+                let state = world.snapshot();
+                assert!(state.local_transport.as_ref().unwrap().events.is_empty());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn people_at_a_store_can_choose_autonomous_encounters() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert!(events.iter().any(|event| (event.a, event.b) == (1, 2)));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 fn local_carrying_walks_before_each_physical_transfer_and_can_pause() {
     let initial = local_walking_fixture();
@@ -5464,6 +5604,97 @@ fn distant_store_food_is_not_acquired_without_being_there() {
         .find(|c| c.place == Place::Inventory(1))
         .unwrap();
     assert_eq!(store.used, 2);
+}
+
+#[test]
+fn hungry_people_can_take_visible_food_at_their_local_store() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[1].hunger = 5;
+    initial.people[1].seek_meals = true;
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| container.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let store = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| container.place == Place::Inventory(1))
+        .unwrap();
+    *store = Container::new(
+        store.place,
+        store.capacity,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|container| container.place == Place::Person(2))
+                    .unwrap();
+                assert!(
+                    holder
+                        .lots
+                        .iter()
+                        .any(|lot| lot.good == 1 && lot.quantity == 1)
+                );
+                let stock = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|container| container.place == Place::Stock { region: 1, good: 1 })
+                    .unwrap();
+                assert_eq!(stock.used, 2);
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                world.advance().unwrap();
+                assert!(world.snapshot().people[1].hunger < state.people[1].hunger);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

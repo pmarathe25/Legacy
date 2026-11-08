@@ -3658,11 +3658,6 @@ impl Economy {
                 .then_some(position.person)
             })
             .collect();
-        let local_prior_busy = if local_nonstock.is_empty() {
-            Vec::new()
-        } else {
-            busy.par_iter().copied().collect()
-        };
         let manual_walk = match player_transfer {
             Some(game_economy_interaction::PhysicalChoice::WalkLocal { person, store }) => {
                 let actor = self
@@ -3727,9 +3722,6 @@ impl Economy {
             }
             None
         };
-        if !local_nonstock.is_empty() {
-            game_economy_work::reserve(&mut busy, local_nonstock.iter().copied());
-        }
         let auto_page_reads = self.writing.as_ref().map_or_else(Vec::new, |owner| {
             owner.auto_reads(&self.people, &busy, &self.physical)
         });
@@ -3864,6 +3856,11 @@ impl Economy {
             }
             reserved_targets.sort_unstable();
             reserved_targets.dedup();
+            let site_busy = (!local_nonstock.is_empty()).then(|| {
+                let mut rows = busy.clone();
+                game_economy_work::reserve(&mut rows, local_nonstock.iter().copied());
+                rows
+            });
             let actors = game_economy_confinement::ReleaseContext {
                 owner,
                 people: &self.people,
@@ -3871,7 +3868,7 @@ impl Economy {
                     .work_sites
                     .as_ref()
                     .ok_or("confinement requires physical sites")?,
-                busy: &busy,
+                busy: site_busy.as_deref().unwrap_or(&busy),
                 reserved_targets: &reserved_targets,
                 opening_guards: &opening_guards,
                 opinions: self.opinions.as_ref(),
@@ -3917,6 +3914,7 @@ impl Economy {
             .filter(|owner| !owner.capture_policies.is_empty())
         {
             let mut autonomous_busy = busy.clone();
+            autonomous_busy.extend_from_slice(&local_nonstock);
             if let Some(plan) = &taking_plan {
                 autonomous_busy.extend_from_slice(&plan.targets);
             }
@@ -3954,6 +3952,7 @@ impl Economy {
             controlled_unavailable.extend(player_work.map(|row| row.actor()));
             controlled_unavailable.extend(player_meal.map(|row| row.person));
             controlled_unavailable.extend(player_transfer.map(|row| row.person()));
+            controlled_unavailable.extend_from_slice(&local_nonstock);
             if let Some((row, _)) = &manual_response {
                 controlled_unavailable.push(row.worker);
             }
@@ -3978,12 +3977,34 @@ impl Economy {
             held.par_sort_unstable();
             held.dedup();
         }
+        let departure_busy = (campaign_draft.is_some() && !local_nonstock.is_empty()).then(|| {
+            let mut rows = busy.clone();
+            game_economy_work::reserve(&mut rows, local_nonstock.iter().copied());
+            rows
+        });
         let (guardian_departures, guardian_actors) = campaign_draft.as_mut().map_or_else(
             || (Vec::new(), Vec::new()),
-            |draft| draft.prepare_guardians(&self.people, self.travel.as_ref(), &busy),
+            |draft| {
+                draft.prepare_guardians(
+                    &self.people,
+                    self.travel.as_ref(),
+                    departure_busy.as_deref().unwrap_or(&busy),
+                )
+            },
         );
         if !guardian_actors.is_empty() {
             game_economy_work::reserve(&mut busy, guardian_actors);
+        }
+        // Personal reading, writing, and encounters need no stock access.
+        // Preserve their actual reservations before the remaining stock and
+        // site planners receive the temporary location restriction.
+        let local_prior_busy = if local_nonstock.is_empty() {
+            Vec::new()
+        } else {
+            busy.par_iter().copied().collect()
+        };
+        if !local_nonstock.is_empty() {
+            game_economy_work::reserve(&mut busy, local_nonstock.iter().copied());
         }
         let communication = game_economy_confinement::Communication {
             before: self.confinement.as_ref(),
@@ -4046,8 +4067,24 @@ impl Economy {
             }
             available_held = game_economy_work::exclude_sorted(&available_held, &caregivers);
         }
-        let (pickup, mut claim_uses, transfer) =
-            family::prepare_provisioning!(self, view, busy, action_base, claims, player_transfer);
+        let provision_busy = (!local_nonstock.is_empty()).then(|| {
+            local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                &[],
+            )
+        });
+        let (pickup, mut claim_uses, transfer) = family::prepare_provisioning!(
+            self,
+            view,
+            busy,
+            action_base,
+            claims,
+            player_transfer,
+            provision_busy.as_deref().unwrap_or(&busy)
+        );
         let exchange = game_economy_exchange::Context {
             market: self.market.as_ref(),
             view: &view,
@@ -5059,6 +5096,7 @@ impl Economy {
             if let Some(family) = &self.family {
                 game_economy_work::reserve(&mut excluded, game_economy_work::underage(family));
             }
+            game_economy_work::reserve(&mut excluded, pickup.actors.iter().copied());
             excluded
         });
         let local_plan = self
@@ -7110,7 +7148,7 @@ impl Economy {
             shared_people.extend(tool_repairs.iter().map(|row| row.0));
         }
         let fatigue_busy = (self.fatigue.is_some() && !local_nonstock.is_empty()).then(|| {
-            local_walking::carrying_busy(
+            let mut rows = local_walking::carrying_busy(
                 &busy,
                 &local_nonstock,
                 &local_prior_busy,
@@ -7118,7 +7156,9 @@ impl Economy {
                 local_plan
                     .as_ref()
                     .map_or(&[][..], |plan| plan.actors.as_slice()),
-            )
+            );
+            game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+            rows
         });
         let fatigue = game_economy_fatigue::prepare_world!(
             self,
@@ -7439,8 +7479,28 @@ impl Economy {
             available
         });
         let social_available = social_with_children.as_deref().unwrap_or(meeting_held);
+        let social_local_busy = (social_enabled && !local_nonstock.is_empty()).then(|| {
+            let mut rows = local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                local_plan
+                    .as_ref()
+                    .map_or(&[][..], |plan| plan.actors.as_slice()),
+            );
+            game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, asked_actors.iter().copied());
+            game_economy_work::reserve(&mut rows, giving_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, medical_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, handling_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, restraint_plan.actors.iter().copied());
+            rows
+        });
+        let social_base = social_local_busy.as_deref().unwrap_or(&busy);
         let social_busy = (social_enabled && !social_available.is_empty())
-            .then(|| game_economy_work::exclude_sorted(&busy, social_available));
+            .then(|| game_economy_work::exclude_sorted(social_base, social_available));
         let social_partition = |person| communication.partition(person);
         let social_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
             (social_enabled && !held.is_empty()).then_some(&social_partition);
@@ -7489,7 +7549,7 @@ impl Economy {
         let mut dynamics = game_economy_dynamics::prepare_dynamics!(
             self,
             person,
-            social_busy.as_deref().unwrap_or(&busy),
+            social_busy.as_deref().unwrap_or(social_base),
             tick,
             treatment,
             physical,

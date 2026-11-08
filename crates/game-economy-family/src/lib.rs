@@ -20,8 +20,8 @@ macro_rules! validate_custody {
 
 #[macro_export]
 macro_rules! prepare_provisioning {
-    ($world:expr, $view:expr, $busy:expr, $base:expr, $claims:expr, $choice:expr) => {{
-        let mut pickup_busy = $busy.clone();
+    ($world:expr, $view:expr, $busy:expr, $base:expr, $claims:expr, $choice:expr, $location_busy:expr) => {{
+        let mut pickup_busy = $location_busy.to_vec();
         if let Some((care, family)) = $world.care.as_ref().zip($world.family.as_ref()) {
             game_economy_work::reserve(
                 &mut pickup_busy,
