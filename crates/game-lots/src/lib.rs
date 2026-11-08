@@ -374,6 +374,9 @@ impl Store {
             return Err("duplicate physical item creation".into());
         }
         Ok(!ids.is_empty()
+            || transactions
+                .par_iter()
+                .any(|row| row.movements.iter().any(|movement| movement.item.is_some()))
             || (!self.item_places.is_empty()
                 && transactions.par_iter().any(|row| {
                     row.movements
@@ -483,10 +486,11 @@ impl Store {
         transfers: &[SimpleTransfer],
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        if !self.item_places.is_empty()
-            && transfers
-                .par_iter()
-                .any(|row| self.touches_item(&row.movement))
+        if transfers.par_iter().any(|row| row.movement.item.is_some())
+            || (!self.item_places.is_empty()
+                && transfers
+                    .par_iter()
+                    .any(|row| self.touches_item(&row.movement)))
         {
             return Ok(None);
         }
@@ -511,10 +515,11 @@ impl Store {
         transfers: &[SimpleTransfer],
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        if !self.item_places.is_empty()
-            && transfers
-                .par_iter()
-                .any(|row| self.touches_item(&row.movement))
+        if transfers.par_iter().any(|row| row.movement.item.is_some())
+            || (!self.item_places.is_empty()
+                && transfers
+                    .par_iter()
+                    .any(|row| self.touches_item(&row.movement)))
         {
             return Ok(None);
         }

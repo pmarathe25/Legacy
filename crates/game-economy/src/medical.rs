@@ -382,6 +382,7 @@ impl Context<'_> {
             .map(|&(id, c)| Transaction {
                 id,
                 movements: vec![Movement {
+                    item: None,
                     id,
                     from: Place::Person(c.actor),
                     to: None,

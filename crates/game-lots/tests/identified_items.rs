@@ -27,6 +27,7 @@ fn transfer(id: u64, to: Option<Place>) -> Transaction {
     Transaction {
         id,
         movements: vec![Movement {
+            item: None,
             id,
             from: Place::Person(1),
             to,
@@ -35,6 +36,114 @@ fn transfer(id: u64, to: Option<Place>) -> Transaction {
         }],
         creations: vec![],
     }
+}
+
+fn exact(id: u64, target: Option<Place>, item: u64) -> Transaction {
+    let mut action = transfer(id, target);
+    action.movements[0].item = Some(item);
+    action
+}
+
+fn seed_with_first_before_second() -> u64 {
+    (0..1000)
+        .find(|&seed| game_genetics::random(seed, 1, 1) < game_genetics::random(seed, 2, 1))
+        .unwrap()
+}
+
+#[test]
+fn exact_selection_moves_the_requested_page_and_rejects_missing_items() {
+    let mut owner = store();
+    let draft = owner
+        .prepare_transactions(1, &[exact(1, Some(Place::Person(2)), 11)])
+        .unwrap();
+    assert!(draft.transactions()[0].accepted);
+    assert_eq!(draft.outcomes()[0].lots[0].item, Some(11));
+    owner.commit(draft).unwrap();
+    assert_eq!(owner.item_place(11), Some(Place::Person(2)));
+    assert_eq!(owner.item_place(10), Some(Place::Person(1)));
+    let draft = owner
+        .prepare_transactions(2, &[exact(2, Some(Place::Person(2)), 11)])
+        .unwrap();
+    assert!(!draft.transactions()[0].accepted);
+    assert!(draft.item_updates().is_empty());
+}
+
+#[test]
+fn a_rejected_exact_reservation_does_not_change_a_later_generic_allocation() {
+    let mut owner = Store::compile(State {
+        tick: 0,
+        revision: 0,
+        containers: vec![
+            Container::new(Place::Person(1), 2, vec![item(10), item(11)]).unwrap(),
+            Container::new(Place::Person(2), 1, vec![item(12)]).unwrap(),
+            Container::new(Place::Person(3), 1, vec![]).unwrap(),
+        ],
+    })
+    .unwrap();
+    let draft = owner
+        .prepare_transactions(
+            seed_with_first_before_second(),
+            &[
+                exact(1, Some(Place::Person(2)), 10),
+                transfer(2, Some(Place::Person(3))),
+            ],
+        )
+        .unwrap();
+    assert!(!draft.transactions()[0].accepted);
+    assert!(draft.transactions()[1].accepted);
+    assert_eq!(draft.outcomes()[1].lots[0].item, Some(11));
+    owner.commit(draft).unwrap();
+    assert_eq!(owner.item_place(10), Some(Place::Person(1)));
+    assert_eq!(owner.item_place(11), Some(Place::Person(3)));
+}
+
+#[test]
+fn earlier_generic_claim_can_take_the_page_a_later_exact_claim_wants() {
+    let mut owner = store();
+    let draft = owner
+        .prepare_transactions(
+            seed_with_first_before_second(),
+            &[
+                transfer(1, Some(Place::Person(2))),
+                exact(2, Some(Place::Person(2)), 10),
+            ],
+        )
+        .unwrap();
+    assert!(draft.transactions()[0].accepted);
+    assert!(!draft.transactions()[1].accepted);
+    assert_eq!(draft.outcomes()[0].lots[0].item, Some(10));
+    owner.commit(draft).unwrap();
+    assert_eq!(owner.item_place(10), Some(Place::Person(2)));
+    assert_eq!(owner.item_place(11), Some(Place::Person(1)));
+}
+
+#[test]
+fn duplicate_exact_legs_reject_the_entire_transaction() {
+    let mut owner = store();
+    let mut action = exact(1, None, 10);
+    let mut other = action.movements[0];
+    other.id = 2;
+    action.movements.push(other);
+    let draft = owner.prepare_transactions(1, &[action]).unwrap();
+    assert!(!draft.transactions()[0].accepted);
+    assert!(draft.item_updates().is_empty());
+    owner.commit(draft).unwrap();
+    assert_eq!(owner.item_place(10), Some(Place::Person(1)));
+}
+
+#[test]
+fn compact_exact_consumption_removes_only_the_selected_item() {
+    let mut owner = store();
+    let mut draft = owner
+        .prepare_with_empty_compact(1, &[exact(1, None, 11)], vec![], &[1], true)
+        .unwrap();
+    assert!(draft.transactions()[0].accepted);
+    assert!(draft.outcomes()[0].lots.is_empty());
+    assert_eq!(draft.item_updates(), &[(11, None)]);
+    draft.take_receipts();
+    owner.commit(draft).unwrap();
+    assert_eq!(owner.item_place(10), Some(Place::Person(1)));
+    assert_eq!(owner.item_place(11), None);
 }
 
 #[test]
@@ -165,6 +274,7 @@ fn full_custody_can_replace_a_consumed_item_atomically() {
     let action = Transaction {
         id: 1,
         movements: vec![Movement {
+            item: None,
             id: 1,
             from: Place::Person(1),
             to: None,
@@ -199,6 +309,7 @@ fn independent_items(count: u64) -> (State, Vec<Transaction>) {
         actions.push(Transaction {
             id,
             movements: vec![Movement {
+                item: None,
                 id,
                 from: source,
                 to: Some(destination),
@@ -220,21 +331,25 @@ fn independent_items(count: u64) -> (State, Vec<Transaction>) {
 
 #[test]
 fn independent_identified_transfers_match_across_worker_counts() {
-    let (state, actions) = independent_items(2048);
-    let run = |workers| {
+    let (state, mut actions) = independent_items(2048);
+    let run = |workers, actions: &[Transaction]| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
                 let mut owner = Store::compile(state.clone()).unwrap();
-                let draft = owner.prepare_transactions(7, &actions).unwrap();
+                let draft = owner.prepare_transactions(7, actions).unwrap();
                 assert!(draft.transactions().iter().all(|row| row.accepted));
                 owner.commit(draft).unwrap();
                 owner.export()
             })
     };
-    assert_eq!(run(1), run(4));
+    assert_eq!(run(1, &actions), run(4, &actions));
+    for action in &mut actions {
+        action.movements[0].item = Some(action.id);
+    }
+    assert_eq!(run(1, &actions), run(4, &actions));
 }
 
 #[test]
@@ -261,6 +376,7 @@ fn unrelated_fungible_transfers_keep_the_fast_path_in_a_world_with_items() {
         transfers.push(SimpleTransfer {
             action: id,
             movement: Movement {
+                item: None,
                 id,
                 from: source,
                 to: Some(destination),
@@ -303,7 +419,13 @@ fn independent_identified_transfers_benchmark() {
         .build()
         .unwrap()
         .install(|| {
-            let (state, actions) = independent_items(count);
+            let (state, mut actions) = independent_items(count);
+            let exact = std::env::var_os("LEGACY_EXACT").is_some();
+            if exact {
+                for action in &mut actions {
+                    action.movements[0].item = Some(action.id);
+                }
+            }
             let mut samples = Vec::new();
             for round in 0..4 {
                 let mut owner = Store::compile(state.clone()).unwrap();
@@ -316,6 +438,9 @@ fn independent_identified_transfers_benchmark() {
                 }
             }
             samples.sort_by(f64::total_cmp);
-            println!("items={count} workers={workers} seconds={:.6}", samples[1]);
+            println!(
+                "items={count} workers={workers} exact={exact} seconds={:.6}",
+                samples[1]
+            );
         });
 }

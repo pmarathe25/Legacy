@@ -56,6 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let moves: Vec<_> = (1..=count)
         .map(|id| Movement {
+            item: None,
             id,
             from: if hot_source {
                 inventory
@@ -125,6 +126,7 @@ fn recipes(workers: usize, count: u64, repeats: usize) -> Result<(), Box<dyn std
         .map(|id| Transaction {
             id,
             movements: vec![Movement {
+                item: None,
                 id,
                 from: source,
                 to: None,

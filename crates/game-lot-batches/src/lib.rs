@@ -16,10 +16,11 @@ pub fn prepare_flat_transfers(
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
-    if state
-        .containers
-        .par_iter()
-        .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
+    if transfers.par_iter().any(|row| row.movement.item.is_some())
+        || state
+            .containers
+            .par_iter()
+            .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
     {
         return Ok(None);
     }
@@ -45,10 +46,11 @@ pub fn prepare_partitioned_flat(
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
-    if state
-        .containers
-        .par_iter()
-        .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
+    if transfers.par_iter().any(|row| row.movement.item.is_some())
+        || state
+            .containers
+            .par_iter()
+            .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
     {
         return Ok(None);
     }
@@ -80,9 +82,10 @@ pub fn prepare(
         .containers
         .par_iter()
         .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
-        || transactions
-            .par_iter()
-            .any(|t| t.creations.iter().any(|c| c.lot.item.is_some()));
+        || transactions.par_iter().any(|t| {
+            t.creations.iter().any(|c| c.lot.item.is_some())
+                || t.movements.iter().any(|m| m.item.is_some())
+        });
     if identified {
         return Err("identified items require the custody store".into());
     }
@@ -135,9 +138,10 @@ pub fn prepare_unpartitioned(
         .containers
         .par_iter()
         .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
-        || transactions
-            .par_iter()
-            .any(|t| t.creations.iter().any(|c| c.lot.item.is_some()))
+        || transactions.par_iter().any(|t| {
+            t.creations.iter().any(|c| c.lot.item.is_some())
+                || t.movements.iter().any(|m| m.item.is_some())
+        })
     {
         return Err("identified items require the custody store".into());
     }

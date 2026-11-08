@@ -22,6 +22,7 @@ fn fixture(count: u64) -> (State, Vec<SimpleTransfer>) {
         .map(|id| SimpleTransfer {
             action: id,
             movement: Movement {
+                item: None,
                 id,
                 from: Place::Inventory(id % 2 + 1),
                 to: Some(Place::Person(id)),

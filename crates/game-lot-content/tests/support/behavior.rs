@@ -122,6 +122,7 @@ fn imported_food_shelf_life_follows_the_physical_goods() {
             .prepare(
                 1,
                 &[Movement {
+                    item: None,
                     id: 1,
                     from: Place::Stock {
                         region: 1,

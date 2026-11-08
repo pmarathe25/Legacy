@@ -157,6 +157,7 @@ impl Context<'_> {
                 Transaction {
                     id,
                     movements: vec![Movement {
+                        item: None,
                         id,
                         from: source,
                         to: Some(Place::Person(person)),

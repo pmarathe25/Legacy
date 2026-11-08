@@ -272,6 +272,7 @@ fn physical_action(pending: &mut Pending, id: u64) -> SimpleTransfer {
     SimpleTransfer {
         action: id,
         movement: Movement {
+            item: None,
             id,
             from: Place::Person(pending.intent.target),
             to: Some(Place::Person(pending.intent.actor)),

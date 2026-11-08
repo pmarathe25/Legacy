@@ -211,6 +211,7 @@ pub fn recover(
     Ok(Some(Transaction {
         id,
         movements: vec![Movement {
+            item: None,
             id,
             from: Place::Person(deceased),
             to: Some(Place::Person(person)),
@@ -254,6 +255,7 @@ pub fn transfer(
     Ok(Some(Transaction {
         id,
         movements: vec![Movement {
+            item: None,
             id,
             from,
             to: Some(to),

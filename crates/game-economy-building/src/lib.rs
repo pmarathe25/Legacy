@@ -601,6 +601,7 @@ impl Context<'_> {
                 let mut movements = Vec::with_capacity(2);
                 if c.blueprint.salvage > 0 {
                     movements.push(Movement {
+                        item: None,
                         id,
                         from: c.source,
                         to: Some(Place::Site(self.sites.next_id + i as u64)),
@@ -610,6 +611,7 @@ impl Context<'_> {
                 }
                 if c.blueprint.salvage < c.blueprint.quantity {
                     movements.push(Movement {
+                        item: None,
                         id: id + u64::from(c.blueprint.salvage > 0),
                         from: c.source,
                         to: None,

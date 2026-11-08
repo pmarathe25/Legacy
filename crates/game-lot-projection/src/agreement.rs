@@ -140,6 +140,7 @@ impl Plan {
         self.actions.push(Transaction {
             id,
             movements: vec![Movement {
+                item: None,
                 id: 1,
                 from: Place::Person(row.debtor),
                 to: Some(Place::Person(row.creditor)),
@@ -318,6 +319,7 @@ impl Context<'_> {
                     Transaction {
                         id: action,
                         movements: vec![Movement {
+                            item: None,
                             id: 1,
                             from: Place::Person(contract.debtor),
                             to: Some(Place::Person(contract.creditor)),

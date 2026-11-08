@@ -904,6 +904,7 @@ dependencies = [
 name = "game-lots"
 version = "0.2.0"
 dependencies = [
+ "game-genetics",
  "game-lot-allocation",
  "game-lot-batches",
  "game-lot-model",

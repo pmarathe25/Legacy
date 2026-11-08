@@ -4797,6 +4797,7 @@ impl Economy {
                     Transaction {
                         id,
                         movements: vec![game_lots::Movement {
+                            item: None,
                             id,
                             from: game_lots::Place::Person(person),
                             to: None,

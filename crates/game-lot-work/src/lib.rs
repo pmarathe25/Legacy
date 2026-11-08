@@ -142,6 +142,7 @@ pub fn start(requests: &[Start], recipes: &[Recipe]) -> Result<Starts, String> {
                 .enumerate()
                 .map(|(n, amount)| {
                     Ok(Movement {
+                        item: None,
                         id: offsets[index]
                             .checked_add(n as u64)
                             .and_then(|id| id.checked_add(1))
@@ -279,6 +280,7 @@ fn finish_ready(
                 .enumerate()
                 .map(|(n, item)| {
                     Ok(Movement {
+                        item: None,
                         id: id(n)?,
                         from: Place::JobInput(job.id),
                         to: None,
@@ -391,6 +393,7 @@ fn return_custody(
                 .enumerate()
                 .map(|(n, item)| {
                     Ok(Movement {
+                        item: None,
                         id: offsets[index]
                             .checked_add(n as u64)
                             .and_then(|id| id.checked_add(1))

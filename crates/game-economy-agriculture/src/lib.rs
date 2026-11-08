@@ -436,6 +436,7 @@ impl Context<'_> {
                         Some(Transaction {
                             id: action,
                             movements: vec![Movement {
+                                item: None,
                                 id: action,
                                 from: Place::Stock {
                                     region: field.region,

@@ -199,6 +199,7 @@ impl Context<'_> {
                 Transaction {
                     id,
                     movements: vec![Movement {
+                        item: None,
                         id,
                         from,
                         to: Some(Place::Person(child)),

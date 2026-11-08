@@ -138,6 +138,7 @@ pub fn prepare(
             Transaction {
                 id,
                 movements: vec![Movement {
+                    item: None,
                     id,
                     from,
                     to: Some(Place::Person(person)),

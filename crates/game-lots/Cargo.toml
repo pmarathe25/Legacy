@@ -16,3 +16,4 @@ rayon.workspace = true
 
 [dev-dependencies]
 serde_json.workspace = true
+game-genetics = { path = "../game-genetics" }

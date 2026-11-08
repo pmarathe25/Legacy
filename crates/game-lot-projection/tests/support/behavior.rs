@@ -206,6 +206,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
     let rival = Transaction {
         id: 200,
         movements: vec![Movement {
+            item: None,
             id: 1,
             from: Place::Person(2),
             to: None,
@@ -236,6 +237,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
     let substituted = Transaction {
         id: 100,
         movements: vec![Movement {
+            item: None,
             id: 1,
             from: Place::Person(2),
             to: None,
