@@ -5660,13 +5660,25 @@ fn people_at_a_store_can_choose_to_give_carried_goods() {
         requests: vec![],
         acquaintance_asking: vec![],
     });
-    let run = |workers| {
+    let run = |workers, separated| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
-                let mut world = Economy::compile(initial.clone()).unwrap();
+                let mut state = initial.clone();
+                if separated {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions
+                        .retain(|position| position.person != 2);
+                }
+                let mut world = Economy::compile(state).unwrap();
                 world.advance().unwrap();
                 let state = world.snapshot();
                 let holder = state
@@ -5676,28 +5688,32 @@ fn people_at_a_store_can_choose_to_give_carried_goods() {
                     .iter()
                     .find(|row| row.place == Place::Person(2))
                     .unwrap();
-                assert!(
+                assert_eq!(
                     holder
                         .lots
                         .iter()
-                        .any(|lot| lot.good == 1 && lot.quantity == 1)
+                        .any(|lot| lot.good == 1 && lot.quantity == 1),
+                    !separated
                 );
                 assert!(
-                    state
-                        .dynamics
-                        .as_ref()
-                        .unwrap()
-                        .social
-                        .as_ref()
-                        .unwrap()
-                        .events
-                        .iter()
-                        .all(|event| event.a != 1 && event.b != 1)
+                    separated
+                        || state
+                            .dynamics
+                            .as_ref()
+                            .unwrap()
+                            .social
+                            .as_ref()
+                            .unwrap()
+                            .events
+                            .iter()
+                            .all(|event| event.a != 1 && event.b != 1)
                 );
                 state
             })
     };
-    assert_eq!(run(1), run(4));
+    for separated in [false, true] {
+        assert_eq!(run(1, separated), run(4, separated));
+    }
 }
 
 #[test]
@@ -22612,6 +22628,225 @@ fn use_named_acquisition_store(state: &mut State, available: u64) {
     });
 }
 
+fn destination_acquisition_workload(count: u64, available: u64, visit_ticks: u64) -> State {
+    let mut state = autonomous_acquisition_workload(count, available);
+    state.rules.hunger_per_tick = 0;
+    state.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![].into(),
+        responses: vec![].into(),
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![],
+    });
+    use_named_acquisition_store(&mut state, available);
+    for person in &mut state.people {
+        person.region = Some(2);
+    }
+    for mission in &mut state.missions.as_mut().unwrap().entries {
+        mission.phase = MissionPhase::Visiting;
+        mission.visit_ticks = visit_ticks;
+        mission.remaining = visit_ticks;
+        mission
+            .delivery_preference
+            .as_mut()
+            .unwrap()
+            .acquisition
+            .as_mut()
+            .unwrap()
+            .known_store = Some(1);
+    }
+    let local = state.local_transport.as_mut().unwrap();
+    local.stores[0].region = 2;
+    local.walking = Some(LocalWalking {
+        routes: vec![
+            LocalWalkRoute {
+                region: 2,
+                from: LocalEndpoint::Stock,
+                to: LocalEndpoint::Store { id: 1 },
+                ticks: 2,
+            },
+            LocalWalkRoute {
+                region: 2,
+                from: LocalEndpoint::Store { id: 1 },
+                to: LocalEndpoint::Stock,
+                ticks: 2,
+            },
+        ]
+        .into(),
+        preferences: vec![].into(),
+        positions: vec![],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn visiting_travelers_can_find_supplies_and_return_to_the_recipient() {
+    let run = |workers, stocked: bool, visit_ticks| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let initial = destination_acquisition_workload(1, u64::from(stocked), visit_ticks);
+                let mut world = Economy::compile(initial).unwrap();
+                world.advance().unwrap();
+                let opening = world.snapshot();
+                let travel = opening
+                    .local_transport
+                    .as_ref()
+                    .unwrap()
+                    .walking
+                    .as_ref()
+                    .unwrap()
+                    .positions
+                    .clone();
+                assert!(matches!(
+                    travel[0].location,
+                    LocalLocation::Walking {
+                        to: LocalEndpoint::Store { id: 1 },
+                        ..
+                    }
+                ));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    let mut delivered = false;
+                    for _ in 0..8 {
+                        world.advance().unwrap();
+                        let state = world.snapshot();
+                        if state.missions.as_ref().unwrap().entries[0].objective_met && !delivered {
+                            let walking = state
+                                .local_transport
+                                .as_ref()
+                                .unwrap()
+                                .walking
+                                .as_ref()
+                                .unwrap();
+                            assert_eq!(
+                                walking.location(1, 2),
+                                LocalLocation::At {
+                                    region: 2,
+                                    endpoint: LocalEndpoint::Stock
+                                }
+                            );
+                            delivered = true;
+                        }
+                    }
+                    let state = world.snapshot();
+                    if visit_ticks > 1 || !stocked {
+                        assert_eq!(
+                            state.missions.as_ref().unwrap().entries[0].objective_met,
+                            stocked
+                        );
+                    }
+                    if !stocked && visit_ticks > 1 {
+                        assert!(matches!(
+                            state
+                                .local_transport
+                                .as_ref()
+                                .unwrap()
+                                .walking
+                                .as_ref()
+                                .unwrap()
+                                .positions[0]
+                                .location,
+                            LocalLocation::At {
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                                ..
+                            }
+                        ));
+                    }
+                    if visit_ticks == 1 {
+                        assert!(
+                            state
+                                .local_transport
+                                .as_ref()
+                                .unwrap()
+                                .walking
+                                .as_ref()
+                                .unwrap()
+                                .positions
+                                .iter()
+                                .all(|position| !matches!(
+                                    position.location,
+                                    LocalLocation::Walking {
+                                        to: LocalEndpoint::Store { id: 1 },
+                                        ..
+                                    }
+                                ))
+                        );
+                    }
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                (travel, world.snapshot())
+            })
+    };
+    for (stocked, ticks) in [(true, 12), (false, 12), (true, 1), (false, 1)] {
+        let one = run(1, stocked, ticks);
+        assert_eq!(one.1, run(4, stocked, ticks).1);
+    }
+    assert_eq!(run(1, true, 12).0, run(1, false, 12).0);
+}
+
+#[test]
+fn traveler_delivers_at_a_store_when_recipient_is_already_there() {
+    let mut initial = destination_acquisition_workload(1, 0, 12);
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = [1, 2]
+        .into_iter()
+        .map(|person| LocalPosition {
+            person,
+            location: LocalLocation::At {
+                region: 2,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        })
+        .collect();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.missions.unwrap().entries[0].objective_met);
+    assert!(
+        state
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
 #[test]
 fn travelers_compete_for_shared_stock_deterministically() {
     let count = 512u64;
@@ -23010,16 +23245,23 @@ fn concentrated_expedition_acquisition_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(count / 2);
     assert!(count > 0 && available <= count);
-    let mut initial = autonomous_acquisition_workload(count, available);
+    let at_destination = std::env::var_os("LEGACY_MISSION_AT_DESTINATION").is_some();
+    let mut initial = if at_destination {
+        destination_acquisition_workload(count, available, 12)
+    } else {
+        autonomous_acquisition_workload(count, available)
+    };
     let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
     let returning = std::env::var_os("LEGACY_MISSION_RETURN").is_some();
-    let searching = std::env::var_os("LEGACY_MISSION_SEARCH").is_some();
+    let searching = at_destination || std::env::var_os("LEGACY_MISSION_SEARCH").is_some();
     assert!(!returning || at_store);
     assert!(!searching || !at_store);
-    if at_store || searching || std::env::var_os("LEGACY_NAMED_STORE").is_some() {
+    if !at_destination
+        && (at_store || searching || std::env::var_os("LEGACY_NAMED_STORE").is_some())
+    {
         use_named_acquisition_store(&mut initial, available);
     }
-    if searching {
+    if searching && !at_destination {
         for mission in &mut initial.missions.as_mut().unwrap().entries {
             mission
                 .delivery_preference
@@ -23110,7 +23352,7 @@ fn concentrated_expedition_acquisition_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} travelers={count} stock={available} at_store={at_store} returning={returning} searching={searching} elapsed={:.6} fingerprint={:016x}",
+                "workers={workers} travelers={count} stock={available} at_store={at_store} returning={returning} searching={searching} at_destination={at_destination} elapsed={:.6} fingerprint={:016x}",
                 samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]

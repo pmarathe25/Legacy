@@ -4733,6 +4733,10 @@ impl Economy {
             tick,
             seed: self.seed,
             locations: &locations,
+            walking: self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref()),
         }
         .prepare(action_base)?;
         #[cfg(feature = "profile")]

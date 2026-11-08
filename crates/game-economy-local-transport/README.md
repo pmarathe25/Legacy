@@ -20,6 +20,8 @@ The existing tool-repair and autonomous-wound-care benchmarks also accept `LEGAC
 
 The existing concentrated giving and disease benchmarks accept `LEGACY_AT_STORE=1`; add `LEGACY_SELF_TREATMENT=1` to exercise disease self-treatment. On a Ryzen 5 7600 with 100,000 people, one and six workers measured 111.2 and 54.0 ms for one giving boundary and 283.4 and 112.1 ms for three disease boundaries. Each pair produced identical state fingerprints.
 
+After adding local co-location checks, the same store-local giving boundary measured 120.9 and 52.7 ms with one and six workers and matching fingerprints.
+
 The concentrated food-request benchmark accepts `LEGACY_AT_STORE=1`. On a Ryzen 5 7600 with 100,000 people, the one- and six-worker medians were 50.2 and 18.3 ms, with identical state fingerprints.
 
 With `LEGACY_AT_STORE=1 LEGACY_GOAL_RETURN=1`, the concentrated goal-fetch benchmark first acquires inputs and then times the return-walking boundary. For 100,000 people on a Ryzen 5 7600, one and six workers measured 90.4 and 31.0 ms with the same state fingerprint. The preceding contested pickup measured 161.1 and 60.7 ms.

@@ -89,7 +89,10 @@ pub fn mission_supply(
         .par_iter()
         .filter_map(|mission| {
             if mission.objective_met
-                || !matches!(mission.phase, MissionPhase::Ready | MissionPhase::Outbound)
+                || matches!(
+                    mission.phase,
+                    MissionPhase::Completed | MissionPhase::Failed
+                )
                 || context.busy.binary_search(&mission.person).is_ok()
                 || context.blocked.binary_search(&mission.person).is_ok()
             {
@@ -117,7 +120,8 @@ pub fn mission_supply(
             if actor.controlled
                 || actor.health == 0
                 || actor.hunger > context.max_hunger
-                || region == mission.destination
+                || (mission.phase == MissionPhase::Ready && region != mission.origin)
+                || (mission.phase == MissionPhase::Returning && region == mission.origin)
                 || context
                     .owner
                     .stores
@@ -146,6 +150,11 @@ pub fn mission_supply(
                 return None;
             }
             let location = context.walking.location(actor.id, region);
+            if mission.phase == MissionPhase::Returning
+                && !matches!(location, Location::Walking { to, .. } if to == destination)
+            {
+                return None;
+            }
             let visible = match location {
                 Location::At {
                     endpoint: Endpoint::Stock,
@@ -203,8 +212,10 @@ pub fn mission_return(
         .entries
         .par_iter()
         .filter_map(|mission| {
-            if !matches!(mission.phase, MissionPhase::Ready | MissionPhase::Outbound)
-                || mission.objective_met
+            if matches!(
+                mission.phase,
+                MissionPhase::Completed | MissionPhase::Failed
+            ) || mission.objective_met
                 || context.busy.binary_search(&mission.person).is_ok()
             {
                 return None;
@@ -227,8 +238,8 @@ pub fn mission_return(
                 return None;
             }
             let region = actor.region?;
-            if region == mission.destination
-                || (mission.phase == MissionPhase::Ready && region != mission.origin)
+            if (mission.phase == MissionPhase::Ready && region != mission.origin)
+                || (mission.phase == MissionPhase::Returning && region == mission.origin)
             {
                 return None;
             }
@@ -244,11 +255,17 @@ pub fn mission_return(
             let needed = quantity
                 .saturating_sub(delivered)
                 .saturating_add(preference.reserve);
-            if context
-                .view
-                .container(Place::Person(actor.id))?
-                .quantity(good)
-                < needed
+            let held = context.view.container(Place::Person(actor.id))?.quantity(good);
+            if mission.phase != MissionPhase::Returning && held < needed {
+                return None;
+            }
+            if held >= needed && region == mission.destination
+                && context.people.binary_search_by_key(&recipient, |person| person.id).ok().is_some_and(|index| {
+                    let target = &context.people[index];
+                    target.region == Some(region)
+                        && matches!((context.walking.location(actor.id, region), context.walking.location(target.id, region)),
+                            (Location::At { endpoint: a, .. }, Location::At { endpoint: b, .. }) if a == b)
+                })
             {
                 return None;
             }

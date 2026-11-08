@@ -595,8 +595,20 @@ pub struct Context<'a> {
     pub tick: u64,
     pub seed: u64,
     pub locations: &'a Colocation,
+    pub walking: Option<&'a game_economy_local_transport::walking::Walking>,
 }
 impl Context<'_> {
+    pub(crate) fn locally_together(&self, a: &Person, b: &Person) -> bool {
+        let (Some(walking), Some(region), Some(other_region)) = (self.walking, a.region, b.region)
+        else {
+            return true;
+        };
+        use game_economy_local_transport::walking::Location;
+        region == other_region
+            && matches!((walking.location(a.id, region), walking.location(b.id, region)),
+            (Location::At { region: left, endpoint: x }, Location::At { region: right, endpoint: y }) if left == right && x == y)
+    }
+
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("giving.prepare.setup");
@@ -1010,6 +1022,7 @@ impl Context<'_> {
                 || b.health == 0
                 || sender == recipient
                 || !self.communication.allows(sender, recipient)
+                || !self.locally_together(a, b)
                 || self
                     .locations
                     .region((a.id, a.region), (b.id, b.region))
@@ -1022,6 +1035,16 @@ impl Context<'_> {
                 );
             }
             chosen.push((sender, recipient, good, quantity));
+        }
+        if self.walking.is_some() {
+            chosen = chosen
+                .into_par_iter()
+                .filter(|&(sender, recipient, _, _)| {
+                    find(sender)
+                        .zip(find(recipient))
+                        .is_some_and(|(a, b)| self.locally_together(a, b))
+                })
+                .collect();
         }
         #[cfg(feature = "profile")]
         {

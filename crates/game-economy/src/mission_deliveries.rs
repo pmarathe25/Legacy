@@ -63,6 +63,9 @@ pub(crate) fn choices(
                 .binary_search_by_key(&recipient, |p| p.id)
                 .ok()
                 .map(|i| &context.people[i])?;
+            if !context.locally_together(sender, target) {
+                return None;
+            }
             let pressured = preference.pressure_threshold.is_some_and(|threshold| {
                 opinions.is_some_and(|index| {
                     let (fear, obligation) = index.feelings(sender.id, target.id);
