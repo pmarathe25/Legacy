@@ -11764,6 +11764,101 @@ fn actual_birth_can_transmit_maternal_infection_atomically() {
 }
 
 #[test]
+fn birth_preserves_all_prior_maternal_strains_during_treatment() {
+    let mut initial = campaign_fixture();
+    initial.campaign = None;
+    initial.pending_food.clear();
+    initial.dynamics = Some(infection_from(1));
+    let disease = initial.dynamics.as_mut().unwrap().disease.as_mut().unwrap();
+    disease.strains[0].transmission_per_million = 0;
+    disease.strains[0].birth_transmission_per_million = 1_000_000;
+    let mut second = disease.strains[0].clone();
+    second.id = 2;
+    disease.strains.push(second);
+    disease.cases.push(game_disease::Case {
+        person: 1,
+        strain: 2,
+        infected_at: 0,
+        source: None,
+    });
+    disease.treatments.push(game_disease::Treatment {
+        strain: 1,
+        medicine: 2,
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let mut state = world.snapshot();
+                state.dynamics.as_mut().unwrap().treatment.push(
+                    game_economy_dynamics::TreatmentPolicy {
+                        person: 1,
+                        medicine: 2,
+                        quantity: 1,
+                        willing: true,
+                        health_at_most: Some(100),
+                    },
+                );
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap();
+                let mut lots = holder.lots.clone();
+                lots.push(Lot {
+                    good: 2,
+                    quantity: 1,
+                    item: None,
+                    expires_at: None,
+                });
+                *holder = Container::new(holder.place, holder.capacity, lots).unwrap();
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                let cases = &saved
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .disease
+                    .as_ref()
+                    .unwrap()
+                    .cases;
+                assert!(
+                    !cases
+                        .iter()
+                        .any(|case| case.person == 1 && case.strain == 1)
+                );
+                assert!(
+                    cases
+                        .iter()
+                        .any(|case| case.person == 1 && case.strain == 2)
+                );
+                assert_eq!(
+                    cases
+                        .iter()
+                        .filter(|case| case.person == 5)
+                        .map(|case| case.strain)
+                        .collect::<Vec<_>>(),
+                    [1, 2]
+                );
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(saved, restored.snapshot());
+                saved
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
     let mut initial = campaign_fixture();
     initial.campaign = None;
