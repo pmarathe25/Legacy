@@ -20,7 +20,7 @@ CLI / scenario runner / future graphical client
 
 The session host owns a simulation instance, its worker budget, command queue, advancement requests, and publication of committed views. It can run on the calling thread in tests or on a dedicated host thread in an interactive application. Threading policy is separate from game rules.
 
-Use a Rust workspace with small `game-api`, `game-sim`, and `game-cli` crates under `crates/`. The API crate contains renderer-independent value types. The simulation crate contains domains, scheduling, and CPU compute; an optional compute adapter can be extracted into its own crate later. Add a benchmark target using the simulation directly. The [first coding task](implementation.md#first-coding-task) defines the initial slice; introduce further boundaries as working code needs them.
+The current workspace uses `game-economy` as its composed simulation, `game-economy-player` for player-facing actions and observations, and `game-economy-cli` for the text interface. The [workspace README](../../README.md) documents current commands and benchmarks. Keep domain and compute boundaries renderer-independent; optional acceleration can be added where measurements justify it.
 
 Neither the API nor authoritative simulation depends on windows, a scene graph, a rendering engine's clock, animation callbacks, textures, input devices, or a graphics context. If an ECS is used internally, its entity handles and mutable world are private implementation details.
 
