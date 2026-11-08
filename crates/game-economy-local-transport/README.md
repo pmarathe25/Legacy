@@ -24,6 +24,8 @@ After adding local co-location checks, the same store-local giving boundary meas
 
 The concentrated food-request benchmark accepts `LEGACY_AT_STORE=1`. On a Ryzen 5 7600 with 100,000 people, the one- and six-worker medians were 50.2 and 18.3 ms, with identical state fingerprints.
 
+After adding endpoint checks for care and food requests, the same 100,000-person wound-care workload measured 228.0 and 97.5 ms, and food requests measured 53.0 and 20.3 ms, with one and six workers respectively. Each pair produced matching fingerprints.
+
 With `LEGACY_AT_STORE=1 LEGACY_GOAL_RETURN=1`, the concentrated goal-fetch benchmark first acquires inputs and then times the return-walking boundary. For 100,000 people on a Ryzen 5 7600, one and six workers measured 90.4 and 31.0 ms with the same state fingerprint. The preceding contested pickup measured 161.1 and 60.7 ms.
 
 A goal fetcher may optionally define `search = { store = 1, alternatives = [2, 3], max_visits = 3, willing = true, retry_ticks = 8, max_ticks = 16 }`. When its own work goal lacks an input at regional stock, the person can choose to visit the ordered known stores without observing their contents remotely. The bounded visit count defaults to one; at most 32 distinct stores in the same region may be listed. The person may use an authored direct route or travel through regional stock. A paused choice retains the current leg until its expiry, with departure counting toward `max_ticks`; exhausting the choices does not force a return. A successful local pickup can motivate the existing return-to-stock path. Explicit carrying and visit choices take priority over starting a search.

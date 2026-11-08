@@ -5,6 +5,24 @@ use game_lots::{Place, Transaction};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
+/// Regional co-location alone is insufficient when local walking is enabled.
+pub fn people_together(
+    walking: Option<&Walking>,
+    a: &game_economy_person::Person,
+    b: &game_economy_person::Person,
+) -> bool {
+    let (Some(walking), Some(region), Some(other_region)) = (walking, a.region, b.region) else {
+        return true;
+    };
+    use game_economy_local_transport::walking::Location;
+    if a.id == b.id {
+        return matches!(walking.location(a.id, region), Location::At { .. });
+    }
+    region == other_region
+        && matches!((walking.location(a.id, region), walking.location(b.id, region)),
+        (Location::At { region: left, endpoint: x }, Location::At { region: right, endpoint: y }) if left == right && x == y)
+}
+
 pub struct GoalWalkContext<'a> {
     pub owner: &'a LocalTransport,
     pub walking: &'a Walking,

@@ -5559,6 +5559,115 @@ fn a_person_can_treat_their_wound_at_a_store() {
 }
 
 #[test]
+fn wound_care_requires_the_patient_at_the_same_local_endpoint() {
+    use game_economy_combat::injury::Case;
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[1].health = 80;
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 2,
+        attacker: 1,
+        sustained_at: 0,
+        heals_at: 8,
+    }]));
+    initial.combat = Some(combat);
+    initial.medical = Some(Medical {
+        acquaintances: vec![],
+        policies: vec![MedicalPolicy {
+            person: 1,
+            patient: 2,
+            medicine: 2,
+            quantity: 1,
+            willing: true,
+            patient_health_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut controlled = initial.clone();
+    controlled.people[0].controlled = true;
+    controlled
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .retain(|position| position.person != 2);
+    let mut manual = Economy::compile(controlled).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.treat_other(1, 2, 2, 1).is_err());
+    assert_eq!(manual.snapshot(), before);
+    let run = |workers, separated| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if separated {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions
+                        .retain(|position| position.person != 2);
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .injuries
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty(),
+                    !separated
+                );
+                let medicine = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap();
+                assert_eq!(medicine.lots.iter().any(|lot| lot.good == 2), separated);
+                state
+            })
+    };
+    for separated in [false, true] {
+        assert_eq!(run(1, separated), run(4, separated));
+    }
+}
+
+#[test]
 fn a_person_can_take_carried_medicine_at_a_store() {
     use game_disease::Treatment;
     use game_economy_dynamics::TreatmentPolicy;
@@ -5835,6 +5944,24 @@ fn a_person_at_a_store_can_ask_without_compelling_a_gift() {
             })
     };
     assert_eq!(run(1), run(4));
+    let mut separated = initial;
+    separated
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .retain(|position| position.person != 2);
+    let mut world = Economy::compile(separated.clone()).unwrap();
+    world.advance().unwrap();
+    assert!(world.food_requests().is_empty());
+    separated.people[0].controlled = true;
+    let mut manual = Economy::compile(separated).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.ask_food(1, 2, 4).is_err());
+    assert_eq!(manual.snapshot(), before);
 }
 
 #[test]

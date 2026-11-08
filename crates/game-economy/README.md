@@ -166,6 +166,7 @@ Named stores within a region have separate physical custody and capacities. A pe
 
 Hungry people who choose to seek meals may obtain an actual portion from a locally observed named store when it is their best available source. They carry the food before consuming it; regional stock claims apply to regional custody rather than to a separate store.
 When local walking is enabled, direct gifts and expedition deliveries require both people to be at the same local endpoint. Someone in transit cannot hand goods to another person at a distant endpoint.
+The same endpoint rule applies to treatment and food requests, including remembered-helper and acquaintance choices. A person can still treat themselves or interact with someone at the same store.
 The ignored `concentrated_named_food_benchmark` measures many hungry people competing for local stores. Set `LEGACY_PEOPLE`, `LEGACY_STORES`, and `LEGACY_WORKERS` to vary population, store count, and concurrency; population and half-population must divide evenly among stores. Add `--features profile` and `LEGACY_PROFILE` for phase timings.
 
 People with an enabled personal goal-fetching preference can obtain missing inputs for their own active work goals from locally observed stores, physically carrying and depositing the goods before work can begin. They may stop and retain what they carry.

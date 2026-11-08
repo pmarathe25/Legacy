@@ -4598,7 +4598,12 @@ impl Economy {
                     &communication,
                 ),
                 tick,
-                &locations,
+                (
+                    &locations,
+                    self.local_transport
+                        .as_ref()
+                        .and_then(|owner| owner.walking.as_ref()),
+                ),
             )?;
             if let Some(asking_busy) = &mut asking_busy {
                 game_economy_work::reserve(asking_busy, askers.iter().copied());
@@ -4624,6 +4629,10 @@ impl Economy {
                     relationships: acquaintances,
                     opinions: self.opinions.as_ref(),
                     locations: &locations,
+                    walking: self
+                        .local_transport
+                        .as_ref()
+                        .and_then(|owner| owner.walking.as_ref()),
                     communication: &communication,
                     seed: self.seed,
                     tick,
@@ -4668,6 +4677,13 @@ impl Economy {
                 || recipient.health == 0
                 || person == target
                 || !communication.allows(person, target)
+                || !local_walking::people_together(
+                    self.local_transport
+                        .as_ref()
+                        .and_then(|owner| owner.walking.as_ref()),
+                    actor,
+                    recipient,
+                )
                 || locations
                     .region((actor.id, actor.region), (recipient.id, recipient.region))
                     .is_none()
@@ -4942,6 +4958,10 @@ impl Economy {
             max_health: self.rules.max_health,
             manual: manual_medical,
             locations: &locations,
+            walking: self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref()),
         }
         .prepare(action_base)?;
         action_base = action_base

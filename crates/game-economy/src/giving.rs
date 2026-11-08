@@ -312,7 +312,10 @@ impl Giving {
             &game_economy_confinement::Communication<'_>,
         ),
         tick: u64,
-        locations: &Colocation,
+        (locations, walking): (
+            &Colocation,
+            Option<&game_economy_local_transport::walking::Walking>,
+        ),
     ) -> Result<Vec<u64>, String> {
         let mut expired: Vec<_> = self
             .requests
@@ -377,6 +380,7 @@ impl Giving {
                         .map(|i| &people[i])?;
                     (target.health > 0
                         && communication.allows(actor.id, target.id)
+                        && crate::local_walking::people_together(walking, actor, target)
                         && locations
                             .region((actor.id, actor.region), (target.id, target.region))
                             .is_some())
@@ -438,6 +442,7 @@ impl Giving {
                     || actor.hunger < asking.min_hunger
                     || target.health == 0
                     || !communication.allows(actor.id, target.id)
+                    || !crate::local_walking::people_together(walking, actor, target)
                     || explicit.binary_search(&actor.id).is_ok()
                     || busy.binary_search(&actor.id).is_ok()
                     || pending.binary_search(&actor.id).is_ok()
@@ -531,6 +536,7 @@ impl Giving {
                                 let target = &people[i];
                                 target.health > 0
                                     && communication.allows(actor.id, target.id)
+                                    && crate::local_walking::people_together(walking, actor, target)
                                     && locations
                                         .region(
                                             (actor.id, actor.region),
@@ -599,14 +605,7 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub(crate) fn locally_together(&self, a: &Person, b: &Person) -> bool {
-        let (Some(walking), Some(region), Some(other_region)) = (self.walking, a.region, b.region)
-        else {
-            return true;
-        };
-        use game_economy_local_transport::walking::Location;
-        region == other_region
-            && matches!((walking.location(a.id, region), walking.location(b.id, region)),
-            (Location::At { region: left, endpoint: x }, Location::At { region: right, endpoint: y }) if left == right && x == y)
+        crate::local_walking::people_together(self.walking, a, b)
     }
 
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {

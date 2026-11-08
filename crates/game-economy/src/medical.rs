@@ -137,6 +137,7 @@ pub struct Context<'a> {
     pub max_health: u32,
     pub manual: Option<(u64, u64, u32, u64)>,
     pub locations: &'a Colocation,
+    pub walking: Option<&'a game_economy_local_transport::walking::Walking>,
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
@@ -186,6 +187,9 @@ impl Context<'_> {
                 }
                 self.locations
                     .region((actor.id, actor.region), (patient.id, patient.region))?;
+                if !crate::local_walking::people_together(self.walking, actor, patient) {
+                    return None;
+                }
                 let pressured =
                     p.pressured_by
                         .zip(p.pressure_threshold)
@@ -257,6 +261,9 @@ impl Context<'_> {
                     let patient = find(patient_id)?;
                     self.locations
                         .region((actor.id, actor.region), (patient.id, patient.region))?;
+                    if !crate::local_walking::people_together(self.walking, actor, patient) {
+                        return None;
+                    }
                     let pressured = preference.pressure_threshold.is_some_and(|threshold| {
                         opinions.as_ref().is_some_and(|index| {
                             let (fear, obligation) = index.feelings(actor_id, patient_id);
@@ -322,6 +329,7 @@ impl Context<'_> {
                     .locations
                     .region((a.id, a.region), (p.id, p.region))
                     .is_none()
+                || !crate::local_walking::people_together(self.walking, a, p)
                 || (!self_wound && !available(p))
                 || !self.communication.can_touch(actor, patient)
                 || quantity == 0
