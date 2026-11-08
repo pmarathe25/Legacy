@@ -64,6 +64,82 @@ impl RecallIndex<'_> {
             .is_none_or(|index| self.rows[index].remembers(record, now))
     }
 }
+
+enum ReportUses {
+    Dense {
+        base: u64,
+        slots: Vec<(AtomicU64, AtomicU64)>,
+    },
+    Sparse(Vec<(u64, AtomicU64, AtomicU64)>),
+}
+impl ReportUses {
+    fn new(base: Option<u64>, population: usize, encounters: &[Encounter]) -> Self {
+        if let Some(base) = base
+            && encounters.len().saturating_mul(2) >= population / 2
+        {
+            return Self::Dense {
+                base,
+                slots: (0..population)
+                    .into_par_iter()
+                    .map(|_| (AtomicU64::new(0), AtomicU64::new(0)))
+                    .collect(),
+            };
+        }
+        let mut people: Vec<_> = encounters
+            .par_iter()
+            .flat_map_iter(|event| [event.a, event.b])
+            .collect();
+        if people.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            people.par_sort_unstable();
+        }
+        Self::Sparse(
+            people
+                .par_chunk_by(|a, b| a == b)
+                .map(|group| (group[0], AtomicU64::new(0), AtomicU64::new(0)))
+                .collect(),
+        )
+    }
+    fn record(&self, person: u64, source: u64, region: u64) {
+        let slot = match self {
+            Self::Dense { base, slots } => person
+                .checked_sub(*base)
+                .and_then(|offset| usize::try_from(offset).ok())
+                .and_then(|index| slots.get(index))
+                .map(|(a, b)| (a, b)),
+            Self::Sparse(rows) => rows
+                .binary_search_by_key(&person, |row| row.0)
+                .ok()
+                .map(|index| (&rows[index].1, &rows[index].2)),
+        };
+        if let Some((a, b)) = slot {
+            a.store(source, Ordering::Relaxed);
+            b.store(region, Ordering::Relaxed);
+        }
+    }
+    fn pairs(&self) -> Vec<(u64, u64)> {
+        let collect = |person: u64, source: &AtomicU64, region: &AtomicU64| {
+            let source = source.load(Ordering::Relaxed);
+            let region = region.load(Ordering::Relaxed);
+            (source != 0 && region != 0)
+                .then_some([(person, region), (source, region)])
+                .into_iter()
+                .flatten()
+        };
+        match self {
+            Self::Dense { base, slots } => slots
+                .par_iter()
+                .enumerate()
+                .flat_map_iter(|(index, (source, region))| {
+                    collect(*base + index as u64, source, region)
+                })
+                .collect(),
+            Self::Sparse(rows) => rows
+                .par_iter()
+                .flat_map_iter(|(person, source, region)| collect(*person, source, region))
+                .collect(),
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Mind {
@@ -773,6 +849,8 @@ impl Knowledge {
             };
         seen_contacts.par_sort_unstable();
         let recall = self.recall_index();
+        let report_uses = (!self.retention.is_empty() && !encounters.is_empty())
+            .then(|| ReportUses::new(observation_base, observations.len(), encounters));
         let next: Vec<Mind> = self
             .minds
             .par_iter()
@@ -868,18 +946,44 @@ impl Knowledge {
                                 .find(|old| old.region == r.region)
                                 .is_none_or(|old| {
                                     (r.observed_at, r.witness) > (old.observed_at, old.witness)
+                                        || (!self.retention.is_empty()
+                                            && same_evidence(
+                                                old,
+                                                &r.stated_to(
+                                                    partner,
+                                                    mind.person,
+                                                    minds[j].misreport,
+                                                ),
+                                            ))
                                 })
                         })
-                        .max_by_key(|r| (r.observed_at, r.region, r.witness));
+                        .max_by_key(|r| {
+                            let newer = self.retention.is_empty()
+                                || mind
+                                    .records
+                                    .iter()
+                                    .find(|old| old.region == r.region)
+                                    .is_none_or(|old| {
+                                        (r.observed_at, r.witness) > (old.observed_at, old.witness)
+                                    });
+                            (newer, r.observed_at, r.region, r.witness)
+                        });
                     if let Some(report) = report {
                         let received = report.stated_to(partner, mind.person, minds[j].misreport);
-                        remember(
-                            &mut mind.records,
-                            received,
-                            self.max_records,
-                            local_region,
-                            false,
-                        );
+                        if !mind.records.iter().any(|old| same_evidence(old, &received)) {
+                            remember(
+                                &mut mind.records,
+                                received.clone(),
+                                self.max_records,
+                                local_region,
+                                false,
+                            );
+                        }
+                        if let Some(uses) = &report_uses
+                            && mind.records.iter().any(|old| same_evidence(old, &received))
+                        {
+                            uses.record(mind.person, partner, received.region);
+                        }
                     }
                 }
                 if let Some(partner) = partner
@@ -946,6 +1050,10 @@ impl Knowledge {
                 mind
             })
             .collect();
+        let mut reinforced: Vec<_> = report_uses
+            .as_ref()
+            .map_or_else(Vec::new, ReportUses::pairs);
+        reinforced.par_sort_unstable();
         let retention = if self.retention.is_empty() {
             Vec::new()
         } else {
@@ -993,6 +1101,17 @@ impl Knowledge {
                             policy.reinforce(record.region, now);
                         } else if changed {
                             policy.reinforce(record.region, now.saturating_add(1));
+                        }
+                    }
+                    let begin = reinforced.partition_point(|row| row.0 < policy.person);
+                    let end = reinforced.partition_point(|row| row.0 <= policy.person);
+                    for &(_, region) in &reinforced[begin..end] {
+                        if new_mind
+                            .records
+                            .iter()
+                            .any(|record| record.region == region)
+                        {
+                            policy.reinforce(region, now.saturating_add(1));
                         }
                     }
                     policy

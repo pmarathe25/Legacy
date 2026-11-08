@@ -7710,6 +7710,102 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
 }
 
 #[test]
+fn repeated_personal_testimony_reinforces_recall_without_refreshing_the_claim() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-written-food.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                let knowledge = state.knowledge.as_mut().unwrap();
+                let source = knowledge
+                    .minds
+                    .iter_mut()
+                    .find(|mind| mind.person == 1)
+                    .unwrap();
+                source.reporting = Some(game_economy::Reporting {
+                    willing: true,
+                    pressure_threshold: None,
+                });
+                let mut remembered = source
+                    .records
+                    .iter()
+                    .find(|record| record.region == 2)
+                    .unwrap()
+                    .clone();
+                remembered.learned_from = Some(1);
+                knowledge
+                    .minds
+                    .iter_mut()
+                    .find(|mind| mind.person == 2)
+                    .unwrap()
+                    .records
+                    .push(remembered.clone());
+                knowledge.retention = (1..=2)
+                    .map(|person| game_economy::Retention {
+                        person,
+                        ticks: 2,
+                        traces: vec![],
+                    })
+                    .collect();
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .any(|record| record.region == 2)
+                );
+                assert!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .any(|record| record == &remembered)
+                );
+                let saved = world.snapshot();
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert!(
+                    world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                assert!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn faded_personal_memory_can_be_recovered_from_an_old_page() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

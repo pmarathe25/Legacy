@@ -152,6 +152,169 @@ fn hearing_a_forgotten_report_again_restores_its_recall() {
 }
 
 #[test]
+fn retelling_equal_evidence_reinforces_both_people_without_changing_provenance() {
+    let mut received = record();
+    received.learned_from = Some(1);
+    let owner = Knowledge {
+        max_records: 4,
+        minds: vec![mind(1, vec![record()]), mind(2, vec![received.clone()])],
+        retention: vec![
+            Retention {
+                person: 1,
+                ticks: 2,
+                traces: vec![],
+            },
+            Retention {
+                person: 2,
+                ticks: 2,
+                traces: vec![],
+            },
+        ],
+    };
+    let regions = HashSet::from([1, 2]);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                owner
+                    .prepare(&observations(), &regions, &[meeting()], 1)
+                    .unwrap()
+            })
+    };
+    let next = run(1);
+    assert_eq!(next, run(4));
+    assert!(
+        next.recall_at(1, 3)
+            .unwrap()
+            .iter()
+            .any(|row| row.region == 2)
+    );
+    assert!(
+        next.recall_at(2, 3)
+            .unwrap()
+            .iter()
+            .any(|row| row == &received)
+    );
+    assert!(
+        next.recall_at(1, 4)
+            .unwrap()
+            .iter()
+            .all(|row| row.region != 2)
+    );
+    assert!(
+        next.recall_at(2, 4)
+            .unwrap()
+            .iter()
+            .all(|row| row.region != 2)
+    );
+    let ignored = owner
+        .prepare_validated_with(&observations(), &regions, &[meeting()], 1, |_, _| false)
+        .unwrap();
+    assert!(
+        ignored
+            .recall_at(2, 2)
+            .unwrap()
+            .iter()
+            .all(|row| row.region != 2)
+    );
+}
+
+#[test]
+fn a_new_report_takes_precedence_over_rehearsing_an_equal_one() {
+    let mut equal = record();
+    equal.observed_at = 1;
+    let mut unknown = record();
+    unknown.region = 3;
+    let owner = Knowledge {
+        max_records: 4,
+        minds: vec![mind(1, vec![equal.clone(), unknown]), mind(2, vec![equal])],
+        retention: vec![Retention {
+            person: 2,
+            ticks: 5,
+            traces: vec![],
+        }],
+    };
+    let next = owner
+        .prepare(&observations(), &HashSet::from([1, 2, 3]), &[meeting()], 1)
+        .unwrap();
+    assert!(
+        next.minds[1]
+            .records
+            .iter()
+            .any(|record| record.region == 3)
+    );
+}
+
+#[test]
+fn sparse_person_ids_reinforce_independent_encounters() {
+    let mut received = record();
+    received.learned_from = Some(1);
+    let owner = Knowledge {
+        max_records: 4,
+        minds: vec![mind(3, vec![received]), mind(1, vec![record()])],
+        retention: vec![
+            Retention {
+                person: 3,
+                ticks: 2,
+                traces: vec![],
+            },
+            Retention {
+                person: 1,
+                ticks: 2,
+                traces: vec![],
+            },
+        ],
+    };
+    let observations = vec![
+        Observation {
+            person: 3,
+            health: 100,
+            local: Some((1, 3)),
+        },
+        Observation {
+            person: 1,
+            health: 100,
+            local: Some((1, 3)),
+        },
+    ];
+    let events = vec![Encounter {
+        tick: 2,
+        region: 1,
+        a: 1,
+        b: 3,
+        pressured: None,
+        also_pressured: None,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                owner
+                    .prepare(&observations, &HashSet::from([1, 2]), &events, 1)
+                    .unwrap()
+            })
+    };
+    let next = run(1);
+    assert_eq!(next, run(4));
+    assert!(
+        next.recall_at(1, 3)
+            .unwrap()
+            .iter()
+            .any(|row| row.region == 2)
+    );
+    assert!(
+        next.recall_at(3, 3)
+            .unwrap()
+            .iter()
+            .any(|row| row.region == 2)
+    );
+}
+
+#[test]
 fn forgotten_speaker_cannot_relay_a_memory_but_an_accepted_report_has_its_own_retention() {
     let regions = HashSet::from([1, 2]);
     let owner = Knowledge {
@@ -307,6 +470,91 @@ fn personal_memory_retention_benchmark() {
             samples.sort_by(f64::total_cmp);
             println!(
                 "people={count} stride={stride} workers={workers} seconds={:.6}",
+                samples[1]
+            );
+        });
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn personal_memory_retelling_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100_000u64);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let stride = std::env::var("LEGACY_RETENTION_STRIDE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100u64);
+    let encounter_stride = std::env::var("LEGACY_ENCOUNTER_STRIDE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1u64);
+    assert!(count.is_multiple_of(2) && stride > 0 && encounter_stride > 0);
+    let owner = Knowledge {
+        max_records: 4,
+        minds: (1..=count)
+            .map(|person| mind(person, vec![record()]))
+            .collect(),
+        retention: (1..=count)
+            .filter(|person| person % stride == 0)
+            .map(|person| Retention {
+                person,
+                ticks: 2,
+                traces: vec![],
+            })
+            .collect(),
+    };
+    let observations: Vec<_> = (1..=count)
+        .map(|person| Observation {
+            person,
+            health: 100,
+            local: Some((1, 3)),
+        })
+        .collect();
+    let events: Vec<_> = (0..count / 2)
+        .filter(|n| n % encounter_stride == 0)
+        .map(|n| Encounter {
+            tick: 2,
+            region: 1,
+            a: n * 2 + 1,
+            b: n * 2 + 2,
+            pressured: None,
+            also_pressured: None,
+        })
+        .collect();
+    let regions = HashSet::from([1, 2]);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let start = std::time::Instant::now();
+                let next = owner
+                    .prepare_validated(&observations, &regions, &events, 1)
+                    .unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert!(next.retention.iter().all(|policy| {
+                    let participated = ((policy.person - 1) / 2) % encounter_stride == 0;
+                    policy
+                        .traces
+                        .iter()
+                        .any(|trace| trace.region == 2 && trace.reinforced_at == 2)
+                        == participated
+                }));
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "people={count} stride={stride} encounters={encounter_stride} workers={workers} seconds={:.6}",
                 samples[1]
             );
         });
