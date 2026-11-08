@@ -86,6 +86,14 @@ pub struct Injuries {
 }
 
 impl Injuries {
+    /// Runtime compilation keeps cases ordered by person.
+    pub fn immobilized(&self, person: u64) -> bool {
+        self.rules.immobilizes
+            && self
+                .cases
+                .binary_search_by_key(&person, |case| case.person)
+                .is_ok()
+    }
     pub fn validate(
         &self,
         people: &HashSet<u64>,

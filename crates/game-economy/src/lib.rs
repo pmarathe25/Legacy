@@ -6406,8 +6406,38 @@ impl Economy {
             .as_ref()
             .map(|travel| travel.advance(&mut person.people));
         let mut food_search = self.food_search.clone();
+        let possible_departures = self.travel.is_some()
+            && (expedition
+                .as_ref()
+                .and_then(|prepared| prepared.draft.as_ref())
+                .is_some_and(|draft| !draft.departures.is_empty())
+                || !guardian_departures.is_empty()
+                || search_plan
+                    .as_ref()
+                    .is_some_and(|plan| !plan.departures.is_empty())
+                || hauling_plan
+                    .as_ref()
+                    .is_some_and(|plan| !plan.departures.is_empty()));
+        let mut travel_blocked = if possible_departures {
+            held.to_vec()
+        } else {
+            Vec::new()
+        };
+        if possible_departures {
+            travel_blocked.par_extend(fighters.par_iter().copied());
+            if let Some(injuries) = self
+                .combat
+                .as_ref()
+                .and_then(|combat| combat.state.injuries.as_ref())
+                .filter(|injuries| injuries.rules.immobilizes)
+            {
+                travel_blocked.par_extend(injuries.cases.par_iter().map(|case| case.person));
+            }
+            travel_blocked.par_sort_unstable();
+            travel_blocked.dedup();
+        }
         let alive_and_local = |d: &Departure| {
-            held.binary_search(&d.person).is_err()
+            travel_blocked.binary_search(&d.person).is_err()
                 && person
                     .people
                     .binary_search_by_key(&d.person, |p| p.id)
@@ -6843,7 +6873,7 @@ impl Economy {
             travel,
             dynamics,
             mission_gifts,
-            held,
+            travel_blocked,
             mission_observations,
             tick
         );

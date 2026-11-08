@@ -163,6 +163,25 @@ macro_rules! departure_method {
             }) {
                 return Err("person is held behind a physical barrier".into());
             }
+            if self.combat.as_ref().is_some_and(|combat| {
+                departures
+                    .par_iter()
+                    .any(|request| combat.actors().binary_search(&request.person).is_ok())
+            }) {
+                return Err("a combatant cannot depart during a fight".into());
+            }
+            if self
+                .combat
+                .as_ref()
+                .and_then(|combat| combat.state.injuries.as_ref())
+                .is_some_and(|injuries| {
+                    departures
+                        .par_iter()
+                        .any(|request| injuries.immobilized(request.person))
+                })
+            {
+                return Err("a wound prevents departure".into());
+            }
             let working = $crate::travel::working(self.physical.work());
             let (travel, people) = self.travel.as_ref().ok_or("travel is disabled")?.depart(
                 &self.people,

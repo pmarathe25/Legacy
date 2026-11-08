@@ -24540,6 +24540,174 @@ fn wound_treatment_requires_real_medicine_and_no_disease() {
 }
 
 #[test]
+fn fighting_and_immobilizing_wounds_prevent_manual_departure() {
+    use game_economy_combat::injury::Case;
+    let mut initial = food_search_workload(4);
+    initial.food_search = None;
+    initial.people[0].controlled = true;
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![
+        Case {
+            person: 3,
+            attacker: 2,
+            sustained_at: 0,
+            heals_at: 2,
+        },
+        Case {
+            person: 1,
+            attacker: 2,
+            sustained_at: 0,
+            heals_at: 2,
+        },
+    ]));
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    let request = Departure {
+        person: 1,
+        destination: 2,
+    };
+    let before = world.snapshot();
+    assert!(world.depart(&[request]).is_err());
+    assert!(
+        world
+            .depart(&[Departure {
+                person: 3,
+                destination: 2
+            }])
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), before);
+    world.advance().unwrap();
+    world.advance().unwrap();
+    world.depart(&[request]).unwrap();
+    assert_eq!(world.snapshot().people[0].region, None);
+
+    let mut state = food_search_workload(4);
+    state.food_search = None;
+    state.people[0].controlled = true;
+    state.combat = Some(combat_rules());
+    let mut world = Economy::compile(state).unwrap();
+    world.attack(1, 2).unwrap();
+    let before = world.snapshot();
+    assert!(world.depart(&[request]).is_err());
+    assert_eq!(world.snapshot(), before);
+    Economy::compile(before).unwrap();
+}
+
+#[test]
+fn immobilized_people_do_not_depart_on_food_search_or_expeditions() {
+    use game_economy_combat::injury::Case;
+    let injury = || {
+        injury_rules(vec![Case {
+            person: 1,
+            attacker: 2,
+            sustained_at: 0,
+            heals_at: 2,
+        }])
+    };
+    let run = |workers, mission| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = if mission {
+                    expedition_workload(4)
+                } else {
+                    food_search_workload(4)
+                };
+                let mut combat = combat_rules();
+                combat.injuries = Some(injury());
+                initial.combat = Some(combat);
+                let mut world = Economy::compile(initial).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.people[0].region, Some(1));
+                assert_eq!(state.travel.as_ref().unwrap().journeys.len(), 3);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.people[0].region, None);
+                state
+            })
+    };
+    for mission in [false, true] {
+        assert_eq!(run(1, mission), run(4, mission));
+    }
+}
+
+#[test]
+fn active_fighters_do_not_depart_with_pending_expeditions() {
+    let mut initial = expedition_workload(4);
+    initial.combat = Some(combat_rules());
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.people[0].region, Some(1));
+    assert_eq!(state.people[1].region, Some(1));
+    assert_eq!(state.travel.as_ref().unwrap().journeys.len(), 2);
+    Economy::compile(state).unwrap();
+}
+
+#[test]
+#[ignore = "immobilized food-search departures performance measurement"]
+fn immobilized_departure_benchmark() {
+    use game_economy_combat::injury::Case;
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    assert!(count >= 2);
+    let mut initial = food_search_workload(count);
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(
+        (1..=count)
+            .step_by(2)
+            .map(|person| Case {
+                person,
+                attacker: if person == 1 { 2 } else { 1 },
+                sustained_at: 0,
+                heals_at: 50,
+            })
+            .collect(),
+    ));
+    initial.combat = Some(combat);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut samples = Vec::new();
+        let mut fingerprint = None;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            samples.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            assert_eq!(state.travel.as_ref().unwrap().journeys.len(), (count / 2) as usize);
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if let Some(expected) = fingerprint { assert_eq!(expected, actual); }
+            fingerprint = Some(actual);
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} people={count} immobilized={} elapsed_median={:.6} fingerprint={:016x}", count.div_ceil(2), samples[1], fingerprint.unwrap());
+    });
+}
+
+#[test]
 fn treatment_can_reach_a_worker_whose_wound_has_paused_their_job() {
     use game_economy_combat::injury::Case;
     let mut initial = fixture();

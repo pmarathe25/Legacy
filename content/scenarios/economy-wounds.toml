@@ -17,6 +17,20 @@ max_work_hunger = 20
 id = 1
 stock = { reed-shelter-kit = 1, bread = 20 }
 
+[[regions]]
+id = 2
+stock = { bread = 1 }
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 2
+
+[[routes]]
+source = 2
+destination = 1
+ticks = 2
+
 [[people]]
 id = 1
 region = 1

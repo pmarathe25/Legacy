@@ -272,7 +272,7 @@ impl Runtime {
         Self::compile_known(state, people, view, tick, &goods)
     }
     fn compile_known(
-        state: Combat,
+        mut state: Combat,
         people: &[Person],
         view: &View,
         tick: u64,
@@ -309,8 +309,15 @@ impl Runtime {
             return Err("invalid personal combat reaction".into());
         }
         intervention::validate(&state.interventions, &ids)?;
-        if let Some(injuries) = &state.injuries {
+        if let Some(injuries) = &mut state.injuries {
             injuries.validate(&ids, goods, tick)?;
+            if injuries
+                .cases
+                .par_windows(2)
+                .any(|pair| pair[0].person > pair[1].person)
+            {
+                injuries.cases.par_sort_unstable_by_key(|case| case.person);
+            }
         }
         if state.conflict.encounters.par_iter().any(|fight| {
             fight.fighters.par_iter().any(|f| {
@@ -614,10 +621,11 @@ impl Runtime {
             .iter()
             .find(|r| r.person == target)
             .map_or(&Response::Defend, |r| &r.response);
-        let immobilized = self.state.injuries.as_ref().is_some_and(|injuries| {
-            injuries.rules.immobilizes
-                && injuries.cases.par_iter().any(|case| case.person == target)
-        });
+        let immobilized = self
+            .state
+            .injuries
+            .as_ref()
+            .is_some_and(|injuries| injuries.immobilized(target));
         let target_order = match response {
             Response::Defend => Order::Defend,
             Response::Fight => Order::Attack { target: actor },
@@ -679,13 +687,11 @@ impl Runtime {
         command: game_conflict::Command,
     ) -> Result<Self, String> {
         if matches!(command.order, Order::Retreat)
-            && self.state.injuries.as_ref().is_some_and(|injuries| {
-                injuries.rules.immobilizes
-                    && injuries
-                        .cases
-                        .par_iter()
-                        .any(|case| case.person == command.person)
-            })
+            && self
+                .state
+                .injuries
+                .as_ref()
+                .is_some_and(|injuries| injuries.immobilized(command.person))
         {
             return Err("a wound prevents retreat".into());
         }
@@ -700,13 +706,12 @@ impl Runtime {
         tick: u64,
         command: game_tactics::Move,
     ) -> Result<Self, String> {
-        if self.state.injuries.as_ref().is_some_and(|injuries| {
-            injuries.rules.immobilizes
-                && injuries
-                    .cases
-                    .par_iter()
-                    .any(|case| case.person == command.person)
-        }) {
+        if self
+            .state
+            .injuries
+            .as_ref()
+            .is_some_and(|injuries| injuries.immobilized(command.person))
+        {
             return Err("a wound prevents tactical movement".into());
         }
         let mut state = self.state.clone();

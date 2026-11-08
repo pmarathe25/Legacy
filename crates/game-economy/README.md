@@ -4,7 +4,7 @@ This composed simulation joins personal work, actual dated goods, food acquisiti
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.
 
-Optional combat wounds persist independently of health. They can pause or reduce continuing work and optionally prevent tactical movement and retreat. A real, accepted treatment using configured medicine can clear an earlier wound; a new wound in the same boundary remains. The player's local view shows who is visibly wounded without exposing private causes. Strategic travel is not yet limited by these wounds.
+Optional combat wounds persist independently of health. They can pause or reduce continuing work and optionally prevent tactical movement, retreat, and strategic departure. A real, accepted treatment using configured medicine can clear an earlier wound; a new wound in the same boundary remains. The player's local view shows who is visibly wounded without exposing private causes.
 
 Optional renewable animal products grow as bounded individual biological state. Collection uses an animal's response and the collector's choices, produces real dated goods, and competes with other actions involving that animal. An existing physical hold can support explicitly forced collection without implying consent.
 
@@ -52,6 +52,8 @@ It is a synthetic tactical workload, not a complete war or mixed campaign.
 The ignored `independent_reinforcement_benchmark` measures a full boundary of personal attempts to join existing fights. Set `LEGACY_HOT=1` to put all attempts into one fight and exercise its finite tactical capacity; `LEGACY_ENCOUNTERS` controls the number of helpers, and `LEGACY_WORKERS` controls concurrency.
 
 The ignored `combat_wounds_benchmark` measures a full boundary of real strikes producing wounds. Set `LEGACY_HOT=1` to direct all strikes at one person; `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` select the workload and concurrency.
+
+The ignored `immobilized_departure_benchmark` measures food-search decisions and departures with half the population immobilized. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to vary the workload and concurrency.
 
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary

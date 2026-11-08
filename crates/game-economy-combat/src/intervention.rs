@@ -170,9 +170,12 @@ impl Runtime {
         if self.actors().binary_search(&actor).is_ok() {
             return Err("person is already fighting".into());
         }
-        if self.state.injuries.as_ref().is_some_and(|injuries| {
-            injuries.rules.immobilizes && injuries.cases.par_iter().any(|case| case.person == actor)
-        }) {
+        if self
+            .state
+            .injuries
+            .as_ref()
+            .is_some_and(|injuries| injuries.immobilized(actor))
+        {
             return Err("a wound prevents tactical entry".into());
         }
         let person = people
