@@ -24272,7 +24272,249 @@ fn combat_rules() -> Combat {
         }],
         protection: vec![],
         weapons: vec![],
+        interventions: vec![],
+        intervention_events: vec![],
     }
+}
+
+#[test]
+fn individuals_join_an_existing_fight_from_personal_motivation() {
+    use game_economy_combat::intervention::Preference;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.dynamics = None;
+    initial.nutrition = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[3].seek_meals = true;
+    initial.people[3].hunger = 20;
+    let mut combat = combat_rules();
+    combat.interventions = vec![
+        Preference {
+            person: 3,
+            beneficiary: 2,
+            opponent: 1,
+            willing: true,
+            pressure_from: None,
+            fear_at_least: None,
+            obligation_at_least: None,
+        },
+        Preference {
+            person: 4,
+            beneficiary: 2,
+            opponent: 1,
+            willing: false,
+            pressure_from: Some(2),
+            fear_at_least: Some(3),
+            obligation_at_least: None,
+        },
+    ];
+    initial.combat = Some(combat);
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 4,
+        target: 2,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.attack(1, 2).unwrap();
+                let before = world.snapshot();
+                let discarded = world.prepare().unwrap();
+                drop(discarded);
+                assert_eq!(world.snapshot(), before);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let combat = state.combat.as_ref().unwrap();
+                let fighters = &combat.conflict.encounters[0].fighters;
+                assert_eq!(
+                    fighters
+                        .iter()
+                        .map(|f| (f.person, f.side))
+                        .collect::<Vec<_>>(),
+                    vec![(1, 1), (2, 2), (3, 2), (4, 2)]
+                );
+                assert!(
+                    combat
+                        .conflict
+                        .events
+                        .iter()
+                        .all(|event| event.attacker != 3 && event.attacker != 4)
+                );
+                assert_eq!(combat.tactics.battles[0].people.len(), 4);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(4))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn intervention_fails_if_the_beneficiary_withdraws_before_admission() {
+    use game_economy_combat::intervention::Preference;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    initial.people[1].health = 20;
+    let mut combat = combat_rules();
+    combat.reactions[0].retreat_at_or_below = Some(20);
+    combat.interventions = vec![Preference {
+        person: 3,
+        beneficiary: 2,
+        opponent: 1,
+        willing: true,
+        pressure_from: None,
+        fear_at_least: None,
+        obligation_at_least: None,
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    let combat = world.snapshot().combat.unwrap();
+    assert!(combat.conflict.encounters.is_empty());
+    assert_eq!(combat.intervention_events.len(), 1);
+    assert!(!combat.intervention_events[0].admitted);
+}
+
+#[test]
+fn intervention_interrupts_the_helpers_existing_work() {
+    use game_economy_combat::intervention::Preference;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.dynamics = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    let mut combat = combat_rules();
+    combat.interventions = vec![Preference {
+        person: 2,
+        beneficiary: 3,
+        opponent: 1,
+        willing: true,
+        pressure_from: None,
+        fear_at_least: None,
+        obligation_at_least: None,
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(world.advance().unwrap().started, vec![1]);
+    world.attack(1, 3).unwrap();
+    assert_eq!(world.advance().unwrap().abandoned, vec![1]);
+    assert!(
+        world.snapshot().combat.unwrap().conflict.encounters[0]
+            .fighters
+            .iter()
+            .any(|f| f.person == 2)
+    );
+}
+
+#[test]
+fn an_unwilling_or_controlled_person_does_not_intervene_automatically() {
+    use game_economy_combat::intervention::Preference;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    let mut combat = combat_rules();
+    combat.interventions = vec![Preference {
+        person: 3,
+        beneficiary: 2,
+        opponent: 1,
+        willing: false,
+        pressure_from: Some(2),
+        fear_at_least: Some(1),
+        obligation_at_least: Some(1),
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().combat.unwrap().conflict.encounters[0]
+            .fighters
+            .len(),
+        2
+    );
+
+    initial.people[2].controlled = true;
+    initial.combat.as_mut().unwrap().interventions[0].willing = true;
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().combat.unwrap().conflict.encounters[0]
+            .fighters
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn personally_felt_obligation_can_motivate_defense_without_consent() {
+    use game_economy_combat::intervention::Preference;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    let mut combat = combat_rules();
+    combat.interventions = vec![Preference {
+        person: 3,
+        beneficiary: 2,
+        opponent: 1,
+        willing: false,
+        pressure_from: Some(2),
+        fear_at_least: None,
+        obligation_at_least: Some(3),
+    }];
+    initial.combat = Some(combat);
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 3,
+        target: 2,
+        trust: 0,
+        fear: 0,
+        obligation: 3,
+        affinity: 0,
+    }];
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    let combat = world.snapshot().combat.unwrap();
+    assert!(
+        combat.conflict.encounters[0]
+            .fighters
+            .iter()
+            .any(|fighter| fighter.person == 3 && fighter.side == 2)
+    );
 }
 
 #[test]
@@ -26203,6 +26445,8 @@ fn concentrated_combat(count: u64) -> State {
         reactions: vec![],
         protection: vec![],
         weapons: vec![],
+        interventions: vec![],
+        intervention_events: vec![],
     });
     state
 }
@@ -26254,6 +26498,96 @@ fn independent_combats(count: u64) -> State {
         })
         .collect();
     state
+}
+
+fn independent_reinforcements(count: u64) -> State {
+    use game_economy_combat::intervention::Preference;
+    let mut state = independent_combats(count);
+    let helper = state.people[0].clone();
+    for i in 0..count {
+        let id = count * 2 + i + 1;
+        let mut person = helper.clone();
+        person.id = id;
+        person.health = 100;
+        state.people.push(person);
+        state
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Person(id), 10, vec![]).unwrap());
+    }
+    state.combat.as_mut().unwrap().interventions = (0..count)
+        .map(|i| Preference {
+            person: count * 2 + i + 1,
+            beneficiary: i * 2 + 1,
+            opponent: i * 2 + 2,
+            willing: true,
+            pressure_from: None,
+            fear_at_least: None,
+            obligation_at_least: None,
+        })
+        .collect();
+    state
+}
+
+#[test]
+#[ignore = "independent reinforcements performance measurement"]
+fn independent_reinforcement_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_ENCOUNTERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let hot = std::env::var_os("LEGACY_HOT").is_some();
+    let mut initial = independent_reinforcements(count);
+    if hot {
+        let combat = initial.combat.as_mut().unwrap();
+        combat.conflict.encounters.truncate(1);
+        combat.tactics.battles.truncate(1);
+        for preference in &mut combat.interventions {
+            preference.beneficiary = 1;
+            preference.opponent = 2;
+        }
+    }
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut fingerprint = None;
+            for _ in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                samples.push(start.elapsed().as_secs_f64());
+                let state = world.snapshot();
+                let combat = state.combat.as_ref().unwrap();
+                if hot {
+                    let rules = &combat.tactics.maps[0].rules;
+                    let capacity = ((rules.width.min(63) + 1) * (rules.height.min(63) + 1) - 2) as usize;
+                    assert_eq!(combat.intervention_events.iter().filter(|e| e.admitted).count(), (count as usize).min(capacity));
+                } else {
+                    assert!(combat.conflict.encounters.iter().all(|f| f.fighters.len() == 3));
+                }
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(expected, actual); }
+                fingerprint = Some(actual);
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "workers={workers} encounters={count} people={} hot={hot} elapsed_median={:.6} fingerprint={:016x}",
+                count * 3,
+                samples[1], fingerprint.unwrap()
+            );
+        });
 }
 
 #[test]

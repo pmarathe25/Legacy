@@ -1,5 +1,6 @@
 //! Tactical encounters over the economic world's authoritative people.
 pub mod confrontation;
+pub mod intervention;
 pub use game_conflict::{Command, Order};
 use game_conflict::{Conflict, Encounter, Fighter};
 use game_conflict_packed::{Plan, Round};
@@ -43,6 +44,8 @@ pub struct Config {
     pub map_rules: Rules,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub interventions: Vec<intervention::Preference>,
     #[serde(default)]
     pub protection: Vec<ProtectionConfig>,
     #[serde(default)]
@@ -92,6 +95,7 @@ impl Config {
         let mut combat = initial(regions, seed, self.damage, self.map_rules, self.reactions)?;
         combat.protection = protection;
         combat.weapons = weapons;
+        combat.interventions = self.interventions;
         Ok(combat)
     }
 }
@@ -114,6 +118,10 @@ pub struct Combat {
     pub tactics: Tactics,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    #[serde(default)]
+    pub interventions: Vec<intervention::Preference>,
+    #[serde(default)]
+    pub intervention_events: Vec<intervention::Event>,
     #[serde(default)]
     pub protection: Vec<Protection>,
     #[serde(default)]
@@ -160,6 +168,8 @@ pub fn initial(
             battles: vec![],
         },
         reactions,
+        interventions: vec![],
+        intervention_events: vec![],
         protection: vec![],
         weapons: vec![],
     })
@@ -196,6 +206,8 @@ fn clone_state(state: &Combat) -> Combat {
                 .collect(),
         },
         reactions: state.reactions.par_iter().cloned().collect(),
+        interventions: state.interventions.par_iter().cloned().collect(),
+        intervention_events: vec![],
         protection: state.protection.par_iter().cloned().collect(),
         weapons: state.weapons.par_iter().cloned().collect(),
     }
@@ -258,6 +270,7 @@ impl Runtime {
         {
             return Err("invalid personal combat reaction".into());
         }
+        intervention::validate(&state.interventions, &ids)?;
         if state.conflict.encounters.par_iter().any(|fight| {
             fight.fighters.par_iter().any(|f| {
                 people

@@ -26,6 +26,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 In `content/scenarios/economy-fear-retreat.toml`, use `attack 3` and advance the combat. The other fighter can gain personal fear from an actual strike and choose to retreat in a later round; another person's fear or a fighter without that inclination does not compel retreat.
 
+In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the combat. Person 2 can independently interrupt their work and enter the encounter on person 3's side after the current round, provided both combatants remain and a visible tactical entry is available.
+
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
 
 `content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.

@@ -47,6 +47,8 @@ encounters in the same world and reports import and three-boundary times
 separately. Set `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` to vary the workload.
 It is a synthetic tactical workload, not a complete war or mixed campaign.
 
+The ignored `independent_reinforcement_benchmark` measures a full boundary of personal attempts to join existing fights. Set `LEGACY_HOT=1` to put all attempts into one fight and exercise its finite tactical capacity; `LEGACY_ENCOUNTERS` controls the number of helpers, and `LEGACY_WORKERS` controls concurrency.
+
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary
 the population and concurrency. It reports a state fingerprint and times two

@@ -2825,13 +2825,67 @@ impl Economy {
         };
         let confrontation =
             game_economy_combat::confrontation::combine(confrontation, taking_confrontation)?;
+        let intervention = if self
+            .combat
+            .as_ref()
+            .is_some_and(|combat| !combat.state.interventions.is_empty())
+        {
+            let mut unavailable =
+                game_economy_fatigue::resting(self.fatigue.as_ref(), &self.people);
+            if let Some(selected) = &confrontation {
+                unavailable.extend_from_slice(&selected.actors);
+            }
+            if let Some(plan) = &taking_plan {
+                unavailable.extend_from_slice(&plan.actors);
+            }
+            if let Some(confinement) = &self.confinement {
+                unavailable.extend(confinement.holds.iter().map(|hold| hold.person));
+            }
+            if let Some(row) = request {
+                unavailable.extend([row.actor, row.target]);
+            }
+            unavailable.extend(player_work.map(|row| row.actor()));
+            unavailable.extend(player_meal.map(|row| row.person));
+            unavailable.extend(player_transfer.map(|row| row.person()));
+            if let Some((row, _)) = &manual_response {
+                unavailable.push(row.worker);
+            }
+            if let Some(choice) = player_transfer {
+                use game_economy_interaction::PhysicalChoice;
+                match choice {
+                    PhysicalChoice::Give { recipient, .. }
+                    | PhysicalChoice::GivePage { recipient, .. } => unavailable.push(recipient),
+                    PhysicalChoice::TreatOther { patient, .. } => unavailable.push(patient),
+                    PhysicalChoice::AskFood { target, .. }
+                    | PhysicalChoice::Confine { target, .. }
+                    | PhysicalChoice::ReleaseHeld { target, .. } => unavailable.push(target),
+                    PhysicalChoice::AskHaul { carrier, .. } => unavailable.push(carrier),
+                    _ => {}
+                }
+            }
+            unavailable.par_sort_unstable();
+            unavailable.dedup();
+            game_economy_combat::intervention::select(
+                self.combat.as_ref(),
+                self.opinions.as_ref(),
+                &self.people,
+                &unavailable,
+            )
+        } else {
+            None
+        };
         let current_fighters = self
             .combat
             .as_ref()
             .map_or(&[][..], |combat| combat.actors());
-        let combined_fighters = confrontation.as_ref().map(|selected| {
+        let combined_fighters = (confrontation.is_some() || intervention.is_some()).then(|| {
             let mut fighters = current_fighters.to_vec();
-            fighters.extend_from_slice(&selected.actors);
+            if let Some(selected) = &confrontation {
+                fighters.extend_from_slice(&selected.actors);
+            }
+            if let Some(selected) = &intervention {
+                fighters.extend_from_slice(&selected.actors);
+            }
             fighters.par_sort_unstable();
             fighters.dedup();
             fighters
@@ -6658,6 +6712,9 @@ impl Economy {
             game_economy_claims::publish_site_uses(owner, &uses, &sites, &self.people, tick);
         }
         game_economy_combat::finish_world!(combat, person);
+        if let Some((combat, selected)) = combat.as_mut().zip(intervention.as_ref()) {
+            combat.add_interventions(selected, &person.people)?;
+        }
         let started_confrontations =
             if let Some((combat, selected)) = combat.as_mut().zip(confrontation.as_ref()) {
                 #[cfg(feature = "profile")]
