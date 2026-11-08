@@ -86,6 +86,38 @@ impl Clone for LocalTransport {
     }
 }
 impl LocalTransport {
+    fn valid_goal_search(&self, search: &goal::SearchPreference) -> bool {
+        let Some(first) = self
+            .stores
+            .binary_search_by_key(&search.store, |store| store.id)
+            .ok()
+            .map(|index| &self.stores[index])
+        else {
+            return false;
+        };
+        self.walking.is_some()
+            && search.retry_ticks > 0
+            && search.max_ticks > 0
+            && search.max_visits > 0
+            && search.max_visits <= 32
+            && search.alternatives.len() < 32
+            && (search.max_visits as usize) <= search.alternatives.len() + 1
+            && search.examined <= search.max_visits
+            && search.active_recipe != Some(0)
+            && (search.active_recipe.is_some() || search.target.is_none())
+            && search.target.is_none_or(|target| {
+                target == search.store || search.alternatives.contains(&target)
+            })
+            && search.alternatives.iter().enumerate().all(|(index, id)| {
+                *id != search.store
+                    && !search.alternatives[..index].contains(id)
+                    && self
+                        .stores
+                        .binary_search_by_key(id, |store| store.id)
+                        .ok()
+                        .is_some_and(|i| self.stores[i].region == first.region)
+            })
+    }
     /// Clone the transport owner while a replacement walking generation is staged separately.
     pub fn clone_without_walking(&self) -> Self {
         Self {
@@ -135,9 +167,7 @@ impl LocalTransport {
             || self.policies.par_windows(2).any(|w| w[0].person >= w[1].person)
             || self.goal_fetchers.par_windows(2).any(|w| w[0].person >= w[1].person)
             || self.goal_fetchers.par_iter().any(|p| !people.contains(&p.person) || p.max_quantity == 0
-                || p.search.as_ref().is_some_and(|search| self.walking.is_none() || search.retry_ticks == 0 || search.max_ticks == 0
-                    || self.stores.binary_search_by_key(&search.store, |store| store.id).is_err()
-                    || search.active_recipe == Some(0)))
+                || p.search.as_ref().is_some_and(|search| !self.valid_goal_search(search)))
             || self.policies.par_iter().any(|p| !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0
                 || p.source == p.destination || !endpoint(p.source, p.region, p.good) || !endpoint(p.destination, p.region, p.good)
                 || p.pressured_by.is_some() != p.pressure_threshold.is_some() || p.pressure_threshold == Some(0)

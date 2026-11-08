@@ -5,6 +5,7 @@ use game_lots::{ContainerView, Place, View};
 use game_production_model::Recipe;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -23,6 +24,10 @@ pub struct Preference {
 pub struct SearchPreference {
     pub store: u64,
     #[serde(default)]
+    pub alternatives: Arc<Vec<u64>>,
+    #[serde(default = "one_visit")]
+    pub max_visits: u32,
+    #[serde(default)]
     pub willing: bool,
     pub retry_ticks: u64,
     pub max_ticks: u64,
@@ -32,6 +37,14 @@ pub struct SearchPreference {
     pub active_recipe: Option<u32>,
     #[serde(default)]
     pub expires_at: u64,
+    #[serde(default)]
+    pub examined: u32,
+    #[serde(default)]
+    pub target: Option<u64>,
+}
+
+fn one_visit() -> u32 {
+    1
 }
 #[derive(Clone, Copy)]
 pub struct Need {

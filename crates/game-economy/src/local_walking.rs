@@ -152,7 +152,7 @@ pub fn mission_return(
     choices.par_iter().filter_map(|choice| choice.1).collect()
 }
 
-/// One bounded attempt at a personally chosen store; its contents are not read.
+/// Visit a bounded sequence of known stores, inspecting each only on arrival.
 pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>, String> {
     use game_economy_local_transport::walking::{Location, Request};
     context
@@ -171,6 +171,7 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                     || selected.is_some_and(|recipe| Some(recipe) != search.active_recipe))
             {
                 search.active_recipe = None;
+                search.target = None;
                 return Some(Ok(SearchProposal {
                     person: preference.person,
                     request: None,
@@ -182,18 +183,10 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                 .binary_search_by_key(&preference.person, |person| person.id)
                 .ok()?];
             let region = person.region?;
-            let destination = Endpoint::Store { id: search.store };
+            let destination = Endpoint::Store {
+                id: search.target.unwrap_or(search.store),
+            };
             let location = context.walking.location(person.id, region);
-            if search.active_recipe.is_some()
-                && matches!(location, Location::At { endpoint, .. } if endpoint == destination)
-            {
-                search.active_recipe = None;
-                return Some(Ok(SearchProposal {
-                    person: preference.person,
-                    request: None,
-                    search,
-                }));
-            }
             if !preference.enabled
                 || !search.willing
                 || person.controlled
@@ -213,8 +206,113 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
             }
             let recipe_id = selected?;
             if search.active_recipe.is_some() {
-                if context.walking.can_advance(person.id, region, destination) {
+                let recipe = context
+                    .recipes
+                    .iter()
+                    .find(|recipe| recipe.id == recipe_id)?;
+                let holder = context.view.container(Place::Person(person.id))?;
+                if holder.used >= holder.capacity
+                    || recipe
+                        .inputs
+                        .iter()
+                        .any(|input| holder.quantity(input.good) > 0)
+                {
+                    search.active_recipe = None;
+                    search.target = None;
                     return Some(Ok(SearchProposal {
+                        person: person.id,
+                        request: None,
+                        search,
+                    }));
+                }
+                if matches!(location, Location::At { endpoint, .. } if endpoint == destination) {
+                    if search.max_visits == 1 {
+                        search.active_recipe = None;
+                        search.target = None;
+                        return Some(Ok(SearchProposal {
+                            person: person.id,
+                            request: None,
+                            search,
+                        }));
+                    }
+                    let source = context
+                        .view
+                        .container(Place::Inventory(search.target.unwrap_or(search.store)))?;
+                    if recipe
+                        .inputs
+                        .iter()
+                        .any(|input| source.quantity(input.good) > 0)
+                    {
+                        return None;
+                    }
+                    search.examined = search.examined.saturating_add(1);
+                    let current = search.target.unwrap_or(search.store);
+                    let mut candidates =
+                        std::iter::once(search.store).chain(search.alternatives.iter().copied());
+                    let next = candidates
+                        .by_ref()
+                        .skip_while(|id| *id != current)
+                        .skip(1)
+                        .find_map(|id| {
+                            if search.examined >= search.max_visits {
+                                return None;
+                            }
+                            let next = Endpoint::Store { id };
+                            if context.walking.has_route(region, destination, next) {
+                                Some((id, next))
+                            } else if context.walking.has_route(
+                                region,
+                                destination,
+                                Endpoint::Stock,
+                            ) && context.walking.has_route(region, Endpoint::Stock, next)
+                            {
+                                Some((id, Endpoint::Stock))
+                            } else {
+                                None
+                            }
+                        });
+                    if let Some((target, step)) = next {
+                        search.target = Some(target);
+                        return Some(Ok(SearchProposal {
+                            person: person.id,
+                            request: Some(Request {
+                                person: person.id,
+                                region,
+                                destination: step,
+                            }),
+                            search,
+                        }));
+                    }
+                    search.active_recipe = None;
+                    search.target = None;
+                    return Some(Ok(SearchProposal {
+                        person: person.id,
+                        request: None,
+                        search,
+                    }));
+                }
+                let step = match location {
+                    Location::Walking { to, .. } if to == destination || to == Endpoint::Stock => {
+                        Some(to)
+                    }
+                    Location::At {
+                        endpoint: Endpoint::Stock,
+                        ..
+                    } if context
+                        .walking
+                        .has_route(region, Endpoint::Stock, destination) =>
+                    {
+                        Some(destination)
+                    }
+                    Location::At { endpoint, .. }
+                        if context.walking.has_route(region, endpoint, destination) =>
+                    {
+                        Some(destination)
+                    }
+                    _ => None,
+                };
+                return step.map(|destination| {
+                    Ok(SearchProposal {
                         person: person.id,
                         request: Some(Request {
                             person: person.id,
@@ -222,14 +320,8 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
                             destination,
                         }),
                         search,
-                    }));
-                }
-                search.active_recipe = None;
-                return Some(Ok(SearchProposal {
-                    person: person.id,
-                    request: None,
-                    search,
-                }));
+                    })
+                });
             }
             if context.tick < search.next_review
                 || !matches!(
@@ -273,6 +365,8 @@ pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>
             search.next_review = next_review;
             search.expires_at = expires_at;
             search.active_recipe = Some(recipe_id);
+            search.examined = 0;
+            search.target = Some(search.store);
             Some(Ok(SearchProposal {
                 person: person.id,
                 request: Some(Request {

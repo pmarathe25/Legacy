@@ -66,18 +66,19 @@ fn authored_local_visit_is_an_independent_personal_choice() {
 #[test]
 fn authored_goal_search_reaches_a_store_and_returns_with_material() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let run = |workers| {
+    let run = |workers, fixture: &str, source| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
             .build()
             .unwrap()
             .install(|| {
                 let mut world = scenario(
-                    &root.join("content/scenarios/economy-goal-search.toml"),
+                    &root.join(format!("content/scenarios/{fixture}.toml")),
                     &root.join("content"),
                 )
                 .unwrap();
                 let mut visited = false;
+                let mut visited_source = false;
                 let mut carried = false;
                 for _ in 0..20 {
                     world.advance().unwrap();
@@ -88,13 +89,19 @@ fn authored_goal_search_reaches_a_store_and_returns_with_material() {
                             && event.outcome == game_economy::LocalWalkOutcome::Arrived
                             && event.destination == game_economy::LocalEndpoint::Store { id: 1 }
                     });
+                    visited_source |= local.walking.as_ref().unwrap().events.iter().any(|event| {
+                        event.person == 2
+                            && event.outcome == game_economy::LocalWalkOutcome::Arrived
+                            && event.destination
+                                == game_economy::LocalEndpoint::Store { id: source }
+                    });
                     carried |= local.events.iter().any(|event| {
                         event.person == 2
                             && event.moved
-                            && matches!(event.from, game_lots::Place::Inventory(1))
+                            && event.from == game_lots::Place::Inventory(source)
                     });
                 }
-                assert!(visited && carried);
+                assert!(visited && visited_source && carried);
                 let state = world.snapshot();
                 assert!(
                     state
@@ -108,7 +115,9 @@ fn authored_goal_search_reaches_a_store_and_returns_with_material() {
                 state
             })
     };
-    assert_eq!(run(1), run(4));
+    for (fixture, source) in [("economy-goal-search", 1), ("economy-goal-multistore", 2)] {
+        assert_eq!(run(1, fixture, source), run(4, fixture, source));
+    }
 }
 
 #[test]

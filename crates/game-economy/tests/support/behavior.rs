@@ -7091,6 +7091,10 @@ fn personal_goal_search_fixture(stocked: bool) -> State {
         enabled: true,
         max_quantity: 1,
         search: Some(GoalSearchPreference {
+            alternatives: vec![].into(),
+            max_visits: 1,
+            examined: 0,
+            target: None,
             store: 1,
             willing: true,
             retry_ticks: 5,
@@ -7151,6 +7155,185 @@ fn personal_goal_search_fixture(stocked: bool) -> State {
         .unwrap();
     *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
     state
+}
+
+fn multi_store_goal_search_fixture(stocked: bool) -> State {
+    let mut state = personal_goal_search_fixture(false);
+    let search = state.local_transport.as_mut().unwrap().goal_fetchers[0]
+        .search
+        .as_mut()
+        .unwrap();
+    search.alternatives = vec![2].into();
+    search.max_visits = 2;
+    search.max_ticks = 16;
+    let source = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(2))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        if stocked {
+            vec![Lot {
+                item: None,
+                good: 2,
+                quantity: 1,
+                expires_at: None,
+            }]
+        } else {
+            vec![]
+        },
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn multi_store_goal_search_is_local_bounded_and_resumable() {
+    let run = |workers, stocked| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(multi_store_goal_search_fixture(stocked)).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let opening = world.snapshot();
+                let search = opening.local_transport.as_ref().unwrap().goal_fetchers[0]
+                    .search
+                    .as_ref()
+                    .unwrap();
+                assert_eq!((search.examined, search.target), (1, Some(2)));
+                let travel = opening
+                    .local_transport
+                    .as_ref()
+                    .unwrap()
+                    .walking
+                    .as_ref()
+                    .unwrap()
+                    .positions
+                    .clone();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for simulation in [&mut world, &mut restored] {
+                    simulation.set_goal_search_choice(2, false).unwrap();
+                    simulation.advance().unwrap();
+                    assert_eq!(
+                        simulation
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .positions,
+                        travel
+                    );
+                    simulation.set_goal_search_choice(2, true).unwrap();
+                    simulation.advance().unwrap();
+                    simulation.advance().unwrap();
+                    for _ in 0..7 {
+                        simulation.advance().unwrap();
+                    }
+                    let state = simulation.snapshot();
+                    assert_eq!(
+                        state.goals.as_ref().unwrap().people[0].progress,
+                        u64::from(stocked)
+                    );
+                    if !stocked {
+                        let transport = state.local_transport.as_ref().unwrap();
+                        assert_eq!(
+                            transport.goal_fetchers[0]
+                                .search
+                                .as_ref()
+                                .unwrap()
+                                .active_recipe,
+                            None
+                        );
+                        assert!(matches!(
+                            transport.walking.as_ref().unwrap().positions[0].location,
+                            LocalLocation::At {
+                                endpoint: LocalEndpoint::Store { id: 2 },
+                                ..
+                            }
+                        ));
+                    }
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                (travel, world.snapshot())
+            })
+    };
+    let (stocked_travel, stocked) = run(1, true);
+    let (empty_travel, empty) = run(1, false);
+    assert_eq!(stocked_travel, empty_travel);
+    assert_eq!(stocked, run(4, true).1);
+    assert_eq!(empty, run(4, false).1);
+}
+
+#[test]
+fn multi_store_goal_search_rejects_invalid_authored_sequences() {
+    for alternatives in [vec![1], vec![2, 2], vec![999]] {
+        let mut initial = multi_store_goal_search_fixture(false);
+        initial.local_transport.as_mut().unwrap().goal_fetchers[0]
+            .search
+            .as_mut()
+            .unwrap()
+            .alternatives = alternatives.into();
+        assert!(Economy::compile(initial).is_err());
+    }
+    for max_visits in [0, 3, 33] {
+        let mut initial = multi_store_goal_search_fixture(false);
+        initial.local_transport.as_mut().unwrap().goal_fetchers[0]
+            .search
+            .as_mut()
+            .unwrap()
+            .max_visits = max_visits;
+        assert!(Economy::compile(initial).is_err());
+    }
+}
+
+#[test]
+fn multi_store_goal_search_can_use_stock_as_a_waypoint() {
+    let mut initial = multi_store_goal_search_fixture(true);
+    initial.rules.hunger_per_tick = 0;
+    let walking = initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap();
+    std::sync::Arc::make_mut(&mut walking.routes).retain(|route| {
+        !(route.from == LocalEndpoint::Store { id: 1 }
+            && route.to == LocalEndpoint::Store { id: 2 })
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    for _ in 0..3 {
+        world.advance().unwrap();
+    }
+    let state = world.snapshot();
+    let transport = state.local_transport.unwrap();
+    assert_eq!(
+        transport.goal_fetchers[0].search.as_ref().unwrap().target,
+        Some(2)
+    );
+    assert!(matches!(
+        transport.walking.unwrap().positions[0].location,
+        LocalLocation::Walking {
+            to: LocalEndpoint::Stock,
+            ..
+        }
+    ));
+    for _ in 0..12 {
+        world.advance().unwrap();
+    }
+    assert_eq!(world.snapshot().goals.unwrap().people[0].progress, 1);
 }
 
 #[test]
@@ -8152,13 +8335,19 @@ fn concentrated_goal_fetch_benchmark() {
     let returning = std::env::var_os("LEGACY_GOAL_RETURN").is_some();
     let searching = std::env::var_os("LEGACY_GOAL_SEARCH").is_some();
     let empty_search = std::env::var_os("LEGACY_GOAL_EMPTY").is_some();
+    let multi_search = std::env::var_os("LEGACY_GOAL_MULTI").is_some();
     assert!(!returning || at_store);
     assert!(!empty_search || searching);
+    assert!(!multi_search || (searching && empty_search));
     assert!(!searching || (!at_store && std::env::var_os("LEGACY_CHAIN").is_none()));
     if searching {
         let transport = initial.local_transport.as_mut().unwrap();
         for preference in &mut transport.goal_fetchers {
             preference.search = Some(GoalSearchPreference {
+                alternatives: if multi_search { vec![2] } else { vec![] }.into(),
+                max_visits: if multi_search { 2 } else { 1 },
+                examined: 0,
+                target: None,
                 store: 1,
                 willing: true,
                 retry_ticks: 5,
@@ -8169,12 +8358,20 @@ fn concentrated_goal_fetch_benchmark() {
             });
         }
         transport.walking = Some(LocalWalking {
-            routes: vec![LocalWalkRoute {
-                region: 1,
-                from: LocalEndpoint::Stock,
-                to: LocalEndpoint::Store { id: 1 },
-                ticks: 2,
-            }]
+            routes: vec![
+                LocalWalkRoute {
+                    region: 1,
+                    from: LocalEndpoint::Stock,
+                    to: LocalEndpoint::Store { id: 1 },
+                    ticks: 2,
+                },
+                LocalWalkRoute {
+                    region: 1,
+                    from: LocalEndpoint::Store { id: 1 },
+                    to: LocalEndpoint::Store { id: 2 },
+                    ticks: 2,
+                },
+            ]
             .into(),
             preferences: vec![].into(),
             positions: vec![],
@@ -8233,7 +8430,14 @@ fn concentrated_goal_fetch_benchmark() {
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 let state = world.snapshot();
-                if empty_search {
+                if multi_search {
+                    let transport = state.local_transport.as_ref().unwrap();
+                    assert_eq!(transport.walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), count as usize - 1);
+                    assert!(transport.goal_fetchers.iter().all(|preference| {
+                        let search = preference.search.as_ref().unwrap();
+                        search.examined == 1 && search.target == Some(2)
+                    }));
+                } else if empty_search {
                     let transport = state.local_transport.as_ref().unwrap();
                     assert!(transport.walking.as_ref().unwrap().events.is_empty());
                     assert!(transport.events.is_empty());

@@ -1,0 +1,146 @@
+# A personal project searches two known local stores for timber.
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { reed-shelter-kit = 1, bread = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+goods = { bread = 10, timber = 1 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+goods = { bread = 10 }
+
+[family]
+next_id = 3
+
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[family.members]]
+id = 2
+age = 18
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[campaign.lineage]
+current = 1
+started = 0
+
+[work_sites]
+sites = []
+[[work_sites.requirements]]
+recipe = "fixture-tool"
+kind = "workshop"
+slots = 1
+
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "reed workshop"
+kind = "workshop"
+capacity = 1
+kit = "reed-shelter-kit"
+quantity = 1
+
+[[construction.goal_builders]]
+person = 2
+enabled = true
+disregard_claims = false
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "empty store"
+capacity = 10
+goods = {}
+
+[[local_transport.stores]]
+id = 2
+region = 1
+name = "timber store"
+capacity = 10
+goods = { timber = 5 }
+
+[[local_transport.goal_fetchers]]
+person = 2
+enabled = true
+max_quantity = 5
+search = { store = 1, alternatives = [2], max_visits = 2, willing = true, retry_ticks = 12, max_ticks = 16 }
+
+[[aspirations]]
+person = 2
+recipe = "fixture-tool"
+priority = 1
+batch = 1
+review_interval = 3
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "stock" }
+to = { kind = "store", id = 1 }
+ticks = 2
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 1 }
+to = { kind = "stock" }
+ticks = 2
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 1 }
+to = { kind = "store", id = 2 }
+ticks = 2
+
+[[local_transport.walking.routes]]
+region = 1
+from = { kind = "store", id = 2 }
+to = { kind = "stock" }
+ticks = 2

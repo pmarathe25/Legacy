@@ -189,6 +189,10 @@ impl Walking {
             .map(|i| &self.routes[i])
     }
 
+    pub fn has_route(&self, region: u64, from: Endpoint, to: Endpoint) -> bool {
+        self.route(region, from, to).is_some()
+    }
+
     /// Check whether an autonomous choice can advance toward this endpoint.
     pub fn can_advance(&self, person: u64, region: u64, destination: Endpoint) -> bool {
         match self.location(person, region) {
