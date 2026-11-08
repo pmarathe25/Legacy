@@ -130,6 +130,7 @@ pub fn select(
     unavailable: &[u64],
     unable_to_initiate: &[u64],
     tick: u64,
+    reachable: &(dyn Fn(&Person, &Person) -> bool + Sync),
 ) -> Option<Selection> {
     let runtime = runtime?;
     let opinions = opinions.filter(|owner| {
@@ -207,12 +208,15 @@ pub fn select(
                     return None;
                 }
                 let target = find(opinion.target)?;
-                (target.health > 0 && target.region == Some(region) && target.id != actor.id)
-                    .then_some(Choice {
-                        actor: actor.id,
-                        target: target.id,
-                        region,
-                    })
+                (target.health > 0
+                    && target.region == Some(region)
+                    && target.id != actor.id
+                    && reachable(actor, target))
+                .then_some(Choice {
+                    actor: actor.id,
+                    target: target.id,
+                    region,
+                })
             })
         })
         .collect();
@@ -541,8 +545,16 @@ mod tests {
                 let mut samples = Vec::new();
                 for _ in 0..5 {
                     let now = std::time::Instant::now();
-                    let selected =
-                        select(Some(&runtime), Some(&opinions), &people, &[], &[], 1).unwrap();
+                    let selected = select(
+                        Some(&runtime),
+                        Some(&opinions),
+                        &people,
+                        &[],
+                        &[],
+                        1,
+                        &|_, _| true,
+                    )
+                    .unwrap();
                     samples.push(now.elapsed().as_secs_f64());
                     assert_eq!(
                         selected.choices.len(),

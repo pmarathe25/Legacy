@@ -421,6 +421,11 @@ macro_rules! combat_methods {
             beneficiary: u64,
             opponent: u64,
         ) -> Result<(), String> {
+            if !self.local_people_together(actor, beneficiary)
+                || !self.local_people_together(actor, opponent)
+            {
+                return Err("reinforcement requires people at the same local endpoint".into());
+            }
             if self.confinement.as_ref().is_some_and(|owner| {
                 owner.held(actor) || owner.held(beneficiary) || owner.held(opponent)
             }) {
@@ -455,6 +460,9 @@ macro_rules! combat_methods {
         }
         /// Start an attack; the other person responds according to their own reaction.
         pub fn attack(&mut self, actor: u64, target: u64) -> Result<u64, String> {
+            if !self.local_people_together(actor, target) {
+                return Err("attack requires people at the same local endpoint".into());
+            }
             if self
                 .confinement
                 .as_ref()

@@ -61,6 +61,8 @@ It is a synthetic tactical workload, not a complete war or mixed campaign.
 
 The ignored `independent_reinforcement_benchmark` measures a full boundary of personal attempts to join existing fights. Set `LEGACY_HOT=1` to put all attempts into one fight and exercise its finite tactical capacity; `LEGACY_ENCOUNTERS` controls the number of helpers, and `LEGACY_WORKERS` controls concurrency.
 
+When local walking is enabled, an attack or reinforcement requires the participants to be at the same endpoint. Add `LEGACY_LOCAL_CONFRONTATIONS=1` to the existing confrontation benchmark or `LEGACY_LOCAL_REINFORCEMENT=1` to the reinforcement benchmark to exercise this check. On a Ryzen 5 7600, 10,000 people initiating independent confrontations measured 6.7 and 3.8 ms with one and six workers; 5,000 independent reinforcements among 15,000 people measured 15.1 and 7.8 ms. Each pair had matching fingerprints.
+
 The ignored `combat_wounds_benchmark` measures a full boundary of real strikes producing wounds. Set `LEGACY_HOT=1` to direct all strikes at one person; `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` select the workload and concurrency.
 
 The ignored `immobilized_departure_benchmark` measures food-search decisions and departures with half the population immobilized. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to vary the workload and concurrency.

@@ -32282,6 +32282,82 @@ fn simultaneous_confrontations_choose_disjoint_people_and_reserve_their_time() {
 }
 
 #[test]
+fn confrontations_and_attacks_require_a_reachable_local_person() {
+    use game_opinions::{Confrontation, Sensitivity};
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    let walking = initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap();
+    walking.positions.retain(|position| position.person != 2);
+    walking.positions.push(LocalPosition {
+        person: 3,
+        location: LocalLocation::At {
+            region: 1,
+            endpoint: LocalEndpoint::Store { id: 1 },
+        },
+    });
+    initial.combat = Some(combat_rules());
+    let opinions = initial.opinions.as_mut().unwrap();
+    opinions.records = [(2, -5), (3, -3)]
+        .into_iter()
+        .map(|(target, trust)| Opinion {
+            observer: 1,
+            target,
+            trust,
+            fear: 0,
+            obligation: 0,
+            affinity: 0,
+        })
+        .collect();
+    opinions.sensitivities = vec![Sensitivity {
+        person: 1,
+        confrontation: Some(Confrontation {
+            trust_at_most: -2,
+            fear_at_most: 0,
+            interval: 1,
+            enabled: true,
+        }),
+        ..Default::default()
+    }]
+    .into();
+    let mut controlled = initial.clone();
+    controlled.people[0].controlled = true;
+    let mut manual = Economy::compile(controlled).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.attack(1, 2).is_err());
+    assert_eq!(manual.snapshot(), before);
+    assert!(manual.attack(1, 3).is_ok());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let encounters = &state.combat.as_ref().unwrap().conflict.encounters;
+                assert_eq!(encounters.len(), 1);
+                assert_eq!(
+                    encounters[0]
+                        .fighters
+                        .iter()
+                        .map(|f| f.person)
+                        .collect::<Vec<_>>(),
+                    vec![1, 3]
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn confrontation_uses_sparse_people_and_multiple_personal_opinions() {
     use game_opinions::{Confrontation, Sensitivity};
     let mut initial = fixture();
@@ -32436,6 +32512,7 @@ fn many_hostile_people_cannot_assign_one_target_to_multiple_fights() {
 #[ignore = "performance measurement"]
 fn concentrated_tactical_confrontation_benchmark() {
     use game_opinions::{Confrontation, Sensitivity};
+    use std::hash::{Hash, Hasher};
     let count: u64 = std::env::var("LEGACY_COUNT")
         .unwrap_or_else(|_| "10000".into())
         .parse()
@@ -32445,6 +32522,7 @@ fn concentrated_tactical_confrontation_benchmark() {
         .parse()
         .unwrap();
     let hot_target = std::env::var_os("LEGACY_HOT_TARGET").is_some();
+    let local = std::env::var_os("LEGACY_LOCAL_CONFRONTATIONS").is_some();
     assert!(count >= 4 && count.is_multiple_of(2));
     let mut initial = concentrated(count);
     initial.autowork = None;
@@ -32455,6 +32533,42 @@ fn concentrated_tactical_confrontation_benchmark() {
         person.hunger = 0;
     }
     initial.combat = Some(combat_rules());
+    if local {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_unstable_by_key(|row| row.place);
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![LocalStore {
+                id: 1,
+                region: 1,
+                name: "local".into(),
+            }],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                positions: (1..=count)
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect(),
+                events: vec![],
+            }),
+        });
+    }
     let mut opinions = fixture().opinions.unwrap();
     let initiators: Vec<_> = (1..count)
         .filter(|person| hot_target || person % 2 == 1)
@@ -32492,12 +32606,14 @@ fn concentrated_tactical_confrontation_benchmark() {
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
-                let fights = world.snapshot().combat.unwrap().conflict.encounters;
+                let state = world.snapshot();
+                let fights = &state.combat.as_ref().unwrap().conflict.encounters;
                 assert_eq!(
                     fights.len(),
                     if hot_target { 1 } else { count as usize / 2 }
@@ -32512,14 +32628,19 @@ fn concentrated_tactical_confrontation_benchmark() {
                         vec![1, count]
                     );
                 }
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} hot_target={hot_target} tick_seconds={:.6}",
-                samples[1]
+                "workers={workers} people={count} hot_target={hot_target} local={local} tick_seconds={:.6} fingerprint={:016x}",
+                samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]
             for (name, measurement) in game_diagnostics::snapshot() {
@@ -33202,6 +33323,116 @@ fn independent_reinforcements(count: u64) -> State {
 }
 
 #[test]
+fn reinforcement_requires_access_to_the_fighters_local_endpoint() {
+    let mut initial = independent_reinforcements(2);
+    initial.rules.max_health = 1000;
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "local".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: [1, 2]
+                .into_iter()
+                .map(|person| LocalPosition {
+                    person,
+                    location: LocalLocation::At {
+                        region: 1,
+                        endpoint: LocalEndpoint::Store { id: 1 },
+                    },
+                })
+                .collect(),
+            events: vec![],
+        }),
+    });
+    let mut manual = Economy::compile(initial.clone()).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.reinforce_combat(5, 1, 2).is_err());
+    assert_eq!(before, manual.snapshot());
+    let mut together = initial.clone();
+    together
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .push(LocalPosition {
+            person: 5,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        });
+    assert!(
+        Economy::compile(together)
+            .unwrap()
+            .reinforce_combat(5, 1, 2)
+            .is_ok()
+    );
+    let run = |workers, together| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if together {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions
+                        .push(LocalPosition {
+                            person: 5,
+                            location: LocalLocation::At {
+                                region: 1,
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                            },
+                        });
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .intervention_events
+                        .iter()
+                        .any(|event| event.person == 5),
+                    together
+                );
+                state
+            })
+    };
+    for together in [false, true] {
+        assert_eq!(run(1, together), run(4, together));
+    }
+}
+
+#[test]
 #[ignore = "independent reinforcements performance measurement"]
 fn independent_reinforcement_benchmark() {
     use std::hash::{Hash, Hasher};
@@ -33215,6 +33446,43 @@ fn independent_reinforcement_benchmark() {
         .unwrap_or(1);
     let hot = std::env::var_os("LEGACY_HOT").is_some();
     let mut initial = independent_reinforcements(count);
+    let local = std::env::var_os("LEGACY_LOCAL_REINFORCEMENT").is_some();
+    if local {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_unstable_by_key(|row| row.place);
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![LocalStore {
+                id: 1,
+                region: 1,
+                name: "local".into(),
+            }],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                positions: (1..=count * 3)
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect(),
+                events: vec![],
+            }),
+        });
+    }
     if hot {
         let combat = initial.combat.as_mut().unwrap();
         combat.conflict.encounters.truncate(1);
@@ -33254,7 +33522,7 @@ fn independent_reinforcement_benchmark() {
             samples.remove(0);
             samples.sort_by(f64::total_cmp);
             eprintln!(
-                "workers={workers} encounters={count} people={} hot={hot} elapsed_median={:.6} fingerprint={:016x}",
+                "workers={workers} encounters={count} people={} hot={hot} local={local} elapsed_median={:.6} fingerprint={:016x}",
                 count * 3,
                 samples[1], fingerprint.unwrap()
             );

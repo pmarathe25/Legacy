@@ -309,6 +309,28 @@ impl Draft {
     }
 }
 impl Economy {
+    fn local_people_together(&self, a: u64, b: u64) -> bool {
+        self.local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref())
+            .is_none_or(|walking| {
+                self.people
+                    .binary_search_by_key(&a, |person| person.id)
+                    .ok()
+                    .zip(
+                        self.people
+                            .binary_search_by_key(&b, |person| person.id)
+                            .ok(),
+                    )
+                    .is_some_and(|(a, b)| {
+                        local_walking::people_together(
+                            Some(walking),
+                            &self.people[a],
+                            &self.people[b],
+                        )
+                    })
+            })
+    }
     giving_practices::methods!();
     /// Change this person's willingness to assist; their own fear or felt
     /// obligation may still motivate a later contribution.
@@ -3299,27 +3321,7 @@ impl Economy {
                 self.confinement
                     .as_ref()
                     .is_none_or(|owner| owner.can_touch(a, b))
-                    && self
-                        .local_transport
-                        .as_ref()
-                        .and_then(|owner| owner.walking.as_ref())
-                        .is_none_or(|walking| {
-                            self.people
-                                .binary_search_by_key(&a, |person| person.id)
-                                .ok()
-                                .zip(
-                                    self.people
-                                        .binary_search_by_key(&b, |person| person.id)
-                                        .ok(),
-                                )
-                                .is_some_and(|(a, b)| {
-                                    local_walking::people_together(
-                                        Some(walking),
-                                        &self.people[a],
-                                        &self.people[b],
-                                    )
-                                })
-                        })
+                    && self.local_people_together(a, b)
             };
             Some(
                 game_economy_taking::Context {
@@ -3415,6 +3417,15 @@ impl Economy {
                 &unavailable,
                 &unable_to_initiate,
                 tick,
+                &|a, b| {
+                    local_walking::people_together(
+                        self.local_transport
+                            .as_ref()
+                            .and_then(|owner| owner.walking.as_ref()),
+                        a,
+                        b,
+                    )
+                },
             )
         } else {
             None
@@ -3466,6 +3477,7 @@ impl Economy {
                 self.opinions.as_ref(),
                 &self.people,
                 &unavailable,
+                &|a, b| self.local_people_together(a, b),
             )
         } else {
             None

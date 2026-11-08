@@ -77,6 +77,7 @@ pub fn select(
     opinions: Option<&Opinions>,
     people: &[Person],
     unavailable: &[u64],
+    reachable: &(dyn Fn(u64, u64) -> bool + Sync),
 ) -> Option<Selection> {
     let runtime = runtime?;
     if runtime.state.interventions.is_empty() || runtime.state.conflict.encounters.is_empty() {
@@ -133,15 +134,19 @@ pub fn select(
             }
             let &(encounter, region, side) = fighters.get(&row.beneficiary)?;
             let &(other_encounter, _, other_side) = fighters.get(&row.opponent)?;
-            (person.region == Some(region) && encounter == other_encounter && side != other_side)
-                .then_some(Choice {
-                    actor: row.person,
-                    beneficiary: row.beneficiary,
-                    opponent: row.opponent,
-                    encounter,
-                    region,
-                    side,
-                })
+            (person.region == Some(region)
+                && encounter == other_encounter
+                && side != other_side
+                && reachable(person.id, row.beneficiary)
+                && reachable(person.id, row.opponent))
+            .then_some(Choice {
+                actor: row.person,
+                beneficiary: row.beneficiary,
+                opponent: row.opponent,
+                encounter,
+                region,
+                side,
+            })
         })
         .collect();
     if choices.is_empty() {
