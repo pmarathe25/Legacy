@@ -26,6 +26,8 @@ pub struct SkillView {
 pub struct WorkSiteView {
     pub site: game_economy::WorkSite,
     pub occupied: u64,
+    /// Current wear, wear limit, repair good, and repair quantity when configured.
+    pub maintenance: Option<(u64, u64, u32, u64)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DebrisView {
@@ -445,6 +447,27 @@ impl<'a> Player<'a> {
                         .map(|site| WorkSiteView {
                             site: (*site).clone(),
                             occupied: used.get(&site.id).copied().unwrap_or(0),
+                            maintenance: state
+                                .construction
+                                .and_then(|c| c.maintenance.as_ref())
+                                .and_then(|m| {
+                                    let condition = m
+                                        .conditions
+                                        .binary_search_by_key(&site.id, |c| c.site)
+                                        .ok()
+                                        .map(|i| &m.conditions[i])?;
+                                    let rule = m
+                                        .rules
+                                        .binary_search_by(|r| r.kind.cmp(&site.kind))
+                                        .ok()
+                                        .map(|i| &m.rules[i])?;
+                                    Some((
+                                        condition.wear,
+                                        rule.wear_limit,
+                                        rule.repair_good,
+                                        rule.repair_quantity,
+                                    ))
+                                }),
                         })
                         .collect()
                 })
@@ -810,6 +833,9 @@ impl<'a> Player<'a> {
         self.world.destroy_site(self.current()?, site)
     }
     /// Recover locally visible debris into the ruler's actual possessions.
+    pub fn repair_site(&mut self, site: u64) -> Result<bool, String> {
+        self.world.repair_site(self.current()?, site)
+    }
     pub fn salvage_site(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
         self.world
             .salvage_site(self.current()?, site, good, quantity)

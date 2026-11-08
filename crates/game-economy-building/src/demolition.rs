@@ -71,6 +71,7 @@ pub struct Context<'a> {
     pub claims: Option<&'a Claims<'a>>,
     pub busy: &'a [u64],
     pub manual_site: Option<u64>,
+    pub repair_sites: &'a [u64],
     pub max_hunger: u32,
     pub seed: u64,
     pub tick: u64,
@@ -97,6 +98,7 @@ impl Context<'_> {
             .filter_map(|policy| {
                 if self.busy.binary_search(&policy.person).is_ok()
                     || self.manual_site == Some(policy.site)
+                    || self.repair_sites.binary_search(&policy.site).is_ok()
                 {
                     return None;
                 }

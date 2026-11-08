@@ -37,6 +37,10 @@ pub enum PhysicalChoice {
         person: u64,
         site: u64,
     },
+    RepairSite {
+        person: u64,
+        site: u64,
+    },
     SalvageSite {
         person: u64,
         site: u64,
@@ -142,6 +146,7 @@ impl PhysicalChoice {
             | Self::Farm { person, .. }
             | Self::Build { person, .. }
             | Self::DestroySite { person, .. }
+            | Self::RepairSite { person, .. }
             | Self::SalvageSite { person, .. }
             | Self::LocalStore { person, .. }
             | Self::Gather { person, .. }

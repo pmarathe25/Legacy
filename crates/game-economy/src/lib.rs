@@ -3,6 +3,10 @@ pub use game_agreements::OfferPolicy as PromiseOfferPolicy;
 pub use game_agreements::WorkOfferPolicy as WorkPromiseOfferPolicy;
 pub use game_autowork::requests::OfferValue as WorkOfferValue;
 pub use game_economy_building::demolition::{Event as DemolitionEvent, Policy as DemolitionPolicy};
+pub use game_economy_building::maintenance::{
+    Condition as SiteCondition, Event as MaintenanceEvent, Maintenance,
+    Policy as MaintenancePolicy, Rule as MaintenanceRule,
+};
 pub use game_economy_building::salvage::{Event as SalvageEvent, Policy as SalvagePolicy};
 pub use game_economy_building::{
     Blueprint as BuildingBlueprint, Construction, Event as ConstructionEvent, GoalBuilder,
@@ -388,6 +392,26 @@ impl Economy {
             .work_sites
             .as_ref()
             .is_some_and(|sites| sites.sites.binary_search_by_key(&site, |s| s.id).is_err()))
+    }
+    /// Attempt a repair using materials in the controlled person's custody.
+    pub fn repair_site(&mut self, person: u64, site: u64) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::RepairSite { person, site }),
+        )?;
+        self.commit(draft)?;
+        Ok(self
+            .construction
+            .as_ref()
+            .and_then(|c| c.maintenance.as_ref())
+            .is_some_and(|m| {
+                m.events
+                    .iter()
+                    .any(|e| e.person == person && e.site == site && e.repaired)
+            }))
     }
     /// Recover actual material from local debris into this person's custody.
     pub fn salvage_site(
@@ -2072,6 +2096,9 @@ impl Economy {
                 .work_sites
                 .as_ref()
                 .ok_or("construction requires work sites")?;
+            if let Some(maintenance) = &mut owner.maintenance {
+                maintenance.enroll(sites);
+            }
             owner.validate(&ids, &goods, sites, &view, physical.tick())?;
         } else if view
             .containers
@@ -4364,6 +4391,61 @@ impl Economy {
             .transpose()?;
         if let Some(plan) = &construction_plan {
             game_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+        }
+        let manual_repair =
+            match player_transfer {
+                Some(game_economy_interaction::PhysicalChoice::RepairSite { person, site }) => {
+                    if self.family.as_ref().is_some_and(|f| {
+                        f.members
+                            .iter()
+                            .any(|m| m.id == person && m.age < f.rules.min_work_age)
+                    }) || self.physical.work().iter().any(|w| {
+                        w.job.worker == person && w.phase == game_lot_runtime::Phase::Working
+                    }) {
+                        return Err("person cannot repair while underage or working".into());
+                    }
+                    Some(game_economy_building::maintenance::Manual { person, site })
+                }
+                _ => None,
+            };
+        let maintenance = self
+            .construction
+            .as_ref()
+            .and_then(|c| c.maintenance.as_ref());
+        if manual_repair.is_some() && maintenance.is_none() {
+            return Err("site maintenance is disabled".into());
+        }
+        #[cfg(feature = "profile")]
+        let repair_phase = game_diagnostics::span("economy.maintenance.plan");
+        let repair_plan = maintenance
+            .zip(self.work_sites.as_ref())
+            .map(|(owner, sites)| {
+                game_economy_building::maintenance::Context {
+                    owner,
+                    sites,
+                    people: &self.people,
+                    opinions: self.opinions.as_ref(),
+                    claims: claims.as_ref(),
+                    busy: &busy,
+                    max_hunger: self.rules.max_work_hunger,
+                    manual: manual_repair,
+                    manual_destroy: destroy_site.map(|(site, _)| site),
+                    seed: self.seed,
+                    tick,
+                }
+                .prepare(action_base)
+            })
+            .transpose()?;
+        #[cfg(feature = "profile")]
+        drop(repair_phase);
+        if let Some(plan) = &repair_plan {
+            action_base = action_base
+                .checked_add(plan.actions.len() as u64)
+                .ok_or("action count overflow")?;
+            game_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
         let demolition_plan = self
             .construction
@@ -4378,6 +4460,7 @@ impl Economy {
                     claims: claims.as_ref(),
                     busy: &busy,
                     manual_site: destroy_site.map(|(site, _)| site),
+                    repair_sites: repair_plan.as_ref().map_or(&[], |p| p.sites.as_slice()),
                     max_hunger: self.rules.max_work_hunger,
                     seed: self.seed,
                     tick,
@@ -4417,11 +4500,6 @@ impl Economy {
             };
         if manual_salvage.is_some() && self.construction.is_none() {
             return Err("site salvage is disabled".into());
-        }
-        if let Some(plan) = &construction_plan {
-            action_base = action_base
-                .checked_add(plan.actions.len() as u64)
-                .ok_or("action count overflow")?;
         }
         let salvage_plan = self
             .construction
@@ -4535,6 +4613,9 @@ impl Economy {
         if let Some(plan) = &salvage_plan {
             actions.extend_from_slice(&plan.actions);
         }
+        if let Some(plan) = &repair_plan {
+            actions.extend_from_slice(&plan.actions);
+        }
         if let Some(plan) = &care {
             actions.extend_from_slice(&plan.actions);
         }
@@ -4560,6 +4641,10 @@ impl Economy {
         let mut compact = game_economy_agriculture::append_planting(&mut farming, &mut actions);
         // Animal care needs the acceptance receipt, not copies of consumed lot cohorts.
         compact.par_extend(animal_care_plan.actions.par_iter().map(|action| action.id));
+        if let Some(plan) = &repair_plan {
+            // Repairs also need only acceptance, not the consumed lot cohorts.
+            compact.par_extend(plan.actions.par_iter().map(|action| action.id));
+        }
         actions.append(&mut animal_care_plan.actions);
         #[cfg(feature = "profile")]
         {
@@ -4597,6 +4682,32 @@ impl Economy {
             drop(work_phase);
             work_phase = game_diagnostics::span("economy.work.plan");
         }
+        let mut unavailable_sites = maintenance
+            .zip(self.work_sites.as_ref())
+            .map_or_else(Vec::new, |(owner, sites)| owner.broken(sites));
+        if let Some(plan) = &repair_plan {
+            unavailable_sites.extend_from_slice(&plan.sites);
+            unavailable_sites.par_sort_unstable();
+            unavailable_sites.dedup();
+        }
+        let usable_sites = self.work_sites.as_ref().map(|sites| {
+            if unavailable_sites.is_empty() {
+                std::borrow::Cow::Borrowed(sites)
+            } else {
+                let usable = WorkSites {
+                    next_id: sites.next_id,
+                    sites: sites
+                        .sites
+                        .par_iter()
+                        .filter(|s| unavailable_sites.binary_search(&s.id).is_err())
+                        .cloned()
+                        .collect(),
+                    requirements: sites.requirements.clone(),
+                    bindings: sites.bindings.clone(),
+                };
+                std::borrow::Cow::Owned(usable)
+            }
+        });
         let mut work = game_economy_goals::prepare_work!(
             self,
             view,
@@ -4607,7 +4718,8 @@ impl Economy {
             goal_work,
             site_classes,
             work_offers,
-            practice_requests
+            practice_requests,
+            usable_sites.as_deref()
         );
         #[cfg(feature = "profile")]
         {
@@ -4697,7 +4809,7 @@ impl Economy {
             site_disregards.par_sort_unstable();
             site_disregards.dedup();
         }
-        let site_plan = self.work_sites.as_ref().map(|sites| {
+        let site_plan = usable_sites.as_deref().map(|sites| {
             sites.prepare_access(
                 &starts,
                 &game_economy_work::sites::access::Access {
@@ -5403,6 +5515,17 @@ impl Economy {
                     .filter(|material| destroyed.binary_search(&material.site).is_ok())
                     .for_each(|material| material.debris = true);
             }
+        }
+        if let (Some(owner), Some(prior), Some(current)) = (
+            construction.as_mut().and_then(|c| c.maintenance.as_mut()),
+            self.work_sites.as_ref(),
+            work_sites.as_ref(),
+        ) {
+            #[cfg(feature = "profile")]
+            let _repair_phase = game_diagnostics::span("economy.maintenance.publish");
+            let repairs =
+                repair_plan.map_or_else(Vec::new, |plan| plan.publish(tick, physical.events()));
+            owner.finish(prior, current, physical.events(), repairs);
         }
         if let (Some(confinement), Some(sites)) = (&mut next_confinement, &work_sites) {
             let built: Vec<_> = construction

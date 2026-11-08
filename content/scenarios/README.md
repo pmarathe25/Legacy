@@ -2,6 +2,8 @@
 
 The `economy*.toml` starts are for the current runner. `campaign-population.toml` is an optional population profile.
 
+`[construction.maintenance]` can define `[[construction.maintenance.rules]]` for a site kind, with `wear_limit`, `wear_per_slot`, a named `repair_good`, and `repair_quantity`. Each actual completed job adds wear based on its occupied slots. A site at its limit does not admit new work; ongoing jobs may finish. `[[construction.maintenance.policies]]` gives a person an individual inclination to repair one site, with optional fear or obligation pressure and a choice to disregard claims. A chosen repair uses material the person carries, requires the site to be idle, and reserves it against demolition and new work for that boundary. Rejected consumption leaves wear unchanged. Accepted repairs restore the site; no institution or obligation is created.
+
 `economy.toml` and `economy-campaign.toml` are authored starts for the dated-goods simulation. Goods, recipes and crops are loaded by name from the existing object, workshop and agriculture content directories. `food_relief_divisor` converts authored food relief to this scenario's hunger scale; it should be tuned alongside the per-tick hunger rate and meal threshold.
 
 Optional `environment`, `medical`, `giving`, `food_search`, `gathering`, `hauling`, `recovery`, `purpose`, `knowledge`, `skills`, `fatigue`, `family`, `care`, `cultivation`, `missions`, `campaign`, `agreements`, `work_requests`, `opinions` and `dynamics` sections configure separate owners. Work preferences and directed feelings describe individuals: an agreement records a promise but does not compel delivery, and fear or obligation can influence a response without granting an organization authority.

@@ -6364,3 +6364,65 @@ fn authored_site_claims_remain_personal_and_private_to_the_ruler() {
         2
     );
 }
+
+#[test]
+fn authored_workshop_wears_and_player_repairs_with_carried_timber() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-maintenance.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                for _ in 0..40 {
+                    if world
+                        .snapshot()
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear
+                        == 1
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                let worn = world.snapshot();
+                assert_eq!(
+                    worn.construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    1
+                );
+                let mut player = game_economy_player::Player::new(&mut world);
+                let view = player.view().unwrap();
+                let site = view
+                    .work_sites
+                    .iter()
+                    .find(|site| site.site.id == 1)
+                    .unwrap();
+                assert_eq!(site.maintenance.unwrap().0, 1);
+                assert!(player.repair_site(1).unwrap());
+                assert_eq!(
+                    player.view().unwrap().work_sites[0].maintenance.unwrap().0,
+                    0
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}

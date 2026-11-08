@@ -160,6 +160,24 @@ struct ConstructionConfig {
     goal_builders: Vec<game_economy::GoalBuilder>,
     #[serde(default)]
     salvaging: Vec<game_economy::SalvagePolicy>,
+    #[serde(default)]
+    maintenance: Option<MaintenanceConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceConfig {
+    rules: Vec<MaintenanceRuleConfig>,
+    #[serde(default)]
+    policies: Vec<game_economy::MaintenancePolicy>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MaintenanceRuleConfig {
+    kind: String,
+    wear_limit: u64,
+    wear_per_slot: u64,
+    repair_good: String,
+    repair_quantity: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -850,6 +868,32 @@ pub fn scenario_with_options(
                 materials: vec![],
                 salvaging: config.salvaging,
                 salvage_events: vec![],
+                maintenance: config
+                    .maintenance
+                    .map(|m| {
+                        let rules = m
+                            .rules
+                            .into_iter()
+                            .map(|r| {
+                                Ok(game_economy::MaintenanceRule {
+                                    kind: r.kind,
+                                    wear_limit: r.wear_limit,
+                                    wear_per_slot: r.wear_per_slot,
+                                    repair_good: *goods.get(r.repair_good.as_str()).ok_or_else(
+                                        || format!("unknown repair good {}", r.repair_good),
+                                    )?,
+                                    repair_quantity: r.repair_quantity,
+                                })
+                            })
+                            .collect::<Result<Vec<_>, String>>()?;
+                        Ok::<_, String>(game_economy::Maintenance {
+                            rules,
+                            conditions: vec![],
+                            policies: m.policies,
+                            events: vec![],
+                        })
+                    })
+                    .transpose()?,
             })
         })
         .transpose()?;

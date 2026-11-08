@@ -1,5 +1,6 @@
 //! Personal choices to assemble physical sites from actual local kits.
 pub mod demolition;
+pub mod maintenance;
 pub mod salvage;
 pub mod site_access;
 use game_economy_claims::{Index as Claims, Use};
@@ -91,6 +92,8 @@ pub struct Construction {
     pub salvaging: Vec<salvage::Policy>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub salvage_events: Vec<salvage::Event>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maintenance: Option<maintenance::Maintenance>,
 }
 /// Physical custody exists separately; this identifies its location and whether the site remains intact.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -112,6 +115,7 @@ impl Clone for Construction {
             materials: self.materials.par_iter().cloned().collect(),
             salvaging: self.salvaging.par_iter().cloned().collect(),
             salvage_events: self.salvage_events.par_iter().cloned().collect(),
+            maintenance: self.maintenance.clone(),
         }
     }
 }
@@ -123,6 +127,9 @@ impl Construction {
         self.goal_builders.par_sort_unstable_by_key(|p| p.person);
         self.materials.par_sort_unstable_by_key(|row| row.site);
         self.salvaging.par_sort_unstable_by_key(|row| row.person);
+        if let Some(maintenance) = &mut self.maintenance {
+            maintenance.normalize();
+        }
     }
     pub fn validate(
         &self,
@@ -143,7 +150,11 @@ impl Construction {
                 })
                 .collect()
         };
-        if !salvage::valid(&self.salvaging, &self.salvage_events, people, tick)
+        if self
+            .maintenance
+            .as_ref()
+            .is_some_and(|m| !m.valid(people, goods, sites, tick))
+            || !salvage::valid(&self.salvaging, &self.salvage_events, people, tick)
             || self
                 .salvage_events
                 .par_iter()

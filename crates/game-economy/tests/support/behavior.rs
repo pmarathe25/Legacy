@@ -37728,6 +37728,7 @@ fn construction_fixture() -> State {
         materials: vec![],
         salvaging: vec![],
         salvage_events: vec![],
+        maintenance: None,
         blueprints: vec![BuildingBlueprint {
             salvage: 0,
             id: 1,
@@ -38187,6 +38188,7 @@ fn demolition_respects_personal_site_claims_unless_the_actor_disregards_them() {
         materials: vec![],
         salvaging: vec![],
         salvage_events: vec![],
+        maintenance: None,
         blueprints: vec![],
         policies: vec![],
         events: vec![],
@@ -38268,6 +38270,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         materials: vec![],
         salvaging: vec![],
         salvage_events: vec![],
+        maintenance: None,
         blueprints: vec![],
         policies: vec![],
         events: vec![],
@@ -40141,6 +40144,7 @@ fn concentrated_site_destruction(count: u64) -> State {
         materials: vec![],
         salvaging: vec![],
         salvage_events: vec![],
+        maintenance: None,
         blueprints: vec![],
         policies: vec![],
         events: vec![],
@@ -40235,6 +40239,7 @@ fn concentrated_site_construction(count: u64) -> State {
         materials: vec![],
         salvaging: vec![],
         salvage_events: vec![],
+        maintenance: None,
         blueprints: vec![BuildingBlueprint {
             salvage: 0,
             id: 1,
@@ -41235,4 +41240,439 @@ fn people_produce_a_kit_build_a_site_and_then_use_it_for_work() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+fn maintenance_fixture() -> State {
+    let mut state = construction_fixture();
+    state.people[0].controlled = true;
+    state.people[0].hunger = 0;
+    state.work_sites.as_mut().unwrap().sites.push(WorkSite {
+        id: 1,
+        region: 1,
+        kind: "workshop".into(),
+        capacity: 1,
+    });
+    let owner = state.construction.as_mut().unwrap();
+    owner.policies.clear();
+    owner.maintenance = Some(Maintenance {
+        rules: vec![MaintenanceRule {
+            kind: "workshop".into(),
+            wear_limit: 1,
+            wear_per_slot: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![],
+        policies: vec![],
+        events: vec![],
+    });
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state
+}
+
+#[test]
+fn completed_work_wears_site_repair_consumes_goods_and_reopens_it() {
+    let initial = maintenance_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                assert_eq!(world.advance().unwrap().finished.len(), 1);
+                let worn = world.snapshot();
+                assert_eq!(
+                    worn.construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    1
+                );
+                let mut blocked = Economy::compile(worn.clone()).unwrap();
+                assert!(blocked.advance().unwrap().started.is_empty());
+                assert_eq!(
+                    blocked
+                        .snapshot()
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    1
+                );
+                let saved = serde_json::to_string(&worn).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                let draft = world.prepare().unwrap();
+                assert!(world.repair_site(1, 1).unwrap());
+                assert!(restored.repair_site(1, 1).unwrap());
+                assert!(world.commit(draft).is_err());
+                let repaired = world.snapshot();
+                assert_eq!(repaired, restored.snapshot());
+                assert_eq!(
+                    repaired
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    0
+                );
+                assert_eq!(
+                    repaired
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                assert_eq!(restored.advance().unwrap().started.len(), 1);
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn repair_failure_preserves_wear_and_competing_demolition_cannot_destroy_reserved_site() {
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let owner = initial.construction.as_mut().unwrap();
+    owner
+        .maintenance
+        .as_mut()
+        .unwrap()
+        .conditions
+        .push(SiteCondition { site: 1, wear: 1 });
+    owner.maintenance.as_mut().unwrap().policies = vec![MaintenancePolicy {
+        person: 2,
+        site: 1,
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+        disregard_claims: false,
+    }];
+    owner.demolition = vec![DemolitionPolicy {
+        person: 3,
+        site: 1,
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+        disregard_claims: false,
+    }];
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let owner = state.construction.as_ref().unwrap();
+                assert!(!owner.maintenance.as_ref().unwrap().events[0].repaired);
+                assert_eq!(owner.maintenance.as_ref().unwrap().conditions[0].wear, 1);
+                assert!(
+                    state
+                        .work_sites
+                        .as_ref()
+                        .unwrap()
+                        .sites
+                        .iter()
+                        .any(|site| site.id == 1)
+                );
+                assert!(owner.demolition_events.is_empty());
+                assert!(world.repair_site(1, 1).unwrap());
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    0
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn maintenance_workload(count: u64, concentrated_site: bool) -> State {
+    let mut state = concentrated(count);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    for container in &mut state.physical.custody.containers {
+        if matches!(container.place, Place::Person(_)) {
+            *container = Container::new(
+                container.place,
+                10,
+                vec![Lot {
+                    good: 2,
+                    quantity: 1,
+                    expires_at: None,
+                }],
+            )
+            .unwrap();
+        }
+    }
+    let sites = if concentrated_site { 1 } else { count };
+    state.work_sites = Some(WorkSites {
+        next_id: 0,
+        sites: (1..=sites)
+            .map(|id| WorkSite {
+                id,
+                region: 1,
+                kind: "workshop".into(),
+                capacity: 1,
+            })
+            .collect(),
+        requirements: vec![],
+        bindings: vec![],
+    });
+    state.construction = Some(Construction {
+        blueprints: vec![],
+        policies: vec![],
+        events: vec![],
+        demolition: vec![],
+        demolition_events: vec![],
+        goal_builders: vec![],
+        materials: vec![],
+        salvaging: vec![],
+        salvage_events: vec![],
+        maintenance: Some(Maintenance {
+            rules: vec![MaintenanceRule {
+                kind: "workshop".into(),
+                wear_limit: 1,
+                wear_per_slot: 1,
+                repair_good: 2,
+                repair_quantity: 1,
+            }],
+            conditions: (1..=sites)
+                .map(|site| SiteCondition { site, wear: 1 })
+                .collect(),
+            policies: (1..=count)
+                .map(|person| MaintenancePolicy {
+                    person,
+                    site: if concentrated_site { 1 } else { person },
+                    willing: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                    disregard_claims: false,
+                })
+                .collect(),
+            events: vec![],
+        }),
+    });
+    state
+}
+
+#[test]
+fn maintenance_many_independent_and_contested_sites_are_deterministic() {
+    for concentrated_site in [false, true] {
+        let initial = maintenance_workload(4096, concentrated_site);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let owner = state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap();
+                    let expected = if concentrated_site { 1 } else { 4096 };
+                    assert_eq!(owner.events.iter().filter(|e| e.repaired).count(), expected);
+                    assert_eq!(
+                        owner.conditions.iter().filter(|c| c.wear == 0).count(),
+                        expected
+                    );
+                    Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn maintenance_scaling_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let concentrated_site = std::env::var_os("LEGACY_CONCENTRATED").is_some();
+    let initial = maintenance_workload(count, concentrated_site);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut times = Vec::new();
+        let mut fingerprint = 0;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            times.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            let owner = state.construction.as_ref().unwrap().maintenance.as_ref().unwrap();
+            assert_eq!(owner.events.iter().filter(|e| e.repaired).count(), if concentrated_site { 1 } else { count as usize });
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if fingerprint != 0 { assert_eq!(actual, fingerprint); }
+            fingerprint = actual;
+        }
+        times.remove(0);
+        times.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} people={count} concentrated={concentrated_site} ticks=1 elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={fingerprint:016x}", times[0], times[1], times[2]);
+        #[cfg(feature = "profile")]
+        if std::env::var_os("LEGACY_PROFILE").is_some() {
+            for (name, measurement) in game_diagnostics::snapshot() {
+                eprintln!("{name}: {:.3} ms/call", measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0);
+            }
+        }
+    });
+}
+
+#[test]
+fn repair_can_follow_personal_fear_without_creating_an_obligation() {
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let owner = initial
+        .construction
+        .as_mut()
+        .unwrap()
+        .maintenance
+        .as_mut()
+        .unwrap();
+    owner.conditions.push(SiteCondition { site: 1, wear: 1 });
+    owner.policies.push(MaintenancePolicy {
+        person: 2,
+        site: 1,
+        willing: false,
+        pressured_by: Some(1),
+        pressure_threshold: Some(3),
+        disregard_claims: false,
+    });
+    let mut pressure = initial.opinions.as_ref().unwrap().records[0].clone();
+    pressure.observer = 2;
+    pressure.target = 1;
+    pressure.fear = 3;
+    pressure.obligation = 0;
+    initial.opinions.as_mut().unwrap().records.push(pressure);
+    let mut unpressured = initial.clone();
+    unpressured
+        .opinions
+        .as_mut()
+        .unwrap()
+        .records
+        .retain(|o| o.observer != 2);
+    let mut world = Economy::compile(initial).unwrap();
+    let mut comparison = Economy::compile(unpressured).unwrap();
+    world.advance().unwrap();
+    comparison.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .construction
+            .unwrap()
+            .maintenance
+            .unwrap()
+            .conditions[0]
+            .wear,
+        0
+    );
+    assert_eq!(
+        comparison
+            .snapshot()
+            .construction
+            .unwrap()
+            .maintenance
+            .unwrap()
+            .conditions[0]
+            .wear,
+        1
+    );
+    assert_eq!(
+        world
+            .snapshot()
+            .opinions
+            .unwrap()
+            .records
+            .iter()
+            .find(|o| o.observer == 2 && o.target == 1)
+            .unwrap()
+            .obligation,
+        0
+    );
 }

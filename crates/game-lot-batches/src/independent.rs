@@ -103,7 +103,9 @@ pub fn prepare(
         return Ok(None);
     }
     let mut movement_ids: Vec<_> = rows.par_iter().map(|r| r.movement.id).collect();
-    movement_ids.par_sort_unstable();
+    if movement_ids.par_windows(2).any(|p| p[0] > p[1]) {
+        movement_ids.par_sort_unstable();
+    }
     if movement_ids.par_windows(2).any(|p| p[0] == p[1]) {
         return Ok(None);
     }
@@ -177,11 +179,20 @@ pub fn prepare(
                 .then(|| (index, after(container, next, 0, 0)))
             }),
     );
-    changes.par_sort_unstable_by_key(|row| row.0);
+    if changes.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        changes.par_sort_unstable_by_key(|row| row.0);
+    }
     let mut outcomes: Vec<_> = resolved.par_iter().map(|row| row.0.clone()).collect();
-    outcomes.par_sort_unstable_by_key(|row| row.id);
+    if outcomes.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+        outcomes.par_sort_unstable_by_key(|row| row.id);
+    }
     let mut transaction_outcomes: Vec<_> = resolved.par_iter().map(|row| row.1).collect();
-    transaction_outcomes.par_sort_unstable_by_key(|row| row.id);
+    if transaction_outcomes
+        .par_windows(2)
+        .any(|pair| pair[0].id > pair[1].id)
+    {
+        transaction_outcomes.par_sort_unstable_by_key(|row| row.id);
+    }
     Ok(Some(Draft {
         base_instance: instance,
         base_tick: state.tick,
