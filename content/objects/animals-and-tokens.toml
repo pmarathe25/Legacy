@@ -33,3 +33,9 @@ id = 9206
 name = "Raw wool"
 mass = 1
 tags = ["animal", "fiber", "raw"]
+
+[data.objects.wool-yarn]
+id = 9207
+name = "Wool yarn"
+mass = 1
+tags = ["animal", "fiber", "crafted"]

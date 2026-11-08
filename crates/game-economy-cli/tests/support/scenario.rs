@@ -6664,3 +6664,133 @@ fn animal_product_refusal_and_capacity_failure_preserve_fleece() {
         );
     }
 }
+
+#[test]
+fn renewable_wool_can_support_another_persons_independent_production() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run =
+        |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = scenario(
+                        &root.join("content/scenarios/economy-fleece-workshop.toml"),
+                        &root.join("content"),
+                    )
+                    .unwrap();
+                    let initial = world.snapshot();
+                    let good = |name: &str| {
+                        initial
+                            .physical
+                            .goods
+                            .iter()
+                            .find(|g| g.name == name)
+                            .unwrap()
+                            .id
+                    };
+                    let wool = good("raw-wool");
+                    let yarn = good("wool-yarn");
+                    world.advance().unwrap();
+                    world.advance().unwrap();
+                    assert!(
+                        world
+                            .snapshot()
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .all(|c| c.place
+                                != (game_lots::Place::Stock {
+                                    region: 1,
+                                    good: yarn
+                                })
+                                || c.used == 0)
+                    );
+                    assert_eq!(
+                        game_economy_player::Player::new(&mut world)
+                            .collect_animal_product(1, false)
+                            .unwrap(),
+                        game_economy::AnimalProductOutcome::Collected
+                    );
+                    assert!(
+                        game_economy_player::Player::new(&mut world)
+                            .transfer_stock(wool, 2, false)
+                            .unwrap()
+                    );
+                    let mut declining = world.snapshot();
+                    declining
+                        .people
+                        .iter_mut()
+                        .find(|person| person.id == 2)
+                        .unwrap()
+                        .willing_to_work = false;
+                    let mut declining = game_economy::Economy::compile(declining).unwrap();
+                    for _ in 0..10 {
+                        declining.advance().unwrap();
+                    }
+                    assert!(declining.snapshot().physical.custody.containers.iter().all(
+                        |c| c.place
+                            != (game_lots::Place::Stock {
+                                region: 1,
+                                good: yarn
+                            })
+                            || c.used == 0
+                    ));
+                    let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                    let mut restored =
+                        game_economy::Economy::compile(serde_json::from_str(&saved).unwrap())
+                            .unwrap();
+                    for _ in 0..30 {
+                        if world
+                            .snapshot()
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .any(|c| {
+                                c.place
+                                    == (game_lots::Place::Stock {
+                                        region: 1,
+                                        good: yarn,
+                                    })
+                                    && c.used > 0
+                            })
+                        {
+                            break;
+                        }
+                        world.advance().unwrap();
+                        restored.advance().unwrap();
+                    }
+                    let state = world.snapshot();
+                    assert_eq!(state, restored.snapshot());
+                    assert!(state.physical.custody.containers.iter().any(|c| c.place
+                        == (game_lots::Place::Stock {
+                            region: 1,
+                            good: yarn
+                        })
+                        && c.used == 1));
+                    assert!(
+                        state
+                            .goals
+                            .as_ref()
+                            .unwrap()
+                            .people
+                            .iter()
+                            .any(|g| g.person == 2 && g.progress == 1)
+                    );
+                    assert!(
+                        state
+                            .fauna
+                            .as_ref()
+                            .unwrap()
+                            .animals
+                            .iter()
+                            .any(|a| a.id == 1 && a.health > 0)
+                    );
+                    state
+                })
+        };
+    assert_eq!(run(1), run(4));
+}

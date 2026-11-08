@@ -1,0 +1,149 @@
+# A person can collect fleece, place it in stock, and let a neighbor spin yarn.
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { reed-shelter-kit = 1, bread = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+goods = { bread = 10, timber = 1 }
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = true
+goods = { bread = 10 }
+
+[family]
+next_id = 3
+
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 40
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = true
+
+[[family.members]]
+id = 1
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[[family.members]]
+id = 2
+age = 18
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[campaign.lineage]
+current = 1
+started = 0
+
+[work_sites]
+sites = []
+[[work_sites.requirements]]
+recipe = "fixture-tool"
+kind = "workshop"
+slots = 1
+
+[construction]
+[[construction.blueprints]]
+id = 1
+name = "reed workshop"
+kind = "workshop"
+capacity = 1
+kit = "reed-shelter-kit"
+quantity = 1
+
+[[construction.goal_builders]]
+person = 2
+enabled = true
+disregard_claims = false
+
+[local_transport]
+[[local_transport.stores]]
+id = 1
+region = 1
+name = "timber store"
+capacity = 10
+goods = { timber = 5 }
+
+[[local_transport.goal_fetchers]]
+person = 2
+enabled = true
+max_quantity = 5
+
+[[aspirations]]
+person = 2
+recipe = "spin-raw-wool"
+priority = 1
+batch = 1
+review_interval = 3
+
+[fauna]
+next_id = 2
+last_tick = 0
+
+[[fauna.species]]
+id = 1
+name = "wool grazer"
+food_good = "grain"
+intake = 1
+hunger_per_tick = 1
+relief_per_unit = 1
+starvation_threshold = 100
+starvation_damage = 1
+max_health = 10
+adult_age = 1
+fertile_until = 30
+lifespan = 60
+gestation = 3
+conception_one_in = 1000000
+breeding_max_hunger = 4
+newborn_health = 10
+
+[[fauna.animals]]
+id = 1
+species = 1
+region = 1
+age = 2
+health = 10
+hunger = 0
+genome = { sex = "Male", alleles = [[300, 300], [400, 400], [500, 500], [600, 600]] }
+handling_response = { willing = true }
+
+[animal_products]
+rules = [{ species = 1, good = "raw-wool", quantity = 2, grow_ticks = 2, min_age = 1, min_health = 1, max_hunger = 20 }]
