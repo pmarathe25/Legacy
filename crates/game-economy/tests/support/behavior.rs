@@ -14465,6 +14465,7 @@ fn travelers_choose_whether_to_obtain_delivery_goods_and_respect_claims() {
                         1,
                         id,
                         Some(MissionDeliveryAcquisition {
+                            known_store: None,
                             willing,
                             pressure_threshold: pressure,
                             disregard_claims: disregard,
@@ -14603,6 +14604,7 @@ fn travelers_can_obtain_delivery_goods_from_a_local_named_store() {
                         1,
                         id,
                         Some(MissionDeliveryAcquisition {
+                            known_store: None,
                             willing,
                             pressure_threshold: None,
                             disregard_claims: false,
@@ -14669,6 +14671,194 @@ fn travelers_can_obtain_delivery_goods_from_a_local_named_store() {
 }
 
 #[test]
+fn travelers_choose_a_known_store_for_missing_expedition_supplies() {
+    let run = |workers, stocked| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = expedition_fixture();
+                initial.rules.hunger_per_tick = 0;
+                initial.people[2].region = Some(2);
+                for place in [Place::Person(1), Place::Stock { region: 1, good: 2 }] {
+                    let holder = initial
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == place)
+                        .unwrap();
+                    *holder = Container::new(place, 10, vec![]).unwrap();
+                }
+                initial.physical.custody.containers.push(
+                    Container::new(
+                        Place::Inventory(10),
+                        10,
+                        if stocked {
+                            vec![Lot {
+                                item: None,
+                                good: 2,
+                                quantity: 2,
+                                expires_at: None,
+                            }]
+                        } else {
+                            vec![]
+                        },
+                    )
+                    .unwrap(),
+                );
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_unstable_by_key(|row| row.place);
+                initial.local_transport = Some(LocalTransport {
+                    stores: vec![LocalStore {
+                        id: 10,
+                        region: 1,
+                        name: "supplies".into(),
+                    }],
+                    policies: vec![],
+                    goal_fetchers: vec![],
+                    events: vec![],
+                    walking: Some(LocalWalking {
+                        routes: vec![
+                            LocalWalkRoute {
+                                region: 1,
+                                from: LocalEndpoint::Stock,
+                                to: LocalEndpoint::Store { id: 10 },
+                                ticks: 2,
+                            },
+                            LocalWalkRoute {
+                                region: 1,
+                                from: LocalEndpoint::Store { id: 10 },
+                                to: LocalEndpoint::Stock,
+                                ticks: 2,
+                            },
+                        ]
+                        .into(),
+                        preferences: vec![].into(),
+                        positions: vec![],
+                        events: vec![],
+                    }),
+                });
+                let mut world = Economy::compile(initial).unwrap();
+                let id = world
+                    .start_mission(MissionStart {
+                        person: 1,
+                        destination: 2,
+                        visit_ticks: 6,
+                    })
+                    .unwrap();
+                world.set_mission_delivery(1, id, 3, 2, 2).unwrap();
+                world
+                    .set_mission_delivery_choices(1, id, true, 0, None)
+                    .unwrap();
+                let choice = MissionDeliveryAcquisition {
+                    willing: true,
+                    pressure_threshold: None,
+                    disregard_claims: false,
+                    known_store: Some(10),
+                };
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .set_mission_delivery_acquisition(
+                            1,
+                            id,
+                            Some(MissionDeliveryAcquisition {
+                                known_store: Some(999),
+                                ..choice
+                            })
+                        )
+                        .is_err()
+                );
+                assert_eq!(before, world.snapshot());
+                world
+                    .set_mission_delivery_acquisition(
+                        1,
+                        id,
+                        Some(MissionDeliveryAcquisition {
+                            willing: false,
+                            ..choice
+                        }),
+                    )
+                    .unwrap();
+                let mut declined = Economy::compile(world.snapshot()).unwrap();
+                declined.advance().unwrap();
+                assert!(
+                    declined
+                        .snapshot()
+                        .local_transport
+                        .unwrap()
+                        .walking
+                        .unwrap()
+                        .events
+                        .is_empty()
+                );
+                world
+                    .set_mission_delivery_acquisition(1, id, Some(choice))
+                    .unwrap();
+                world.advance().unwrap();
+                let saved = world.snapshot();
+                let travel = saved
+                    .local_transport
+                    .as_ref()
+                    .unwrap()
+                    .walking
+                    .as_ref()
+                    .unwrap()
+                    .positions
+                    .clone();
+                assert!(matches!(
+                    travel[0].location,
+                    LocalLocation::Walking {
+                        to: LocalEndpoint::Store { id: 10 },
+                        ..
+                    }
+                ));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    for _ in 0..15 {
+                        world.advance().unwrap();
+                    }
+                    assert_eq!(
+                        world.snapshot().missions.as_ref().unwrap().entries[0].objective_met,
+                        stocked
+                    );
+                    if !stocked {
+                        assert!(matches!(
+                            world
+                                .snapshot()
+                                .local_transport
+                                .unwrap()
+                                .walking
+                                .unwrap()
+                                .positions[0]
+                                .location,
+                            LocalLocation::At {
+                                endpoint: LocalEndpoint::Store { id: 10 },
+                                ..
+                            }
+                        ));
+                    }
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                (travel, world.snapshot())
+            })
+    };
+    let (stocked_travel, stocked) = run(1, true);
+    let (empty_travel, empty) = run(1, false);
+    assert_eq!(stocked_travel, empty_travel);
+    assert_eq!(stocked, run(4, true).1);
+    assert_eq!(empty, run(4, false).1);
+}
+
+#[test]
 fn travelers_can_obtain_and_deliver_supplies_across_save_and_reload() {
     let mut initial = expedition_fixture();
     initial.people[2].region = Some(2);
@@ -14696,6 +14886,7 @@ fn travelers_can_obtain_and_deliver_supplies_across_save_and_reload() {
             1,
             id,
             Some(MissionDeliveryAcquisition {
+                known_store: None,
                 willing: true,
                 pressure_threshold: None,
                 disregard_claims: false,
@@ -22366,6 +22557,7 @@ fn autonomous_acquisition_workload(count: u64, available: u64) -> State {
             pressure_threshold: None,
             reserve: 0,
             acquisition: Some(MissionDeliveryAcquisition {
+                known_store: None,
                 willing: true,
                 pressure_threshold: None,
                 disregard_claims: false,
@@ -22821,9 +23013,35 @@ fn concentrated_expedition_acquisition_benchmark() {
     let mut initial = autonomous_acquisition_workload(count, available);
     let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
     let returning = std::env::var_os("LEGACY_MISSION_RETURN").is_some();
+    let searching = std::env::var_os("LEGACY_MISSION_SEARCH").is_some();
     assert!(!returning || at_store);
-    if at_store || std::env::var_os("LEGACY_NAMED_STORE").is_some() {
+    assert!(!searching || !at_store);
+    if at_store || searching || std::env::var_os("LEGACY_NAMED_STORE").is_some() {
         use_named_acquisition_store(&mut initial, available);
+    }
+    if searching {
+        for mission in &mut initial.missions.as_mut().unwrap().entries {
+            mission
+                .delivery_preference
+                .as_mut()
+                .unwrap()
+                .acquisition
+                .as_mut()
+                .unwrap()
+                .known_store = Some(1);
+        }
+        initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            routes: vec![LocalWalkRoute {
+                region: 1,
+                from: LocalEndpoint::Stock,
+                to: LocalEndpoint::Store { id: 1 },
+                ticks: 2,
+            }]
+            .into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        });
     }
     if at_store {
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
@@ -22875,8 +23093,10 @@ fn concentrated_expedition_acquisition_benchmark() {
                     .filter(|lot| lot.good == 2)
                     .map(|lot| lot.quantity)
                     .sum();
-                assert_eq!(acquired, available);
-                if returning {
+                assert_eq!(acquired, if searching { 0 } else { available });
+                if searching {
+                    assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), count as usize);
+                } else if returning {
                     assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), available as usize);
                 }
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -22890,7 +23110,7 @@ fn concentrated_expedition_acquisition_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} travelers={count} stock={available} at_store={at_store} returning={returning} elapsed={:.6} fingerprint={:016x}",
+                "workers={workers} travelers={count} stock={available} at_store={at_store} returning={returning} searching={searching} elapsed={:.6} fingerprint={:016x}",
                 samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]

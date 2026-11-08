@@ -59,6 +59,9 @@ pub struct DeliveryAcquisition {
     pub pressure_threshold: Option<u64>,
     #[serde(default)]
     pub disregard_claims: bool,
+    /// A personally known local store to visit when nearby supplies are missing.
+    #[serde(default)]
+    pub known_store: Option<u64>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]

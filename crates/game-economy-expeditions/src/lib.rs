@@ -406,6 +406,21 @@ macro_rules! mission_methods {
             }) {
                 return Err("delivery pressure threshold must be positive".into());
             }
+            if preference
+                .and_then(|value| value.acquisition)
+                .and_then(|choice| choice.known_store)
+                .is_some_and(|id| {
+                    self.local_transport.as_ref().is_none_or(|local| {
+                        local.walking.is_none()
+                            || local
+                                .stores
+                                .binary_search_by_key(&id, |store| store.id)
+                                .is_err()
+                    })
+                })
+            {
+                return Err("delivery acquisition needs a known local store and walking".into());
+            }
             let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
             let mission = missions
                 .entries
@@ -461,6 +476,20 @@ macro_rules! mission_methods {
         ) -> Result<(), String> {
             if acquisition.is_some_and(|choice| choice.pressure_threshold == Some(0)) {
                 return Err("delivery pressure threshold must be positive".into());
+            }
+            if acquisition
+                .and_then(|choice| choice.known_store)
+                .is_some_and(|id| {
+                    self.local_transport.as_ref().is_none_or(|local| {
+                        local.walking.is_none()
+                            || local
+                                .stores
+                                .binary_search_by_key(&id, |store| store.id)
+                                .is_err()
+                    })
+                })
+            {
+                return Err("delivery acquisition needs a known local store and walking".into());
             }
             let missions = self.missions.as_mut().ok_or("expeditions are disabled")?;
             let mission = missions

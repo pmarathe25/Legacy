@@ -4303,6 +4303,19 @@ fn player_can_set_a_delivery_objective_through_the_cli() {
     assert!(!acquisition.willing);
     assert!(acquisition.disregard_claims);
     assert_eq!(acquisition.pressure_threshold, Some(4));
+    let error = game_economy_cli_commands::player::handle(
+        &mut world,
+        &[
+            "delivery-acquisition",
+            &id.to_string(),
+            "on",
+            "respect",
+            "none",
+            "999",
+        ],
+    )
+    .unwrap_err();
+    assert!(error.contains("known local store"));
 }
 
 #[test]

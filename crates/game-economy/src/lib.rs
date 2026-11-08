@@ -2547,6 +2547,25 @@ impl Economy {
         {
             return Err("local store custody requires location metadata".into());
         }
+        if state.missions.as_ref().is_some_and(|missions| {
+            missions.entries.par_iter().any(|mission| {
+                mission
+                    .delivery_preference
+                    .and_then(|preference| preference.acquisition)
+                    .and_then(|choice| choice.known_store)
+                    .is_some_and(|id| {
+                        state.local_transport.as_ref().is_none_or(|local| {
+                            local.walking.is_none()
+                                || local
+                                    .stores
+                                    .binary_search_by_key(&id, |store| store.id)
+                                    .is_err()
+                        })
+                    })
+            })
+        }) {
+            return Err("delivery acquisition references an unknown local store".into());
+        }
         if let Some(medical) = &state.medical {
             medical.validate(
                 &ids,
@@ -3844,6 +3863,32 @@ impl Economy {
                 if !walks.is_empty() {
                     goal_walks.par_extend(walks);
                     goal_walks.par_sort_unstable_by_key(|request| request.person);
+                    goal_walks.dedup_by_key(|request| request.person);
+                }
+            }
+            if let Some(missions) = &self.missions
+                && missions.entries.par_iter().any(|mission| {
+                    mission
+                        .delivery_preference
+                        .and_then(|p| p.acquisition)
+                        .is_some_and(|p| p.known_store.is_some())
+                })
+            {
+                let walks = local_walking::mission_supply(local_walking::MissionSupplyContext {
+                    missions,
+                    owner,
+                    walking,
+                    people: &self.people,
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    claims: claims.as_ref(),
+                    busy: &busy,
+                    blocked: &visit_blocked,
+                    max_hunger: self.rules.max_work_hunger,
+                });
+                if !walks.is_empty() {
+                    goal_walks.par_extend(walks);
+                    goal_walks.par_sort_by_key(|request| request.person);
                     goal_walks.dedup_by_key(|request| request.person);
                 }
             }

@@ -368,7 +368,8 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             willing,
             claims,
             pressure,
-        ] => {
+            store @ ..,
+        ] if store.len() <= 1 => {
             let willing = match *willing {
                 "on" => true,
                 "off" => false,
@@ -388,6 +389,11 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 person.parse().map_err(|_| "invalid person")?,
                 id.parse().map_err(|_| "invalid expedition")?,
                 Some(MissionDeliveryAcquisition {
+                    known_store: match store {
+                        [] | ["none"] => None,
+                        [id] => Some(id.parse().map_err(|_| "invalid local store")?),
+                        _ => unreachable!(),
+                    },
                     willing,
                     disregard_claims,
                     pressure_threshold,

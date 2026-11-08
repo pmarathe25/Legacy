@@ -52,6 +52,134 @@ pub struct MissionReturnContext<'a> {
     pub busy: &'a [u64],
 }
 
+pub struct MissionSupplyContext<'a> {
+    pub missions: &'a crate::Missions,
+    pub owner: &'a LocalTransport,
+    pub walking: &'a Walking,
+    pub people: &'a [game_economy_person::Person],
+    pub view: &'a game_lots::View,
+    pub opinions: Option<&'a game_opinions::Opinions>,
+    pub claims: Option<&'a game_economy_claims::Index<'a>>,
+    pub busy: &'a [u64],
+    pub blocked: &'a [u64],
+    pub max_hunger: u32,
+}
+
+/// Seek a known store only when locally observed supplies do not meet the need.
+pub fn mission_supply(
+    context: MissionSupplyContext<'_>,
+) -> Vec<game_economy_local_transport::walking::Request> {
+    use game_economy_expeditions::{MissionPhase, Objective};
+    use game_economy_local_transport::walking::{Location, Request};
+    let opinions = context
+        .missions
+        .entries
+        .par_iter()
+        .any(|mission| {
+            mission
+                .delivery_preference
+                .and_then(|p| p.acquisition)
+                .is_some_and(|p| p.known_store.is_some() && p.pressure_threshold.is_some())
+        })
+        .then(|| context.opinions.map(game_opinions::Opinions::index))
+        .flatten();
+    let mut requests: Vec<_> = context
+        .missions
+        .entries
+        .par_iter()
+        .filter_map(|mission| {
+            if mission.objective_met
+                || !matches!(mission.phase, MissionPhase::Ready | MissionPhase::Outbound)
+                || context.busy.binary_search(&mission.person).is_ok()
+                || context.blocked.binary_search(&mission.person).is_ok()
+            {
+                return None;
+            }
+            let preference = mission.delivery_preference?;
+            let choice = preference.acquisition?;
+            let destination = Endpoint::Store {
+                id: choice.known_store?,
+            };
+            let Objective::Deliver {
+                person: recipient,
+                good,
+                quantity,
+                delivered,
+            } = mission.objective?
+            else {
+                return None;
+            };
+            let actor = &context.people[context
+                .people
+                .binary_search_by_key(&mission.person, |p| p.id)
+                .ok()?];
+            let region = actor.region?;
+            if actor.controlled
+                || actor.health == 0
+                || actor.hunger > context.max_hunger
+                || region == mission.destination
+                || context
+                    .owner
+                    .stores
+                    .binary_search_by_key(&choice.known_store?, |store| store.id)
+                    .ok()
+                    .is_none_or(|i| context.owner.stores[i].region != region)
+            {
+                return None;
+            }
+            let pressured = choice.pressure_threshold.is_some_and(|threshold| {
+                opinions.as_ref().is_some_and(|index| {
+                    let (fear, obligation) = index.feelings(actor.id, recipient);
+                    fear.saturating_add(obligation) >= threshold
+                })
+            });
+            if !choice.willing && !pressured {
+                return None;
+            }
+            let holder = context.view.container(Place::Person(actor.id))?;
+            if holder.used >= holder.capacity
+                || holder.quantity(good)
+                    >= quantity
+                        .saturating_sub(delivered)
+                        .saturating_add(preference.reserve)
+            {
+                return None;
+            }
+            let location = context.walking.location(actor.id, region);
+            let visible = match location {
+                Location::At {
+                    endpoint: Endpoint::Stock,
+                    ..
+                } if choice.disregard_claims
+                    || context
+                        .claims
+                        .is_none_or(|claims| claims.allows(actor.id, region, good)) =>
+                {
+                    context.view.container(Place::Stock { region, good })
+                }
+                Location::At {
+                    endpoint: Endpoint::Store { id },
+                    ..
+                } => context.view.container(Place::Inventory(id)),
+                _ => None,
+            };
+            if visible.is_some_and(|source| source.quantity(good) > 0)
+                || !context.walking.can_advance(actor.id, region, destination)
+            {
+                return None;
+            }
+            Some(Request {
+                person: actor.id,
+                region,
+                destination,
+            })
+        })
+        .collect();
+    requests.par_sort_unstable_by_key(|request| (request.person, request.destination));
+    requests.dedup_by_key(|request| request.person);
+    requests
+}
+
 /// A traveler who still wants to deliver can carry the actual goods to the
 /// regional exit, without learning anything about distant inventory.
 pub fn mission_return(
