@@ -113,6 +113,8 @@ pub struct Context<'a> {
     pub work: &'a [Work],
     pub rates: &'a [(u64, u64)],
     pub busy: &'a [u64],
+    pub resting: &'a [u64],
+    pub manual: Option<&'a Preference>,
     pub sites: &'a Facilities,
     pub unavailable_sites: &'a [u64],
     pub site_classes: &'a [(u64, Option<u64>)],
@@ -150,7 +152,7 @@ fn priority(seed: u64, tick: u64, job: u64, person: u64) -> u64 {
 
 impl Context<'_> {
     pub fn prepare(&self) -> Vec<Event> {
-        if self.owner.preferences.is_empty() || self.rates.is_empty() {
+        if (self.owner.preferences.is_empty() && self.manual.is_none()) || self.rates.is_empty() {
             return Vec::new();
         }
         let mut rates = self.rates.to_vec();
@@ -180,8 +182,17 @@ impl Context<'_> {
             .owner
             .preferences
             .par_iter()
+            .filter(|preference| {
+                self.manual
+                    .is_none_or(|manual| manual.person != preference.person)
+            })
+            .chain(self.manual.into_par_iter())
             .filter_map(|preference| {
-                if self.busy.binary_search(&preference.person).is_ok()
+                let manual = self
+                    .manual
+                    .is_some_and(|choice| choice.person == preference.person);
+                if (!manual && self.busy.binary_search(&preference.person).is_ok())
+                    || self.resting.binary_search(&preference.person).is_ok()
                     || underage.binary_search(&preference.person).is_ok()
                 {
                     return None;
@@ -191,7 +202,10 @@ impl Context<'_> {
                     .binary_search_by_key(&preference.person, |p| p.id)
                     .ok()
                     .map(|i| &self.people[i])?;
-                if person.controlled || person.health == 0 || person.hunger > self.max_hunger {
+                if (person.controlled && !manual)
+                    || person.health == 0
+                    || person.hunger > self.max_hunger
+                {
                     return None;
                 }
                 let job = active

@@ -1524,6 +1524,18 @@ impl<'a> Player<'a> {
             .iter()
             .any(|w| w.job.worker == actor && events.started.contains(&w.job.id)))
     }
+    pub fn assist_work(
+        &mut self,
+        lead: u64,
+        recipe: u32,
+        disregard_claims: bool,
+    ) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&lead) {
+            return Err("person is not present".into());
+        }
+        self.world
+            .assist_work(self.current()?, lead, recipe, disregard_claims)
+    }
     pub fn eat(&mut self, good: u32) -> Result<bool, String> {
         self.world.eat(self.current()?, good)
     }

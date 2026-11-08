@@ -24,6 +24,13 @@ pub enum WorkAction {
     Continue {
         actor: u64,
     },
+    /// Spend one boundary assisting an existing lead's local work.
+    Assist {
+        actor: u64,
+        lead: u64,
+        recipe: u32,
+        disregard_claims: bool,
+    },
     /// Respond to a request personally received by the controlled worker.
     Respond {
         actor: u64,
@@ -34,9 +41,10 @@ pub enum WorkAction {
 impl WorkAction {
     pub fn actor(self) -> u64 {
         match self {
-            Self::Start { actor, .. } | Self::Continue { actor } | Self::Respond { actor, .. } => {
-                actor
-            }
+            Self::Start { actor, .. }
+            | Self::Continue { actor }
+            | Self::Assist { actor, .. }
+            | Self::Respond { actor, .. } => actor,
         }
     }
 }
@@ -214,6 +222,22 @@ macro_rules! validate_work_world {
                 }
                 $crate::WorkAction::Continue { .. } if !working => {
                     return Err("person has no active work".into());
+                }
+                $crate::WorkAction::Assist { lead, recipe, .. } => {
+                    if working
+                        || actor == lead
+                        || $world.shared_work.as_ref().is_none_or(|owner| {
+                            !owner.rules.iter().any(|rule| rule.recipe == recipe)
+                        })
+                        || !$world.physical.work().iter().any(|row| {
+                            row.phase == game_lot_runtime::Phase::Working
+                                && row.job.worker == lead
+                                && row.job.recipe == recipe
+                                && Some(row.job.region) == person.region
+                        })
+                    {
+                        return Err("no eligible local job to assist".into());
+                    }
                 }
                 _ => {}
             }

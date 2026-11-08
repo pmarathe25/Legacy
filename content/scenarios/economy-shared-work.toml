@@ -101,7 +101,7 @@ slots = 1
 
 [[shared_work.rules]]
 recipe = "fixture-tool"
-max_helpers = 1
+max_helpers = 2
 
 [[shared_work.preferences]]
 person = 3

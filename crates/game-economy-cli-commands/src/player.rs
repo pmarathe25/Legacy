@@ -47,6 +47,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 "writing | pages | write-food SCRIPT REGION current|LIFE remembered|FOOD | give-page PERSON ITEM | read-page ITEM | practice-writing SCRIPT"
             );
             println!("tell-route PERSON SOURCE DEST remembered|open|closed remembered|TICKS");
+            println!("assist-work LEAD RECIPE respect|disregard");
         }
         ["view"] => {
             let view = player.view()?;
@@ -749,6 +750,21 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             )?
         ),
         ["continue-work"] => println!("finished={}", player.continue_work()?),
+        ["assist-work", lead, recipe, claims] => {
+            let disregard = match *claims {
+                "respect" => false,
+                "disregard" => true,
+                _ => return Err("expected respect or disregard".into()),
+            };
+            println!(
+                "assisted={}",
+                player.assist_work(
+                    lead.parse().map_err(|_| "invalid person")?,
+                    recipe.parse().map_err(|_| "invalid recipe")?,
+                    disregard
+                )?
+            );
+        }
         ["feed-animal", animal, good, quantity] => println!(
             "food-used={}",
             player.feed_animal(

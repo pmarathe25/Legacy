@@ -45270,6 +45270,104 @@ fn shared_work_boundary_benchmark() {
 }
 
 #[test]
+fn controlled_person_can_assist_without_forcing_the_lead_or_ignoring_claims() {
+    use game_economy_claims::Claims;
+    let mut initial = shared_work_fixture();
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims::default()),
+    });
+    for preference in &mut initial.shared_work.as_mut().unwrap().preferences {
+        preference.willing = false;
+        preference.fear_at_least = None;
+    }
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                assert!(world.assist_work(1, 2, 1, false).is_err());
+                assert_eq!(world.snapshot(), before);
+                world.advance().unwrap();
+                world.claim_site(2, 1).unwrap();
+                let before = world.snapshot();
+                assert!(world.assist_work(3, 2, 1, false).is_err());
+                assert_eq!(world.snapshot(), before);
+                assert!(!world.assist_work(1, 2, 1, false).unwrap());
+                assert!(world.assist_work(1, 2, 1, true).unwrap());
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .shared_work
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.person == 1 && event.lead == 2 && event.progress == 1)
+                );
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .claims
+                        .as_ref()
+                        .unwrap()
+                        .site_events
+                        .iter()
+                        .any(|event| event.person == 1 && event.claimant == 2 && event.site == 1)
+                );
+                assert!(
+                    state
+                        .skills
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .any(|record| record.person == 1 && record.completions == 1)
+                );
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let race = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = shared_work_fixture();
+                initial.shared_work.as_mut().unwrap().rules[0].max_helpers = 1;
+                initial.shared_work.as_mut().unwrap().preferences[1].fear_at_least = None;
+                let mut world = Economy::compile(initial).unwrap();
+                world.advance().unwrap();
+                let admitted = world.assist_work(1, 2, 1, false).unwrap();
+                let state = world.snapshot();
+                let events = &state.shared_work.as_ref().unwrap().events;
+                assert_eq!(events.len(), 1);
+                assert_eq!(admitted, events[0].person == 1);
+                state
+            })
+    };
+    assert_eq!(race(1), race(4));
+    let mut world = Economy::compile(shared_work_fixture()).unwrap();
+    world.advance().unwrap();
+    world.set_work_choice(2, false).unwrap();
+    assert!(!world.assist_work(1, 2, 1, false).unwrap());
+    assert!(world.snapshot().shared_work.unwrap().events.is_empty());
+}
+
+#[test]
 fn shared_work_respects_contested_site_claims_and_publishes_witnessed_use() {
     use game_economy_claims::Claims;
     let mut initial = shared_work_fixture();

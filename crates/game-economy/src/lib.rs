@@ -302,6 +302,33 @@ impl Economy {
         self.epoch = epoch;
         Ok(())
     }
+    /// Attempt to contribute to a local lead's active job for one boundary.
+    pub fn assist_work(
+        &mut self,
+        actor: u64,
+        lead: u64,
+        recipe: u32,
+        disregard_claims: bool,
+    ) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            Some(game_economy_interaction::WorkAction::Assist {
+                actor,
+                lead,
+                recipe,
+                disregard_claims,
+            }),
+            None,
+            None,
+        )?;
+        let admitted = draft
+            .shared_work
+            .as_ref()
+            .is_some_and(|owner| owner.events.iter().any(|event| event.person == actor));
+        self.commit(draft)?;
+        Ok(admitted)
+    }
     /// Change this person's willingness to build for their own production goals.
     pub fn set_goal_building_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
@@ -5775,6 +5802,23 @@ impl Economy {
                     .collect(),
             )
         };
+        let manual_shared = match player_work {
+            Some(game_economy_interaction::WorkAction::Assist {
+                actor,
+                lead,
+                recipe,
+                disregard_claims,
+            }) => Some(SharedWorkPreference {
+                person: actor,
+                lead,
+                recipe,
+                willing: true,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims,
+            }),
+            _ => None,
+        };
         let base_rates = if self.shared_work.is_some() {
             rates.clone()
         } else {
@@ -5788,6 +5832,8 @@ impl Economy {
                     work: self.physical.work(),
                     rates: &rates,
                     busy: &busy,
+                    resting: &resting,
+                    manual: manual_shared.as_ref(),
                     sites,
                     unavailable_sites: &unavailable_sites,
                     site_classes: &site_classes,
