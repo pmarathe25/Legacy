@@ -3616,6 +3616,8 @@ fn generated_acquaintance_requests_benchmark() {
         .unwrap()
         .install(|| {
             let initial = hungry_generated_campaign(count);
+            #[cfg(feature = "profile")]
+            let before = game_diagnostics::snapshot();
             let mut samples = Vec::new();
             for round in 0..4 {
                 let mut world = game_economy::Economy::compile(initial.clone()).unwrap();
@@ -3632,6 +3634,20 @@ fn generated_acquaintance_requests_benchmark() {
                 "workers={workers} generated={count} hungry_tick_seconds={:.6}",
                 samples[1]
             );
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (name, measurement) in game_diagnostics::snapshot() {
+                    let prior = before.get(name);
+                    let calls = measurement.calls - prior.map_or(0, |m| m.calls);
+                    let nanos = measurement.nanoseconds - prior.map_or(0, |m| m.nanoseconds);
+                    if calls > 0 {
+                        println!(
+                            "phase={name} calls={calls} mean_ms={:.3}",
+                            nanos as f64 / calls as f64 / 1_000_000.0
+                        );
+                    }
+                }
+            }
         });
 }
 

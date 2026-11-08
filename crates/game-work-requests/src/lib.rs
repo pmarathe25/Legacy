@@ -482,6 +482,12 @@ impl Requests {
         offers: Option<&OfferIndex>,
         tick: u64,
     ) -> Draft {
+        if self.pending.is_empty() {
+            return Draft {
+                decisions: Vec::new(),
+                expired: Vec::new(),
+            };
+        }
         let mut busy = busy.to_vec();
         busy.par_sort_unstable();
         let mut prefs: Vec<_> = self.preferences.par_iter().collect();

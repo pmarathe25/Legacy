@@ -182,7 +182,7 @@ To measure three complete campaign boundaries with generated individuals, set `L
 
 For separate phase attribution, enable the `profile` feature and set `LEGACY_PROFILE=1` when running that benchmark. Phase timings include instrumentation and should not be compared directly with ordinary throughput measurements.
 
-`generated_acquaintance_requests_benchmark` uses the same environment variables and measures one boundary after a large generated population has met others and become hungry. It checks that a substantial number of actual requests were made.
+`generated_acquaintance_requests_benchmark` uses the same environment variables and measures one boundary after a large generated population has met others and become hungry. It checks that a substantial number of actual requests were made. With `--features profile` and `LEGACY_PROFILE=1`, its phase means exclude the initial campaign boundary but include the warm-up sample; nested phase times overlap.
 
 For a ruler and guardians in the same dated-goods world, run `cargo run -p game-economy-cli -- content/scenarios/economy-campaign.toml`. `ruler` shows the current incarnation, guardians and any pending invocation warning. `invoke`, `dismiss-invocation`, `accept-warning`, and `guardian-release` operate those personal abilities and choices. A pending warning leaves the simulation time unchanged until it is accepted or invocation is dismissed.
 
