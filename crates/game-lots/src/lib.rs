@@ -4,7 +4,7 @@ mod view;
 pub use compose::{Composed, compose};
 pub use game_lot_model::{
     Container, Creation, Lot, LotList, Movement, Outcome, OutcomeBatch, OutcomeHeader, OutcomeRef,
-    Place, SimpleTransfer, Spoilage, State, Transaction, TransactionOutcome, deadline,
+    Place, PlaceIndex, SimpleTransfer, Spoilage, State, Transaction, TransactionOutcome, deadline,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -212,6 +212,10 @@ impl Store {
     }
     pub fn tick(&self) -> u64 {
         self.state.tick
+    }
+    /// Borrow the ordered committed custody without copying it.
+    pub fn containers(&self) -> &[Container] {
+        &self.state.containers
     }
     pub fn container(&self, place: Place) -> Option<&Container> {
         self.state

@@ -3,8 +3,8 @@ use crate::{Batch, Draft};
 use game_lot_allocation as allocation;
 use game_lot_model::key;
 use game_lot_model::{
-    Container, Creation, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, Spoilage, State,
-    TransactionOutcome,
+    Container, Creation, Lot, Movement, OutcomeBatch, OutcomeChunk, Place, PlaceIndex, Spoilage,
+    State, TransactionOutcome,
 };
 use rayon::prelude::*;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -114,6 +114,7 @@ pub fn prepare(
     if !additions.is_empty() {
         containers.par_sort_unstable_by_key(|row| row.place);
     }
+    let places = PlaceIndex::new(&containers, |row: &&Container| row.place);
     let mut claims: Vec<_> = moves
         .par_iter()
         .enumerate()
@@ -128,15 +129,15 @@ pub fn prepare(
             {
                 return Err("invalid lot movement".to_string());
             }
-            let source = containers
-                .binary_search_by_key(&movement.from, |container| container.place)
-                .map_err(|_| "missing source custody".to_string())?;
+            let source = places
+                .locate(movement.from)
+                .ok_or_else(|| "missing source custody".to_string())?;
             let destination = movement
                 .to
                 .map(|place| {
-                    containers
-                        .binary_search_by_key(&place, |container| container.place)
-                        .map_err(|_| "missing destination custody".to_string())
+                    places
+                        .locate(place)
+                        .ok_or_else(|| "missing destination custody".to_string())
                 })
                 .transpose()?;
             let rank = if let Some(batch) = &batch {
@@ -185,9 +186,9 @@ pub fn prepare(
             {
                 return Err("invalid created lot".to_string());
             }
-            containers
-                .binary_search_by_key(&creation.to, |container| container.place)
-                .map_err(|_| "missing output custody".to_string())
+            places
+                .locate(creation.to)
+                .ok_or_else(|| "missing output custody".to_string())
         })
         .collect::<Result<_, _>>()?;
     let used: Vec<_> = containers

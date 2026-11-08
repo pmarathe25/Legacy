@@ -1,6 +1,6 @@
 //! Progress, physical completion, loss and returns at one shared boundary.
 use super::{ExternalReceiptBatch, ExternalReceiptHeader, Growth, Phase, Runtime, Work};
-use game_lots::{Place, SimpleTransfer, Spoilage, Transaction, TransactionOutcome};
+use game_lots::{Place, PlaceIndex, SimpleTransfer, Spoilage, Transaction, TransactionOutcome};
 use game_production_model::{JobPhase, Start};
 use rayon::prelude::*;
 
@@ -456,17 +456,20 @@ impl Runtime {
                     row.job.remaining = row.job.remaining.saturating_sub(rates[index].1);
                 }
             });
+        let custody_rows = self.store.containers();
+        let work_places =
+            (!self.work.is_empty()).then(|| PlaceIndex::new(custody_rows, |c| c.place));
+        let work_custody = |place| {
+            work_places
+                .as_ref()
+                .and_then(|index| index.locate(place))
+                .map(|i| &custody_rows[i])
+                .expect("validated work custody")
+        };
         let finishing: Vec<_> = next
             .par_iter()
             .filter(|row| row.phase == Phase::Working && row.job.remaining == 0)
-            .map(|row| {
-                (
-                    &row.job,
-                    self.store
-                        .container(Place::JobInput(row.job.id))
-                        .expect("validated input custody"),
-                )
-            })
+            .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
         let finished = game_lot_work::finish(&finishing, &self.catalog, next_tick)?;
         let mut interrupted = finished.interrupted;
@@ -477,27 +480,13 @@ impl Runtime {
         let returning: Vec<_> = next
             .par_iter()
             .filter(|row| row.phase == Phase::Returning)
-            .map(|row| {
-                (
-                    &row.job,
-                    self.store
-                        .container(Place::JobInput(row.job.id))
-                        .expect("validated input custody"),
-                )
-            })
+            .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
         let returned = game_lot_work::cancel(&returning, next_tick)?;
         let waiting: Vec<_> = next
             .par_iter()
             .filter(|row| row.phase == Phase::Waiting)
-            .map(|row| {
-                (
-                    &row.job,
-                    self.store
-                        .container(Place::JobOutput(row.job.id))
-                        .expect("validated output custody"),
-                )
-            })
+            .map(|row| (&row.job, work_custody(Place::JobOutput(row.job.id))))
             .collect();
         let delivered = game_lot_work::deliver(&waiting, next_tick)?;
         #[cfg(feature = "profile")]
