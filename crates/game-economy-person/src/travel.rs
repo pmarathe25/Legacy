@@ -46,6 +46,13 @@ pub struct RouteObservation {
     pub destination: u64,
     pub open: bool,
     pub observed_at: u64,
+    /// The individual's estimate; it may differ from the actual travel time.
+    #[serde(default)]
+    pub estimated_ticks: Option<u64>,
+    #[serde(default)]
+    pub witness: Option<u64>,
+    #[serde(default)]
+    pub learned_from: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -65,6 +72,9 @@ pub struct Travel {
     pub observations: Vec<RouteObservation>,
     #[serde(default = "default_observation_limit")]
     pub observation_limit: usize,
+    /// Food-search path selection uses only the individual's own route reports.
+    #[serde(default)]
+    pub personal_routing: bool,
 }
 fn default_observation_limit() -> usize {
     8
@@ -77,6 +87,7 @@ impl Default for Travel {
             closures: Vec::new(),
             observations: Vec::new(),
             observation_limit: default_observation_limit(),
+            personal_routing: false,
         }
     }
 }
@@ -116,6 +127,53 @@ pub fn routes(travel: &Travel, destinations: &[u64]) -> HashMap<(u64, u64), (u64
         })
         .collect()
 }
+
+/// Find paths over only one person's bounded, dated route reports. A closed
+/// report can be rechecked after the person's normal review delay.
+pub fn known_paths(
+    reports: &[&RouteObservation],
+    source: u64,
+    now: u64,
+    retry_ticks: u64,
+) -> HashMap<u64, (u64, u64)> {
+    let mut best = HashMap::from([(source, (0u64, source))]);
+    let mut queue = BinaryHeap::from([Reverse((0u64, source, source))]);
+    while let Some(Reverse((distance, first, node))) = queue.pop() {
+        if best.get(&node) != Some(&(distance, first)) {
+            continue;
+        }
+        for report in reports
+            .iter()
+            .copied()
+            .filter(|report| report.source == node)
+        {
+            if !report.open && now.saturating_sub(report.observed_at) < retry_ticks {
+                continue;
+            }
+            let Some(cost) = report
+                .estimated_ticks
+                .and_then(|ticks| distance.checked_add(ticks))
+            else {
+                continue;
+            };
+            let first_step = if node == source {
+                report.destination
+            } else {
+                first
+            };
+            let candidate = (cost, first_step);
+            if best
+                .get(&report.destination)
+                .is_none_or(|old| candidate < *old)
+            {
+                best.insert(report.destination, candidate);
+                queue.push(Reverse((cost, first_step, report.destination)));
+            }
+        }
+    }
+    best.remove(&source);
+    best
+}
 /// Coarse routes place people together when their recorded legs and progress match.
 pub struct Colocation {
     journeys: HashMap<u64, (u64, u64, u64)>,
@@ -150,6 +208,7 @@ impl Clone for Travel {
             closures: self.closures.par_iter().cloned().collect(),
             observations: self.observations.par_iter().cloned().collect(),
             observation_limit: self.observation_limit,
+            personal_routing: self.personal_routing,
         }
     }
 }
@@ -219,7 +278,8 @@ impl Travel {
             || observations
                 .par_chunk_by(|a, b| a.0 == b.0)
                 .any(|group| group.len() > self.observation_limit)
-            || (!self.closures.is_empty() && self.observation_limit == 0)
+            || ((!self.closures.is_empty() || self.personal_routing)
+                && !(1..=64).contains(&self.observation_limit))
             || self.closures.par_iter().any(|c| {
                 c.start >= c.end
                     || routes
@@ -230,6 +290,11 @@ impl Travel {
             })
             || self.observations.par_iter().any(|o| {
                 o.observed_at > tick
+                    || o.estimated_ticks == Some(0)
+                    || o.witness
+                        .is_some_and(|id| people.binary_search_by_key(&id, |p| p.id).is_err())
+                    || o.learned_from
+                        .is_some_and(|id| people.binary_search_by_key(&id, |p| p.id).is_err())
                     || people.binary_search_by_key(&o.person, |p| p.id).is_err()
                     || routes
                         .binary_search_by_key(&(o.source, o.destination), |r| {
@@ -334,7 +399,7 @@ impl Travel {
         tick: u64,
     ) -> Result<(Self, Vec<Person>, Vec<DepartureOutcome>), String> {
         let journeys = self.plan_departures(people, requests, working)?;
-        if self.closures.is_empty() {
+        if self.closures.is_empty() && !self.personal_routing {
             let (all_travel, all_people) = self.publish_departures(people, journeys);
             return Ok((
                 all_travel,
@@ -349,6 +414,27 @@ impl Travel {
             ));
         }
         let closed = self.closed_routes(tick);
+        // A route attempt reveals whether passage is currently possible, not
+        // the true duration of a journey the person has not yet completed.
+        let mut estimates: Vec<_> = self
+            .observations
+            .par_iter()
+            .filter_map(|observation| {
+                observation.estimated_ticks.map(|ticks| {
+                    (
+                        (
+                            observation.person,
+                            observation.source,
+                            observation.destination,
+                        ),
+                        ticks,
+                    )
+                })
+            })
+            .collect();
+        if estimates.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            estimates.par_sort_unstable_by_key(|row| row.0);
+        }
         let results: Vec<_> = requests
             .par_iter()
             .map(|request| {
@@ -371,6 +457,15 @@ impl Travel {
                             .binary_search(&(source, request.destination))
                             .is_err(),
                         observed_at: tick,
+                        estimated_ticks: estimates
+                            .binary_search_by_key(
+                                &(request.person, source, request.destination),
+                                |row| row.0,
+                            )
+                            .ok()
+                            .map(|index| estimates[index].1),
+                        witness: Some(request.person),
+                        learned_from: None,
                     },
                 )
             })
@@ -479,6 +574,7 @@ impl Travel {
             closures: self.closures.par_iter().cloned().collect(),
             observations: self.observations.par_iter().cloned().collect(),
             observation_limit: self.observation_limit,
+            personal_routing: self.personal_routing,
         }
     }
     /// Stop travelers who died in a later lifecycle phase of this boundary.

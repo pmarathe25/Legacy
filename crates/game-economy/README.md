@@ -63,6 +63,8 @@ The ignored `tactical_site_damage_benchmark` measures a full boundary of attacks
 
 The ignored `route_closure_batch_benchmark` attempts a mixed batch of open and closed routes and advances a boundary. `LEGACY_PEOPLE` controls the number of travelers, `LEGACY_DISTRIBUTED=1` gives them independent routes, and `LEGACY_WORKERS` controls concurrency.
 
+The ignored `personal_route_planning_benchmark` measures a full boundary of food seekers planning from individual route reports. `LEGACY_PEOPLE` sets the population, `LEGACY_MULTIHOP=1` exercises multi-leg paths, and `LEGACY_WORKERS` sets concurrency.
+
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary
 the population and concurrency. It reports a state fingerprint and times two
@@ -134,7 +136,9 @@ With `giving.inherit_births` and family birth enrollment enabled, a newborn may 
 
 Travelers can eat carried food. People on the same directed route at the same progress are treated as together by this coarse travel model: they can meet autonomously or by choice, ask for food, give supplies, provide care, and independently propose, consider, or physically fulfill promises; contact can transmit disease. Other routes and people at the source remain separate. Each action advances the shared world and the journey.
 
-Authored directed route closures block new departures during their scheduled interval, while journeys already underway continue. Each actual attempt produces a bounded, dated personal observation; other people do not receive an automatic update. Blocked members of a departure batch do not prevent unrelated travelers from leaving. Route planning still uses the shared route graph in this slice; personal route reports are not yet used to select paths.
+Authored directed route closures block new departures during their scheduled interval, while journeys already underway continue. Each actual attempt produces a bounded, dated personal observation; other people do not receive an automatic update. Blocked members of a departure batch do not prevent unrelated travelers from leaving.
+
+When `personal_route_planning` is enabled in content, autonomous food seekers select paths only from their own bounded route reports and estimated durations. An unknown path is unavailable, and an old closed report can be rechecked after the food seeker's review delay. A physical attempt updates that person's report without broadcasting it or replacing their travel-time estimate. Hauling, guardian and expedition planning still use the shared route graph; every departure is subject to physical closures.
 
 Individual hauling preferences can move real lots between regions. A carrier can change their mind between pickup, departure, and delivery; fear or obligation may motivate an otherwise unwilling carrier. Routes, claims, carrying capacity, destination capacity, and expiry all remain physical constraints.
 

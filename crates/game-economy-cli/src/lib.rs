@@ -3,7 +3,7 @@ mod population;
 use game_autowork::{Autowork, Policy};
 use game_economy::{
     Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Economy, Families,
-    FarmPolicy, Field, Goals, Person, Route, RouteClosure, Rules, State, Travel,
+    FarmPolicy, Field, Goals, Person, Route, RouteClosure, RouteObservation, Rules, State, Travel,
 };
 use game_economy_agriculture::content as crop_content;
 use game_lot_content::Catalog;
@@ -32,6 +32,10 @@ struct Scenario {
     routes: Vec<Route>,
     #[serde(default)]
     route_closures: Vec<RouteClosure>,
+    #[serde(default)]
+    personal_route_planning: bool,
+    #[serde(default)]
+    route_observations: Vec<RouteObservation>,
     #[serde(default)]
     family: Option<Families>,
     #[serde(default)]
@@ -1448,8 +1452,9 @@ pub fn scenario_with_options(
         pending_food: vec![],
         travel: (!scenario.routes.is_empty()).then_some(Travel {
             closures: scenario.route_closures,
-            observations: vec![],
+            observations: scenario.route_observations,
             observation_limit: 8,
+            personal_routing: scenario.personal_route_planning,
             routes: scenario.routes,
             journeys: vec![],
         }),

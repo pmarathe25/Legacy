@@ -40,6 +40,8 @@ In `content/scenarios/economy-combat-collapse.toml`, the same attack collapses t
 
 In `content/scenarios/economy-route-closure.toml`, `go 2` reports a blocked departure until tick 2; after `step 2`, the same attempt succeeds. A closure blocks new departures only. The player's `view` shows their bounded, dated observations of routes they tried.
 
+`content/scenarios/economy-personal-routes.toml` gives two food seekers different route reports. On the first `step`, one takes a known indirect route while the other discovers that their supposedly open direct route is closed.
+
 In `content/scenarios/economy-autonomous-site-attack.toml`, person 2 has an individual preference to strike the workshop while fighting. Use `attack 2` and `step` to observe their independent choice.
 
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.

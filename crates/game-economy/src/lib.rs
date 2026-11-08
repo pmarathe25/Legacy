@@ -6545,7 +6545,13 @@ impl Economy {
             owner.reinforce_uses(&uses, tick).map_err(str::to_owned)?;
         }
         if let (Some(plan), Some(search)) = (search_plan, food_search.as_mut()) {
-            search.publish(&search_attempts, &plan.targets, &plan.abandoned, tick)?;
+            search.publish(
+                &search_attempts,
+                &plan.targets,
+                &plan.abandoned,
+                tick,
+                travel.as_ref().is_some_and(|owner| owner.personal_routing),
+            )?;
         }
         #[cfg(feature = "profile")]
         {

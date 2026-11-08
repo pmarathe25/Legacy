@@ -3,7 +3,7 @@ use game_economy_claims::Index as Claims;
 use game_economy_knowledge::Knowledge;
 use game_economy_person::{
     Person,
-    travel::{Departure, Travel, routes},
+    travel::{Departure, Travel, known_paths, routes},
 };
 use game_lots::{Place, View};
 use game_production_model::Good;
@@ -114,8 +114,9 @@ impl FoodSearch {
         targets: &[(u64, u64)],
         abandoned: &[u64],
         tick: u64,
+        backoff_abandoned: bool,
     ) -> Result<(), String> {
-        let next = if departures.is_empty() {
+        let next = if departures.is_empty() && (!backoff_abandoned || abandoned.is_empty()) {
             tick
         } else {
             tick.checked_add(self.retry_ticks)
@@ -136,6 +137,9 @@ impl FoodSearch {
                     .map(|i| targets[i].1);
             } else if abandoned.binary_search(&p.person).is_ok() {
                 p.target = None;
+                if backoff_abandoned {
+                    p.next_review = next;
+                }
             }
         });
         Ok(())
@@ -186,26 +190,41 @@ impl Context<'_> {
             minds.par_sort_unstable_by_key(|m| m.person);
         }
         let recall = self.knowledge.recall_index();
-        let mut destinations: Vec<_> = minds
-            .par_iter()
-            .flat_map_iter(|mind| {
-                mind.records
-                    .iter()
-                    .filter(|r| {
-                        recall.remembers(mind.person, r, self.now)
-                            && r.food >= self.owner.min_report_food
-                            && self.now.saturating_sub(r.observed_at) <= self.owner.max_report_age
-                    })
-                    .map(|r| r.region)
-            })
-            .chain(self.owner.people.par_iter().filter_map(|p| p.target))
-            .collect();
+        let mut destinations: Vec<_> = if self.travel.personal_routing {
+            Vec::new()
+        } else {
+            minds
+                .par_iter()
+                .flat_map_iter(|mind| {
+                    mind.records
+                        .iter()
+                        .filter(|r| {
+                            recall.remembers(mind.person, r, self.now)
+                                && r.food >= self.owner.min_report_food
+                                && self.now.saturating_sub(r.observed_at)
+                                    <= self.owner.max_report_age
+                        })
+                        .map(|r| r.region)
+                })
+                .chain(self.owner.people.par_iter().filter_map(|p| p.target))
+                .collect()
+        };
         destinations.par_sort_unstable();
         destinations = destinations
             .par_chunk_by(|a, b| a == b)
             .map(|group| group[0])
             .collect();
-        let routes = routes(self.travel, &destinations);
+        let routes = if self.travel.personal_routing {
+            HashMap::new()
+        } else {
+            routes(self.travel, &destinations)
+        };
+        let mut route_reports: Vec<_> = if self.travel.personal_routing {
+            self.travel.observations.par_iter().collect()
+        } else {
+            Vec::new()
+        };
+        route_reports.par_sort_unstable_by_key(|report| report.person);
         let decisions: Vec<_> = self
             .owner
             .people
@@ -246,7 +265,9 @@ impl Context<'_> {
                 }
                 if self.busy.binary_search(&person.id).is_ok()
                     || (self.now < preference.next_review
-                        && (preference.target.is_none() || !self.travel.closures.is_empty()))
+                        && (preference.target.is_none()
+                            || !self.travel.closures.is_empty()
+                            || self.travel.personal_routing))
                 {
                     return None;
                 }
@@ -254,11 +275,37 @@ impl Context<'_> {
                     .binary_search_by_key(&person.id, |m| m.person)
                     .ok()
                     .map(|i| minds[i])?;
+                let personal_reports = self.travel.personal_routing.then(|| {
+                    let start = route_reports.partition_point(|report| report.person < person.id);
+                    let end = route_reports.partition_point(|report| report.person <= person.id);
+                    &route_reports[start..end]
+                });
+                let personal_routes = personal_reports
+                    .filter(|reports| reports.len() > 1)
+                    .map(|reports| known_paths(reports, region, self.now, self.owner.retry_ticks));
+                let path = |destination| match personal_reports {
+                    Some([report]) => {
+                        if report.source == region
+                            && report.destination == destination
+                            && (report.open
+                                || self.now.saturating_sub(report.observed_at)
+                                    >= self.owner.retry_ticks)
+                        {
+                            report.estimated_ticks.map(|ticks| (ticks, destination))
+                        } else {
+                            None
+                        }
+                    }
+                    Some(_) => personal_routes
+                        .as_ref()
+                        .and_then(|paths| paths.get(&destination).copied()),
+                    None => routes.get(&(region, destination)).copied(),
+                };
                 let destination = preference.target.or_else(|| {
                     mind.records
                         .iter()
                         .filter_map(|record| {
-                            let (ticks, _) = routes.get(&(region, record.region))?;
+                            let (ticks, _) = path(record.region)?;
                             (recall.remembers(mind.person, record, self.now)
                                 && record.region != region
                                 && record.food >= self.owner.min_report_food
@@ -267,17 +314,20 @@ impl Context<'_> {
                                 .then_some((
                                     record.food,
                                     record.observed_at,
-                                    std::cmp::Reverse(*ticks),
+                                    std::cmp::Reverse(ticks),
                                     std::cmp::Reverse(record.region),
                                 ))
                         })
                         .max()
                         .map(|row| row.3.0)
-                })?;
-                let Some((_, next)) = routes.get(&(region, destination)) else {
+                });
+                let Some(destination) = destination else {
+                    return self.travel.personal_routing.then_some((person.id, None));
+                };
+                let Some((_, next)) = path(destination) else {
                     return preference.target.map(|_| (person.id, None));
                 };
-                Some((person.id, Some((*next, destination))))
+                Some((person.id, Some((next, destination))))
             })
             .collect();
         let departures = decisions
