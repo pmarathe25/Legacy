@@ -722,6 +722,41 @@ pub fn finish(
                 })
         })
         .collect();
+    // Every member must be able to use the actual route before a party can
+    // depart. Failed individual attempts still produce personal observations.
+    if let Some(current) = travel.as_ref().filter(|owner| !owner.closures.is_empty()) {
+        let closed = current.closed_routes(tick);
+        let blocked_requests: Vec<_> = draft
+            .departures
+            .par_iter()
+            .zip(available.par_iter())
+            .filter_map(|(departure, &ok)| {
+                (ok && closed
+                    .binary_search(&(departure.source, departure.destination))
+                    .is_ok())
+                .then_some(Departure {
+                    person: departure.person,
+                    destination: departure.destination,
+                })
+            })
+            .collect();
+        if !blocked_requests.is_empty() {
+            if let Ok((next_travel, _, _)) = current.attempt(people, &blocked_requests, &[], tick) {
+                *travel = Some(next_travel);
+            }
+            available
+                .par_iter_mut()
+                .zip(draft.departures.par_iter())
+                .for_each(|(ok, departure)| {
+                    if closed
+                        .binary_search(&(departure.source, departure.destination))
+                        .is_ok()
+                    {
+                        *ok = false;
+                    }
+                });
+        }
+    }
     let mut groups: Vec<_> = draft
         .departures
         .par_iter()
@@ -757,7 +792,7 @@ pub fn finish(
     let accepted = if requests.is_empty() {
         true
     } else if let Some(current) = travel.as_ref() {
-        if let Ok((next_travel, next_people)) = current.depart(people, &requests, &[]) {
+        if let Ok((next_travel, next_people, _)) = current.attempt(people, &requests, &[], tick) {
             *travel = Some(next_travel);
             *people = next_people;
             true

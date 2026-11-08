@@ -61,6 +61,8 @@ The ignored `autonomous_wound_care_benchmark` measures a full boundary of indepe
 
 The ignored `tactical_site_damage_benchmark` measures a full boundary of attacks on maintainable work sites. `LEGACY_ENCOUNTERS` controls strike count, `LEGACY_HOT=1` directs all strikes at one site, `LEGACY_AUTONOMOUS=1` makes individual fighters choose the site attack, and `LEGACY_COLLAPSE=1` enables collapse. With both hot contention and collapse enabled, `LEGACY_BARRIER=1` adds a site-owned tactical barrier. `LEGACY_WORKERS` controls concurrency.
 
+The ignored `route_closure_batch_benchmark` attempts a mixed batch of open and closed routes and advances a boundary. `LEGACY_PEOPLE` controls the number of travelers, `LEGACY_DISTRIBUTED=1` gives them independent routes, and `LEGACY_WORKERS` controls concurrency.
+
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary
 the population and concurrency. It reports a state fingerprint and times two
@@ -131,6 +133,8 @@ Actual newborns may acquire a parent's general learning inclination when configu
 With `giving.inherit_births` and family birth enrollment enabled, a newborn may acquire a parent's general helping and acquaintance-request inclinations. Experiences, remembered helpers, previous targets, and target-specific requests are not copied.
 
 Travelers can eat carried food. People on the same directed route at the same progress are treated as together by this coarse travel model: they can meet autonomously or by choice, ask for food, give supplies, provide care, and independently propose, consider, or physically fulfill promises; contact can transmit disease. Other routes and people at the source remain separate. Each action advances the shared world and the journey.
+
+Authored directed route closures block new departures during their scheduled interval, while journeys already underway continue. Each actual attempt produces a bounded, dated personal observation; other people do not receive an automatic update. Blocked members of a departure batch do not prevent unrelated travelers from leaving. Route planning still uses the shared route graph in this slice; personal route reports are not yet used to select paths.
 
 Individual hauling preferences can move real lots between regions. A carrier can change their mind between pickup, departure, and delivery; fear or obligation may motivate an otherwise unwilling carrier. Routes, claims, carrying capacity, destination capacity, and expiry all remain physical constraints.
 

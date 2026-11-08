@@ -128,6 +128,8 @@ pub struct View {
     pub claim_built_sites: Option<bool>,
     pub site_observations: Vec<SiteObservation>,
     pub food_reports: Vec<Record>,
+    /// Only route observations made by the controlled person.
+    pub route_observations: Vec<game_economy::RouteObservation>,
     pub job: Option<Job>,
     /// Only the controlled person's own goals are visible.
     pub goals: Vec<game_economy::Goal>,
@@ -209,6 +211,16 @@ impl<'a> Player<'a> {
                     .par_iter()
                     .find_any(|j| j.person == id)
                     .cloned()
+            })
+        });
+        let route_observations = current.map_or_else(Vec::new, |id| {
+            state.travel.map_or_else(Vec::new, |travel| {
+                travel
+                    .observations
+                    .par_iter()
+                    .filter(|observation| observation.person == id)
+                    .cloned()
+                    .collect()
             })
         });
         if nearby.par_windows(2).any(|pair| pair[0] > pair[1]) {
@@ -650,6 +662,7 @@ impl<'a> Player<'a> {
             possessions,
             local_stock,
             food_reports,
+            route_observations,
             job,
             goals: current.map_or_else(Vec::new, |id| {
                 state.goals.map_or_else(Vec::new, |owner| {
@@ -1944,11 +1957,12 @@ impl<'a> Player<'a> {
         let events = self.world.continue_work(actor)?;
         Ok(events.finished.contains(&job))
     }
-    pub fn depart(&mut self, destination: u64) -> Result<(), String> {
-        self.world.depart(&[Departure {
+    pub fn depart(&mut self, destination: u64) -> Result<bool, String> {
+        let outcomes = self.world.attempt_departures(&[Departure {
             person: self.current()?,
             destination,
-        }])
+        }])?;
+        Ok(outcomes[0].departed)
     }
     /// Time can pass during a succession gap or an accepted loss of control.
     pub fn advance(&mut self) -> Result<(), String> {

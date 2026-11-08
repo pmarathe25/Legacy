@@ -644,10 +644,15 @@ fn command(world: &mut Economy, line: &str) -> Result<bool, String> {
                 _ => return Err("expected on or off".into()),
             },
         )?,
-        ["go", person, destination] => world.depart(&[Departure {
-            person: person.parse().map_err(|_| "invalid person")?,
-            destination: destination.parse().map_err(|_| "invalid destination")?,
-        }])?,
+        ["go", person, destination] => {
+            let outcomes = world.attempt_departures(&[Departure {
+                person: person.parse().map_err(|_| "invalid person")?,
+                destination: destination.parse().map_err(|_| "invalid destination")?,
+            }])?;
+            for outcome in outcomes {
+                println!("person={} departed={}", outcome.person, outcome.departed);
+            }
+        }
         ["step"] => advance(world, 1)?,
         ["step", count] => advance(world, count.parse().map_err(|_| "invalid tick count")?)?,
         ["save", path] => game_economy_cli::save(world, Path::new(path))?,

@@ -27,12 +27,58 @@ pub struct Departure {
     pub person: u64,
     pub destination: u64,
 }
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// A directed route is physically impassable during the half-open interval.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Closure {
+    pub source: u64,
+    pub destination: u64,
+    pub start: u64,
+    pub end: u64,
+}
+
+/// The outcome observed by an individual who actually tried a local route.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteObservation {
+    pub person: u64,
+    pub source: u64,
+    pub destination: u64,
+    pub open: bool,
+    pub observed_at: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DepartureOutcome {
+    pub person: u64,
+    pub departed: bool,
+}
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Travel {
     pub routes: Vec<Route>,
     #[serde(default)]
     pub journeys: Vec<Journey>,
+    #[serde(default)]
+    pub closures: Vec<Closure>,
+    #[serde(default)]
+    pub observations: Vec<RouteObservation>,
+    #[serde(default = "default_observation_limit")]
+    pub observation_limit: usize,
+}
+fn default_observation_limit() -> usize {
+    8
+}
+impl Default for Travel {
+    fn default() -> Self {
+        Self {
+            routes: Vec::new(),
+            journeys: Vec::new(),
+            closures: Vec::new(),
+            observations: Vec::new(),
+            observation_limit: default_observation_limit(),
+        }
+    }
 }
 /// Compute routes once per reported destination, independently across destinations.
 pub fn routes(travel: &Travel, destinations: &[u64]) -> HashMap<(u64, u64), (u64, u64)> {
@@ -101,6 +147,9 @@ impl Clone for Travel {
         Self {
             routes: self.routes.par_iter().cloned().collect(),
             journeys: self.journeys.par_iter().cloned().collect(),
+            closures: self.closures.par_iter().cloned().collect(),
+            observations: self.observations.par_iter().cloned().collect(),
+            observation_limit: self.observation_limit,
         }
     }
 }
@@ -119,6 +168,7 @@ pub fn validate_world(
     people: &[Person],
     view: &View,
     work: &[Work],
+    tick: u64,
 ) -> Result<(), String> {
     let regions = view
         .containers
@@ -128,24 +178,65 @@ pub fn validate_world(
             _ => None,
         })
         .collect();
-    travel.validate(people, &regions, &working(work))
+    travel.validate(people, &regions, &working(work), tick)
 }
 
 impl Travel {
+    /// Build the current physical admission index without updating anyone's beliefs.
+    pub fn closed_routes(&self, tick: u64) -> Vec<(u64, u64)> {
+        let mut closed: Vec<_> = self
+            .closures
+            .par_iter()
+            .filter(|closure| closure.start <= tick && tick < closure.end)
+            .map(|closure| (closure.source, closure.destination))
+            .collect();
+        closed.par_sort_unstable();
+        closed.dedup();
+        closed
+    }
     pub fn validate(
         &self,
         people: &[Person],
         regions: &HashSet<u64>,
         working: &[u64],
+        tick: u64,
     ) -> Result<(), String> {
         let mut routes: Vec<_> = self.routes.par_iter().collect();
         routes.par_sort_unstable_by_key(|r| (r.source, r.destination));
         let mut journeys: Vec<_> = self.journeys.par_iter().map(|j| j.person).collect();
         journeys.par_sort_unstable();
+        let mut observations: Vec<_> = self
+            .observations
+            .par_iter()
+            .map(|o| (o.person, o.source, o.destination))
+            .collect();
+        observations.par_sort_unstable();
         if routes
             .par_windows(2)
             .any(|r| (r[0].source, r[0].destination) == (r[1].source, r[1].destination))
             || journeys.par_windows(2).any(|r| r[0] == r[1])
+            || observations.par_windows(2).any(|pair| pair[0] == pair[1])
+            || observations
+                .par_chunk_by(|a, b| a.0 == b.0)
+                .any(|group| group.len() > self.observation_limit)
+            || (!self.closures.is_empty() && self.observation_limit == 0)
+            || self.closures.par_iter().any(|c| {
+                c.start >= c.end
+                    || routes
+                        .binary_search_by_key(&(c.source, c.destination), |r| {
+                            (r.source, r.destination)
+                        })
+                        .is_err()
+            })
+            || self.observations.par_iter().any(|o| {
+                o.observed_at > tick
+                    || people.binary_search_by_key(&o.person, |p| p.id).is_err()
+                    || routes
+                        .binary_search_by_key(&(o.source, o.destination), |r| {
+                            (r.source, r.destination)
+                        })
+                        .is_err()
+            })
             || self.routes.par_iter().any(|r| {
                 r.source == r.destination
                     || r.ticks == 0
@@ -176,12 +267,12 @@ impl Travel {
         Ok(())
     }
     /// Validate an entire departure batch before changing people or journeys.
-    pub fn depart(
+    fn plan_departures(
         &self,
         people: &[Person],
         requests: &[Departure],
         working: &[u64],
-    ) -> Result<(Self, Vec<Person>), String> {
+    ) -> Result<Vec<Journey>, String> {
         let mut requests: Vec<_> = requests.par_iter().copied().collect();
         requests.par_sort_unstable_by_key(|r| r.person);
         if requests.par_windows(2).any(|r| r[0].person == r[1].person) {
@@ -189,7 +280,7 @@ impl Travel {
         }
         let mut routes: Vec<_> = self.routes.par_iter().collect();
         routes.par_sort_unstable_by_key(|r| (r.source, r.destination));
-        let journeys: Vec<_> = requests
+        requests
             .par_iter()
             .map(|request| {
                 let person = people
@@ -216,11 +307,13 @@ impl Travel {
                 })
             })
             .collect::<Result<_, &str>>()
-            .map_err(str::to_owned)?;
+            .map_err(str::to_owned)
+    }
+    fn publish_departures(&self, people: &[Person], journeys: Vec<Journey>) -> (Self, Vec<Person>) {
         let mut next_people: Vec<_> = people.par_iter().cloned().collect();
         next_people.par_iter_mut().for_each(|person| {
-            if requests
-                .binary_search_by_key(&person.id, |r| r.person)
+            if journeys
+                .binary_search_by_key(&person.id, |journey| journey.person)
                 .is_ok()
             {
                 person.region = None;
@@ -229,7 +322,118 @@ impl Travel {
         let mut next = self.clone();
         next.journeys.par_extend(journeys);
         next.journeys.par_sort_unstable_by_key(|j| j.person);
-        Ok((next, next_people))
+        (next, next_people)
+    }
+    /// Validate a batch as a whole, then resolve physical route closures per
+    /// traveler. A blocked attempt does not cancel unrelated departures.
+    pub fn attempt(
+        &self,
+        people: &[Person],
+        requests: &[Departure],
+        working: &[u64],
+        tick: u64,
+    ) -> Result<(Self, Vec<Person>, Vec<DepartureOutcome>), String> {
+        let journeys = self.plan_departures(people, requests, working)?;
+        if self.closures.is_empty() {
+            let (all_travel, all_people) = self.publish_departures(people, journeys);
+            return Ok((
+                all_travel,
+                all_people,
+                requests
+                    .par_iter()
+                    .map(|r| DepartureOutcome {
+                        person: r.person,
+                        departed: true,
+                    })
+                    .collect(),
+            ));
+        }
+        let closed = self.closed_routes(tick);
+        let results: Vec<_> = requests
+            .par_iter()
+            .map(|request| {
+                let index = people
+                    .binary_search_by_key(&request.person, |p| p.id)
+                    .unwrap();
+                let source = people[index].region.unwrap();
+                (
+                    DepartureOutcome {
+                        person: request.person,
+                        departed: closed
+                            .binary_search(&(source, request.destination))
+                            .is_err(),
+                    },
+                    RouteObservation {
+                        person: request.person,
+                        source,
+                        destination: request.destination,
+                        open: closed
+                            .binary_search(&(source, request.destination))
+                            .is_err(),
+                        observed_at: tick,
+                    },
+                )
+            })
+            .collect();
+        let accepted: Vec<_> = journeys
+            .into_par_iter()
+            .filter(|journey| {
+                closed
+                    .binary_search(&(journey.source, journey.destination))
+                    .is_err()
+            })
+            .collect();
+        let (mut next, next_people) = self.publish_departures(people, accepted);
+        let mut observations: Vec<_> = self
+            .observations
+            .par_iter()
+            .cloned()
+            .chain(
+                results
+                    .par_iter()
+                    .map(|(_, observation)| observation.clone()),
+            )
+            .collect();
+        // For an equal timestamp, a newly witnessed result supersedes the
+        // previous report. Stable sorting preserves that publication order.
+        if observations.par_windows(2).any(|pair| {
+            (
+                pair[0].person,
+                pair[0].source,
+                pair[0].destination,
+                pair[0].observed_at,
+            ) > (
+                pair[1].person,
+                pair[1].source,
+                pair[1].destination,
+                pair[1].observed_at,
+            )
+        }) {
+            observations.par_sort_by_key(|o| (o.person, o.source, o.destination, o.observed_at));
+        }
+        observations = observations
+            .par_chunk_by(|a, b| {
+                (a.person, a.source, a.destination) == (b.person, b.source, b.destination)
+            })
+            .map(|group| group.last().unwrap().clone())
+            .collect();
+        observations.par_sort_unstable_by_key(|o| {
+            (o.person, Reverse(o.observed_at), o.source, o.destination)
+        });
+        next.observations = observations
+            .par_chunk_by(|a, b| a.person == b.person)
+            .flat_map_iter(|group| group.iter().take(self.observation_limit).cloned())
+            .collect();
+        next.observations
+            .par_sort_unstable_by_key(|o| (o.person, o.source, o.destination));
+        Ok((
+            next,
+            next_people,
+            results
+                .into_par_iter()
+                .map(|(outcome, _)| outcome)
+                .collect(),
+        ))
     }
     /// Arrival occurs after this interval's personal and physical decisions.
     pub fn advance(&self, people: &mut [Person]) -> Self {
@@ -272,6 +476,9 @@ impl Travel {
         Self {
             routes: self.routes.clone(),
             journeys,
+            closures: self.closures.par_iter().cloned().collect(),
+            observations: self.observations.par_iter().cloned().collect(),
+            observation_limit: self.observation_limit,
         }
     }
     /// Stop travelers who died in a later lifecycle phase of this boundary.

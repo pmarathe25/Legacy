@@ -62,6 +62,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             for record in view.food_reports {
                 println!("report={record:?}");
             }
+            for record in view.route_observations {
+                println!("route-observation={record:?}");
+            }
             println!("local_stock={:?}", view.local_stock);
             for body in view.bodies {
                 println!("body={body:?}");
@@ -1074,7 +1077,10 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 quantity.parse().map_err(|_| "invalid quantity")?
             )?
         ),
-        ["go", region] => player.depart(region.parse().map_err(|_| "invalid region")?)?,
+        ["go", region] => println!(
+            "departed={}",
+            player.depart(region.parse().map_err(|_| "invalid region")?)?
+        ),
         ["expedition", region, visit] => println!(
             "expedition={}",
             player.start_expedition(

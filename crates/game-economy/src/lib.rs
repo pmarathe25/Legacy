@@ -38,7 +38,9 @@ pub use game_economy_local_transport::{
     Policy as LocalTransportPolicy, Store as LocalStore,
 };
 use game_economy_person as person;
-pub use game_economy_person::travel::{Colocation, Departure, Journey, Route, Travel};
+pub use game_economy_person::travel::{
+    Closure as RouteClosure, Colocation, Departure, Journey, Route, RouteObservation, Travel,
+};
 pub use game_economy_promises::{Decision as PromiseDecision, Proposal as PromiseProposal};
 pub use game_economy_skills::Skills;
 pub use game_economy_taking::{
@@ -2226,7 +2228,13 @@ impl Economy {
         let _ = game_lot_projection::cargo(&view, state.rules.carrying_capacity)?;
         family::validate_custody!(people, view, ids, physical);
         if let Some(travel) = &state.travel {
-            person::travel::validate_world(travel, &state.people, &view, physical.work())?;
+            person::travel::validate_world(
+                travel,
+                &state.people,
+                &view,
+                physical.work(),
+                physical.tick(),
+            )?;
         }
         family::validate_care!(state, physical, ids);
         game_economy_campaign::validate_world!(state, physical, view);
@@ -6483,7 +6491,7 @@ impl Economy {
                         person.people[i].health > 0 && person.people[i].region.is_some()
                     })
         };
-        let search_departures: Vec<_> = search_plan
+        let search_attempts: Vec<_> = search_plan
             .as_ref()
             .map_or(&[][..], |plan| &plan.departures)
             .par_iter()
@@ -6497,21 +6505,32 @@ impl Economy {
             .copied()
             .filter(alive_and_local)
             .collect();
-        departures.par_extend(search_departures.par_iter().copied());
+        departures.par_extend(search_attempts.par_iter().copied());
         departures.par_extend(
             guardian_departures
                 .par_iter()
                 .copied()
                 .filter(alive_and_local),
         );
+        let mut admitted: Vec<u64> = Vec::new();
         if !departures.is_empty() {
             let current_travel = travel.as_mut().ok_or("departures require travel")?;
             let working = person::travel::working(self.physical.work());
-            let (next_travel, next_people) =
-                current_travel.depart(&person.people, &departures, &working)?;
+            let (next_travel, next_people, outcomes) =
+                current_travel.attempt(&person.people, &departures, &working, tick)?;
+            admitted = outcomes
+                .par_iter()
+                .filter_map(|outcome| outcome.departed.then_some(outcome.person))
+                .collect();
+            admitted.par_sort_unstable();
             *current_travel = next_travel;
             person.people = next_people;
         }
+        let search_departures: Vec<_> = search_attempts
+            .par_iter()
+            .copied()
+            .filter(|request| admitted.binary_search(&request.person).is_ok())
+            .collect();
         if let (Some(plan), Some(owner)) = (search_plan.as_ref(), knowledge.as_mut())
             && !plan.memory_uses.is_empty()
         {
@@ -6526,7 +6545,7 @@ impl Economy {
             owner.reinforce_uses(&uses, tick).map_err(str::to_owned)?;
         }
         if let (Some(plan), Some(search)) = (search_plan, food_search.as_mut()) {
-            search.publish(&search_departures, &plan.targets, &plan.abandoned, tick)?;
+            search.publish(&search_attempts, &plan.targets, &plan.abandoned, tick)?;
         }
         #[cfg(feature = "profile")]
         {

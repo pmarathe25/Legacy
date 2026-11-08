@@ -156,6 +156,13 @@ macro_rules! work_choice_method {
 macro_rules! departure_method {
     () => {
         pub fn depart(&mut self, departures: &[Departure]) -> Result<(), String> {
+            self.attempt_departures(departures).map(|_| ())
+        }
+        /// Attempt local departures and report physical route closures per person.
+        pub fn attempt_departures(
+            &mut self,
+            departures: &[Departure],
+        ) -> Result<Vec<$crate::travel::DepartureOutcome>, String> {
             if departures.iter().any(|request| {
                 self.confinement
                     .as_ref()
@@ -183,11 +190,11 @@ macro_rules! departure_method {
                 return Err("a wound prevents departure".into());
             }
             let working = $crate::travel::working(self.physical.work());
-            let (travel, people) = self.travel.as_ref().ok_or("travel is disabled")?.depart(
-                &self.people,
-                departures,
-                &working,
-            )?;
+            let (travel, people, outcomes) = self
+                .travel
+                .as_ref()
+                .ok_or("travel is disabled")?
+                .attempt(&self.people, departures, &working, self.tick())?;
             let epoch = self
                 .epoch
                 .checked_add(1)
@@ -205,7 +212,7 @@ macro_rules! departure_method {
             self.people = people;
             self.animal_restraints = restraints;
             self.epoch = epoch;
-            Ok(())
+            Ok(outcomes)
         }
     };
 }

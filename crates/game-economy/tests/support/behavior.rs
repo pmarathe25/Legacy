@@ -246,6 +246,9 @@ fn independent_written_journeys(count: u64) -> State {
         }
     }
     state.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -1987,6 +1990,9 @@ fn a_departing_handler_leaves_the_animal_at_its_real_location() {
         .containers
         .sort_unstable_by_key(|container| container.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -5843,6 +5849,262 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
 }
 
 #[test]
+fn route_closures_are_local_observations_and_do_not_cancel_other_travelers() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.nutrition = None;
+    initial.rules.hunger_per_tick = 0;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    for region in [2, 3] {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Stock { region, good: 1 }, 10, vec![]).unwrap());
+    }
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    initial.travel = Some(Travel {
+        routes: vec![
+            Route {
+                source: 1,
+                destination: 2,
+                ticks: 3,
+            },
+            Route {
+                source: 1,
+                destination: 3,
+                ticks: 2,
+            },
+        ],
+        closures: vec![RouteClosure {
+            source: 1,
+            destination: 2,
+            start: 1,
+            end: 2,
+        }],
+        ..Travel::default()
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(
+                    world
+                        .attempt_departures(&[Departure {
+                            person: 1,
+                            destination: 2
+                        }])
+                        .unwrap()[0]
+                        .departed
+                );
+                world.advance().unwrap();
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .attempt_departures(&[Departure {
+                            person: 2,
+                            destination: 99
+                        }])
+                        .is_err()
+                );
+                assert_eq!(before, world.snapshot());
+                let outcomes = world
+                    .attempt_departures(&[
+                        Departure {
+                            person: 2,
+                            destination: 2,
+                        },
+                        Departure {
+                            person: 3,
+                            destination: 3,
+                        },
+                    ])
+                    .unwrap();
+                assert!(!outcomes[0].departed);
+                assert!(outcomes[1].departed);
+                let state = world.snapshot();
+                assert_eq!(state.people[1].region, Some(1));
+                assert_eq!(state.people[2].region, None);
+                let travel = state.travel.as_ref().unwrap();
+                assert!(
+                    travel
+                        .journeys
+                        .iter()
+                        .any(|journey| journey.person == 1 && journey.remaining == 2)
+                );
+                assert!(
+                    travel.observations.iter().any(|record| record.person == 2
+                        && !record.open
+                        && record.observed_at == 1)
+                );
+                assert!(!travel.observations.iter().any(|record| record.person == 4));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let request = [Departure {
+                    person: 2,
+                    destination: 2,
+                }];
+                assert!(world.attempt_departures(&request).unwrap()[0].departed);
+                assert!(restored.attempt_departures(&request).unwrap()[0].departed);
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .observations
+                        .iter()
+                        .any(|record| record.person == 2 && record.open && record.observed_at == 2)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn route_closure_batch_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let distributed = std::env::var_os("LEGACY_DISTRIBUTED").is_some();
+    let mut initial = knowledge_workload(count);
+    initial.knowledge = None;
+    let regions: Vec<_> = if distributed {
+        (2..count + 2).collect()
+    } else {
+        vec![2, 3]
+    };
+    for region in regions {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Stock { region, good: 1 }, 10, vec![]).unwrap());
+    }
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|container| container.place);
+    initial.travel = Some(Travel {
+        routes: if distributed {
+            (1..=count)
+                .map(|person| Route {
+                    source: 1,
+                    destination: person + 1,
+                    ticks: 2,
+                })
+                .collect()
+        } else {
+            vec![
+                Route {
+                    source: 1,
+                    destination: 2,
+                    ticks: 3,
+                },
+                Route {
+                    source: 1,
+                    destination: 3,
+                    ticks: 2,
+                },
+            ]
+        },
+        closures: if distributed {
+            (1..=count)
+                .filter(|person| person % 2 == 0)
+                .map(|person| RouteClosure {
+                    source: 1,
+                    destination: person + 1,
+                    start: 0,
+                    end: 2,
+                })
+                .collect()
+        } else {
+            vec![RouteClosure {
+                source: 1,
+                destination: 2,
+                start: 0,
+                end: 2,
+            }]
+        },
+        ..Travel::default()
+    });
+    let requests: Vec<_> = (1..=count)
+        .map(|person| Departure {
+            person,
+            destination: if distributed {
+                person + 1
+            } else if person % 2 == 0 {
+                2
+            } else {
+                3
+            },
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut fingerprint = None;
+            for _ in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                let outcomes = world.attempt_departures(&requests).unwrap();
+                world.advance().unwrap();
+                samples.push(start.elapsed().as_secs_f64());
+                assert_eq!(
+                    outcomes.iter().filter(|outcome| outcome.departed).count(),
+                    count.div_ceil(2) as usize
+                );
+                let state = world.snapshot();
+                assert_eq!(
+                    state.travel.as_ref().unwrap().observations.len(),
+                    count as usize
+                );
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint {
+                    assert_eq!(expected, actual);
+                }
+                fingerprint = Some(actual);
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "workers={workers} people={count} distributed={distributed} elapsed_median={:.6} fingerprint={:016x}",
+                samples[1],
+                fingerprint.unwrap()
+            );
+        });
+}
+
+#[test]
 fn travelers_are_exposed_even_when_shelter_is_available() {
     let mut initial = fixture();
     initial.agreements = None;
@@ -5863,6 +6125,9 @@ fn travelers_are_exposed_even_when_shelter_is_available() {
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -6012,6 +6277,9 @@ fn travelers_eat_only_their_own_unexpired_supplies_while_the_journey_advances() 
         .containers
         .sort_unstable_by_key(|c| c.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -9736,6 +10004,116 @@ fn personal_output_claims_arise_only_after_physical_delivery() {
 }
 
 #[test]
+fn a_blocked_expedition_does_not_stop_an_unrelated_expedition() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    for region in [2, 3] {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Stock { region, good: 1 }, 10, vec![]).unwrap());
+    }
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.travel = Some(Travel {
+        routes: vec![
+            Route {
+                source: 1,
+                destination: 2,
+                ticks: 2,
+            },
+            Route {
+                source: 1,
+                destination: 3,
+                ticks: 2,
+            },
+            Route {
+                source: 2,
+                destination: 1,
+                ticks: 2,
+            },
+            Route {
+                source: 3,
+                destination: 1,
+                ticks: 2,
+            },
+        ],
+        closures: vec![RouteClosure {
+            source: 1,
+            destination: 2,
+            start: 0,
+            end: 5,
+        }],
+        ..Travel::default()
+    });
+    initial.missions = Some(Missions {
+        next_id: 1,
+        pressure_threshold: None,
+        entries: vec![],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world
+                    .start_mission(MissionStart {
+                        person: 1,
+                        destination: 2,
+                        visit_ticks: 1,
+                    })
+                    .unwrap();
+                world
+                    .start_mission(MissionStart {
+                        person: 2,
+                        destination: 3,
+                        visit_ticks: 1,
+                    })
+                    .unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.people[0].region, Some(1));
+                assert_eq!(state.people[1].region, None);
+                assert!(
+                    state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .observations
+                        .iter()
+                        .any(|record| record.person == 1 && !record.open)
+                );
+                assert!(
+                    state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .observations
+                        .iter()
+                        .any(|record| record.person == 2 && record.open)
+                );
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn personal_expedition_travels_and_returns_with_real_custody_and_can_be_cancelled() {
     let mut initial = fixture();
     initial.agreements = None;
@@ -9757,6 +10135,9 @@ fn personal_expedition_travels_and_returns_with_real_custody_and_can_be_cancelle
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![
             Route {
                 source: 1,
@@ -10284,6 +10665,9 @@ fn hauling_workload(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|c| c.place);
     state.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![
             Route {
                 source: 1,
@@ -10732,6 +11116,9 @@ fn expedition_fixture() -> State {
         .containers
         .sort_unstable_by_key(|row| row.place);
     state.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![
             Route {
                 source: 1,
@@ -14708,6 +15095,9 @@ fn distinct_cells_and_journeys_keep_social_contact_separate() {
         .containers
         .sort_unstable_by_key(|c| c.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -18562,6 +18952,9 @@ fn expedition_workload(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|row| row.place);
     state.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![
             Route {
                 source: 1,
@@ -23068,6 +23461,9 @@ fn journeys_keep_possessions_and_expiry_and_resume_without_teleporting() {
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -23155,6 +23551,9 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         .containers
         .sort_unstable_by_key(|c| c.place);
     initial.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -23321,6 +23720,9 @@ fn food_search_workload(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|c| c.place);
     state.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -23366,6 +23768,82 @@ fn food_search_workload(count: u64) -> State {
             .collect(),
     });
     state
+}
+
+#[test]
+fn food_search_retries_a_closed_route_after_its_personal_cooldown() {
+    let mut initial = food_search_workload(4);
+    initial
+        .travel
+        .as_mut()
+        .unwrap()
+        .closures
+        .push(RouteClosure {
+            source: 1,
+            destination: 2,
+            start: 1,
+            end: 3,
+        });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let blocked = world.snapshot();
+                assert!(blocked.travel.as_ref().unwrap().journeys.is_empty());
+                assert!(
+                    blocked
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .observations
+                        .iter()
+                        .all(|record| !record.open && record.observed_at == 1)
+                );
+                assert!(
+                    blocked
+                        .food_search
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .all(|person| person.target == Some(2) && person.next_review == 4)
+                );
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                assert!(
+                    world
+                        .snapshot()
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .journeys
+                        .is_empty()
+                );
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.travel.as_ref().unwrap().journeys.len(), 4);
+                assert!(
+                    state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .observations
+                        .iter()
+                        .all(|record| record.open && record.observed_at == 5)
+                );
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
@@ -29717,6 +30195,9 @@ fn traveling_fatigue_workload(count: u64) -> State {
         p.region = None;
     }
     state.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,
@@ -33616,6 +34097,9 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
     learning.experiences = 1;
     learning.last_helper = Some(1);
     remote.travel = Some(Travel {
+        closures: vec![],
+        observations: vec![],
+        observation_limit: 8,
         routes: vec![Route {
             source: 1,
             destination: 2,

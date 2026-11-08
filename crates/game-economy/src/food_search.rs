@@ -245,7 +245,8 @@ impl Context<'_> {
                     return Some((person.id, None));
                 }
                 if self.busy.binary_search(&person.id).is_ok()
-                    || (preference.target.is_none() && self.now < preference.next_review)
+                    || (self.now < preference.next_review
+                        && (preference.target.is_none() || !self.travel.closures.is_empty()))
                 {
                     return None;
                 }
