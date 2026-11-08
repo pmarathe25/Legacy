@@ -1,5 +1,7 @@
 # Personal expeditions
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 An expedition sends one real person along a deterministic shortest path over authored directed routes to a destination, keeps them there for a configured visit, and returns them home. Each leg uses the normal physical departure, provisions, hunger, and arrival rules, and can be observed at intermediate regions. Outbound and return paths may differ. Departure may be rejected or the person may become unavailable; a mission does not teleport them or manufacture supplies. Participants can link matching, ready journeys into a party. Parties wait for all living, active participants to be available for each departure, while independent journeys continue. Participants may cancel their own journey; survivors can continue.
 To start and inspect an individual expedition use `mission-start PERSON DESTINATION VISIT_TICKS` and `missions PERSON`. `mission-cancel PERSON ID` stops the plan without relocating a traveler. `content/scenarios/mission_start.toml` is an interactive fixture.
 When the knowledge owner is enabled, an explorer learns through the normal local observation rules after arriving; the mission does not reveal remote state in advance.

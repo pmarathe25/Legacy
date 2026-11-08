@@ -1,5 +1,7 @@
 # Compact conflict planning
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 `Plan::compile` freezes encounter membership, orders, defense, and damage into canonical target groups and incoming attacker IDs. The fused overlay owner applies bounded order changes through copy-on-write edge masks and defense pages; encounter admission and overlay compaction rebuild topology. `Plan::prepare` reads sorted committed people and returns a private `Round`: one validity bit per potential strike, saturated target damage, and a shared immutable topology generation. Per-attacker event rows are expanded only on demand, in `(target, encounter, attacker)` order. `Round::events` also streams receipts without allocating a full event vector. Old receipts remain correct after a replacement plan is compiled or dropped.
 
 Availability is evaluated in fixed 2,048-edge tasks, allowing a single hot target to use all workers. Damage counts bits with parallel reductions for long target ranges. Saturating the physical total never removes individual receipts. This preserves current simultaneous attack, defense, and withdrawal semantics; a retreating target can still be struck this round.

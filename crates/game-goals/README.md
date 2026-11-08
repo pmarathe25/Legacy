@@ -1,5 +1,7 @@
 # Work goals
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Personal, authored craft goals select a feasible work policy by priority, use the physical production owner's actual input reservations, and advance only on completed work. Explicit work policies take precedence. If work cannot be granted, the selected goal backs off for `retry_interval` ticks (default 3), allowing a lower-priority goal to be attempted. Completed goals remain inspectable and the next unfinished goal becomes eligible.
 `content/scenarios/goals.toml` demonstrates a person pursuing two completed units of a craft. A goal does not conjure inputs or bypass stock, actor, or property reservations; completed goals stop producing work requests. Goals currently require the fused host and an `[autowork]` owner.
 

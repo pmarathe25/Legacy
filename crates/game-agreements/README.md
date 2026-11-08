@@ -1,5 +1,7 @@
 # Agreements
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Explicit, mutually accepted promises for future delivery of physically carried goods. Proposals and acceptance are distinct. Delivery plans become fulfilled only when the host has successfully transferred the goods; expired active promises default. The owner is data-defined and uses stable identities and generation-local events.
 
 `content/scenarios/agreements.toml` demonstrates manual proposals, recipient decisions, and partial delivery. Set `[[agreements.policies]] person = ...` and `honor = true` to let the fused host attempt a debtor's accepted agreements. `content/scenarios/agreements_auto.toml` demonstrates this policy. Candidates use the goods actually carried at the start of a tick; each available person can participate in at most one selected exchange. Deadlines are indexed, and unfinished accepted agreements default after the due tick.

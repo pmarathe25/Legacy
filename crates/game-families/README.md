@@ -1,5 +1,7 @@
 # Parallel family owner
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 This owner supplies a deterministic life-history phase to the economic simulation.
 `content/scenarios/families.toml` defines its parameters and initial people. All ages,
 gestation, recovery spacing and lifespan values are simulation ticks; the example

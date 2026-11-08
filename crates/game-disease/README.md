@@ -1,5 +1,7 @@
 # Disease
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Data-defined infections spread through actual contacts supplied by the host. Incubation, infectious duration, damage, transmission probability and immunity are authored rules. Every distinct contact is evaluated against the committed generation, so one person can expose several others and newly infected people cannot transmit until a later tick. When several sources successfully expose the same person at one boundary, a deterministic seeded choice selects one infection. The host applies damage and publishes disease state transactionally with other health and lifecycle effects.
 
 Each strain may independently set `combat_transmission_per_million` for actual resolved strikes. Its default is zero, so adding combat to a scenario does not imply that every disease spreads that way. Ordinary-contact and combat-contact probabilities are separate.

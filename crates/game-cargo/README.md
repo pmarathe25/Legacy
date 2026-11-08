@@ -1,5 +1,7 @@
 # Parallel cargo state owner
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Owns serializable person-held food and validates identity, quantity and capacity. The runtime composes physical actions and travel; see the parallel runtime README for gameplay limits.
 
 `auto_eat_local` lets a hungry local person consume one meal from food they actually carry before regional food is allocated. A person who eats carried food does not also claim a regional meal that tick, even if still hungry. Carried food is decremented only when the tick commits. The setting defaults to false; the fused host supports it and the comparison hosts reject it rather than omit it. `content/scenarios/local_food.toml` provides an example.
@@ -17,7 +19,7 @@ Optional `food_aid` policies give a person tendencies to share with known hungry
 
 A `food_askers` entry identifies one person, a known local giver, the desired quantity, an interval, and a request lifetime. A hungry, available person can spend an action to ask when they lack a carried meal and have no pending request. The request becomes visible at commit and can be answered on a later tick; asking neither transfers food nor compels a reply.
  The person may change that tendency with `food-asking PERSON enable|disable`; existing requests can be withdrawn separately.
- The [`food_requests.toml`](../../content/scenarios/food_requests.toml) fixture demonstrates an autonomous request followed by a separately chosen response.
+ The `food_requests.toml` (historical fixture) fixture demonstrates an autonomous request followed by a separately chosen response.
 
 An optional `auto_seek_age` schedules each actual newborn to gain a food-seeking preference after the specified number of ticks. Pending enrollments are saved, and an explicit personal choice cancels the scheduled change. The experimental generated profile sets this age to the end of dependent care.
 
@@ -31,7 +33,7 @@ With `choose_known = true`, a food asker can instead approach a local person tow
 
 Optional `food_stores` describe distinct local stocks with their own capacities and optional personal claimants. A person's `food_store_choices` entry directs their hungry acquisition attempt to one local store; concurrent attempts compete for its real stock in a deterministic order that rotates over time. A choice is an intention, not a permission check. A claimant who sets `object_to_taking` can lose trust in someone they witness taking, but the taking still occurs. A claimant elsewhere does not automatically learn of it. Unsuccessful attempts consume an action and do not fall back to the regional source that tick; if the chosen store is in another region, the person instead uses their ordinary regional preference.
 
-`food-stores PERSON` lists local stores, `food-source PERSON STORE|region` changes a person's source preference, and `store-take PERSON STORE AMOUNT` / `store-put PERSON STORE AMOUNT` move actual held food. Each command checks physical location and capacity. The [`food_stores.toml`](../../content/scenarios/food_stores.toml) fixture demonstrates these operations. General ownership disputes and enforcement are not yet modeled; stores are enabled by the default generated profile.
+`food-stores PERSON` lists local stores, `food-source PERSON STORE|region` changes a person's source preference, and `store-take PERSON STORE AMOUNT` / `store-put PERSON STORE AMOUNT` move actual held food. Each command checks physical location and capacity. The `food_stores.toml` (historical fixture) fixture demonstrates these operations. General ownership disputes and enforcement are not yet modeled; stores are enabled by the default generated profile.
 
 An optional `food_depositors` entry gives an individual a tendency to put one carried meal into a selected local store, at their own interval and while retaining their chosen reserve. Capacity is resolved from the committed stock, so a withdrawal in the same tick does not create deposit capacity until the next tick. A successful deposit moves actual food; a refused or failed attempt cannot create stock. `food-deposit PERSON enable|disable` changes the individual's tendency. A person already occupied by another planned action cannot deposit in the same tick.
 

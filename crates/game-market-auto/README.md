@@ -1,5 +1,7 @@
 # Parallel autonomous market
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Opted-in recipients assess pending offers using their authored values. Only feasible offers enter deterministic priority matching; the lowest offer ID must be preferred by both participants for an exchange to proceed. Matching is conservative and may defer otherwise feasible offers. Missing valuations prevent acceptance, and equal value is accepted when minimum gain is zero.
 
 A policy with `propose = true` also lets its person propose trades using their valuations and visible local carried goods. A proposal does not transfer goods: its recipient independently evaluates it at a later boundary. Missing valuations prevent proposals, and competing participants can defer each other under the conservative priority rule.

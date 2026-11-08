@@ -1,5 +1,7 @@
 # Parallel knowledge owner
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 An individual may enable `remember_people` to retain where and when they personally met others. This is a bounded personal memory of an actual local encounter, not another person's current location or private thoughts. It is independent of whether either person shares a food report. Each mind retains at most `max_records` people and at most `max_records` regional food records. Disabling new memories does not erase old ones.
 
 Each mind may set `reporting = { willing = false, pressure_threshold = 5 }` to withhold reports unless its own fear plus felt obligation toward the listener reaches five. Omit the threshold to withhold regardless of those feelings; omit the policy to retain the default willingness. The listener independently decides whether to accept a report. Reporting does not require private approval, alter memories, or reveal whether a statement is truthful.

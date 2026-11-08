@@ -1,6 +1,6 @@
 # Simulation content
 
-The `economy*.toml` starts are for the current runner. Some other files in this directory are retained reference inputs for removed experimental hosts and are not necessarily compatible with it.
+The `economy*.toml` starts are for the current runner. `campaign-population.toml` is an optional population profile.
 
 `economy.toml` and `economy-campaign.toml` are authored starts for the dated-goods simulation. Goods, recipes and crops are loaded by name from the existing object, workshop and agriculture content directories. `food_relief_divisor` converts authored food relief to this scenario's hunger scale; it should be tuned alongside the per-tick hunger rate and meal threshold.
 

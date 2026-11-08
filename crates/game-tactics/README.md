@@ -1,5 +1,7 @@
 # Tactical geometry
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Deterministic, serializable fixed-point local maps and checked movement/line-of-sight geometry. The map is persistent world state: later damage or edits change the stored obstacles, and loading does not regenerate a site. Coordinates are integer subunits rather than tiles; no renderer is required.
 
 `content/scenarios/tactics.toml` supplies a persistent local map for an authored encounter. In the administrative CLI, `tactical-fight ID REGION A B AX AY BX BY` starts a battle with explicit placements; `tactical-move ID PERSON X Y` submits one movement for the current round. `combat-order` selects attack, defense, or retreat. The ruler-bound player mode can move or order only the current ruler once an encounter exists.

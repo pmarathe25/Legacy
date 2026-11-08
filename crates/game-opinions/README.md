@@ -1,5 +1,7 @@
 # Directed trust
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Each observer's trust in another person is separate. Authored rules define the initial and bounded trust values and how directly experienced fulfilled or defaulted promises update them. The creditor learns from the debtor's outcome; no omniscient global reputation is created.
 
 An optional `teaching_reaction` lets a person independently interpret lessons they give and receive. Each `given` or `received` reaction contains signed trust, affinity, fear, and obligation changes; a relationship case can override either role for a particular person. No reaction or obligation is automatic. Only actual lessons produce these experiences, including lessons given under personal pressure.

@@ -1,5 +1,7 @@
 # Personal production skills
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 Optional personal skills improve a person's work rate after actual completed jobs. A rule can apply to one recipe or to several recipes in an authored craft category; related work and lessons contribute to the same personal record. Successive levels require increasing numbers of completed jobs: with `completions_per_level = 2`, levels one, two, and three require cumulative totals of 2, 6, and 12 jobs. Work advances by `1 + level * work_per_level` units per tick, capped by `max_level`.
 
 An authored rule (or `catalog_training`) may instead set `practice_each_tick = true`. In the lot-based economy, each boundary that actually reduces a job's remaining work counts as one practice credit, even if the job is later abandoned or interrupted. A paused job grants no credit, and its completion does not grant a second credit for the same work. With this option, `completions_per_level` measures practice credits instead of completed jobs. Old data defaults to completion-based learning. The older experimental fused host rejects this option until it can account for partial work.

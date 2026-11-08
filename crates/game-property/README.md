@@ -1,5 +1,7 @@
 # Parallel property
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 An optional property owner assigns a regional nonfood stock to a person and can delegate use to other local people. Unclaimed stocks remain public. Production inputs and outputs and local goods transfers require the worker or holder to have access. Permission checks read an immutable index in parallel; reservations already accepted remain valid if permissions later change.
 
 A title transfer requires an owner proposal and a separate recipient decision while both are living and local. Acceptance changes ownership and clears delegated access. Without an inheritance policy, a deceased owner retains the claim; titles do not pass to a reincarnation automatically. This is a limited stock-rights model, not a complete land, inheritance, legal, or political system.

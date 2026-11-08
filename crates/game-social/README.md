@@ -1,5 +1,7 @@
 # Parallel social owner
 
+> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+
 This owner prepares local, mutually willing encounters from an immutable boundary snapshot. People who are traveling, dead, too ill, too hungry, or unwilling do not participate. Within each region, seeded identity priorities form disjoint pairs; each person participates at most once per eligible tick. Encounters increment a capped, undirected familiarity value and a checked counter. Sorted sparse relationship records and the latest tick's receipts are saved; older receipts must be streamed by a host if history is needed.
 
 Participation is explicit per person, including newborns. This is a narrow social mechanism, not a model of friendship, subjective beliefs, speech, relationships with asymmetric opinions, family care, institutions, or player perception. It uses a pre-tick snapshot, so travel departures already in transit cannot meet; people who arrive in a tick first become eligible on the following tick. Prepared social changes publish only if the rest of the tick succeeds. Social-state validation, cloning, and accumulated relationship history still add cost each tick; no whole-game scaling claim follows from the parallel matching stage.
