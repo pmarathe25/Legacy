@@ -237,6 +237,134 @@ fn fixture() -> State {
     }
 }
 
+fn independent_written_circulation(count: u64) -> State {
+    let mut state = independent_authors(count);
+    let person_template = state.people[0].clone();
+    let mind_template = state.knowledge.as_ref().unwrap().minds[0].clone();
+    for id in count + 1..=count * 2 {
+        let mut person = person_template.clone();
+        person.id = id;
+        state.people.push(person);
+        state
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Person(id), 10, vec![]).unwrap());
+        let mut mind = mind_template.clone();
+        mind.person = id;
+        mind.records.clear();
+        state.knowledge.as_mut().unwrap().minds.push(mind);
+    }
+    let writing = state.writing.as_mut().unwrap();
+    let literacy = writing.literacy_mut();
+    literacy.extend((count + 1..=count * 2).map(|person| Literacy {
+        person,
+        script: 1,
+        read: true,
+        write: false,
+        auto_read: true,
+    }));
+    state.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: (1..=count)
+            .map(|person| GivingPolicy {
+                person,
+                recipient: person + count,
+                good: 3,
+                quantity: 1,
+                recipient_hunger_at_least: 0,
+                willing: true,
+                requires_request: false,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        responses: vec![].into(),
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![],
+    });
+    state
+}
+
+#[test]
+fn independent_written_circulation_matches_across_worker_counts() {
+    let count = 1024;
+    let initial = independent_written_circulation(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state.writing.as_ref().unwrap().reads.len(), count as usize);
+                assert!(
+                    state
+                        .knowledge
+                        .as_ref()
+                        .unwrap()
+                        .minds
+                        .iter()
+                        .filter(|mind| mind.person > count)
+                        .all(|mind| mind
+                            .records
+                            .iter()
+                            .any(|record| record.region == 2 && record.food == 21))
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_written_circulation_benchmark() {
+    let count = std::env::var("LEGACY_PAIRS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000u64);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(independent_written_circulation(count)).unwrap();
+            let start = std::time::Instant::now();
+            for _ in 0..3 {
+                world.advance().unwrap();
+            }
+            let elapsed = start.elapsed().as_secs_f64();
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (phase, measurement) in game_diagnostics::snapshot() {
+                    println!(
+                        "phase={phase} calls={} milliseconds={:.3}",
+                        measurement.calls,
+                        measurement.nanoseconds as f64 / 1_000_000.0
+                    );
+                }
+            }
+            assert_eq!(
+                world.snapshot().writing.unwrap().reads.len(),
+                count as usize
+            );
+            println!("pairs={count} workers={workers} boundaries=3 seconds={elapsed:.6}");
+        });
+}
+
 fn independent_authors(count: u64) -> State {
     let mut state = independent_readers(count);
     for container in &mut state.physical.custody.containers {

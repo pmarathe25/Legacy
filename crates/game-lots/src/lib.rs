@@ -503,6 +503,18 @@ impl Store {
         {
             return self.item_draft(inner, containers, true);
         }
+        if check_items
+            && containers.is_empty()
+            && compact.is_empty()
+            && let Some(inner) = game_lot_batches::prepare_independent_items(
+                &self.state,
+                self.instance,
+                transactions,
+                advance,
+            )?
+        {
+            return self.item_draft(inner, containers, true);
+        }
         let prepare = if check_items {
             game_lot_batches::prepare_unpartitioned_validated
         } else {
@@ -530,6 +542,17 @@ impl Store {
         if check_items
             && additions.is_empty()
             && let Some(inner) = game_lot_batches::prepare_local_creations(
+                &self.state,
+                self.instance,
+                transactions,
+                advance,
+            )?
+        {
+            return self.item_draft(inner, additions, true);
+        }
+        if check_items
+            && additions.is_empty()
+            && let Some(inner) = game_lot_batches::prepare_independent_items(
                 &self.state,
                 self.instance,
                 transactions,

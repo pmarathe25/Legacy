@@ -21,6 +21,31 @@ pub fn prepare_local_creations(
     local_creation::prepare(state, instance, transactions, advance)
 }
 
+/// The custody owner validated item identities and will track changes. Generic
+/// disjoint transfers can retain identified cohorts; exact selection falls back.
+pub fn prepare_independent_items(
+    state: &State,
+    instance: u64,
+    transactions: &[Transaction],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    if transactions.len() < 128
+        || transactions
+            .par_iter()
+            .any(|row| row.movements.iter().any(|movement| movement.item.is_some()))
+    {
+        return Ok(None);
+    }
+    let mut ids: Vec<_> = transactions.par_iter().map(|row| row.id).collect();
+    if ids.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        ids.par_sort_unstable();
+    }
+    if ids.first() == Some(&0) || ids.par_windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err("invalid or duplicate transaction id".into());
+    }
+    independent_transfer::prepare(state, instance, transactions, advance)
+}
+
 /// Attempt a disjoint flat transfer batch; `None` requests the general arbiter.
 pub fn prepare_flat_transfers(
     state: &State,

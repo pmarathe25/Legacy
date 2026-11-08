@@ -351,4 +351,106 @@ mod tests {
         selected[0].movements[0].item = Some(50);
         assert!(prepare(&state, 1, &selected, true).unwrap().is_none());
     }
+
+    #[test]
+    fn independent_identified_transfers_match_general_arbiter() {
+        let count = 256u64;
+        let mut containers = Vec::new();
+        let mut actions = Vec::new();
+        for id in 1..=count {
+            let source = Place::Person(id);
+            let destination = Place::Person(id + count);
+            containers.push(
+                Container::new(
+                    source,
+                    3,
+                    vec![
+                        Lot {
+                            good: 1,
+                            quantity: 1,
+                            item: Some(id),
+                            expires_at: None,
+                        },
+                        Lot {
+                            good: 1,
+                            quantity: 1,
+                            item: None,
+                            expires_at: Some(if id % 7 == 0 { 1 } else { 10 }),
+                        },
+                    ],
+                )
+                .unwrap(),
+            );
+            containers.push(
+                Container::new(
+                    destination,
+                    2,
+                    if id % 5 == 0 {
+                        vec![Lot {
+                            good: 2,
+                            quantity: 2,
+                            item: None,
+                            expires_at: None,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                )
+                .unwrap(),
+            );
+            actions.push(Transaction {
+                id,
+                movements: vec![Movement {
+                    id,
+                    from: source,
+                    to: Some(destination),
+                    good: 1,
+                    quantity: if id % 3 == 0 { 2 } else { 1 },
+                    item: None,
+                }],
+                creations: vec![],
+            });
+        }
+        containers.sort_unstable_by_key(|row| row.place);
+        let state = State {
+            tick: 0,
+            revision: 0,
+            containers,
+        };
+        let fast = crate::prepare_independent_items(&state, 1, &actions, true)
+            .unwrap()
+            .unwrap();
+        let reference =
+            crate::prepare_unpartitioned_validated(&state, 1, 7, &actions, true, vec![], &[])
+                .unwrap()
+                .0;
+        assert_eq!(
+            fast.outcomes
+                .iter()
+                .map(|row| row.to_owned())
+                .collect::<Vec<_>>(),
+            reference
+                .outcomes
+                .iter()
+                .map(|row| row.to_owned())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(fast.transactions, reference.transactions);
+        assert_eq!(fast.spoiled, reference.spoiled);
+        assert_eq!(fast.changes.into_flat(), reference.changes.into_flat());
+        let mut exact = actions.clone();
+        exact[0].movements[0].item = Some(1);
+        assert!(
+            crate::prepare_independent_items(&state, 1, &exact, true)
+                .unwrap()
+                .is_none()
+        );
+        let mut overlapping = actions;
+        overlapping[1].movements[0].to = overlapping[0].movements[0].to;
+        assert!(
+            crate::prepare_independent_items(&state, 1, &overlapping, true)
+                .unwrap()
+                .is_none()
+        );
+    }
 }
