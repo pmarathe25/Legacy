@@ -30415,6 +30415,7 @@ fn many_people_can_independently_offer_promises_after_real_help() {
     let mut unordered = initial.clone();
     unordered.giving.as_mut().unwrap().learning.reverse();
     unordered.giving.as_mut().unwrap().requests.reverse();
+    unordered.agreements.as_mut().unwrap().offering.reverse();
     let mut world = Economy::compile(unordered).unwrap();
     world.advance().unwrap();
     world.advance().unwrap();
@@ -30422,6 +30423,51 @@ fn many_people_can_independently_offer_promises_after_real_help() {
         world.snapshot().agreements.unwrap().contracts,
         expected.agreements.unwrap().contracts
     );
+}
+
+#[test]
+fn help_promise_planning_handles_gapped_people_and_memories() {
+    let mut initial = help_promise_workload(4);
+    initial.people.retain(|p| p.id != 2 && p.id != 6);
+    initial
+        .physical
+        .custody
+        .containers
+        .retain(|c| c.place != Place::Person(2) && c.place != Place::Person(6));
+    let giving = initial.giving.as_mut().unwrap();
+    giving.policies.retain(|p| p.person != 2);
+    giving.responses.retain(|p| p.person != 6);
+    giving.learning.retain(|p| p.person != 6);
+    giving.requests.retain(|p| p.requester != 6);
+    initial
+        .agreements
+        .as_mut()
+        .unwrap()
+        .offering
+        .retain(|p| p.person != 6);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let contracts = &state.agreements.as_ref().unwrap().contracts;
+                assert_eq!(contracts.len(), 3);
+                assert_eq!(
+                    contracts
+                        .iter()
+                        .map(|c| (c.debtor, c.creditor))
+                        .collect::<Vec<_>>(),
+                    vec![(5, 1), (7, 3), (8, 4)]
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 fn help_promise_workload(count: u64) -> State {

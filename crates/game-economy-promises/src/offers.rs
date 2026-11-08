@@ -67,7 +67,30 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         .filter(|c| matches!(c.status, Status::Proposed | Status::Active))
         .map(|c| (c.debtor, c.creditor, c.good))
         .collect();
-    let opinions = opinions.map(Opinions::index);
+    let opinions = opinions
+        .filter(|_| {
+            owner
+                .offering
+                .par_iter()
+                .any(|p| p.minimum_trust.is_some() || p.pressure_threshold.is_some())
+                || owner
+                    .work_offering
+                    .par_iter()
+                    .any(|p| p.minimum_trust.is_some() || p.pressure_threshold.is_some())
+        })
+        .map(Opinions::index);
+    let last_person = people.last().map(|p| p.id);
+    let find_person = |id| {
+        let suffix = last_person
+            .and_then(|last| last.checked_sub(id))
+            .and_then(|distance| usize::try_from(distance).ok())
+            .and_then(|distance| distance.checked_add(1))
+            .and_then(|distance| people.len().checked_sub(distance))
+            .filter(|&index| people[index].id == id);
+        suffix
+            .or_else(|| people.binary_search_by_key(&id, |p| p.id).ok())
+            .map(|i| &people[i])
+    };
     let ordered_help = help_memories
         .par_windows(2)
         .any(|pair| pair[0].person > pair[1].person)
@@ -77,6 +100,18 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             rows
         });
     let help = ordered_help.as_deref().unwrap_or(help_memories);
+    let last_helper = help.last().map(|row| row.person);
+    let find_help = |id| {
+        let suffix = last_helper
+            .and_then(|last| last.checked_sub(id))
+            .and_then(|distance| usize::try_from(distance).ok())
+            .and_then(|distance| distance.checked_add(1))
+            .and_then(|distance| help.len().checked_sub(distance))
+            .filter(|&index| help[index].person == id);
+        suffix
+            .or_else(|| help.binary_search_by_key(&id, |row| row.person).ok())
+            .map(|i| &help[i])
+    };
     let mut work_memories: Vec<_> = if owner
         .offering
         .par_iter()
@@ -100,14 +135,8 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         .offering
         .par_iter()
         .filter_map(|policy| {
-            let actor = people
-                .binary_search_by_key(&policy.person, |p| p.id)
-                .ok()
-                .map(|i| &people[i])?;
-            let recipient = people
-                .binary_search_by_key(&policy.recipient, |p| p.id)
-                .ok()
-                .map(|i| &people[i])?;
+            let actor = find_person(policy.person)?;
+            let recipient = find_person(policy.recipient)?;
             let observed_work = match policy.after_work_recipe {
                 Some(recipe) => {
                     let i = work_memories
@@ -127,10 +156,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 None => None,
             };
             let observed_help = if policy.after_help {
-                let memory = help
-                    .binary_search_by_key(&policy.person, |row| row.person)
-                    .ok()
-                    .map(|i| &help[i])?;
+                let memory = find_help(policy.person)?;
                 if memory.helper != policy.recipient
                     || memory.received_at >= tick
                     || policy
@@ -169,7 +195,12 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             .then_some((policy, observed_work, observed_help))
         })
         .collect();
-    choices.par_sort_unstable_by_key(|(p, _, _)| p.person);
+    if choices
+        .par_windows(2)
+        .any(|pair| pair[0].0.person > pair[1].0.person)
+    {
+        choices.par_sort_unstable_by_key(|(p, _, _)| p.person);
+    }
     let rows: Vec<_> = choices
         .par_iter()
         .map(|(policy, observed_work, observed_help)| {
@@ -206,10 +237,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             {
                 return None;
             }
-            let actor = people
-                .binary_search_by_key(&policy.person, |p| p.id)
-                .ok()
-                .map(|i| &people[i])?;
+            let actor = find_person(policy.person)?;
             if actor.controlled || actor.health == 0 || actor.hunger > max_hunger {
                 return None;
             }
@@ -230,10 +258,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     {
                         return None;
                     }
-                    let recipient = people
-                        .binary_search_by_key(&memory.worker, |p| p.id)
-                        .ok()
-                        .map(|i| &people[i])?;
+                    let recipient = find_person(memory.worker)?;
                     if recipient.health == 0
                         || locations
                             .region((actor.id, actor.region), (recipient.id, recipient.region))
@@ -290,10 +315,20 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             ))
         })
         .collect::<Result<_, String>>()?;
-    work_rows.par_sort_unstable_by_key(|row| row.0.debtor);
+    if work_rows
+        .par_windows(2)
+        .any(|pair| pair[0].0.debtor > pair[1].0.debtor)
+    {
+        work_rows.par_sort_unstable_by_key(|row| row.0.debtor);
+    }
     let mut proposals: Vec<_> = rows.into_par_iter().map(|r| r.0).collect();
     proposals.par_extend(work_rows.par_iter().map(|row| row.0.clone()));
-    proposals.par_sort_unstable_by_key(|row| row.debtor);
+    if proposals
+        .par_windows(2)
+        .any(|pair| pair[0].debtor > pair[1].debtor)
+    {
+        proposals.par_sort_unstable_by_key(|row| row.debtor);
+    }
     Ok(Plan {
         proposals,
         reviews,
