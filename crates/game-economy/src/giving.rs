@@ -6,7 +6,7 @@ use game_opinions::Opinions;
 use game_production_model::Good;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -33,9 +33,9 @@ pub struct Giving {
     /// Newborns may acquire general preferences, never another person's experiences.
     #[serde(default)]
     pub inherit_births: bool,
-    pub policies: Vec<Policy>,
+    pub policies: Arc<Vec<Policy>>,
     #[serde(default)]
-    pub responses: Vec<Response>,
+    pub responses: Arc<Vec<Response>>,
     #[serde(default)]
     pub learning: Vec<SharingLearning>,
     #[serde(default)]
@@ -137,16 +137,57 @@ impl Clone for Giving {
 }
 impl Giving {
     pub(crate) fn clone_without_practices(&self) -> Self {
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("giving.clone.policies");
+        let policies = Arc::clone(&self.policies);
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("giving.clone.responses");
+        }
+        let responses = Arc::clone(&self.responses);
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("giving.clone.learning");
+        }
+        let learning = self.learning.par_iter().cloned().collect();
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("giving.clone.asking");
+        }
+        let asking = self.asking.par_iter().cloned().collect();
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("giving.clone.requests");
+        }
+        let requests = self.requests.par_iter().cloned().collect();
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("giving.clone.acquaintances");
+        }
+        let acquaintance_asking = self.acquaintance_asking.par_iter().cloned().collect();
+        #[cfg(feature = "profile")]
+        drop(phase);
         Self {
             practices: None,
             inherit_births: self.inherit_births,
-            policies: self.policies.par_iter().cloned().collect(),
-            responses: self.responses.par_iter().cloned().collect(),
-            learning: self.learning.par_iter().cloned().collect(),
-            asking: self.asking.par_iter().cloned().collect(),
-            requests: self.requests.par_iter().cloned().collect(),
-            acquaintance_asking: self.acquaintance_asking.par_iter().cloned().collect(),
+            policies,
+            responses,
+            learning,
+            asking,
+            requests,
+            acquaintance_asking,
         }
+    }
+    pub fn policies_mut(&mut self) -> &mut Vec<Policy> {
+        detach(&mut self.policies)
+    }
+    pub fn responses_mut(&mut self) -> &mut Vec<Response> {
+        detach(&mut self.responses)
     }
     pub fn validate(
         &self,
@@ -526,6 +567,13 @@ impl Giving {
             .chain(practice_requests.into_par_iter().map(|r| r.requester))
             .collect())
     }
+}
+
+fn detach<T: Clone + Send + Sync>(rows: &mut Arc<Vec<T>>) -> &mut Vec<T> {
+    if Arc::get_mut(rows).is_none() {
+        *rows = Arc::new(rows.par_iter().cloned().collect());
+    }
+    Arc::get_mut(rows).expect("exclusive giving generation")
 }
 pub struct Plan {
     pub actors: Vec<u64>,

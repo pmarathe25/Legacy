@@ -98,7 +98,9 @@ pub fn enroll(owner: Option<&mut Giving>, family: Option<&Families>, tick: u64) 
             Some(rule)
         })
         .collect();
-    owner.responses.par_extend(inherited_responses);
+    if !inherited_responses.is_empty() {
+        owner.responses_mut().par_extend(inherited_responses);
+    }
     owner.learning.par_extend(inherited_learning);
     owner.acquaintance_asking.par_extend(inherited_asking);
 }

@@ -910,9 +910,10 @@ impl Economy {
             return Err("person must be alive".into());
         }
         let mut next = self.giving.clone().ok_or("giving is disabled")?;
-        if let Some(policy) = next.policies.iter_mut().find(|p| p.person == person) {
-            policy.willing = willing;
-        } else if let Some(policy) = next.responses.iter_mut().find(|p| p.person == person) {
+        if let Some(index) = next.policies.iter().position(|p| p.person == person) {
+            next.policies_mut()[index].willing = willing;
+        } else if let Some(index) = next.responses.iter().position(|p| p.person == person) {
+            let policy = &mut next.responses_mut()[index];
             policy.willing = willing;
             if !willing {
                 policy.affinity_threshold = None;
@@ -3137,7 +3138,11 @@ impl Economy {
         let mut asked_actors = Vec::new();
         #[cfg(feature = "profile")]
         let giving_requests_phase = game_diagnostics::span("economy.giving.requests");
+        #[cfg(feature = "profile")]
+        let giving_clone_phase = game_diagnostics::span("economy.giving.clone");
         let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
+        #[cfg(feature = "profile")]
+        drop(giving_clone_phase);
         if let Some(giving) = &mut next_giving {
             let mut treated: Vec<_> = if available_held.is_empty() {
                 Vec::new()

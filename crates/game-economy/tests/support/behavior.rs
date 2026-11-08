@@ -3121,7 +3121,7 @@ fn requested_hunting_fixture() -> State {
     state.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
+        policies: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         acquaintance_asking: vec![],
@@ -3130,7 +3130,7 @@ fn requested_hunting_fixture() -> State {
             target: 1,
             expires_at: 10,
         }],
-        responses: vec![FoodResponse {
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 1,
             good: 1,
             alternatives: vec![],
@@ -3142,7 +3142,7 @@ fn requested_hunting_fixture() -> State {
             affinity_at_most: None,
             affinity_weight: None,
             pressure_threshold: None,
-        }],
+        }]),
     });
     state
 }
@@ -3156,7 +3156,7 @@ fn requested_hunting_can_supply_an_individually_chosen_alternative_food() {
         .as_mut()
         .unwrap()
         .good = 3;
-    initial.giving.as_mut().unwrap().responses[0].alternatives = vec![3];
+    initial.giving.as_mut().unwrap().responses_mut()[0].alternatives = vec![3];
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)
@@ -3248,10 +3248,10 @@ fn food_response_alternatives_must_be_distinct_known_foods_and_bounded() {
     let mut state = requested_hunting_fixture();
     state.physical.goods[2].food = state.physical.goods[0].food.clone();
     for alternatives in [vec![1], vec![2], vec![99], vec![3, 3], vec![3; 16]] {
-        state.giving.as_mut().unwrap().responses[0].alternatives = alternatives;
+        state.giving.as_mut().unwrap().responses_mut()[0].alternatives = alternatives;
         assert!(Economy::compile(state.clone()).is_err());
     }
-    state.giving.as_mut().unwrap().responses[0].alternatives = vec![3];
+    state.giving.as_mut().unwrap().responses_mut()[0].alternatives = vec![3];
     assert!(Economy::compile(state).is_ok());
 }
 
@@ -3884,8 +3884,8 @@ fn concentrated_requested_hunting_benchmark() {
     state.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
-        responses: vec![],
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         acquaintance_asking: vec![],
@@ -6252,11 +6252,11 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
     initial.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
+        policies: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
-        responses: vec![FoodResponse {
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -6268,7 +6268,7 @@ fn hungry_person_can_ask_a_met_acquaintance_who_remains_free_to_refuse() {
             affinity_at_most: None,
             affinity_weight: None,
             pressure_threshold: None,
-        }],
+        }]),
         acquaintance_asking: vec![AcquaintanceAsking {
             person: 1,
             enabled: true,
@@ -6422,8 +6422,8 @@ fn acquaintance_requests_follow_personal_affinity_and_try_other_known_people() {
     initial.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
-        responses: vec![],
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
@@ -11939,8 +11939,8 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
     initial.giving = Some(Giving {
         practices: None,
         inherit_births: true,
-        policies: vec![],
-        responses: vec![FoodResponse {
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 1,
             good: 1,
             alternatives: vec![],
@@ -11952,7 +11952,7 @@ fn newborn_helping_inclinations_do_not_inherit_memories_or_targets() {
             affinity_at_most: None,
             affinity_weight: None,
             pressure_threshold: Some(3),
-        }],
+        }]),
         learning: vec![SharingLearning {
             person: 1,
             enabled: true,
@@ -12999,7 +12999,7 @@ fn captives_can_request_food_through_a_physical_opening() {
     initial.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
+        policies: std::sync::Arc::new(vec![]),
         learning: vec![],
         acquaintance_asking: vec![],
         requests: vec![],
@@ -13014,7 +13014,7 @@ fn captives_can_request_food_through_a_physical_opening() {
             request_lifetime: 4,
             next_review: 0,
         }],
-        responses: vec![FoodResponse {
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 1,
             good: 1,
             alternatives: vec![],
@@ -13026,7 +13026,7 @@ fn captives_can_request_food_through_a_physical_opening() {
             affinity_at_most: None,
             affinity_weight: None,
             pressure_threshold: None,
-        }],
+        }]),
     });
     let run = |state: State, workers| {
         rayon::ThreadPoolBuilder::new()
@@ -13073,7 +13073,7 @@ fn captives_can_request_food_through_a_physical_opening() {
     closed.confinement.as_mut().unwrap().cells[0].allow_supplies = false;
     assert!(run(closed, 1).0.giving.unwrap().requests.is_empty());
     let mut refusing = initial.clone();
-    refusing.giving.as_mut().unwrap().responses[0].willing = false;
+    refusing.giving.as_mut().unwrap().responses_mut()[0].willing = false;
     let (request, declined) = run(refusing, 1);
     assert!(!request.giving.unwrap().requests.is_empty());
     assert_eq!(
@@ -13465,8 +13465,8 @@ fn a_barrier_prevents_in_person_dependent_care() {
     outside_stock.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
-        responses: vec![],
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         requests: vec![],
         acquaintance_asking: vec![],
@@ -14687,7 +14687,7 @@ fn child_food_request_workload() -> State {
     let mut initial = giving_workload(4);
     set_family_children(&mut initial, &[1]);
     let giving = initial.giving.as_mut().unwrap();
-    giving.policies.clear();
+    giving.policies_mut().clear();
     giving.asking.push(FoodAsking {
         person: 1,
         target: 2,
@@ -14699,7 +14699,7 @@ fn child_food_request_workload() -> State {
         request_lifetime: 4,
         next_review: 0,
     });
-    giving.responses.push(FoodResponse {
+    giving.responses_mut().push(FoodResponse {
         person: 2,
         good: 1,
         alternatives: vec![],
@@ -14760,7 +14760,7 @@ fn a_child_can_request_food_and_another_person_can_independently_respond() {
         1
     );
     let mut refusing = initial;
-    refusing.giving.as_mut().unwrap().responses[0].willing = false;
+    refusing.giving.as_mut().unwrap().responses_mut()[0].willing = false;
     assert_eq!(
         run(refusing, 1)
             .physical
@@ -14782,7 +14782,7 @@ fn a_child_can_choose_to_give_real_possessions() {
         .giving
         .as_mut()
         .unwrap()
-        .policies
+        .policies_mut()
         .retain(|policy| policy.person == 2);
     let mut world = Economy::compile(initial.clone()).unwrap();
     world.advance().unwrap();
@@ -14798,7 +14798,7 @@ fn a_child_can_choose_to_give_real_possessions() {
             .used,
         1
     );
-    initial.giving.as_mut().unwrap().policies[0].willing = false;
+    initial.giving.as_mut().unwrap().policies_mut()[0].willing = false;
     let mut world = Economy::compile(initial.clone()).unwrap();
     world.advance().unwrap();
     assert_eq!(
@@ -14814,7 +14814,7 @@ fn a_child_can_choose_to_give_real_possessions() {
         0
     );
     let mut pressured = initial.clone();
-    let policy = &mut pressured.giving.as_mut().unwrap().policies[0];
+    let policy = &mut pressured.giving.as_mut().unwrap().policies_mut()[0];
     policy.pressured_by = Some(3);
     policy.pressure_threshold = Some(2);
     let mut opinions = fixture().opinions.unwrap();
@@ -14893,7 +14893,7 @@ fn a_child_giving_food_cannot_also_meet_someone() {
         .giving
         .as_mut()
         .unwrap()
-        .policies
+        .policies_mut()
         .retain(|policy| policy.person == 2);
     let mut dynamics = disease_workload(4).dynamics.unwrap();
     dynamics.disease = None;
@@ -15049,7 +15049,7 @@ fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
     initial.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![GivingPolicy {
+        policies: std::sync::Arc::new(vec![GivingPolicy {
             person: 1,
             recipient: 2,
             good: 1,
@@ -15059,8 +15059,8 @@ fn a_physical_opening_allows_real_supplies_to_reach_a_captive() {
             requires_request: false,
             pressured_by: None,
             pressure_threshold: None,
-        }],
-        responses: vec![],
+        }]),
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
@@ -19118,11 +19118,11 @@ fn controlled_person_can_offer_unbacked_work_terms_and_ask_for_the_work() {
         }),
         inherit_births: false,
         acquaintance_asking: vec![],
-        responses: vec![],
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
-        policies: vec![],
+        policies: std::sync::Arc::new(vec![]),
     });
     initial.autowork = Some(Autowork {
         next_id: 1,
@@ -19736,11 +19736,11 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         }),
         inherit_births: false,
         acquaintance_asking: vec![],
-        responses: vec![],
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
-        policies: vec![GivingPolicy {
+        policies: std::sync::Arc::new(vec![GivingPolicy {
             person: 1,
             recipient: 3,
             good: 1,
@@ -19750,7 +19750,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
             requires_request: false,
             pressured_by: None,
             pressure_threshold: None,
-        }],
+        }]),
     });
     initial.goals = Some(Goals {
         retry_interval: 2,
@@ -19829,7 +19829,7 @@ fn witnessed_work_and_a_real_gift_can_inspire_a_personal_work_proposal() {
         }),
     });
     let mut material_experience = initial.clone();
-    material_experience.giving.as_mut().unwrap().policies[0].good = 2;
+    material_experience.giving.as_mut().unwrap().policies_mut()[0].good = 2;
     let holder = material_experience
         .physical
         .custody
@@ -20359,8 +20359,8 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
-        policies: vec![GivingPolicy {
+        responses: std::sync::Arc::new(vec![]),
+        policies: std::sync::Arc::new(vec![GivingPolicy {
             person: 2,
             recipient: 1,
             good: 1,
@@ -20370,7 +20370,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
             requires_request: false,
             pressured_by: None,
             pressure_threshold: None,
-        }],
+        }]),
         asking: vec![],
         requests: vec![],
     });
@@ -20768,7 +20768,7 @@ fn people_invent_and_independently_act_on_a_conditional_food_practice() {
         run(4, false, false, false, true)
     );
     let mut overflow = initial.clone();
-    overflow.giving.as_mut().unwrap().policies[0].willing = false;
+    overflow.giving.as_mut().unwrap().policies_mut()[0].willing = false;
     let mind = &mut overflow
         .giving
         .as_mut()
@@ -21006,8 +21006,8 @@ fn concentrated_practice_shortages(count: u64) -> State {
                 .collect(),
         }),
         inherit_births: false,
-        policies: vec![],
-        responses: vec![],
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
@@ -21089,8 +21089,8 @@ fn personal_giving_moves_goods_and_fear_can_motivate_help() {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
-        policies: vec![GivingPolicy {
+        responses: std::sync::Arc::new(vec![]),
+        policies: std::sync::Arc::new(vec![GivingPolicy {
             person: 4,
             recipient: 3,
             good: 1,
@@ -21100,7 +21100,7 @@ fn personal_giving_moves_goods_and_fear_can_motivate_help() {
             requires_request: false,
             pressured_by: Some(1),
             pressure_threshold: Some(3),
-        }],
+        }]),
         asking: vec![],
         requests: vec![],
     });
@@ -21270,20 +21270,22 @@ fn giving_workload(count: u64) -> State {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
-        policies: (2..=count)
-            .map(|person| GivingPolicy {
-                person,
-                recipient: 1,
-                good: 1,
-                quantity: 1,
-                recipient_hunger_at_least: 5,
-                willing: true,
-                requires_request: false,
-                pressured_by: None,
-                pressure_threshold: None,
-            })
-            .collect(),
+        responses: std::sync::Arc::new(vec![]),
+        policies: std::sync::Arc::new(
+            (2..=count)
+                .map(|person| GivingPolicy {
+                    person,
+                    recipient: 1,
+                    good: 1,
+                    quantity: 1,
+                    recipient_hunger_at_least: 5,
+                    willing: true,
+                    requires_request: false,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                })
+                .collect(),
+        ),
         asking: vec![],
         requests: vec![],
     });
@@ -21478,8 +21480,8 @@ fn food_request_can_be_refused_then_independently_fulfilled_and_survives_reload(
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
-        policies: vec![GivingPolicy {
+        responses: std::sync::Arc::new(vec![]),
+        policies: std::sync::Arc::new(vec![GivingPolicy {
             person: 4,
             recipient: 3,
             good: 1,
@@ -21489,7 +21491,7 @@ fn food_request_can_be_refused_then_independently_fulfilled_and_survives_reload(
             requires_request: true,
             pressured_by: None,
             pressure_threshold: None,
-        }],
+        }]),
         asking: vec![FoodAsking {
             person: 3,
             target: 4,
@@ -21601,8 +21603,8 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        policies: vec![],
-        responses: vec![FoodResponse {
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -21614,7 +21616,7 @@ fn an_unanswered_food_request_leads_to_another_known_person() {
             affinity_threshold: None,
             affinity_at_most: None,
             affinity_weight: None,
-        }],
+        }]),
         asking: vec![FoodAsking {
             person: 3,
             target: 4,
@@ -21684,8 +21686,8 @@ fn food_asking_workload(count: u64) -> State {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
-        policies: vec![],
+        responses: std::sync::Arc::new(vec![]),
+        policies: std::sync::Arc::new(vec![]),
         requests: vec![],
         asking: (2..=count)
             .map(|person| FoodAsking {
@@ -21733,7 +21735,7 @@ fn food_response_workload(count: u64) -> State {
             expires_at: 10,
         })
         .collect();
-    giving.responses = vec![FoodResponse {
+    *giving.responses_mut() = vec![FoodResponse {
         person: 1,
         good: 1,
         alternatives: vec![],
@@ -21810,7 +21812,7 @@ fn a_helper_independently_chooses_between_many_actual_requests() {
 #[test]
 fn fear_of_one_requester_can_motivate_help_without_general_willingness() {
     let mut initial = food_response_workload(4);
-    let response = &mut initial.giving.as_mut().unwrap().responses[0];
+    let response = &mut initial.giving.as_mut().unwrap().responses_mut()[0];
     response.willing = false;
     response.minimum_trust = Some(5);
     response.pressure_threshold = Some(3);
@@ -21905,8 +21907,8 @@ fn giving_nonfood_does_not_satisfy_a_food_request() {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
-        policies: vec![],
+        responses: std::sync::Arc::new(vec![]),
+        policies: std::sync::Arc::new(vec![]),
         asking: vec![],
         requests: vec![FoodRequest {
             requester: 3,
@@ -29997,11 +29999,11 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
     initial.giving = Some(Giving {
         practices: None,
         inherit_births: false,
-        policies: vec![],
+        policies: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         acquaintance_asking: vec![],
-        responses: vec![FoodResponse {
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -30013,7 +30015,7 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
             affinity_at_most: Some(-1),
             affinity_weight: None,
             pressure_threshold: None,
-        }],
+        }]),
         requests: vec![
             FoodRequest {
                 requester: 1,
@@ -30059,7 +30061,7 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
             .used,
         1
     );
-    let response = &mut initial.giving.as_mut().unwrap().responses[0];
+    let response = &mut initial.giving.as_mut().unwrap().responses_mut()[0];
     response.willing = true;
     response.affinity_at_most = None;
     response.affinity_weight = Some(1);
@@ -30075,7 +30077,7 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
             .used,
         1
     );
-    initial.giving.as_mut().unwrap().responses[0].affinity_weight = Some(-1);
+    initial.giving.as_mut().unwrap().responses_mut()[0].affinity_weight = Some(-1);
     let reversed = run(4, &initial);
     assert_eq!(
         reversed
@@ -30088,7 +30090,7 @@ fn food_responses_use_each_persons_signed_affinity_motives_and_preferences() {
             .used,
         1
     );
-    let response = &mut initial.giving.as_mut().unwrap().responses[0];
+    let response = &mut initial.giving.as_mut().unwrap().responses_mut()[0];
     response.willing = false;
     response.affinity_threshold = Some(-4);
     response.affinity_weight = Some(0);
@@ -30132,8 +30134,8 @@ fn actual_food_help_can_motivate_a_revocable_promise_without_creating_debt() {
         practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
-        policies: vec![],
-        responses: vec![FoodResponse {
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -30145,7 +30147,7 @@ fn actual_food_help_can_motivate_a_revocable_promise_without_creating_debt() {
             affinity_threshold: None,
             affinity_at_most: None,
             affinity_weight: None,
-        }],
+        }]),
         learning: vec![SharingLearning {
             person: 2,
             enabled: true,
@@ -30317,21 +30319,23 @@ fn giving_resolves_gapped_person_and_custody_ids() {
         practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
-        policies: [(1, 4), (3, 6)]
-            .into_iter()
-            .map(|(person, recipient)| GivingPolicy {
-                person,
-                recipient,
-                good: 1,
-                quantity: 1,
-                recipient_hunger_at_least: 0,
-                willing: true,
-                requires_request: false,
-                pressured_by: None,
-                pressure_threshold: None,
-            })
-            .collect(),
-        responses: vec![],
+        policies: std::sync::Arc::new(
+            [(1, 4), (3, 6)]
+                .into_iter()
+                .map(|(person, recipient)| GivingPolicy {
+                    person,
+                    recipient,
+                    good: 1,
+                    quantity: 1,
+                    recipient_hunger_at_least: 0,
+                    willing: true,
+                    requires_request: false,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                })
+                .collect(),
+        ),
+        responses: std::sync::Arc::new(vec![]),
         learning: vec![],
         asking: vec![],
         requests: vec![],
@@ -30426,6 +30430,50 @@ fn many_people_can_independently_offer_promises_after_real_help() {
 }
 
 #[test]
+fn giving_preferences_are_shared_until_a_person_changes_them() {
+    let mut world = Economy::compile(help_promise_workload(4)).unwrap();
+    let before = world.snapshot();
+    world.advance().unwrap();
+    let after = world.snapshot();
+    let old = before.giving.as_ref().unwrap();
+    let current = after.giving.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(&old.policies, &current.policies));
+    assert!(std::sync::Arc::ptr_eq(&old.responses, &current.responses));
+    let stale = world.prepare().unwrap();
+    world.set_giving_choice(1, false).unwrap();
+    let changed = world.snapshot();
+    let giving = changed.giving.as_ref().unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&current.policies, &giving.policies));
+    assert!(std::sync::Arc::ptr_eq(
+        &current.responses,
+        &giving.responses
+    ));
+    assert!(old.policies[0].willing);
+    assert!(!giving.policies[0].willing);
+    assert!(world.commit(stale).is_err());
+    assert_eq!(world.snapshot(), changed);
+    world.set_giving_choice(5, true).unwrap();
+    let response_changed = world.snapshot();
+    let response_giving = response_changed.giving.as_ref().unwrap();
+    assert!(std::sync::Arc::ptr_eq(
+        &giving.policies,
+        &response_giving.policies
+    ));
+    assert!(!std::sync::Arc::ptr_eq(
+        &giving.responses,
+        &response_giving.responses
+    ));
+    assert!(!giving.responses[0].willing);
+    assert!(response_giving.responses[0].willing);
+    let encoded = serde_json::to_string(&changed).unwrap();
+    let value: serde_json::Value = serde_json::from_str(&encoded).unwrap();
+    assert!(value["giving"]["policies"].is_array());
+    assert!(value["giving"]["responses"].is_array());
+    let loaded = Economy::compile(serde_json::from_str(&encoded).unwrap()).unwrap();
+    assert_eq!(loaded.snapshot(), changed);
+}
+
+#[test]
 fn help_promise_planning_handles_gapped_people_and_memories() {
     let mut initial = help_promise_workload(4);
     initial.people.retain(|p| p.id != 2 && p.id != 6);
@@ -30435,8 +30483,8 @@ fn help_promise_planning_handles_gapped_people_and_memories() {
         .containers
         .retain(|c| c.place != Place::Person(2) && c.place != Place::Person(6));
     let giving = initial.giving.as_mut().unwrap();
-    giving.policies.retain(|p| p.person != 2);
-    giving.responses.retain(|p| p.person != 6);
+    giving.policies_mut().retain(|p| p.person != 2);
+    giving.responses_mut().retain(|p| p.person != 6);
     giving.learning.retain(|p| p.person != 6);
     giving.requests.retain(|p| p.requester != 6);
     initial
@@ -30482,34 +30530,38 @@ fn help_promise_workload(count: u64) -> State {
         practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
-        policies: (1..=count)
-            .map(|person| GivingPolicy {
-                person,
-                recipient: count + person,
-                good: 1,
-                quantity: 1,
-                recipient_hunger_at_least: 0,
-                willing: true,
-                requires_request: true,
-                pressured_by: None,
-                pressure_threshold: None,
-            })
-            .collect(),
-        responses: (1..=count)
-            .map(|i| FoodResponse {
-                person: count + i,
-                good: 1,
-                alternatives: vec![],
-                quantity: 1,
-                recipient_hunger_at_least: 0,
-                willing: false,
-                minimum_trust: None,
-                pressure_threshold: None,
-                affinity_threshold: None,
-                affinity_at_most: None,
-                affinity_weight: None,
-            })
-            .collect(),
+        policies: std::sync::Arc::new(
+            (1..=count)
+                .map(|person| GivingPolicy {
+                    person,
+                    recipient: count + person,
+                    good: 1,
+                    quantity: 1,
+                    recipient_hunger_at_least: 0,
+                    willing: true,
+                    requires_request: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                })
+                .collect(),
+        ),
+        responses: std::sync::Arc::new(
+            (1..=count)
+                .map(|i| FoodResponse {
+                    person: count + i,
+                    good: 1,
+                    alternatives: vec![],
+                    quantity: 1,
+                    recipient_hunger_at_least: 0,
+                    willing: false,
+                    minimum_trust: None,
+                    pressure_threshold: None,
+                    affinity_threshold: None,
+                    affinity_at_most: None,
+                    affinity_weight: None,
+                })
+                .collect(),
+        ),
         learning: (1..=count)
             .map(|i| SharingLearning {
                 person: count + i,
@@ -30638,8 +30690,8 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
         practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
-        policies: vec![],
-        responses: vec![FoodResponse {
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -30651,7 +30703,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
             affinity_threshold: None,
             affinity_at_most: None,
             affinity_weight: None,
-        }],
+        }]),
         learning: vec![SharingLearning {
             person: 2,
             enabled: true,
@@ -30729,7 +30781,7 @@ fn personal_sharing_value_grows_from_real_food_received_and_can_be_abandoned() {
 fn sharing_learning_workload(count: u64) -> State {
     let mut state = giving_workload(count);
     let giving = state.giving.as_mut().unwrap();
-    giving.responses.push(FoodResponse {
+    giving.responses_mut().push(FoodResponse {
         person: 1,
         good: 1,
         alternatives: vec![],
@@ -30827,8 +30879,8 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
         practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
-        policies: vec![],
-        responses: vec![FoodResponse {
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -30840,7 +30892,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
             affinity_threshold: None,
             affinity_at_most: None,
             affinity_weight: None,
-        }],
+        }]),
         learning: vec![SharingLearning {
             person: 2,
             enabled: true,
@@ -30965,8 +31017,8 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
 fn reciprocal_sharing_workload(count: u64) -> State {
     let mut state = giving_workload(count);
     let giving = state.giving.as_mut().unwrap();
-    giving.policies.clear();
-    giving.responses = (2..=count)
+    giving.policies_mut().clear();
+    *giving.responses_mut() = (2..=count)
         .map(|person| FoodResponse {
             person,
             good: 1,
@@ -31102,8 +31154,8 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
         practices: None,
         inherit_births: false,
         acquaintance_asking: vec![],
-        policies: vec![],
-        responses: vec![FoodResponse {
+        policies: std::sync::Arc::new(vec![]),
+        responses: std::sync::Arc::new(vec![FoodResponse {
             person: 2,
             good: 1,
             alternatives: vec![],
@@ -31115,7 +31167,7 @@ fn hungry_person_constructs_a_request_to_someone_who_actually_helped_them() {
             affinity_threshold: None,
             affinity_at_most: None,
             affinity_weight: None,
-        }],
+        }]),
         learning: vec![SharingLearning {
             person: 2,
             enabled: true,
@@ -31177,7 +31229,7 @@ fn learned_food_asking_workload(count: u64) -> State {
     let mut state = food_asking_workload(count);
     let giving = state.giving.as_mut().unwrap();
     giving.asking.clear();
-    giving.responses = (2..=count)
+    *giving.responses_mut() = (2..=count)
         .map(|person| FoodResponse {
             person,
             good: 1,
@@ -31270,7 +31322,7 @@ fn concentrated_learned_food_asking_benchmark() {
 #[test]
 fn directed_affinity_motivates_and_prioritizes_personal_help() {
     let mut initial = food_response_workload(4);
-    let response = &mut initial.giving.as_mut().unwrap().responses[0];
+    let response = &mut initial.giving.as_mut().unwrap().responses_mut()[0];
     response.willing = false;
     response.affinity_threshold = Some(3);
     let mut opinions = fixture().opinions.unwrap();
@@ -31754,10 +31806,10 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         inherit_births: false,
         acquaintance_asking: vec![],
         learning: vec![],
-        responses: vec![],
+        responses: std::sync::Arc::new(vec![]),
         asking: vec![],
         requests: vec![],
-        policies: vec![GivingPolicy {
+        policies: std::sync::Arc::new(vec![GivingPolicy {
             person: 2,
             recipient: 4,
             good: 1,
@@ -31767,7 +31819,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
             requires_request: false,
             pressured_by: Some(1),
             pressure_threshold: Some(3),
-        }],
+        }]),
     });
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()

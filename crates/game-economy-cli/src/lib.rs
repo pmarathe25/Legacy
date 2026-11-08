@@ -995,8 +995,8 @@ pub fn scenario_with_options(
             Ok(game_economy::Giving {
                 practices: config.practices,
                 inherit_births: config.inherit_births,
-                policies,
-                responses,
+                policies: policies.into(),
+                responses: responses.into(),
                 learning: config.learning,
                 asking: config.asking,
                 requests: vec![],
