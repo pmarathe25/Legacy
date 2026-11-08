@@ -5153,6 +5153,28 @@ impl Economy {
             claim_uses.par_extend(plan.uses.par_iter().copied());
             game_economy_work::reserve(&mut busy, plan.actors.iter().copied());
         }
+        let expedition_busy = local_busy
+            .as_ref()
+            .filter(|_| {
+                self.missions.as_ref().is_some_and(|missions| {
+                    missions.entries.par_iter().any(|mission| {
+                        !mission.objective_met
+                            && mission
+                                .delivery_preference
+                                .and_then(|preference| preference.acquisition)
+                                .is_some_and(|choice| {
+                                    choice.willing || choice.pressure_threshold.is_some()
+                                })
+                    })
+                })
+            })
+            .map(|local_busy| {
+                let mut rows = local_busy.clone();
+                if let Some(plan) = &local_plan {
+                    game_economy_work::reserve(&mut rows, plan.actors.iter().copied());
+                }
+                rows
+            });
         let mut expedition_acquisition = game_economy_expeditions::acquisition::Context {
             missions: self.missions.as_ref(),
             people: &self.people,
@@ -5160,11 +5182,14 @@ impl Economy {
             stores: self
                 .local_transport
                 .as_ref()
-                .filter(|owner| owner.walking.is_none())
                 .map_or(&[], |owner| owner.stores.as_slice()),
+            walking: self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref()),
             opinions: self.opinions.as_ref(),
             claims: claims.as_ref(),
-            busy: &busy,
+            busy: expedition_busy.as_deref().unwrap_or(&busy),
             max_hunger: self.rules.max_work_hunger,
         }
         .prepare(action_base)?;
@@ -5576,6 +5601,35 @@ impl Economy {
                 )
                 .ok_or("action count overflow")?;
         }
+        let goal_fetch_busy = (goal_fetching && !local_nonstock.is_empty()).then(|| {
+            let mut rows = local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                local_plan
+                    .as_ref()
+                    .map_or(&[][..], |plan| plan.actors.as_slice()),
+            );
+            game_economy_work::reserve(
+                &mut rows,
+                pickup
+                    .actors
+                    .iter()
+                    .copied()
+                    .chain(treatment.actors.iter().copied())
+                    .chain(asked_actors.iter().copied())
+                    .chain(giving_plan.actors.iter().copied())
+                    .chain(medical_plan.actors.iter().copied())
+                    .chain(handling_plan.actors.iter().copied())
+                    .chain(restraint_plan.actors.iter().copied())
+                    .chain(expedition_acquisition.actors.iter().copied()),
+            );
+            if let Some(family) = &self.family {
+                game_economy_work::reserve(&mut rows, game_economy_work::underage(family));
+            }
+            rows
+        });
         let goal_fetch_plan = if goal_fetching {
             self.local_transport
                 .as_ref()
@@ -5586,7 +5640,7 @@ impl Economy {
                         recipes: self.physical.recipes(),
                         people: &self.people,
                         view: &view,
-                        busy: &busy,
+                        busy: goal_fetch_busy.as_deref().unwrap_or(&busy),
                         unwilling: &goal_building_refusals,
                         max_hunger: self.rules.max_work_hunger,
                         tick,
@@ -7187,6 +7241,10 @@ impl Economy {
                     .map_or(&[][..], |plan| plan.actors.as_slice()),
             );
             game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
+            if let Some(plan) = &goal_fetch_plan {
+                game_economy_work::reserve(&mut rows, plan.actors.iter().copied());
+            }
             rows
         });
         let fatigue = game_economy_fatigue::prepare_world!(
@@ -7520,6 +7578,10 @@ impl Economy {
             );
             game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
             game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
+            if let Some(plan) = &goal_fetch_plan {
+                game_economy_work::reserve(&mut rows, plan.actors.iter().copied());
+            }
             game_economy_work::reserve(&mut rows, asked_actors.iter().copied());
             game_economy_work::reserve(&mut rows, giving_plan.actors.iter().copied());
             game_economy_work::reserve(&mut rows, medical_plan.actors.iter().copied());

@@ -48,6 +48,7 @@ struct Search<'a> {
     stock: &'a [(u64, u32, u64, u64)],
     producers: &'a [(u32, &'a Recipe)],
     plan_inputs: bool,
+    current_store: Option<u64>,
 }
 impl Search<'_> {
     fn choose(
@@ -62,6 +63,26 @@ impl Search<'_> {
         }
         *budget -= 1;
         visited[depth] = recipe.id;
+        if let Some(store) = self.current_store {
+            let source = self.view.container(Place::Inventory(store))?;
+            return recipe.inputs.iter().find_map(|input| {
+                let needed = input
+                    .quantity
+                    .saturating_sub(self.holder.quantity(input.good));
+                let quantity = source
+                    .quantity(input.good)
+                    .min(needed)
+                    .min(self.max_quantity)
+                    .min(self.holder.capacity.saturating_sub(self.holder.used));
+                (quantity > 0).then_some(Choice {
+                    person: self.person,
+                    from: Place::Inventory(store),
+                    to: Place::Person(self.person),
+                    good: input.good,
+                    quantity,
+                })
+            });
+        }
         let missing = |input: &game_production_model::Amount| {
             let destination = Place::Stock {
                 region: self.region,
@@ -222,6 +243,19 @@ impl Context<'_> {
                     return None;
                 }
                 let region = person.region?;
+                let current_store = match self
+                    .owner
+                    .walking
+                    .as_ref()
+                    .map(|walking| walking.location(person.id, region))
+                {
+                    Some(super::walking::Location::At {
+                        endpoint: super::Endpoint::Store { id },
+                        ..
+                    }) => Some(id),
+                    Some(super::walking::Location::Walking { .. }) => return None,
+                    _ => None,
+                };
                 let need = self
                     .needs
                     .binary_search_by_key(&person.id, |row| row.person)
@@ -244,6 +278,7 @@ impl Context<'_> {
                     stock: &stock,
                     producers: &producers,
                     plan_inputs: self.plan_inputs,
+                    current_store,
                 }
                 .choose(recipe, &mut [0; MAX_DEPTH], 0, &mut budget)
             })

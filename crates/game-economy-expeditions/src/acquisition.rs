@@ -1,7 +1,10 @@
 //! Individual travelers may choose to obtain missing goods from local custody.
 use crate::{MissionPhase, Missions, Objective};
 use game_economy_claims::{Index as Claims, Use};
-use game_economy_local_transport::Store;
+use game_economy_local_transport::{
+    Endpoint, Store,
+    walking::{Location, Walking},
+};
 use game_economy_person::Person;
 use game_lots::{Movement, Place, Transaction, View};
 use game_opinions::Opinions;
@@ -12,6 +15,7 @@ pub struct Context<'a> {
     pub people: &'a [Person],
     pub view: &'a View,
     pub stores: &'a [Store],
+    pub walking: Option<&'a Walking>,
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a Claims<'a>>,
     pub busy: &'a [u64],
@@ -51,8 +55,12 @@ impl Context<'_> {
             .opinions
             .filter(|_| needs_opinions)
             .map(Opinions::index);
-        let mut store_stock: Vec<_> = self
-            .stores
+        let visible_stores = if self.walking.is_some() {
+            &[][..]
+        } else {
+            self.stores
+        };
+        let mut store_stock: Vec<_> = visible_stores
             .par_iter()
             .flat_map_iter(|store| {
                 self.view
@@ -122,17 +130,45 @@ impl Context<'_> {
                 if needed == 0 {
                     return None;
                 }
+                let location = self
+                    .walking
+                    .map(|walking| walking.location(person.id, region));
+                if matches!(location, Some(Location::Walking { .. })) {
+                    return None;
+                }
                 let regional = Place::Stock { region, good };
-                let allowed = choice.disregard_claims
+                let regional_quantity = if location.is_none_or(|location| {
+                    matches!(
+                        location,
+                        Location::At {
+                            endpoint: Endpoint::Stock,
+                            ..
+                        }
+                    )
+                }) && (choice.disregard_claims
                     || self
                         .claims
-                        .is_none_or(|index| index.allows(person.id, region, good));
-                let regional_quantity = self
-                    .view
-                    .container(regional)
-                    .map_or(0, |stock| stock.quantity(good));
-                let (source, available) = if allowed && regional_quantity > 0 {
+                        .is_none_or(|index| index.allows(person.id, region, good)))
+                {
+                    self.view
+                        .container(regional)
+                        .map_or(0, |stock| stock.quantity(good))
+                } else {
+                    0
+                };
+                let (source, available) = if regional_quantity > 0 {
                     (regional, regional_quantity)
+                } else if let Some(Location::At {
+                    endpoint: Endpoint::Store { id },
+                    ..
+                }) = location
+                {
+                    let source = Place::Inventory(id);
+                    let available = self.view.container(source)?.quantity(good);
+                    if available == 0 {
+                        return None;
+                    }
+                    (source, available)
                 } else {
                     let start = store_stock.partition_point(|row| (row.0, row.1) < (region, good));
                     let end = store_stock.partition_point(|row| (row.0, row.1) <= (region, good));

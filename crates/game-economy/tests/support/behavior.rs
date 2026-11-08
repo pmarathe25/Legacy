@@ -6330,6 +6330,159 @@ fn a_person_fetches_observed_local_inputs_for_their_own_work_goal() {
 }
 
 #[test]
+fn goal_fetch_at_a_store_does_not_depend_on_remote_stock() {
+    use game_goals::Goal;
+    let mut initial = local_walking_fixture();
+    let mut dynamics = expedition_fixture().dynamics.unwrap();
+    dynamics.social.as_mut().unwrap().participants[1].willing = true;
+    initial.dynamics = Some(dynamics);
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.goal_fetchers = vec![GoalFetchPreference {
+        person: 2,
+        enabled: true,
+        max_quantity: 1,
+    }];
+    let walking = transport.walking.as_mut().unwrap();
+    walking.positions = vec![LocalPosition {
+        person: 2,
+        location: LocalLocation::At {
+            region: 1,
+            endpoint: LocalEndpoint::Store { id: 1 },
+        },
+    }];
+    walking.preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Stock,
+        willing: false,
+        pressured_by: None,
+        pressure_threshold: None,
+    }]
+    .into();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+            recognize_help: false,
+        }],
+        events: vec![],
+    });
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let run = |workers, remote_quantity| {
+        let mut state = initial.clone();
+        let stock = state
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+            .unwrap();
+        *stock = Container::new(
+            stock.place,
+            stock.capacity,
+            if remote_quantity == 0 {
+                vec![]
+            } else {
+                vec![Lot {
+                    item: None,
+                    good: 2,
+                    quantity: remote_quantity,
+                    expires_at: None,
+                }]
+            },
+        )
+        .unwrap();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let picked = world.snapshot();
+                assert!(
+                    picked
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.a != 2 && event.b != 2)
+                );
+                assert!(
+                    picked
+                        .local_transport
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.person == 2 && event.moved)
+                );
+                let holder = picked
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                assert!(
+                    holder
+                        .lots
+                        .iter()
+                        .any(|lot| lot.good == 2 && lot.quantity == 1)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&picked).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    world.set_local_visit_choice(2, true).unwrap();
+                    world.advance().unwrap();
+                    world.advance().unwrap();
+                    world.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1, 0), run(4, 0));
+    run(1, 2);
+}
+
+#[test]
 fn goal_fetching_finds_inputs_for_a_real_production_chain() {
     use game_goals::Goal;
     let mut initial = local_store_fixture();
@@ -6825,6 +6978,7 @@ fn concentrated_goal_fetching_conserves_goods_across_workers() {
 #[test]
 #[ignore = "performance measurement"]
 fn concentrated_goal_fetch_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -6833,41 +6987,56 @@ fn concentrated_goal_fetch_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = if std::env::var_os("LEGACY_CHAIN").is_some() {
+    let mut initial = if std::env::var_os("LEGACY_CHAIN").is_some() {
         concentrated_chain_fetching(count)
     } else {
         concentrated_goal_fetching(count)
     };
+    let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    if at_store {
+        assert!(std::env::var_os("LEGACY_CHAIN").is_none());
+        initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: (2..=count)
+                .map(|person| LocalPosition {
+                    person,
+                    location: LocalLocation::At {
+                        region: 1,
+                        endpoint: LocalEndpoint::Store { id: 1 },
+                    },
+                })
+                .collect(),
+            events: vec![],
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
-                assert_eq!(
-                    world
-                        .snapshot()
-                        .local_transport
-                        .unwrap()
-                        .events
-                        .iter()
-                        .filter(|event| event.moved)
-                        .count(),
-                    count as usize / 8
-                );
+                let state = world.snapshot();
+                assert_eq!(state.local_transport.as_ref().unwrap().events.iter().filter(|event| event.moved).count(), count as usize / 8);
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} goal_fetch_seconds={:.6}",
-                samples[1]
+                "workers={workers} people={count} at_store={at_store} goal_fetch_seconds={:.6} fingerprint={:016x}",
+                samples[1], fingerprint.unwrap()
             );
         });
 }
@@ -20652,8 +20821,153 @@ fn travelers_compete_for_shared_stock_deterministically() {
 }
 
 #[test]
+fn expedition_supplies_can_be_acquired_only_at_the_current_endpoint() {
+    let mut initial = autonomous_acquisition_workload(4, 0);
+    use_named_acquisition_store(&mut initial, 2);
+    initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        routes: vec![LocalWalkRoute {
+            region: 1,
+            from: LocalEndpoint::Stock,
+            to: LocalEndpoint::Store { id: 1 },
+            ticks: 2,
+        }]
+        .into(),
+        preferences: vec![].into(),
+        positions: vec![
+            LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            },
+            LocalPosition {
+                person: 3,
+                location: LocalLocation::Walking {
+                    region: 1,
+                    from: LocalEndpoint::Stock,
+                    to: LocalEndpoint::Store { id: 1 },
+                    remaining: 1,
+                },
+            },
+            LocalPosition {
+                person: 4,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            },
+        ],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                for person in 1..=4 {
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(person))
+                        .unwrap();
+                    let amount: u64 = holder
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == 2)
+                        .map(|lot| lot.quantity)
+                        .sum();
+                    assert_eq!(amount, u64::from(person == 2 || person == 4));
+                }
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn expedition_pickup_reserves_time_against_goal_fetching() {
+    use game_goals::Goal;
+    let mut initial = autonomous_acquisition_workload(2, 0);
+    use_named_acquisition_store(&mut initial, 2);
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.goal_fetchers = vec![GoalFetchPreference {
+        person: 1,
+        enabled: true,
+        max_quantity: 1,
+    }];
+    transport.walking = Some(LocalWalking {
+        routes: vec![].into(),
+        preferences: vec![].into(),
+        positions: vec![LocalPosition {
+            person: 1,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        }],
+        events: vec![],
+    });
+    initial.people[0].willing_to_work = true;
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 1,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+            recognize_help: false,
+        }],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    assert_eq!(
+        holder
+            .lots
+            .iter()
+            .filter(|lot| lot.good == 2)
+            .map(|lot| lot.quantity)
+            .sum::<u64>(),
+        1
+    );
+    assert!(state.local_transport.unwrap().events.is_empty());
+}
+
+#[test]
 #[ignore = "manual shared-stock acquisition benchmark"]
 fn concentrated_expedition_acquisition_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -20668,8 +20982,25 @@ fn concentrated_expedition_acquisition_benchmark() {
         .unwrap_or(count / 2);
     assert!(count > 0 && available <= count);
     let mut initial = autonomous_acquisition_workload(count, available);
-    if std::env::var_os("LEGACY_NAMED_STORE").is_some() {
+    let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    if at_store || std::env::var_os("LEGACY_NAMED_STORE").is_some() {
         use_named_acquisition_store(&mut initial, available);
+    }
+    if at_store {
+        initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: (1..=count)
+                .map(|person| LocalPosition {
+                    person,
+                    location: LocalLocation::At {
+                        region: 1,
+                        endpoint: LocalEndpoint::Store { id: 1 },
+                    },
+                })
+                .collect(),
+            events: vec![],
+        });
     }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -20677,6 +21008,7 @@ fn concentrated_expedition_acquisition_benchmark() {
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let start = std::time::Instant::now();
@@ -20694,14 +21026,19 @@ fn concentrated_expedition_acquisition_benchmark() {
                     .map(|lot| lot.quantity)
                     .sum();
                 assert_eq!(acquired, available);
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} travelers={count} stock={available} elapsed={:.6}",
-                samples[1]
+                "workers={workers} travelers={count} stock={available} at_store={at_store} elapsed={:.6} fingerprint={:016x}",
+                samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]
             for (name, measurement) in game_diagnostics::snapshot() {
