@@ -1,6 +1,7 @@
 //! Individual, voluntary or personally motivated reinforcement of a local fight.
 use super::{Draft, Fighter, Order, Placement, Plan, Point, Runtime};
 use game_economy_person::Person;
+use game_lots::View;
 use game_opinions::Opinions;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -141,6 +142,114 @@ pub fn select(
     let mut actors: Vec<_> = choices.par_iter().map(|row| row.actor).collect();
     actors.par_sort_unstable();
     Some(Selection { choices, actors })
+}
+
+impl Runtime {
+    /// Choose to join an already visible local fight; this creates no round.
+    pub fn reinforce(
+        &self,
+        people: &[Person],
+        view: &View,
+        tick: u64,
+        actor: u64,
+        beneficiary: u64,
+        opponent: u64,
+    ) -> Result<Self, String> {
+        if actor == beneficiary || actor == opponent || beneficiary == opponent {
+            return Err("reinforcement requires three distinct people".into());
+        }
+        if self.actors().binary_search(&actor).is_ok() {
+            return Err("person is already fighting".into());
+        }
+        let person = people
+            .binary_search_by_key(&actor, |p| p.id)
+            .ok()
+            .map(|i| &people[i])
+            .ok_or("unknown person")?;
+        let region = person.region.ok_or("person is traveling")?;
+        if person.health == 0 {
+            return Err("person cannot fight while incapacitated".into());
+        }
+        let fight = self
+            .state
+            .conflict
+            .encounters
+            .iter()
+            .find(|fight| {
+                fight.region == region && fight.fighters.iter().any(|f| f.person == beneficiary)
+            })
+            .ok_or("no local fight involving that person")?;
+        let side = fight
+            .fighters
+            .iter()
+            .find(|f| f.person == beneficiary)
+            .expect("selected fighter")
+            .side;
+        if fight
+            .fighters
+            .iter()
+            .find(|f| f.person == opponent)
+            .is_none_or(|f| f.side == side)
+        {
+            return Err("opponent is not on another side of this fight".into());
+        }
+        let battle = self
+            .state
+            .tactics
+            .battles
+            .iter()
+            .find(|battle| battle.encounter == fight.id)
+            .ok_or("missing tactical battle")?;
+        let map = self
+            .state
+            .tactics
+            .maps
+            .iter()
+            .find(|map| map.region == region)
+            .ok_or("missing tactical map")?;
+        let witness = battle
+            .people
+            .iter()
+            .find(|p| p.person == beneficiary)
+            .ok_or("missing fighter position")?
+            .position;
+        let occupied: HashSet<_> = battle
+            .people
+            .iter()
+            .map(|p| (p.position.x, p.position.y))
+            .collect();
+        let point = (0..=map.rules.width.min(63))
+            .flat_map(|x| (0..=map.rules.height.min(63)).map(move |y| Point { x, y }))
+            .find(|p| !occupied.contains(&(p.x, p.y)) && map.visible(*p, witness))
+            .ok_or("no visible open tactical entry")?;
+        let encounter = fight.id;
+        let mut state = self.state.clone();
+        let fight = state
+            .conflict
+            .encounters
+            .iter_mut()
+            .find(|fight| fight.id == encounter)
+            .expect("selected fight");
+        fight.fighters.push(Fighter {
+            person: actor,
+            side,
+            order: Order::Attack { target: opponent },
+        });
+        fight.fighters.sort_unstable_by_key(|f| f.person);
+        let battle = state
+            .tactics
+            .battles
+            .iter_mut()
+            .find(|battle| battle.encounter == encounter)
+            .expect("selected battle");
+        battle.people.push(Placement {
+            person: actor,
+            position: point,
+            last_move: None,
+        });
+        battle.people.sort_unstable_by_key(|p| p.person);
+        Self::compile_known(state, people, view, tick, &self.goods)
+    }
 }
 
 impl Draft {

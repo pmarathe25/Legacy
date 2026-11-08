@@ -24518,6 +24518,65 @@ fn personally_felt_obligation_can_motivate_defense_without_consent() {
 }
 
 #[test]
+fn a_controlled_person_can_deliberately_join_a_local_fight() {
+    use game_economy_combat::Point;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    initial.combat = Some(combat_rules());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let fight = world.attack(2, 3).unwrap();
+                let before = world.snapshot();
+                assert!(world.reinforce_combat(1, 3, 3).is_err());
+                assert_eq!(world.snapshot(), before);
+                let stale = world.prepare().unwrap();
+                world.reinforce_combat(1, 3, 2).unwrap();
+                let joined = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), joined);
+                assert_eq!(joined.physical.custody.tick, before.physical.custody.tick);
+                assert!(
+                    joined.combat.as_ref().unwrap().conflict.encounters[0]
+                        .fighters
+                        .iter()
+                        .any(|f| f.person == 1 && f.side == 2)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&joined).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.combat_move(1, fight, Point { x: 1, y: 0 }).unwrap();
+                restored
+                    .combat_move(1, fight, Point { x: 1, y: 0 })
+                    .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .events
+                        .iter()
+                        .any(|event| event.attacker == 1 && event.target == 2)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn taking_from_a_living_person_uses_real_custody_and_can_be_unnoticed() {
     let mut initial = hunting_fixture();
     initial.hunting = None;

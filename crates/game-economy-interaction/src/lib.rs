@@ -366,6 +366,45 @@ macro_rules! work_methods {
 #[macro_export]
 macro_rules! combat_methods {
     () => {
+        /// Join an existing local fight on a person's side, without their consent.
+        pub fn reinforce_combat(
+            &mut self,
+            actor: u64,
+            beneficiary: u64,
+            opponent: u64,
+        ) -> Result<(), String> {
+            if self.confinement.as_ref().is_some_and(|owner| {
+                owner.held(actor) || owner.held(beneficiary) || owner.held(opponent)
+            }) {
+                return Err("a physical barrier separates the participants".into());
+            }
+            if self.campaign.as_ref().is_some_and(|c| {
+                c.lineage.current == Some(actor)
+                    && c.lineage.controlled_person(self.tick()) != Some(actor)
+            }) {
+                return Err("player control is suspended".into());
+            }
+            let view = self.physical.view(self.tick())?;
+            let next = self
+                .combat
+                .as_ref()
+                .ok_or("combat is disabled")?
+                .reinforce(
+                    &self.people,
+                    &view,
+                    self.tick(),
+                    actor,
+                    beneficiary,
+                    opponent,
+                )?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            self.combat = Some(next);
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Start an attack; the other person responds according to their own reaction.
         pub fn attack(&mut self, actor: u64, target: u64) -> Result<u64, String> {
             if self

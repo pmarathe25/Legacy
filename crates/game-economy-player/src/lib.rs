@@ -1054,6 +1054,14 @@ impl<'a> Player<'a> {
         }
         self.world.attack(self.current()?, target)
     }
+    pub fn reinforce_combat(&mut self, beneficiary: u64, opponent: u64) -> Result<(), String> {
+        let view = self.view()?;
+        if !view.nearby.contains(&beneficiary) || !view.nearby.contains(&opponent) {
+            return Err("both fighters must be present".into());
+        }
+        self.world
+            .reinforce_combat(self.current()?, beneficiary, opponent)
+    }
     pub fn ask_work(&mut self, worker: u64, recipe: u32, lifetime: u64) -> Result<u64, String> {
         if !self.view()?.nearby.contains(&worker) {
             return Err("person is not present".into());
