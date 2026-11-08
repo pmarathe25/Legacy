@@ -32,6 +32,7 @@ fn main() {
     let history_stress = std::env::var_os("LEGACY_SOCIAL_HISTORY_STRESS").is_some();
     let local_visits = std::env::var_os("LEGACY_LOCAL_VISITS").is_some();
     let market_workload = std::env::var_os("LEGACY_MARKET").is_some();
+    let work_requests = std::env::var_os("LEGACY_WORK_REQUESTS").is_some();
     let inquiry_pursuit =
         taking_inquiries && std::env::var_os("LEGACY_DISABLE_INQUIRY_PURSUIT").is_none();
     assert!(people > 4 && ticks > 0 && sample_count > 0 && reproduction <= 100);
@@ -118,7 +119,7 @@ fn main() {
                 initial.physical.custody.containers.push(Container::new(Place::Inventory(store.id), people, vec![]).unwrap());
             }
             initial.physical.custody.containers.sort_unstable_by_key(|container| container.place);
-            let preferences = initial.people.iter().filter(|person| !person.controlled && (person.id.is_multiple_of(4) || (market_workload && person.id % 4 == 1))).filter_map(|person| {
+            let preferences = initial.people.iter().filter(|person| !person.controlled && (person.id.is_multiple_of(4) || ((market_workload || work_requests) && person.id % 4 == 1))).filter_map(|person| {
                 let region = person.region?;
                 Some(LocalWalkPreference { meal_hunger: None, person: person.id, region, destination: LocalEndpoint::Store { id: region }, willing: true, pressured_by: None, pressure_threshold: None })
             }).collect::<Vec<_>>();
@@ -144,6 +145,19 @@ fn main() {
                 }).collect(),
                 offers: vec![], events: vec![],
             });
+        }
+        if work_requests {
+            use game_autowork::requests::Asker;
+            use game_economy::{Goal, Goals};
+            let recipe = initial.physical.recipes.first().expect("work recipe").id;
+            let people = initial.people.iter().filter(|person| person.id >= 1000 && person.id % 2 == 1 && person.region.is_some()).map(|person| person.id).collect::<Vec<_>>();
+            let selected: std::collections::HashSet<_> = people.iter().copied().collect();
+            let goals = initial.goals.get_or_insert_with(|| Goals { retry_interval: 3, plan_inputs: false, people: vec![], events: vec![] });
+            goals.people.retain(|goal| goal.recipe != recipe || !selected.contains(&goal.person));
+            goals.people.extend(people.iter().map(|&person| Goal { person, recipe, priority: 1, target: 100, progress: 0, next_review: 0, enabled: true, recognize_help: false }));
+            let requests = initial.autowork.as_mut().and_then(|auto| auto.requests.as_mut()).expect("work requests enabled");
+            requests.askers.retain(|asker| !selected.contains(&asker.person));
+            requests.askers.extend(people.into_iter().map(|person| Asker { person, interval: 1, lifetime: 4, retry_after_offer: false }));
         }
         if encounter_reports {
             let knowledge = initial.knowledge.as_mut().expect("campaign knowledge");
@@ -242,6 +256,7 @@ fn main() {
         let mut local_positions = 0;
         let mut market_offers = 0;
         let mut market_pending = 0;
+        let mut work_requests_created = 0;
         for round in 0..=sample_count {
             let mut world = game_economy::Economy::compile(initial.clone()).unwrap();
             let started = std::time::Instant::now();
@@ -269,6 +284,10 @@ fn main() {
                 market_pending = market.offers.len();
                 assert!(market_offers > 0 && market_offers > market_pending as u64, "market workload must create and execute offers");
             }
+            if work_requests {
+                work_requests_created = state.autowork.as_ref().unwrap().requests.as_ref().unwrap().next_id - 1;
+                assert!(work_requests_created > 0, "work-request workload must create requests");
+            }
             if local_visits { assert!(local_positions > 0, "visit workload must move people"); }
             if encounter_reports {
                 let minds = &state.knowledge.as_ref().unwrap().minds;
@@ -293,7 +312,7 @@ fn main() {
         samples.sort_by(f64::total_cmp);
         let middle = samples.len() / 2;
         let median = if samples.len() % 2 == 0 { (samples[middle - 1] + samples[middle]) / 2.0 } else { samples[middle] };
-        println!("workers={workers} initial_people={people} final_people={final_population} living_people={living_people} history_stress={history_stress} local_visits={local_visits} local_positions={local_positions} market_workload={market_workload} market_offers={market_offers} market_pending={market_pending} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} samples={sample_count} started_jobs={started_jobs} delivered_jobs={delivered_jobs} social_relationships={social_relationships} directed_opinions={directed_opinions} taking_reports={taking_reports} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_pursuit={inquiry_pursuit} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} inquiry_assessments={inquiry_assessments} elapsed_min={:.6} elapsed_median={median:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[samples.len()-1], expected.unwrap());
+        println!("workers={workers} initial_people={people} final_people={final_population} living_people={living_people} history_stress={history_stress} local_visits={local_visits} local_positions={local_positions} market_workload={market_workload} market_offers={market_offers} market_pending={market_pending} work_requests={work_requests} work_requests_created={work_requests_created} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} samples={sample_count} started_jobs={started_jobs} delivered_jobs={delivered_jobs} social_relationships={social_relationships} directed_opinions={directed_opinions} taking_reports={taking_reports} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_pursuit={inquiry_pursuit} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} inquiry_assessments={inquiry_assessments} elapsed_min={:.6} elapsed_median={median:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[samples.len()-1], expected.unwrap());
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {
             for (name, measurement) in game_diagnostics::snapshot() {
