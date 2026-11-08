@@ -5671,6 +5671,61 @@ impl Economy {
             actions.push(action.clone());
         }
         actions.par_extend(practice_actions.par_iter().map(|row| row.2.clone()));
+        let mut paused_tool_workers: Vec<_> = if let Some(owner) = self
+            .tool_wear
+            .as_ref()
+            .filter(|owner| !owner.repairs.is_empty())
+        {
+            let mut tool_pickup_actors: Vec<_> = tool_pickup
+                .as_ref()
+                .map_or(&[][..], |plan| plan.actors.as_slice())
+                .par_iter()
+                .copied()
+                .collect();
+            if tool_pickup_actors
+                .par_windows(2)
+                .any(|pair| pair[0] > pair[1])
+            {
+                tool_pickup_actors.par_sort_unstable();
+            }
+            rates
+                .par_iter()
+                .filter(|(_, rate)| *rate > 0)
+                .filter_map(|(job, _)| {
+                    let work = self
+                        .physical
+                        .work()
+                        .binary_search_by_key(job, |row| row.job.id)
+                        .ok()
+                        .map(|index| &self.physical.work()[index])?;
+                    (work.phase == game_lot_runtime::Phase::Working
+                        && owner
+                            .repairs
+                            .binary_search_by_key(&work.job.worker, |choice| choice.person)
+                            .ok()
+                            .is_some_and(|i| owner.repairs[i].willing)
+                        && tool_pickup_actors.binary_search(&work.job.worker).is_err()
+                        && owner
+                            .select(
+                                &self.work_tools,
+                                &self.physical,
+                                &view,
+                                work.job.worker,
+                                work.job.recipe,
+                            )
+                            .is_none())
+                    .then_some(work.job.worker)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if paused_tool_workers
+            .par_windows(2)
+            .any(|pair| pair[0] > pair[1])
+        {
+            paused_tool_workers.par_sort_unstable();
+        }
         if let Some(plan) = tool_pickup {
             actions.extend(plan.actions);
             claim_uses.extend(plan.uses);
@@ -5731,11 +5786,18 @@ impl Economy {
                 &self.physical,
                 &self.people,
                 &busy,
+                &paused_tool_workers,
                 self.rules.max_work_hunger,
                 base,
             )?;
             game_economy_work::reserve(&mut busy, plan.iter().map(|row| row.0));
+            let mut repairing: Vec<_> = plan.par_iter().map(|row| row.0).collect();
+            if repairing.par_windows(2).any(|pair| pair[0] > pair[1]) {
+                repairing.par_sort_unstable();
+            }
+            game_economy_fatigue::pause_rates(&repairing, self.physical.work(), &mut rates);
             actions.par_extend(plan.par_iter().map(|row| row.2.clone()));
+            compact.par_extend(plan.par_iter().map(|row| row.2.id));
             plan
         } else {
             Vec::new()

@@ -47649,6 +47649,7 @@ fn identified_tool_wear_boundary_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     let repair = std::env::var_os("LEGACY_TOOL_REPAIRS").is_some();
+    let active_repair = std::env::var_os("LEGACY_ACTIVE_TOOL_REPAIRS").is_some();
     let mut initial = concentrated(count);
     initial.nutrition = None;
     initial.physical.recipes[0].ticks = 10;
@@ -47693,7 +47694,7 @@ fn identified_tool_wear_boundary_benchmark() {
             *holder = Container::new(
                 holder.place,
                 holder.capacity,
-                if repair {
+                if repair || active_repair {
                     vec![
                         Lot {
                             good: 2,
@@ -47723,7 +47724,7 @@ fn identified_tool_wear_boundary_benchmark() {
     initial.tool_wear = Some(crate::ToolWear {
         rules: vec![crate::ToolWearRule {
             good: 3,
-            durability: 10,
+            durability: if active_repair { 1 } else { 10 },
             wear: 1,
             repair_good: 2,
             repair_quantity: 1,
@@ -47735,7 +47736,7 @@ fn identified_tool_wear_boundary_benchmark() {
                 damage: u64::from(repair),
             })
             .collect(),
-        repairs: if repair {
+        repairs: if repair || active_repair {
             (1..=count)
                 .map(|person| crate::ToolRepairChoice {
                     person,
@@ -47760,6 +47761,7 @@ fn identified_tool_wear_boundary_benchmark() {
                 if !repair {
                     let started = world.advance().unwrap();
                     assert_eq!(started.started.len(), count as usize);
+                    if active_repair { world.advance().unwrap(); }
                 }
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
@@ -47772,9 +47774,9 @@ fn identified_tool_wear_boundary_benchmark() {
                         .unwrap()
                         .conditions
                         .iter()
-                        .all(|c| c.damage == u64::from(!repair))
+                        .all(|c| c.damage == u64::from(!repair && !active_repair))
                 );
-                if repair { assert_eq!(state.tool_wear.as_ref().unwrap().events.iter().filter(|event| event.accepted).count(), count as usize); }
+                if repair || active_repair { assert_eq!(state.tool_wear.as_ref().unwrap().events.iter().filter(|event| event.accepted).count(), count as usize); }
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 serde_json::to_vec(&state).unwrap().hash(&mut hash);
                 let actual = hash.finish();
@@ -47786,7 +47788,7 @@ fn identified_tool_wear_boundary_benchmark() {
             samples.remove(0);
             samples.sort_by(f64::total_cmp);
             eprintln!(
-                "workers={workers} tools={count} repair={repair} elapsed_median={:.6} fingerprint={:016x}",
+                "workers={workers} tools={count} repair={repair} active_repair={active_repair} elapsed_median={:.6} fingerprint={:016x}",
                 samples[1],
                 fingerprint.unwrap()
             );
@@ -48288,4 +48290,157 @@ fn watering_can_follow_personally_felt_fear_without_willingness_or_assumed_oblig
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].person, 1);
     assert!(events[0].accepted);
+}
+
+#[test]
+fn autonomous_worker_repairs_broken_tool_without_abandoning_active_work() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.physical.recipes[0].ticks = 4;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+        person.willing_to_work = person.id == 1;
+    }
+    initial.autowork.as_mut().unwrap().policies = vec![WorkPolicy {
+        person: 1,
+        recipe: 1,
+        enabled: true,
+        disregard_claims: false,
+    }];
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![
+            Lot {
+                good: 2,
+                quantity: 1,
+                item: None,
+                expires_at: None,
+            },
+            Lot {
+                good: 3,
+                quantity: 1,
+                item: Some(777),
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    initial.tool_wear = Some(crate::ToolWear {
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 1,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![crate::ToolCondition {
+            item: 777,
+            good: 3,
+            damage: 0,
+        }],
+        repairs: vec![crate::ToolRepairChoice {
+            person: 1,
+            item: 777,
+            willing: true,
+        }],
+        events: vec![],
+    });
+    let mut repair_fatigue_rules = fatigue_rules();
+    repair_fatigue_rules.rest_at = 19;
+    initial.fatigue = Some(Fatigue {
+        rules: repair_fatigue_rules,
+        people: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                world.advance().unwrap();
+                let before = world.snapshot();
+                let job = before.physical.work[0].job.id;
+                assert_eq!(before.physical.work[0].job.remaining, 3);
+                assert_eq!(before.tool_wear.as_ref().unwrap().conditions[0].damage, 1);
+                let mut resting_state = before.clone();
+                let fatigue = resting_state
+                    .fatigue
+                    .as_mut()
+                    .unwrap()
+                    .people
+                    .iter_mut()
+                    .find(|person| person.id == 1)
+                    .unwrap();
+                fatigue.fatigue = 19;
+                fatigue.resting = true;
+                let mut resting = Economy::compile(resting_state).unwrap();
+                resting.advance().unwrap();
+                let rested = resting.snapshot();
+                assert!(rested.tool_wear.as_ref().unwrap().events.is_empty());
+                assert_eq!(rested.physical.work[0].job.remaining, 3);
+                let mut unwilling_state = before.clone();
+                unwilling_state.people[0].willing_to_work = false;
+                let mut unwilling = Economy::compile(unwilling_state).unwrap();
+                assert_eq!(unwilling.advance().unwrap().abandoned, vec![job]);
+                assert!(unwilling.snapshot().tool_wear.unwrap().events.is_empty());
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let events = world.advance().unwrap();
+                restored.advance().unwrap();
+                assert!(events.abandoned.is_empty());
+                let repaired = world.snapshot();
+                assert_eq!(repaired, restored.snapshot());
+                assert_eq!(repaired.physical.work[0].job.id, job);
+                assert_eq!(repaired.physical.work[0].job.remaining, 3);
+                assert!(repaired.tool_wear.as_ref().unwrap().events[0].accepted);
+                assert_eq!(repaired.tool_wear.as_ref().unwrap().conditions[0].damage, 0);
+                let before_fatigue = before
+                    .fatigue
+                    .as_ref()
+                    .unwrap()
+                    .people
+                    .iter()
+                    .find(|person| person.id == 1)
+                    .unwrap()
+                    .fatigue;
+                let after_fatigue = repaired
+                    .fatigue
+                    .as_ref()
+                    .unwrap()
+                    .people
+                    .iter()
+                    .find(|person| person.id == 1)
+                    .unwrap()
+                    .fatigue;
+                assert_eq!(after_fatigue, before_fatigue + 2);
+                world.advance().unwrap();
+                let resumed = world.snapshot();
+                assert_eq!(resumed.physical.work[0].job.remaining, 2);
+                world.advance().unwrap();
+                let failed = world.snapshot();
+                assert_eq!(failed.physical.work[0].job.remaining, 2);
+                assert!(!failed.tool_wear.as_ref().unwrap().events[0].accepted);
+                failed
+            })
+    };
+    assert_eq!(run(1), run(4));
 }

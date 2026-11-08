@@ -179,6 +179,7 @@ impl ToolWear {
         physical: &Runtime,
         people: &[Person],
         busy: &[u64],
+        paused_workers: &[u64],
         max_hunger: u32,
         base: u64,
     ) -> Result<Vec<(u64, u64, Transaction)>, String> {
@@ -195,7 +196,8 @@ impl ToolWear {
                     || person.health == 0
                     || person.region.is_none()
                     || person.hunger > max_hunger
-                    || busy.binary_search(&choice.person).is_ok()
+                    || (busy.binary_search(&choice.person).is_ok()
+                        && paused_workers.binary_search(&choice.person).is_err())
                     || physical.item_place(choice.item) != Some(Place::Person(choice.person))
                 {
                     return None;
