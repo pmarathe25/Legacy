@@ -35,7 +35,8 @@ pub use game_economy_knowledge::{
 pub use game_economy_local_transport::goal::Preference as GoalFetchPreference;
 pub use game_economy_local_transport::walking::{
     Event as LocalWalkEvent, Location as LocalLocation, Outcome as LocalWalkOutcome,
-    Position as LocalPosition, Route as LocalWalkRoute, Walking as LocalWalking,
+    Position as LocalPosition, Preference as LocalWalkPreference, Route as LocalWalkRoute,
+    Walking as LocalWalking,
 };
 pub use game_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
@@ -629,6 +630,34 @@ impl Economy {
             .iter_mut()
             .find(|p| p.person == person)
             .ok_or("person has no local carrying preference")?
+            .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.local_transport = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Change one person's willingness to visit their preferred local endpoint.
+    pub fn set_local_visit_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .local_transport
+            .clone()
+            .ok_or("local transport is disabled")?;
+        let walking = next.walking.as_mut().ok_or("local walking is disabled")?;
+        std::sync::Arc::make_mut(&mut walking.preferences)
+            .iter_mut()
+            .find(|p| p.person == person)
+            .ok_or("person has no local visit preference")?
             .willing = willing;
         let epoch = self
             .epoch

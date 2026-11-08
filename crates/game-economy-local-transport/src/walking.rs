@@ -47,6 +47,21 @@ pub struct Request {
     pub destination: Endpoint,
 }
 
+/// A person's own standing inclination to visit a local endpoint.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Preference {
+    pub person: u64,
+    pub region: u64,
+    pub destination: Endpoint,
+    #[serde(default)]
+    pub willing: bool,
+    #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub pressure_threshold: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Outcome {
@@ -71,6 +86,8 @@ pub struct Event {
 pub struct Walking {
     pub routes: Arc<Vec<Route>>,
     #[serde(default)]
+    pub preferences: Arc<Vec<Preference>>,
+    #[serde(default)]
     pub positions: Vec<Position>,
     #[serde(default)]
     pub events: Vec<Event>,
@@ -79,6 +96,7 @@ impl Clone for Walking {
     fn clone(&self) -> Self {
         Self {
             routes: self.routes.clone(),
+            preferences: self.preferences.clone(),
             positions: self.positions.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
         }
@@ -87,6 +105,7 @@ impl Clone for Walking {
 impl Walking {
     pub fn normalize(&mut self) {
         Arc::make_mut(&mut self.routes).par_sort_unstable_by_key(|r| (r.region, r.from, r.to));
+        Arc::make_mut(&mut self.preferences).par_sort_unstable_by_key(|p| p.person);
         self.positions.par_sort_unstable_by_key(|p| p.person);
     }
 
@@ -113,6 +132,21 @@ impl Walking {
                     || r.ticks == 0
                     || !endpoint(r.region, r.from)
                     || !endpoint(r.region, r.to)
+            })
+            || self
+                .preferences
+                .par_windows(2)
+                .any(|p| p[0].person >= p[1].person)
+            || self.preferences.par_iter().any(|p| {
+                people
+                    .binary_search_by_key(&p.person, |row| row.id)
+                    .is_err()
+                    || !endpoint(p.region, p.destination)
+                    || p.pressured_by.is_some() != p.pressure_threshold.is_some()
+                    || p.pressure_threshold == Some(0)
+                    || p.pressured_by.is_some_and(|id| {
+                        id == p.person || people.binary_search_by_key(&id, |row| row.id).is_err()
+                    })
             })
             || self
                 .positions
@@ -334,14 +368,14 @@ impl Walking {
         }
         Ok(Walking {
             routes: self.routes.clone(),
+            preferences: self.preferences.clone(),
             positions,
             events,
         })
     }
 }
 
-/// Choose a destination from each person's existing carrying preference.
-/// This does not inspect the remote endpoint's current stock.
+/// Choose independently motivated destinations without inspecting remote stock.
 pub fn personal_requests(
     owner: &LocalTransport,
     walking: &Walking,
@@ -357,9 +391,13 @@ pub fn personal_requests(
                 .policies
                 .par_iter()
                 .any(|p| p.pressure_threshold.is_some())
+                || walking
+                    .preferences
+                    .par_iter()
+                    .any(|p| p.pressure_threshold.is_some())
         })
         .map(Opinions::index);
-    owner
+    let mut requests: Vec<_> = owner
         .policies
         .par_iter()
         .filter_map(|policy| {
@@ -394,6 +432,13 @@ pub fn personal_requests(
             };
             match walking.location(person.id, policy.region) {
                 Location::At { endpoint, .. } if endpoint == destination => None,
+                Location::At { endpoint, .. }
+                    if walking
+                        .route(policy.region, endpoint, destination)
+                        .is_none() =>
+                {
+                    None
+                }
                 Location::Walking { to, .. } if to != destination => None,
                 _ => Some(Request {
                     person: person.id,
@@ -402,7 +447,59 @@ pub fn personal_requests(
                 }),
             }
         })
-        .collect()
+        .collect();
+    let visits: Vec<_> = walking
+        .preferences
+        .par_iter()
+        .filter_map(|preference| {
+            let person = &people[people
+                .binary_search_by_key(&preference.person, |p| p.id)
+                .ok()?];
+            if person.controlled
+                || person.health == 0
+                || person.region != Some(preference.region)
+                || busy.binary_search(&person.id).is_ok()
+                || requests
+                    .binary_search_by_key(&person.id, |request| request.person)
+                    .is_ok()
+            {
+                return None;
+            }
+            let pressured = preference
+                .pressured_by
+                .zip(preference.pressure_threshold)
+                .is_some_and(|(other, threshold)| {
+                    feelings.as_ref().is_some_and(|index| {
+                        let (fear, obligation) = index.feelings(person.id, other);
+                        fear.saturating_add(obligation) >= threshold
+                    })
+                });
+            if !preference.willing && !pressured {
+                return None;
+            }
+            match walking.location(person.id, preference.region) {
+                Location::At { endpoint, .. } if endpoint == preference.destination => None,
+                Location::At { endpoint, .. }
+                    if walking
+                        .route(preference.region, endpoint, preference.destination)
+                        .is_none() =>
+                {
+                    None
+                }
+                Location::Walking { to, .. } if to != preference.destination => None,
+                _ => Some(Request {
+                    person: person.id,
+                    region: preference.region,
+                    destination: preference.destination,
+                }),
+            }
+        })
+        .collect();
+    if !visits.is_empty() {
+        requests.par_extend(visits);
+        requests.par_sort_unstable_by_key(|request| request.person);
+    }
+    requests
 }
 
 #[cfg(test)]
@@ -425,6 +522,7 @@ mod tests {
     }
     fn model() -> Walking {
         Walking {
+            preferences: vec![].into(),
             routes: vec![Route {
                 region: 1,
                 from: Endpoint::Stock,

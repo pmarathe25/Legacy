@@ -41,6 +41,29 @@ fn local_walking_limits_store_observation_and_physical_pickup() {
 }
 
 #[test]
+fn authored_local_visit_is_an_independent_personal_choice() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-local-walking.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    world.set_local_carrying_choice(2, false).unwrap();
+    world.set_local_visit_choice(2, true).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let walking = state.local_transport.unwrap().walking.unwrap();
+    assert_eq!(
+        walking.location(2, 1),
+        game_economy::LocalLocation::At {
+            region: 1,
+            endpoint: game_economy::LocalEndpoint::Store { id: 1 },
+        }
+    );
+}
+
+#[test]
 fn authored_text_is_written_transferred_and_read_without_automatic_agreement() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

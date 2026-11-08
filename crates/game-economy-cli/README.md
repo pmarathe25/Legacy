@@ -178,7 +178,7 @@ Construction blueprints may specify `salvage` up to the kit `quantity`. Destroye
 
 Try this in `cargo run -p game-economy-cli -- --player content/scenarios/economy-salvage.toml`: use `build-site 1`, `destroy-site 1`, then `view` to inspect the local debris and its good ID. Another person may independently try to recover the same material.
 
-The same scenario includes two named local stores. `view` shows their contents; `take-store STORE GOOD QUANTITY` and `put-store STORE GOOD QUANTITY` move goods through the ruler's own inventory on separate ticks. Scenario `[[local_transport.stores]]` entries define the stores, while optional `[[local_transport.policies]]` entries define individual carriers and their source and destination. In the administrative runner, `carry-local PERSON on|off` changes a person's willingness.
+The same scenario includes two named local stores. `view` shows their contents; `take-store STORE GOOD QUANTITY` and `put-store STORE GOOD QUANTITY` move goods through the ruler's own inventory on separate ticks. Scenario `[[local_transport.stores]]` entries define the stores, while optional `[[local_transport.policies]]` entries define individual carriers and their source and destination. In the administrative runner, `carry-local PERSON on|off` changes a person's carrying willingness. Optional `[[local_transport.walking.preferences]]` entries express a person's independent inclination to visit an endpoint; `visit-local PERSON on|off` changes that inclination in the administrative runner.
 
 Optional `[[local_transport.goal_fetchers]]` entries enable individuals to fetch locally observed supplies for their own current work goals. The administrative command `fetch-goal PERSON on|off` changes that individual preference; it does not create a goal or guarantee the person acts.
 
@@ -257,3 +257,7 @@ Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-tool-production.toml`, then `step 6` and `tool-condition` to see a newly produced tool receive its own identity and undamaged condition. It is delivered as a physical item on the usual following boundary.
 
 Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-irrigation.toml`; `view` shows local field moisture. Use `farm 1` to plant, then `water-field 1 1 respect` to attempt watering from the finite regional supply; `disregard` allows an attempt despite a claim.
+
+Set `LEGACY_LOCAL_VISITS=1` on the mixed campaign benchmark to add an authored visit preference for one quarter of initially autonomous regional residents and a local store in each region. The reported position count confirms that walking occurred; this option changes the scenario and fingerprint.
+
+On a Ryzen 5 7600, the 10,000-person, 12-tick local-visit workload with reproduction disabled moved 2,500 people and started 12,406 jobs. One and six workers had median times of 299 ms and 194 ms respectively, with identical state fingerprints. This is a short, workload-specific measurement.

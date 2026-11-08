@@ -170,3 +170,9 @@ region = 1
 from = { kind = "store", id = 2 }
 to = { kind = "stock" }
 ticks = 2
+
+[[local_transport.walking.preferences]]
+person = 2
+region = 1
+destination = { kind = "store", id = 1 }
+willing = false

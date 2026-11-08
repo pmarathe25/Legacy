@@ -1252,6 +1252,7 @@ fn people_at_a_local_store_can_read_carried_pages() {
         policies: vec![],
         events: vec![],
         walking: Some(LocalWalking {
+            preferences: vec![].into(),
             routes: vec![].into(),
             positions: vec![LocalPosition {
                 person: 2,
@@ -5196,6 +5197,7 @@ fn local_walking_fixture() -> State {
     let source = LocalEndpoint::Store { id: 1 };
     let destination = LocalEndpoint::Store { id: 2 };
     state.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        preferences: vec![].into(),
         routes: vec![
             LocalWalkRoute {
                 region: 1,
@@ -5695,6 +5697,208 @@ fn hungry_people_can_take_visible_food_at_their_local_store() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_person_can_choose_to_visit_and_discover_food_without_a_carrying_task() {
+    let mut initial = local_walking_fixture();
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 1 },
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    }]
+    .into();
+    initial.people[1].hunger = 5;
+    initial.people[1].seek_meals = true;
+    let store = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| container.place == Place::Inventory(1))
+        .unwrap();
+    *store = Container::new(
+        store.place,
+        store.capacity,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let opening = world.snapshot();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    world.set_local_visit_choice(2, false).unwrap();
+                    world.advance().unwrap();
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .positions,
+                        opening
+                            .local_transport
+                            .as_ref()
+                            .unwrap()
+                            .walking
+                            .as_ref()
+                            .unwrap()
+                            .positions
+                    );
+                    world.set_local_visit_choice(2, true).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap();
+                    assert!(holder.lots.iter().all(|lot| lot.good != 1));
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(2))
+                        .unwrap();
+                    assert!(
+                        holder
+                            .lots
+                            .iter()
+                            .any(|lot| lot.good == 1 && lot.quantity == 1)
+                    );
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_person_may_visit_from_personal_fear_without_willingness() {
+    let mut initial = local_walking_fixture();
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 1 },
+        willing: false,
+        pressured_by: Some(1),
+        pressure_threshold: Some(3),
+    }]
+    .into();
+    let run = |fear| {
+        let mut state = initial.clone();
+        state.opinions.as_mut().unwrap().records = vec![Opinion {
+            observer: 2,
+            target: 1,
+            trust: 0,
+            fear,
+            obligation: 0,
+            affinity: 0,
+        }];
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        world
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+    };
+    assert!(run(0).is_empty());
+    assert_eq!(run(5)[0].outcome, LocalWalkOutcome::Progressed);
+}
+
+#[test]
+fn an_unreachable_visit_does_not_prevent_seeking_local_food() {
+    let mut initial = local_walking_fixture();
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    let walking = transport.walking.as_mut().unwrap();
+    walking.routes = vec![].into();
+    walking.preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 1 },
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    }]
+    .into();
+    initial.people[1].hunger = 5;
+    initial.people[1].seek_meals = true;
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|container| container.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 1,
+            expires_at: Some(10),
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|container| container.place == Place::Person(2))
+        .unwrap();
+    assert!(
+        holder
+            .lots
+            .iter()
+            .any(|lot| lot.good == 1 && lot.quantity == 1)
+    );
+    assert!(
+        state
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .is_empty()
+    );
 }
 
 #[test]
@@ -6413,6 +6617,7 @@ fn local_walking_and_contended_pickup_benchmark() {
         .unwrap_or(1);
     let mut initial = concentrated_local_carrying(count);
     initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        preferences: vec![].into(),
         routes: vec![LocalWalkRoute {
             region: 1,
             from: LocalEndpoint::Stock,
