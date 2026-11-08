@@ -150,7 +150,8 @@ use rayon::prelude::*;
 pub use state::{Agreements, Immortal, Person, Rules, State};
 use std::collections::HashSet;
 pub use writing::{
-    Author as WritingAuthor, Literacy, Page as WrittenPage, Study as WritingStudy, Writing,
+    Author as WritingAuthor, Literacy, Page as WrittenPage, Practice as WritingPractice,
+    Study as WritingStudy, Writing,
 };
 pub struct Economy {
     physical: Runtime,
@@ -259,6 +260,7 @@ pub struct Draft {
     written_item: Option<u64>,
     page_given: Option<bool>,
     page_read: Option<bool>,
+    writing_practiced: Option<bool>,
     taking_outcome: Option<TakingOutcome>,
     hunting_births: Vec<HuntingPolicy>,
     animal_care_births: Vec<AnimalCarePolicy>,
@@ -1194,6 +1196,32 @@ impl Economy {
             .cloned()
             .collect())
     }
+    /// A person's own literacy and configured writing-practice progress.
+    pub fn writing_progress(
+        &self,
+        person: u64,
+    ) -> Result<(Vec<Literacy>, Option<WritingPractice>), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |row| row.id)
+            .is_err()
+        {
+            return Err("unknown person".into());
+        }
+        let writing = self.writing.as_ref().ok_or("writing is disabled")?;
+        let literacy = writing
+            .literacy
+            .iter()
+            .filter(|row| row.person == person)
+            .cloned()
+            .collect();
+        let practice = writing
+            .practice
+            .binary_search_by_key(&person, |row| row.person)
+            .ok()
+            .map(|index| writing.practice[index].clone());
+        Ok((literacy, practice))
+    }
     /// Write a known or invoked food claim using carried paper and ink.
     pub fn write_food(
         &mut self,
@@ -1249,6 +1277,19 @@ impl Economy {
         let read = draft.page_read.unwrap_or(false);
         self.commit(draft)?;
         Ok(read)
+    }
+    /// Attempt one configured practice session using real paper and ink.
+    pub fn practice_writing(&mut self, person: u64, script: u32) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::PracticeWriting { person, script }),
+        )?;
+        let practiced = draft.writing_practiced.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(practiced)
     }
     /// Attempt to feed a nearby animal with real carried food.
     pub fn feed_animal(
@@ -2494,6 +2535,7 @@ impl Economy {
                                 | game_economy_interaction::PhysicalChoice::Escape { .. }
                                 | game_economy_interaction::PhysicalChoice::ReadPage { .. }
                                 | game_economy_interaction::PhysicalChoice::WriteFood { .. }
+                                | game_economy_interaction::PhysicalChoice::PracticeWriting { .. }
                         ) || matches!(
                             row,
                             game_economy_interaction::PhysicalChoice::AskFood { .. }
@@ -3107,6 +3149,29 @@ impl Economy {
             });
         if !auto_authors.is_empty() {
             game_economy_work::reserve(&mut busy, auto_authors.iter().map(|row| row.0));
+        }
+        let auto_practice: Vec<_> = self.writing.as_ref().map_or_else(Vec::new, |owner| {
+            owner
+                .practice
+                .par_iter()
+                .filter_map(|policy| {
+                    let person = &self.people
+                        [writing::ordered_index(&self.people, policy.person, |row| row.id)?];
+                    (policy.enabled
+                        && policy.progress < policy.required
+                        && policy.retry_at <= tick
+                        && !person.controlled
+                        && person.health > 0
+                        && person.region.is_some()
+                        && busy.binary_search(&person.id).is_err()
+                        && owner.can_read(person.id, policy.script)
+                        && !owner.can_write(person.id, policy.script))
+                    .then_some((person.id, policy.script))
+                })
+                .collect()
+        });
+        if !auto_practice.is_empty() {
+            game_economy_work::reserve(&mut busy, auto_practice.iter().map(|row| row.0));
         }
         if let Some(owner) = next_confinement
             .as_mut()
@@ -4975,9 +5040,11 @@ impl Economy {
         let mut page_to_write = None;
         let mut page_to_read = None;
         let mut manual_page_action = None;
+        let mut manual_writing_practice = None;
         let mut writing_output = Vec::new();
         if let Some(
             choice @ (game_economy_interaction::PhysicalChoice::WriteFood { .. }
+            | game_economy_interaction::PhysicalChoice::PracticeWriting { .. }
             | game_economy_interaction::PhysicalChoice::ReadPage { .. }
             | game_economy_interaction::PhysicalChoice::GivePage { .. }),
         ) = player_transfer
@@ -5004,6 +5071,44 @@ impl Economy {
                 .ok_or("action count overflow")?;
             action.checked_add(1).ok_or("action count overflow")?;
             match choice {
+                game_economy_interaction::PhysicalChoice::PracticeWriting { script, .. } => {
+                    let policy = owner
+                        .practice
+                        .binary_search_by_key(&person, |row| row.person)
+                        .ok()
+                        .map(|index| &owner.practice[index])
+                        .ok_or("person has no writing practice preference")?;
+                    if policy.script != script
+                        || policy.progress >= policy.required
+                        || !owner.can_read(person, script)
+                        || owner.can_write(person, script)
+                    {
+                        return Err("writing practice requires an incomplete known script".into());
+                    }
+                    manual_page_action = Some(Transaction {
+                        id: action,
+                        movements: vec![
+                            game_lots::Movement {
+                                id: 1,
+                                from: game_lots::Place::Person(person),
+                                to: None,
+                                good: owner.paper,
+                                quantity: owner.paper_quantity,
+                                item: None,
+                            },
+                            game_lots::Movement {
+                                id: 2,
+                                from: game_lots::Place::Person(person),
+                                to: None,
+                                good: owner.ink,
+                                quantity: owner.ink_quantity,
+                                item: None,
+                            },
+                        ],
+                        creations: vec![],
+                    });
+                    manual_writing_practice = Some((person, script, action));
+                }
                 game_economy_interaction::PhysicalChoice::WriteFood {
                     script,
                     region,
@@ -5164,6 +5269,62 @@ impl Economy {
                 .collect();
             writing_output.par_extend(auto_pages.par_iter().map(|row| row.0));
         }
+        let practice_actions: Vec<_> = if auto_practice.is_empty() {
+            Vec::new()
+        } else {
+            let owner = self.writing.as_ref().expect("practice requires writing");
+            let first = action_base
+                .checked_add(
+                    salvage_plan
+                        .as_ref()
+                        .map_or(0, |plan| plan.actions.len() as u64),
+                )
+                .and_then(|id| {
+                    id.checked_add(u64::from(
+                        manual_animal_feed.is_some()
+                            || manual_page_action.is_some()
+                            || page_to_write.is_some(),
+                    ))
+                })
+                .and_then(|id| id.checked_add(auto_pages.len() as u64))
+                .ok_or("action count overflow")?;
+            first
+                .checked_add(auto_practice.len() as u64)
+                .ok_or("action count overflow")?;
+            auto_practice
+                .par_iter()
+                .enumerate()
+                .map(|(index, &(person, script))| {
+                    let id = first + index as u64;
+                    (
+                        person,
+                        script,
+                        Transaction {
+                            id,
+                            movements: vec![
+                                game_lots::Movement {
+                                    id: 1,
+                                    from: game_lots::Place::Person(person),
+                                    to: None,
+                                    good: owner.paper,
+                                    quantity: owner.paper_quantity,
+                                    item: None,
+                                },
+                                game_lots::Movement {
+                                    id: 2,
+                                    from: game_lots::Place::Person(person),
+                                    to: None,
+                                    good: owner.ink,
+                                    quantity: owner.ink_quantity,
+                                    item: None,
+                                },
+                            ],
+                            creations: vec![],
+                        },
+                    )
+                })
+                .collect()
+        };
         game_economy_claims::include_care_farming!(claim_uses, care, farming);
         #[cfg(feature = "profile")]
         {
@@ -5182,6 +5343,7 @@ impl Economy {
         if let Some(action) = &manual_page_action {
             actions.push(action.clone());
         }
+        actions.par_extend(practice_actions.par_iter().map(|row| row.2.clone()));
         if let Some(plan) = tool_pickup {
             actions.extend(plan.actions);
             claim_uses.extend(plan.uses);
@@ -5502,6 +5664,51 @@ impl Economy {
                 .ok()
                 .is_some_and(|i| physical.events().physical_actions[i].accepted)
         });
+        let writing_practiced = manual_writing_practice.map(|_| page_action_accepted);
+        if !practice_actions.is_empty() || manual_writing_practice.is_some() {
+            let mut attempts: Vec<_> = practice_actions
+                .par_iter()
+                .map(|(person, script, action)| (*person, *script, action.id))
+                .chain(manual_writing_practice.into_par_iter())
+                .collect();
+            attempts.par_sort_unstable_by_key(|row| row.0);
+            let owner = writing.as_mut().expect("practice requires writing");
+            std::sync::Arc::make_mut(&mut owner.practice)
+                .par_iter_mut()
+                .for_each(|policy| {
+                    let Ok(index) = attempts.binary_search_by_key(&policy.person, |row| row.0)
+                    else {
+                        return;
+                    };
+                    let action = attempts[index].2;
+                    let accepted = physical
+                        .events()
+                        .physical_actions
+                        .binary_search_by_key(&action, |row| row.id)
+                        .ok()
+                        .is_some_and(|i| physical.events().physical_actions[i].accepted);
+                    if accepted {
+                        policy.progress += 1;
+                    } else {
+                        policy.retry_at = tick.saturating_add(8);
+                    }
+                });
+            let learned: Vec<_> = owner
+                .practice
+                .par_iter()
+                .filter(|row| row.progress == row.required)
+                .map(|row| (row.person, row.script))
+                .collect();
+            if !learned.is_empty() {
+                std::sync::Arc::make_mut(&mut owner.literacy)
+                    .par_iter_mut()
+                    .for_each(|row| {
+                        if learned.binary_search(&(row.person, row.script)).is_ok() {
+                            row.write = true;
+                        }
+                    });
+            }
+        }
         let written_item = page_to_write
             .as_ref()
             .filter(|_| page_action_accepted)
@@ -7123,6 +7330,7 @@ impl Economy {
             written_item,
             page_given,
             page_read,
+            writing_practiced,
             taking_outcome,
             hunting_births,
             animal_care_births,

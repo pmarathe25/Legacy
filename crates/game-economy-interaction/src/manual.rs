@@ -122,6 +122,10 @@ pub enum PhysicalChoice {
         life: Option<u64>,
         claimed_food: Option<u32>,
     },
+    PracticeWriting {
+        person: u64,
+        script: u32,
+    },
     ReadPage {
         person: u64,
         item: u64,
@@ -183,6 +187,7 @@ impl PhysicalChoice {
             | Self::AskFood { person, .. }
             | Self::AskHaul { person, .. }
             | Self::WriteFood { person, .. }
+            | Self::PracticeWriting { person, .. }
             | Self::ReadPage { person, .. }
             | Self::GivePage { person, .. }
             | Self::TreatOther { person, .. }

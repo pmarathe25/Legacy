@@ -7710,6 +7710,91 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
 }
 
 #[test]
+fn writing_practice_consumes_real_materials_and_learns_independently() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, other_has_ink: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-writing-practice.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                state.gathering = None;
+                let writing = state.writing.as_mut().unwrap();
+                let (paper, ink) = (writing.paper, writing.ink);
+                if !other_has_ink {
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == game_lots::Place::Person(2))
+                        .unwrap();
+                    let lots = holder
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good != ink)
+                        .cloned()
+                        .collect();
+                    *holder =
+                        game_lots::Container::new(holder.place, holder.capacity, lots).unwrap();
+                }
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                assert!(Player::new(&mut world).practice_writing(1).unwrap());
+                let (literacy, progress) = Player::new(&mut world).writing_progress().unwrap();
+                assert!(!literacy[0].write);
+                assert_eq!(progress.unwrap().progress, 1);
+                let first = world.snapshot();
+                let practice = &first.writing.as_ref().unwrap().practice;
+                assert_eq!(practice[0].progress, 1);
+                assert_eq!(practice[1].progress, u32::from(other_has_ink));
+                if !other_has_ink {
+                    assert!(practice[1].retry_at > first.physical.custody.tick);
+                    assert!(
+                        first
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place == game_lots::Place::Person(2))
+                            .unwrap()
+                            .lots
+                            .iter()
+                            .any(|lot| lot.good == paper && lot.quantity == 2)
+                    );
+                }
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(Player::new(&mut world).practice_writing(1).unwrap());
+                assert!(Player::new(&mut restored).practice_writing(1).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let after = world.snapshot();
+                let writing = after.writing.as_ref().unwrap();
+                assert!(writing.can_write(1, 1));
+                assert!(Player::new(&mut world).writing_progress().unwrap().0[0].write);
+                assert_eq!(writing.can_write(2, 1), other_has_ink);
+                assert!(writing.pages.is_empty());
+                assert!(Player::new(&mut world).practice_writing(1).is_err());
+                after
+            })
+    };
+    for other_has_ink in [false, true] {
+        assert_eq!(run(1, other_has_ink), run(4, other_has_ink));
+    }
+}
+
+#[test]
 fn repeated_personal_testimony_reinforces_recall_without_refreshing_the_claim() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -8224,6 +8309,7 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
                 });
                 *holder = game_lots::Container::new(holder.place, holder.capacity, lots).unwrap();
                 state.writing = Some(game_economy::Writing {
+                    practice: Default::default(),
                     study: Default::default(),
                     authors: Default::default(),
                     paper,

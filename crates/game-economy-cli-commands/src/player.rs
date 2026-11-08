@@ -44,7 +44,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 "taking-watch PERSON [on|off] | taking-report|taking-relay RECIPIENT ACTOR truthful|transferred|unavailable|resisted|conflict|off | taking-details RECIPIENT ACTOR TARGET|same GOOD|same QUANTITY|same | taking-belief unassessed|believe|doubt | taking-compare match|different off|TRUST AFFINITY FEAR OBLIGATION | taking-reports"
             );
             println!(
-                "pages | write-food SCRIPT REGION current|LIFE remembered|FOOD | give-page PERSON ITEM | read-page ITEM"
+                "writing | pages | write-food SCRIPT REGION current|LIFE remembered|FOOD | give-page PERSON ITEM | read-page ITEM | practice-writing SCRIPT"
             );
         }
         ["view"] => {
@@ -216,6 +216,11 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             );
         }
         ["pages"] => println!("pages={:?}", player.held_pages()?),
+        ["writing"] => println!("writing={:?}", player.writing_progress()?),
+        ["practice-writing", script] => println!(
+            "practiced={}",
+            player.practice_writing(script.parse().map_err(|_| "invalid script")?)?
+        ),
         ["write-food", script, region, life, claim] => {
             let life = if *life == "current" {
                 None

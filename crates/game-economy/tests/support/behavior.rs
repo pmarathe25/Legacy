@@ -365,6 +365,82 @@ fn independent_written_circulation_benchmark() {
         });
 }
 
+fn independent_writing_practice(count: u64) -> State {
+    let mut state = independent_authors(count);
+    let writing = state.writing.as_mut().unwrap();
+    writing.authors = vec![].into();
+    for row in writing.literacy_mut() {
+        row.read = true;
+        row.write = false;
+    }
+    writing.practice = (1..=count)
+        .map(|person| WritingPractice {
+            person,
+            script: 1,
+            required: 1,
+            progress: 0,
+            enabled: true,
+            retry_at: 0,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    state
+}
+
+#[test]
+fn independent_writing_practice_matches_across_worker_counts() {
+    let initial = independent_writing_practice(2048);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert!(writing.practice.iter().all(|row| row.progress == 1));
+                assert!(writing.literacy.iter().all(|row| row.write));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_writing_practice_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000u64);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(independent_writing_practice(count)).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            let elapsed = start.elapsed().as_secs_f64();
+            assert!(
+                world
+                    .snapshot()
+                    .writing
+                    .unwrap()
+                    .practice
+                    .iter()
+                    .all(|row| row.progress == 1)
+            );
+            println!("writers={count} workers={workers} seconds={elapsed:.6}");
+        });
+}
+
 fn independent_authors(count: u64) -> State {
     let mut state = independent_readers(count);
     for container in &mut state.physical.custody.containers {
@@ -632,6 +708,7 @@ fn independent_readers(count: u64) -> State {
             .collect(),
     });
     state.writing = Some(Writing {
+        practice: Default::default(),
         study: Default::default(),
         authors: Default::default(),
         paper: 1,

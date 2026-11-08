@@ -34,6 +34,23 @@ pub struct Writing {
     pub authors: Arc<Vec<Author>>,
     #[serde(default)]
     pub study: Arc<Vec<Study>>,
+    #[serde(default)]
+    pub practice: Arc<Vec<Practice>>,
+}
+
+/// A person's chosen amount of physical practice toward writing a known script.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Practice {
+    pub person: u64,
+    pub script: u32,
+    pub required: u32,
+    #[serde(default)]
+    pub progress: u32,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub retry_at: u64,
 }
 
 /// A personal decision to learn a script by observing a literate encounter partner.
@@ -101,6 +118,7 @@ impl Writing {
         Arc::make_mut(&mut self.reads).par_sort_unstable();
         Arc::make_mut(&mut self.authors).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.study).par_sort_unstable_by_key(|row| (row.person, row.script));
+        Arc::make_mut(&mut self.practice).par_sort_unstable_by_key(|row| row.person);
         let tick = physical.custody.tick;
         if self.paper == self.ink
             || self.paper == self.page
@@ -141,6 +159,17 @@ impl Writing {
                     || row.required == 0
                     || row.progress > row.required
                     || (row.progress == row.required && !self.can_read(row.person, row.script))
+            })
+            || self
+                .practice
+                .par_windows(2)
+                .any(|pair| pair[0].person == pair[1].person)
+            || self.practice.par_iter().any(|row| {
+                !people.contains(&row.person)
+                    || row.script == 0
+                    || row.required == 0
+                    || row.progress > row.required
+                    || (row.progress == row.required && !self.can_write(row.person, row.script))
             })
             || self.reads.par_iter().any(|&(person, item)| {
                 !people.contains(&person) || item == 0 || item >= self.next_item

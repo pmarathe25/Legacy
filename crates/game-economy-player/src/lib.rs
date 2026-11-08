@@ -968,6 +968,20 @@ impl<'a> Player<'a> {
     pub fn read_page(&mut self, item: u64) -> Result<bool, String> {
         self.world.read_page(self.current()?, item)
     }
+    pub fn practice_writing(&mut self, script: u32) -> Result<bool, String> {
+        self.world.practice_writing(self.current()?, script)
+    }
+    pub fn writing_progress(
+        &self,
+    ) -> Result<
+        (
+            Vec<game_economy::Literacy>,
+            Option<game_economy::WritingPractice>,
+        ),
+        String,
+    > {
+        self.world.writing_progress(self.current()?)
+    }
     pub fn invoke(&mut self, lives: &[u64]) -> Result<(), String> {
         self.current()?;
         self.world.invoke_lives(lives)
