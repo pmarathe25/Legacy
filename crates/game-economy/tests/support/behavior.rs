@@ -340,6 +340,16 @@ fn independent_autonomous_authors_benchmark() {
             let start = std::time::Instant::now();
             world.advance().unwrap();
             let seconds = start.elapsed().as_secs_f64();
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (phase, measurement) in game_diagnostics::snapshot() {
+                    println!(
+                        "phase={phase} calls={} milliseconds={:.3}",
+                        measurement.calls,
+                        measurement.nanoseconds as f64 / 1_000_000.0
+                    );
+                }
+            }
             assert_eq!(
                 world.snapshot().writing.unwrap().pages.len(),
                 count as usize

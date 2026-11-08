@@ -12,6 +12,8 @@ The writing owner's literacy, page, and reading-history collections share immuta
 
 The ignored `independent_autonomous_readers_benchmark` measures one full economy boundary with `LEGACY_PEOPLE` independent readers; `LEGACY_WORKERS` selects concurrency. It excludes world construction and reports the median of three warmed runs.
 
+The ignored `independent_autonomous_authors_benchmark` measures one boundary in which `LEGACY_PEOPLE` people independently consume materials and create identified pages. `LEGACY_WORKERS` selects concurrency. Repeat the benchmark to assess timing variation; a `profile` build with `LEGACY_PROFILE` set also prints the instrumented phase timings.
+
 Giving policies and responses are shared immutable collections across staged generations. Rust callers constructing `Giving` can convert vectors into the shared fields; callers changing them use `policies_mut()` or `responses_mut()`, which detach on write. Their serialized representation remains ordinary arrays.
 
 Regional exposure uses finite shelter and authored seasons; seasonal planting, growth and harvest rules affect actual fields. Travelers face source-region exposure. Shelter allocation and crop growth are deterministic across worker counts and saves.

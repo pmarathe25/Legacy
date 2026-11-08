@@ -7,7 +7,19 @@ mod fan_out;
 mod grouped_sources;
 mod independent;
 mod independent_transfer;
+mod local_creation;
 mod partitioned;
+
+/// Try independent local two-input, identified-output transactions after the
+/// custody owner has validated identities. `None` selects the general arbiter.
+pub fn prepare_local_creations(
+    state: &State,
+    instance: u64,
+    transactions: &[Transaction],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
+    local_creation::prepare(state, instance, transactions, advance)
+}
 
 /// Attempt a disjoint flat transfer batch; `None` requests the general arbiter.
 pub fn prepare_flat_transfers(
