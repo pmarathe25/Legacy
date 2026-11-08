@@ -32,7 +32,9 @@ pub use game_economy_goals::{Dream, Dreams, Goal, Goals, Learning};
 pub use game_economy_knowledge::{
     Knowledge, Misreport, PersonReport, RecallTrace, Reporting, Retention, SeenPerson,
 };
-pub use game_economy_local_transport::goal::Preference as GoalFetchPreference;
+pub use game_economy_local_transport::goal::{
+    Preference as GoalFetchPreference, SearchPreference as GoalSearchPreference,
+};
 pub use game_economy_local_transport::walking::{
     Event as LocalWalkEvent, Location as LocalLocation, Outcome as LocalWalkOutcome,
     Position as LocalPosition, Preference as LocalWalkPreference, Route as LocalWalkRoute,
@@ -658,6 +660,34 @@ impl Economy {
             .iter_mut()
             .find(|p| p.person == person)
             .ok_or("person has no local visit preference")?
+            .willing = willing;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        self.local_transport = Some(next);
+        self.epoch = epoch;
+        Ok(())
+    }
+    /// Change one person's willingness to search their selected local store.
+    pub fn set_goal_search_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        if self
+            .people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .is_none_or(|i| self.people[i].health == 0)
+        {
+            return Err("person must be alive".into());
+        }
+        let mut next = self
+            .local_transport
+            .clone()
+            .ok_or("local transport is disabled")?;
+        next.goal_fetchers
+            .iter_mut()
+            .find(|p| p.person == person)
+            .and_then(|preference| preference.search.as_mut())
+            .ok_or("person has no local goal search preference")?
             .willing = willing;
         let epoch = self
             .epoch
@@ -2484,6 +2514,15 @@ impl Economy {
         if let Some(local) = &mut state.local_transport {
             local.normalize();
             local.validate(&ids, &goods, &view, physical.tick())?;
+            if local.goal_fetchers.par_iter().any(|preference| {
+                preference
+                    .search
+                    .as_ref()
+                    .and_then(|search| search.active_recipe)
+                    .is_some_and(|recipe| !physical.recipes().iter().any(|row| row.id == recipe))
+            }) {
+                return Err("local goal search references an unknown recipe".into());
+            }
             if let Some(walking) = &local.walking {
                 let regions: HashSet<_> = view
                     .containers
@@ -3728,13 +3767,19 @@ impl Economy {
         };
         let mut early_goal_work = None;
         let mut early_goal_needs = None;
+        let mut local_search_updates = Vec::new();
         let walking_next = if let Some((owner, walking)) = self
             .local_transport
             .as_ref()
             .and_then(|owner| owner.walking.as_ref().map(|walking| (owner, walking)))
         {
-            let (visit_blocked, goal_walks) = if (!walking.positions.is_empty()
-                || !walking.preferences.is_empty())
+            let has_goal_search = owner
+                .goal_fetchers
+                .par_iter()
+                .any(|preference| preference.search.is_some());
+            let (visit_blocked, goal_walks, search_proposals) = if (!walking.positions.is_empty()
+                || !walking.preferences.is_empty()
+                || has_goal_search)
                 && owner
                     .goal_fetchers
                     .par_iter()
@@ -3758,11 +3803,27 @@ impl Economy {
                     underage: &underage,
                     max_hunger: self.rules.max_work_hunger,
                 });
+                let searches = if has_goal_search {
+                    local_walking::goal_search(local_walking::GoalSearchContext {
+                        owner,
+                        walking,
+                        people: &self.people,
+                        view: &view,
+                        recipes: self.physical.recipes(),
+                        needs: &choices.needs,
+                        busy: &busy,
+                        underage: &underage,
+                        max_hunger: self.rules.max_work_hunger,
+                        tick,
+                    })?
+                } else {
+                    Vec::new()
+                };
                 early_goal_work = Some(planned);
                 early_goal_needs = Some(choices.needs);
-                (choices.blocked, choices.requests)
+                (choices.blocked, choices.requests, searches)
             } else {
-                (Vec::new(), Vec::new())
+                (Vec::new(), Vec::new(), Vec::new())
             };
             let mut requests = game_economy_local_transport::walking::personal_requests(
                 owner,
@@ -3773,16 +3834,72 @@ impl Economy {
                 self.opinions.as_ref(),
                 self.rules.max_work_hunger,
             );
+            let mut carrying_candidates: Vec<_> = goal_walks
+                .par_iter()
+                .map(|request| request.person)
+                .chain(
+                    search_proposals
+                        .par_iter()
+                        .filter(|proposal| proposal.request.is_some())
+                        .map(|proposal| proposal.person),
+                )
+                .collect();
+            if carrying_candidates
+                .par_windows(2)
+                .any(|pair| pair[0] >= pair[1])
+            {
+                carrying_candidates.par_sort_unstable();
+                carrying_candidates.dedup();
+            }
+            let carrying_ready = game_economy_local_transport::Context {
+                owner,
+                people: &self.people,
+                view: &view,
+                opinions: self.opinions.as_ref(),
+                claims: claims.as_ref(),
+                busy: &busy,
+                max_hunger: self.rules.max_work_hunger,
+                manual: None,
+                walking: Some(walking),
+            }
+            .ready_people(&carrying_candidates);
             if !goal_walks.is_empty() {
                 let pending: Vec<_> = goal_walks
                     .into_par_iter()
                     .filter(|goal| {
-                        requests
-                            .binary_search_by_key(&goal.person, |request| request.person)
-                            .is_err()
+                        carrying_ready.binary_search(&goal.person).is_err()
+                            && requests
+                                .binary_search_by_key(&goal.person, |request| request.person)
+                                .is_err()
                     })
                     .collect();
                 requests.par_extend(pending);
+            }
+            if !search_proposals.is_empty() {
+                if requests
+                    .par_windows(2)
+                    .any(|pair| pair[0].person > pair[1].person)
+                {
+                    requests.par_sort_unstable_by_key(|request| request.person);
+                }
+                let accepted: Vec<_> = search_proposals
+                    .into_par_iter()
+                    .filter(|proposal| {
+                        proposal.request.is_none()
+                            || (visit_blocked.binary_search(&proposal.person).is_err()
+                                && carrying_ready.binary_search(&proposal.person).is_err()
+                                && requests
+                                    .binary_search_by_key(&proposal.person, |request| {
+                                        request.person
+                                    })
+                                    .is_err())
+                    })
+                    .collect();
+                requests.par_extend(accepted.par_iter().filter_map(|proposal| proposal.request));
+                local_search_updates = accepted
+                    .into_par_iter()
+                    .map(|proposal| (proposal.person, proposal.search))
+                    .collect();
             }
             requests.extend(manual_walk);
             if !requests.is_empty() {
@@ -9105,6 +9222,31 @@ impl Economy {
             }
         });
         if let Some(owner) = &mut next_local_transport {
+            if !local_search_updates.is_empty() {
+                if local_search_updates
+                    .par_windows(2)
+                    .any(|pair| pair[0].0 > pair[1].0)
+                {
+                    local_search_updates.par_sort_unstable_by_key(|row| row.0);
+                }
+                owner.goal_fetchers.par_chunks_mut(4096).for_each(|chunk| {
+                    let mut index =
+                        local_search_updates.partition_point(|row| row.0 < chunk[0].person);
+                    for preference in chunk {
+                        while index < local_search_updates.len()
+                            && local_search_updates[index].0 < preference.person
+                        {
+                            index += 1;
+                        }
+                        if local_search_updates
+                            .get(index)
+                            .is_some_and(|row| row.0 == preference.person)
+                        {
+                            preference.search = Some(local_search_updates[index].1.clone());
+                        }
+                    }
+                });
+            }
             if let Some(mut walking) = walking_next {
                 walking.positions = walking
                     .positions

@@ -6699,6 +6699,7 @@ fn a_person_fetches_observed_local_inputs_for_their_own_work_goal() {
     let mut initial = local_store_fixture();
     initial.local_transport.as_mut().unwrap().policies.clear();
     initial.local_transport.as_mut().unwrap().goal_fetchers = vec![GoalFetchPreference {
+        search: None,
         person: 2,
         enabled: true,
         max_quantity: 1,
@@ -6829,6 +6830,7 @@ fn goal_fetch_at_a_store_does_not_depend_on_remote_stock() {
     let transport = initial.local_transport.as_mut().unwrap();
     transport.policies.clear();
     transport.goal_fetchers = vec![GoalFetchPreference {
+        search: None,
         person: 2,
         enabled: true,
         max_quantity: 1,
@@ -6979,6 +6981,7 @@ fn a_person_can_visit_fetch_return_and_complete_a_work_goal() {
     let transport = initial.local_transport.as_mut().unwrap();
     transport.policies.clear();
     transport.goal_fetchers = vec![GoalFetchPreference {
+        search: None,
         person: 2,
         enabled: true,
         max_quantity: 1,
@@ -7078,6 +7081,476 @@ fn a_person_can_visit_fetch_return_and_complete_a_work_goal() {
     assert_eq!(run(1), run(4));
 }
 
+fn personal_goal_search_fixture(stocked: bool) -> State {
+    use game_goals::Goal;
+    let mut state = local_walking_fixture();
+    let transport = state.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.goal_fetchers = vec![GoalFetchPreference {
+        person: 2,
+        enabled: true,
+        max_quantity: 1,
+        search: Some(GoalSearchPreference {
+            store: 1,
+            willing: true,
+            retry_ticks: 5,
+            max_ticks: 8,
+            next_review: 0,
+            active_recipe: None,
+            expires_at: 0,
+        }),
+    }];
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    state.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+            recognize_help: false,
+        }],
+        events: vec![],
+    });
+    let source = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        if stocked {
+            vec![Lot {
+                item: None,
+                good: 2,
+                quantity: 1,
+                expires_at: Some(20),
+            }]
+        } else {
+            vec![]
+        },
+    )
+    .unwrap();
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    state
+}
+
+#[test]
+fn personal_goal_search_does_not_know_remote_stock_and_can_pause() {
+    let run = |workers, stocked| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(personal_goal_search_fixture(stocked)).unwrap();
+                world.advance().unwrap();
+                let opening = world.snapshot();
+                let walking = opening
+                    .local_transport
+                    .as_ref()
+                    .unwrap()
+                    .walking
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(walking.events[0].outcome, LocalWalkOutcome::Progressed);
+                let search = opening.local_transport.as_ref().unwrap().goal_fetchers[0]
+                    .search
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(search.active_recipe, Some(1));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    world.set_goal_search_choice(2, false).unwrap();
+                    world.advance().unwrap();
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .positions,
+                        walking.positions
+                    );
+                    world.set_goal_search_choice(2, true).unwrap();
+                    world.advance().unwrap();
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .events[0]
+                            .outcome,
+                        LocalWalkOutcome::Arrived
+                    );
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap();
+                    assert_eq!(holder.lots.iter().any(|lot| lot.good == 2), stocked);
+                    assert_eq!(
+                        state.local_transport.as_ref().unwrap().goal_fetchers[0]
+                            .search
+                            .as_ref()
+                            .unwrap()
+                            .active_recipe,
+                        None
+                    );
+                    if stocked {
+                        for _ in 0..5 {
+                            world.advance().unwrap();
+                        }
+                        assert_eq!(
+                            world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                            1
+                        );
+                    } else {
+                        for _ in 0..3 {
+                            world.advance().unwrap();
+                        }
+                        assert!(
+                            world
+                                .snapshot()
+                                .local_transport
+                                .unwrap()
+                                .walking
+                                .unwrap()
+                                .events
+                                .is_empty()
+                        );
+                    }
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                (
+                    opening.local_transport.unwrap().walking.unwrap().events,
+                    world.snapshot(),
+                )
+            })
+    };
+    let (stocked_events, stocked) = run(1, true);
+    let (empty_events, empty) = run(1, false);
+    assert_eq!(stocked_events, empty_events);
+    assert_eq!(stocked, run(4, true).1);
+    assert_eq!(empty, run(4, false).1);
+}
+
+#[test]
+fn a_personal_visit_takes_priority_over_goal_search() {
+    let mut initial = personal_goal_search_fixture(true);
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 2 },
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    }]
+    .into();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let transport = state.local_transport.unwrap();
+    assert_eq!(
+        transport.walking.unwrap().events[0].destination,
+        LocalEndpoint::Store { id: 2 }
+    );
+    assert_eq!(
+        transport.goal_fetchers[0]
+            .search
+            .as_ref()
+            .unwrap()
+            .active_recipe,
+        None
+    );
+}
+
+#[test]
+fn a_ready_local_carrying_choice_takes_priority_over_goal_search() {
+    let mut initial = personal_goal_search_fixture(true);
+    initial.local_transport.as_mut().unwrap().policies = vec![LocalTransportPolicy {
+        person: 2,
+        region: 1,
+        source: LocalEndpoint::Stock,
+        destination: LocalEndpoint::Store { id: 1 },
+        good: 3,
+        quantity: 1,
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+        disregard_claims: false,
+    }];
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            item: None,
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let transport = state.local_transport.unwrap();
+    assert!(transport.walking.unwrap().events.is_empty());
+    assert!(
+        transport
+            .events
+            .iter()
+            .any(|event| event.person == 2 && event.good == 3 && event.moved)
+    );
+    assert_eq!(
+        transport.goal_fetchers[0]
+            .search
+            .as_ref()
+            .unwrap()
+            .active_recipe,
+        None
+    );
+}
+
+#[test]
+fn a_ready_local_carrying_choice_takes_priority_over_goal_return() {
+    let mut initial = personal_goal_search_fixture(true);
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies = vec![LocalTransportPolicy {
+        person: 2,
+        region: 1,
+        source: LocalEndpoint::Store { id: 1 },
+        destination: LocalEndpoint::Store { id: 2 },
+        good: 3,
+        quantity: 1,
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+        disregard_claims: false,
+    }];
+    transport.walking.as_mut().unwrap().positions = vec![LocalPosition {
+        person: 2,
+        location: LocalLocation::At {
+            region: 1,
+            endpoint: LocalEndpoint::Store { id: 1 },
+        },
+    }];
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            item: None,
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let transport = world.snapshot().local_transport.unwrap();
+    assert!(transport.walking.unwrap().events.is_empty());
+    assert!(
+        transport
+            .events
+            .iter()
+            .any(|event| event.person == 2 && event.good == 3 && event.moved)
+    );
+}
+
+#[test]
+fn goal_search_does_not_preempt_depositing_a_carried_input() {
+    let mut initial = personal_goal_search_fixture(true);
+    initial.physical.recipes[0].inputs[0].quantity = 2;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let transport = state.local_transport.unwrap();
+    assert!(transport.walking.unwrap().events.is_empty());
+    assert_eq!(
+        transport.goal_fetchers[0]
+            .search
+            .as_ref()
+            .unwrap()
+            .active_recipe,
+        None
+    );
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    assert_eq!(stock.used, 1);
+}
+
+#[test]
+fn a_paused_goal_search_expires_without_moving_the_person() {
+    let mut initial = personal_goal_search_fixture(true);
+    initial.local_transport.as_mut().unwrap().goal_fetchers[0]
+        .search
+        .as_mut()
+        .unwrap()
+        .max_ticks = 1;
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    let position = world
+        .snapshot()
+        .local_transport
+        .unwrap()
+        .walking
+        .unwrap()
+        .positions;
+    world.set_goal_search_choice(2, false).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let transport = state.local_transport.unwrap();
+    assert_eq!(transport.walking.unwrap().positions, position);
+    assert_eq!(
+        transport.goal_fetchers[0]
+            .search
+            .as_ref()
+            .unwrap()
+            .active_recipe,
+        None
+    );
+    world.set_goal_search_choice(2, true).unwrap();
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    initial.local_transport.as_mut().unwrap().goal_fetchers[0]
+        .search
+        .as_mut()
+        .unwrap()
+        .retry_ticks = 0;
+    assert!(Economy::compile(initial).is_err());
+}
+
+#[test]
+fn goal_search_expiry_is_an_exclusive_boundary() {
+    let mut initial = personal_goal_search_fixture(true);
+    initial.local_transport.as_mut().unwrap().goal_fetchers[0]
+        .search
+        .as_mut()
+        .unwrap()
+        .max_ticks = 1;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let position = world
+        .snapshot()
+        .local_transport
+        .unwrap()
+        .walking
+        .unwrap()
+        .positions;
+    world.advance().unwrap();
+    let transport = world.snapshot().local_transport.unwrap();
+    assert_eq!(transport.walking.unwrap().positions, position);
+    assert_eq!(
+        transport.goal_fetchers[0]
+            .search
+            .as_ref()
+            .unwrap()
+            .active_recipe,
+        None
+    );
+}
+
 #[test]
 fn a_blocked_work_goal_does_not_permanently_prevent_a_visit() {
     use game_economy_claims::{Claim, Claims};
@@ -7086,6 +7559,7 @@ fn a_blocked_work_goal_does_not_permanently_prevent_a_visit() {
     let transport = initial.local_transport.as_mut().unwrap();
     transport.policies.clear();
     transport.goal_fetchers = vec![GoalFetchPreference {
+        search: None,
         person: 2,
         enabled: true,
         max_quantity: 1,
@@ -7169,6 +7643,7 @@ fn goal_fetching_finds_inputs_for_a_real_production_chain() {
     let transport = initial.local_transport.as_mut().unwrap();
     transport.policies.clear();
     transport.goal_fetchers = vec![GoalFetchPreference {
+        search: None,
         person: 2,
         enabled: true,
         max_quantity: 1,
@@ -7495,6 +7970,7 @@ fn concentrated_goal_fetching(count: u64) -> State {
     transport.policies.clear();
     transport.goal_fetchers = (2..=count)
         .map(|person| GoalFetchPreference {
+            search: None,
             person,
             enabled: true,
             max_quantity: 1,
@@ -7674,7 +8150,47 @@ fn concentrated_goal_fetch_benchmark() {
     };
     let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
     let returning = std::env::var_os("LEGACY_GOAL_RETURN").is_some();
+    let searching = std::env::var_os("LEGACY_GOAL_SEARCH").is_some();
+    let empty_search = std::env::var_os("LEGACY_GOAL_EMPTY").is_some();
     assert!(!returning || at_store);
+    assert!(!empty_search || searching);
+    assert!(!searching || (!at_store && std::env::var_os("LEGACY_CHAIN").is_none()));
+    if searching {
+        let transport = initial.local_transport.as_mut().unwrap();
+        for preference in &mut transport.goal_fetchers {
+            preference.search = Some(GoalSearchPreference {
+                store: 1,
+                willing: true,
+                retry_ticks: 5,
+                max_ticks: 8,
+                next_review: 0,
+                active_recipe: None,
+                expires_at: 0,
+            });
+        }
+        transport.walking = Some(LocalWalking {
+            routes: vec![LocalWalkRoute {
+                region: 1,
+                from: LocalEndpoint::Stock,
+                to: LocalEndpoint::Store { id: 1 },
+                ticks: 2,
+            }]
+            .into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        });
+        if empty_search {
+            let source = initial
+                .physical
+                .custody
+                .containers
+                .iter_mut()
+                .find(|row| row.place == Place::Inventory(1))
+                .unwrap();
+            *source = Container::new(source.place, source.capacity, vec![]).unwrap();
+        }
+    }
     if at_store {
         assert!(std::env::var_os("LEGACY_CHAIN").is_none());
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
@@ -7712,11 +8228,19 @@ fn concentrated_goal_fetch_benchmark() {
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 if returning { world.advance().unwrap(); }
+                if empty_search { world.advance().unwrap(); world.advance().unwrap(); }
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 let state = world.snapshot();
-                if returning {
+                if empty_search {
+                    let transport = state.local_transport.as_ref().unwrap();
+                    assert!(transport.walking.as_ref().unwrap().events.is_empty());
+                    assert!(transport.events.is_empty());
+                    assert!(transport.goal_fetchers.iter().all(|preference| preference.search.as_ref().unwrap().active_recipe.is_none()));
+                } else if searching {
+                    assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), count as usize - 1);
+                } else if returning {
                     assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), count as usize / 8);
                 } else {
                     assert_eq!(state.local_transport.as_ref().unwrap().events.iter().filter(|event| event.moved).count(), count as usize / 8);
@@ -7732,7 +8256,7 @@ fn concentrated_goal_fetch_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} at_store={at_store} returning={returning} goal_fetch_seconds={:.6} fingerprint={:016x}",
+                "workers={workers} people={count} at_store={at_store} returning={returning} searching={searching} empty_search={empty_search} goal_fetch_seconds={:.6} fingerprint={:016x}",
                 samples[1], fingerprint.unwrap()
             );
         });
@@ -21602,6 +22126,7 @@ fn expedition_pickup_reserves_time_against_goal_fetching() {
     use_named_acquisition_store(&mut initial, 2);
     let transport = initial.local_transport.as_mut().unwrap();
     transport.goal_fetchers = vec![GoalFetchPreference {
+        search: None,
         person: 1,
         enabled: true,
         max_quantity: 1,

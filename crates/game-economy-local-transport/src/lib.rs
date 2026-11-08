@@ -134,7 +134,10 @@ impl LocalTransport {
             || view.containers.par_iter().any(|c| matches!(c.place, Place::Inventory(id) if self.stores.binary_search_by_key(&id, |s| s.id).is_err()))
             || self.policies.par_windows(2).any(|w| w[0].person >= w[1].person)
             || self.goal_fetchers.par_windows(2).any(|w| w[0].person >= w[1].person)
-            || self.goal_fetchers.par_iter().any(|p| !people.contains(&p.person) || p.max_quantity == 0)
+            || self.goal_fetchers.par_iter().any(|p| !people.contains(&p.person) || p.max_quantity == 0
+                || p.search.as_ref().is_some_and(|search| self.walking.is_none() || search.retry_ticks == 0 || search.max_ticks == 0
+                    || self.stores.binary_search_by_key(&search.store, |store| store.id).is_err()
+                    || search.active_recipe == Some(0)))
             || self.policies.par_iter().any(|p| !people.contains(&p.person) || !goods.contains(&p.good) || p.quantity == 0
                 || p.source == p.destination || !endpoint(p.source, p.region, p.good) || !endpoint(p.destination, p.region, p.good)
                 || p.pressured_by.is_some() != p.pressure_threshold.is_some() || p.pressure_threshold == Some(0)
@@ -187,6 +190,114 @@ pub struct Context<'a> {
     pub walking: Option<&'a walking::Walking>,
 }
 impl Context<'_> {
+    fn personal_choice(
+        &self,
+        p: &Policy,
+        opinions: Option<&game_opinions::Index<'_>>,
+    ) -> Option<Choice> {
+        let person = self
+            .people
+            .binary_search_by_key(&p.person, |person| person.id)
+            .ok()
+            .map(|i| &self.people[i])?;
+        let pressured =
+            p.pressured_by
+                .zip(p.pressure_threshold)
+                .is_some_and(|(other, threshold)| {
+                    opinions.is_some_and(|index| {
+                        let (fear, obligation) = index.feelings(person.id, other);
+                        fear.saturating_add(obligation) >= threshold
+                    })
+                });
+        if person.controlled
+            || person.health == 0
+            || person.region != Some(p.region)
+            || person.hunger > self.max_hunger
+            || self.busy.binary_search(&person.id).is_ok()
+            || (!p.willing && !pressured)
+        {
+            return None;
+        }
+        let holder = self.view.container(Place::Person(person.id))?;
+        let carrying = holder.quantity(p.good);
+        let endpoint = if carrying == 0 {
+            p.source
+        } else {
+            p.destination
+        };
+        if self
+            .walking
+            .is_some_and(|walking| !walking.present(person.id, p.region, endpoint))
+        {
+            return None;
+        }
+        let (from, to, quantity) = if carrying == 0 {
+            if !p.disregard_claims
+                && matches!(p.source, Endpoint::Stock)
+                && self
+                    .claims
+                    .is_some_and(|claims| !claims.allows(person.id, p.region, p.good))
+            {
+                return None;
+            }
+            let source = p.source.place(p.region, p.good);
+            let stock = self.view.container(source)?;
+            (
+                source,
+                Place::Person(person.id),
+                p.quantity
+                    .min(stock.quantity(p.good))
+                    .min(holder.capacity.saturating_sub(holder.used)),
+            )
+        } else {
+            let destination = p.destination.place(p.region, p.good);
+            let store = self.view.container(destination)?;
+            (
+                Place::Person(person.id),
+                destination,
+                p.quantity
+                    .min(carrying)
+                    .min(store.capacity.saturating_sub(store.used)),
+            )
+        };
+        (quantity > 0).then_some(Choice {
+            person: person.id,
+            from,
+            to,
+            good: p.good,
+            quantity,
+        })
+    }
+
+    /// Actors with a currently executable personal carrying choice.
+    pub fn ready_people(&self, candidates: &[u64]) -> Vec<u64> {
+        if candidates.is_empty() || self.owner.policies.is_empty() {
+            return Vec::new();
+        }
+        let needs_opinions = candidates.par_iter().any(|person| {
+            self.owner
+                .policies
+                .binary_search_by_key(person, |p| p.person)
+                .ok()
+                .is_some_and(|i| self.owner.policies[i].pressure_threshold.is_some())
+        });
+        let opinions = needs_opinions
+            .then(|| self.opinions.map(Opinions::index))
+            .flatten();
+        candidates
+            .par_iter()
+            .filter_map(|person| {
+                let policy = &self.owner.policies[self
+                    .owner
+                    .policies
+                    .binary_search_by_key(person, |p| p.person)
+                    .ok()?];
+                self.personal_choice(policy, opinions.as_ref())
+                    .map(|choice| choice.person)
+            })
+            .collect()
+    }
+
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
         if self.manual.is_none()
             && self
@@ -209,84 +320,12 @@ impl Context<'_> {
             .any(|policy| policy.pressure_threshold.is_some())
             .then(|| self.opinions.map(Opinions::index))
             .flatten();
-        let mut rows: Vec<_> =
-            self.owner
-                .policies
-                .par_iter()
-                .filter_map(|p| {
-                    let person = self
-                        .people
-                        .binary_search_by_key(&p.person, |person| person.id)
-                        .ok()
-                        .map(|i| &self.people[i])?;
-                    let pressured = p.pressured_by.zip(p.pressure_threshold).is_some_and(
-                        |(other, threshold)| {
-                            opinions.as_ref().is_some_and(|index| {
-                                let (fear, obligation) = index.feelings(person.id, other);
-                                fear.saturating_add(obligation) >= threshold
-                            })
-                        },
-                    );
-                    if person.controlled
-                        || person.health == 0
-                        || person.region != Some(p.region)
-                        || person.hunger > self.max_hunger
-                        || self.busy.binary_search(&person.id).is_ok()
-                        || (!p.willing && !pressured)
-                    {
-                        return None;
-                    }
-                    let holder = self.view.container(Place::Person(person.id))?;
-                    let carrying = holder.quantity(p.good);
-                    let endpoint = if carrying == 0 {
-                        p.source
-                    } else {
-                        p.destination
-                    };
-                    if self
-                        .walking
-                        .is_some_and(|walking| !walking.present(person.id, p.region, endpoint))
-                    {
-                        return None;
-                    }
-                    let (from, to, quantity) = if carrying == 0 {
-                        if !p.disregard_claims
-                            && matches!(p.source, Endpoint::Stock)
-                            && self
-                                .claims
-                                .is_some_and(|claims| !claims.allows(person.id, p.region, p.good))
-                        {
-                            return None;
-                        }
-                        let source = p.source.place(p.region, p.good);
-                        let stock = self.view.container(source)?;
-                        (
-                            source,
-                            Place::Person(person.id),
-                            p.quantity
-                                .min(stock.quantity(p.good))
-                                .min(holder.capacity.saturating_sub(holder.used)),
-                        )
-                    } else {
-                        let destination = p.destination.place(p.region, p.good);
-                        let store = self.view.container(destination)?;
-                        (
-                            Place::Person(person.id),
-                            destination,
-                            p.quantity
-                                .min(carrying)
-                                .min(store.capacity.saturating_sub(store.used)),
-                        )
-                    };
-                    (quantity > 0).then_some(Choice {
-                        person: person.id,
-                        from,
-                        to,
-                        good: p.good,
-                        quantity,
-                    })
-                })
-                .collect();
+        let mut rows: Vec<_> = self
+            .owner
+            .policies
+            .par_iter()
+            .filter_map(|p| self.personal_choice(p, opinions.as_ref()))
+            .collect();
         if let Some(manual) = self.manual {
             let person = self
                 .people

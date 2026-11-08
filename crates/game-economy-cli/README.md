@@ -261,3 +261,5 @@ Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-
 Set `LEGACY_LOCAL_VISITS=1` on the mixed campaign benchmark to add an authored visit preference for one quarter of initially autonomous regional residents and a local store in each region. The reported position count confirms that walking occurred; this option changes the scenario and fingerprint.
 
 On a Ryzen 5 7600, the 10,000-person, 12-tick local-visit workload with reproduction disabled moved 2,500 people and started 12,406 jobs. One and six workers had median times of 299 ms and 194 ms respectively, with identical state fingerprints. This is a short, workload-specific measurement.
+
+`economy-goal-search` demonstrates a personal project with a bounded search of a known store. The administrative runner can change that person's inclination with `search-goal PERSON on|off`.

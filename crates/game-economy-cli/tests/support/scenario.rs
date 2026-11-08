@@ -64,6 +64,54 @@ fn authored_local_visit_is_an_independent_personal_choice() {
 }
 
 #[test]
+fn authored_goal_search_reaches_a_store_and_returns_with_material() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-goal-search.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut visited = false;
+                let mut carried = false;
+                for _ in 0..20 {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let local = state.local_transport.as_ref().unwrap();
+                    visited |= local.walking.as_ref().unwrap().events.iter().any(|event| {
+                        event.person == 2
+                            && event.outcome == game_economy::LocalWalkOutcome::Arrived
+                            && event.destination == game_economy::LocalEndpoint::Store { id: 1 }
+                    });
+                    carried |= local.events.iter().any(|event| {
+                        event.person == 2
+                            && event.moved
+                            && matches!(event.from, game_lots::Place::Inventory(1))
+                    });
+                }
+                assert!(visited && carried);
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .goals
+                        .as_ref()
+                        .unwrap()
+                        .people
+                        .iter()
+                        .any(|goal| goal.person == 2 && goal.progress > 0)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_text_is_written_transferred_and_read_without_automatic_agreement() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

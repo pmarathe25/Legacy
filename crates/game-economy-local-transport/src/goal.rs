@@ -13,6 +13,25 @@ pub struct Preference {
     #[serde(default)]
     pub enabled: bool,
     pub max_quantity: u64,
+    #[serde(default)]
+    pub search: Option<SearchPreference>,
+}
+
+/// A person's choice to search one known store for their current goal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SearchPreference {
+    pub store: u64,
+    #[serde(default)]
+    pub willing: bool,
+    pub retry_ticks: u64,
+    pub max_ticks: u64,
+    #[serde(default)]
+    pub next_review: u64,
+    #[serde(default)]
+    pub active_recipe: Option<u32>,
+    #[serde(default)]
+    pub expires_at: u64,
 }
 #[derive(Clone, Copy)]
 pub struct Need {

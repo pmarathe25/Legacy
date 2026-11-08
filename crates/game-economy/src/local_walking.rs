@@ -24,6 +24,159 @@ pub struct GoalWalkPlan {
     pub needs: Vec<game_economy_local_transport::goal::Need>,
 }
 
+pub struct SearchProposal {
+    pub person: u64,
+    pub request: Option<game_economy_local_transport::walking::Request>,
+    pub search: game_economy_local_transport::goal::SearchPreference,
+}
+
+pub struct GoalSearchContext<'a> {
+    pub owner: &'a LocalTransport,
+    pub walking: &'a Walking,
+    pub people: &'a [game_economy_person::Person],
+    pub view: &'a game_lots::View,
+    pub recipes: &'a [game_production_model::Recipe],
+    pub needs: &'a [game_economy_local_transport::goal::Need],
+    pub busy: &'a [u64],
+    pub underage: &'a [u64],
+    pub max_hunger: u32,
+    pub tick: u64,
+}
+
+/// One bounded attempt at a personally chosen store; its contents are not read.
+pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>, String> {
+    use game_economy_local_transport::walking::{Location, Request};
+    context
+        .owner
+        .goal_fetchers
+        .par_iter()
+        .filter_map(|preference| {
+            let mut search = preference.search.clone()?;
+            let selected = context
+                .needs
+                .binary_search_by_key(&preference.person, |need| need.person)
+                .ok()
+                .map(|index| context.needs[index].recipe);
+            if search.active_recipe.is_some()
+                && (context.tick >= search.expires_at
+                    || selected.is_some_and(|recipe| Some(recipe) != search.active_recipe))
+            {
+                search.active_recipe = None;
+                return Some(Ok(SearchProposal {
+                    person: preference.person,
+                    request: None,
+                    search,
+                }));
+            }
+            let person = &context.people[context
+                .people
+                .binary_search_by_key(&preference.person, |person| person.id)
+                .ok()?];
+            let region = person.region?;
+            let destination = Endpoint::Store { id: search.store };
+            let location = context.walking.location(person.id, region);
+            if search.active_recipe.is_some()
+                && matches!(location, Location::At { endpoint, .. } if endpoint == destination)
+            {
+                search.active_recipe = None;
+                return Some(Ok(SearchProposal {
+                    person: preference.person,
+                    request: None,
+                    search,
+                }));
+            }
+            if !preference.enabled
+                || !search.willing
+                || person.controlled
+                || person.health == 0
+                || !person.willing_to_work
+                || person.hunger > context.max_hunger
+                || context.busy.binary_search(&person.id).is_ok()
+                || context.underage.binary_search(&person.id).is_ok()
+                || context
+                    .owner
+                    .stores
+                    .binary_search_by_key(&search.store, |store| store.id)
+                    .ok()
+                    .is_none_or(|index| context.owner.stores[index].region != region)
+            {
+                return None;
+            }
+            let recipe_id = selected?;
+            if search.active_recipe.is_some() {
+                if context.walking.can_advance(person.id, region, destination) {
+                    return Some(Ok(SearchProposal {
+                        person: person.id,
+                        request: Some(Request {
+                            person: person.id,
+                            region,
+                            destination,
+                        }),
+                        search,
+                    }));
+                }
+                search.active_recipe = None;
+                return Some(Ok(SearchProposal {
+                    person: person.id,
+                    request: None,
+                    search,
+                }));
+            }
+            if context.tick < search.next_review
+                || !matches!(
+                    location,
+                    Location::At {
+                        endpoint: Endpoint::Stock,
+                        ..
+                    }
+                )
+                || !context.walking.can_advance(person.id, region, destination)
+            {
+                return None;
+            }
+            let recipe = context
+                .recipes
+                .iter()
+                .find(|recipe| recipe.id == recipe_id)?;
+            let holder = context.view.container(Place::Person(person.id))?;
+            if holder.used >= holder.capacity {
+                return None;
+            }
+            let shortage = recipe.inputs.iter().any(|input| {
+                holder.quantity(input.good) == 0
+                    && context
+                        .view
+                        .container(Place::Stock {
+                            region,
+                            good: input.good,
+                        })
+                        .is_some_and(|stock| stock.quantity(input.good) < input.quantity)
+            });
+            if !shortage {
+                return None;
+            }
+            let Some(next_review) = context.tick.checked_add(search.retry_ticks) else {
+                return Some(Err("local goal search retry overflow".into()));
+            };
+            let Some(expires_at) = context.tick.checked_add(search.max_ticks) else {
+                return Some(Err("local goal search expiry overflow".into()));
+            };
+            search.next_review = next_review;
+            search.expires_at = expires_at;
+            search.active_recipe = Some(recipe_id);
+            Some(Ok(SearchProposal {
+                person: person.id,
+                request: Some(Request {
+                    person: person.id,
+                    region,
+                    destination,
+                }),
+                search,
+            }))
+        })
+        .collect()
+}
+
 /// Bring personally held inputs home without inspecting home while away.
 pub fn goal_walk(context: GoalWalkContext<'_>) -> GoalWalkPlan {
     use game_economy_local_transport::walking::{Location, Request};
@@ -158,7 +311,13 @@ pub fn goal_walk(context: GoalWalkContext<'_>) -> GoalWalkPlan {
             }
         })
         .collect();
-    let blocked = if context.walking.preferences.is_empty() {
+    let blocked = if context.walking.preferences.is_empty()
+        && !context
+            .owner
+            .goal_fetchers
+            .par_iter()
+            .any(|preference| preference.search.is_some())
+    {
         Vec::new()
     } else {
         choices.par_iter().map(|choice| choice.0).collect()
