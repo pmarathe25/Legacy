@@ -237,6 +237,134 @@ fn fixture() -> State {
     }
 }
 
+fn independent_written_journeys(count: u64) -> State {
+    let mut state = independent_written_circulation(count);
+    for person in &mut state.people {
+        if person.id > count {
+            person.hunger = 5;
+            person.seek_meals = true;
+        }
+    }
+    state.travel = Some(Travel {
+        routes: vec![Route {
+            source: 1,
+            destination: 2,
+            ticks: 1,
+        }],
+        journeys: vec![],
+    });
+    state.food_search = Some(FoodSearch {
+        inherit_births: false,
+        min_hunger: 5,
+        min_report_food: 1,
+        max_report_age: 20,
+        retry_ticks: 3,
+        people: (count + 1..=count * 2)
+            .map(|person| FoodSearchPreference {
+                person,
+                enabled: true,
+                next_review: 0,
+                target: None,
+            })
+            .collect(),
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(game_opinions::AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    *opinions.sensitivities_mut() = (count + 1..=count * 2)
+        .map(|person| OpinionSensitivity {
+            person,
+            affinity_report_discrepancy: Some(1),
+            ..Default::default()
+        })
+        .collect();
+    state.opinions = Some(opinions);
+    state
+}
+
+#[test]
+fn independent_written_journeys_match_across_worker_counts() {
+    let count = 512;
+    let initial = independent_written_journeys(count);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                for _ in 0..7 {
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .people
+                        .iter()
+                        .filter(|person| person.id > count)
+                        .all(|person| person.region == Some(2))
+                );
+                assert_eq!(
+                    state
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .filter(|row| row.observer > count && row.affinity == 1)
+                        .count(),
+                    count as usize
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_written_journeys_benchmark() {
+    let count = std::env::var("LEGACY_PAIRS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000u64);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(independent_written_journeys(count)).unwrap();
+            let start = std::time::Instant::now();
+            for _ in 0..7 {
+                world.advance().unwrap();
+            }
+            let elapsed = start.elapsed().as_secs_f64();
+            let state = world.snapshot();
+            assert_eq!(
+                state
+                    .opinions
+                    .as_ref()
+                    .unwrap()
+                    .records
+                    .iter()
+                    .filter(|row| row.observer > count && row.affinity == 1)
+                    .count(),
+                count as usize
+            );
+            println!("pairs={count} workers={workers} boundaries=7 seconds={elapsed:.6}");
+        });
+}
+
 fn independent_written_circulation(count: u64) -> State {
     let mut state = independent_authors(count);
     let person_template = state.people[0].clone();
@@ -30526,6 +30654,193 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
             })
     };
     for rate in [-2, 0, 3] {
+        assert_eq!(run(1, rate), run(4, rate));
+    }
+}
+
+#[test]
+fn a_written_claim_can_guide_travel_and_receive_subjective_discrepancy_reactions() {
+    use game_economy_knowledge::{Mind, Record};
+    let mut initial = expedition_fixture();
+    initial.people[0].controlled = true;
+    initial.people[1].hunger = 5;
+    initial.people[1].seek_meals = true;
+    initial.nutrition = None;
+    initial.dynamics = None;
+    initial.missions = None;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![
+            Lot {
+                good: 1,
+                quantity: 1,
+                item: None,
+                expires_at: None,
+            },
+            Lot {
+                good: 2,
+                quantity: 1,
+                item: None,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    let make_mind = |person, records| Mind {
+        person,
+        reporting: None,
+        remember_people: false,
+        people_reporting: None,
+        people_reports: vec![],
+        people_seen: vec![],
+        misreport: None,
+        records,
+    };
+    initial.knowledge = Some(Knowledge {
+        retention: vec![],
+        max_records: 4,
+        minds: vec![
+            make_mind(
+                1,
+                vec![Record {
+                    region: 2,
+                    food: 0,
+                    observed_at: 0,
+                    witness: 1,
+                    learned_from: None,
+                }],
+            ),
+            make_mind(2, vec![]),
+        ],
+    });
+    initial.writing = Some(Writing {
+        paper: 1,
+        ink: 2,
+        page: 3,
+        paper_quantity: 1,
+        ink_quantity: 1,
+        next_item: 1,
+        literacy: vec![
+            Literacy {
+                person: 1,
+                script: 1,
+                read: true,
+                write: true,
+                auto_read: false,
+            },
+            Literacy {
+                person: 2,
+                script: 1,
+                read: true,
+                write: false,
+                auto_read: true,
+            },
+        ]
+        .into(),
+        pages: vec![].into(),
+        reads: vec![].into(),
+        authors: vec![].into(),
+        study: vec![].into(),
+        practice: vec![].into(),
+    });
+    initial.food_search = Some(FoodSearch {
+        inherit_births: false,
+        min_hunger: 5,
+        min_report_food: 1,
+        max_report_age: 20,
+        retry_ticks: 3,
+        people: vec![FoodSearchPreference {
+            person: 2,
+            enabled: true,
+            next_review: 0,
+            target: None,
+        }],
+    });
+    initial.opinions.as_mut().unwrap().rules.affinity = Some(game_opinions::AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    let run = |workers, rate| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .opinions
+                    .as_mut()
+                    .unwrap()
+                    .sensitivities_mut()
+                    .push(OpinionSensitivity {
+                        person: 2,
+                        affinity_report_discrepancy: Some(rate),
+                        trust_report_discrepancy: Some(rate),
+                        ..Default::default()
+                    });
+                let mut world = Economy::compile(state).unwrap();
+                let item = world.write_food(1, 1, 2, None, Some(10)).unwrap().unwrap();
+                assert!(world.give_page(1, 2, item).unwrap());
+                assert!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                world.advance().unwrap();
+                assert_eq!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .find(|record| record.region == 2)
+                        .unwrap()
+                        .food,
+                    10
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                for _ in 0..6 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(world.snapshot().people[1].region, Some(2));
+                assert_eq!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .find(|record| record.region == 2)
+                        .unwrap()
+                        .food,
+                    0
+                );
+                let opinion = world
+                    .opinions()
+                    .iter()
+                    .find(|row| row.observer == 2 && row.target == 1)
+                    .unwrap();
+                assert_eq!((opinion.affinity, opinion.trust), (rate, rate));
+                world.snapshot()
+            })
+    };
+    for rate in [-2, 3] {
         assert_eq!(run(1, rate), run(4, rate));
     }
 }

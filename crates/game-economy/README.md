@@ -22,6 +22,8 @@ The ignored `concentrated_food_search_benchmark` measures a complete boundary of
 
 Existing personal giving preferences can move written pages as physical goods; the recipient's separate reading and report-reception choices still apply. The ignored `independent_written_circulation_benchmark` measures three complete boundaries in which `LEGACY_PAIRS` authors write, hand pages to recipients, and recipients read them. `LEGACY_WORKERS` selects concurrency.
 
+`independent_written_journeys_benchmark` extends that workload through seven complete boundaries, including recipients traveling based on the claim, observing actual stock, and updating their own relationships. It uses the same `LEGACY_PAIRS` and `LEGACY_WORKERS` settings.
+
 Giving policies and responses are shared immutable collections across staged generations. Rust callers constructing `Giving` can convert vectors into the shared fields; callers changing them use `policies_mut()` or `responses_mut()`, which detach on write. Their serialized representation remains ordinary arrays.
 
 Regional exposure uses finite shelter and authored seasons; seasonal planting, growth and harvest rules affect actual fields. Travelers face source-region exposure. Shelter allocation and crop growth are deterministic across worker counts and saves.
