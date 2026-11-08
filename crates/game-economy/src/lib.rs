@@ -147,7 +147,7 @@ use game_production_model::FoodEffect;
 use rayon::prelude::*;
 pub use state::{Agreements, Immortal, Person, Rules, State};
 use std::collections::HashSet;
-pub use writing::{Literacy, Page as WrittenPage, Writing};
+pub use writing::{Author as WritingAuthor, Literacy, Page as WrittenPage, Writing};
 pub struct Economy {
     physical: Runtime,
     seed: u64,
@@ -3059,6 +3059,47 @@ impl Economy {
         if !auto_page_reads.is_empty() {
             game_economy_work::reserve(&mut busy, auto_page_reads.iter().map(|row| row.0));
         }
+        let auto_authors: Vec<_> = self
+            .writing
+            .as_ref()
+            .zip(self.knowledge.as_ref())
+            .map_or_else(Vec::new, |(owner, knowledge)| {
+                owner
+                    .authors
+                    .par_iter()
+                    .filter_map(|author| {
+                        let person = &self.people
+                            [writing::ordered_index(&self.people, author.person, |row| row.id)?];
+                        let mind = &knowledge.minds[writing::ordered_index(
+                            &knowledge.minds,
+                            author.person,
+                            |row| row.person,
+                        )?];
+                        if author.completed
+                            || author.retry_at > tick
+                            || person.controlled
+                            || person.health == 0
+                            || person.region.is_none()
+                            || busy.binary_search(&author.person).is_ok()
+                            || !owner.can_write(author.person, author.script)
+                        {
+                            return None;
+                        }
+                        let mut claim = mind
+                            .records
+                            .iter()
+                            .find(|record| record.region == author.region)?
+                            .clone();
+                        claim.food = (i128::from(claim.food) + i128::from(author.food_delta))
+                            .clamp(0, i128::from(u32::MAX))
+                            as u32;
+                        Some((author.person, author.script, claim))
+                    })
+                    .collect()
+            });
+        if !auto_authors.is_empty() {
+            game_economy_work::reserve(&mut busy, auto_authors.iter().map(|row| row.0));
+        }
         if let Some(owner) = next_confinement
             .as_mut()
             .filter(|owner| !owner.release_policies.is_empty())
@@ -4926,7 +4967,7 @@ impl Economy {
         let mut page_to_write = None;
         let mut page_to_read = None;
         let mut manual_page_action = None;
-        let mut writing_output = None;
+        let mut writing_output = Vec::new();
         if let Some(
             choice @ (game_economy_interaction::PhysicalChoice::WriteFood { .. }
             | game_economy_interaction::PhysicalChoice::ReadPage { .. }
@@ -4997,7 +5038,7 @@ impl Economy {
                         written_at: tick,
                         claim,
                     };
-                    writing_output = Some(game_lot_runtime::WritingPage {
+                    writing_output.push(game_lot_runtime::WritingPage {
                         action,
                         writer: person,
                         paper: owner.paper,
@@ -5055,6 +5096,65 @@ impl Economy {
                 }
                 _ => unreachable!(),
             }
+        }
+        let mut auto_pages = Vec::new();
+        if !auto_authors.is_empty() {
+            let owner = self.writing.as_ref().expect("authors require writing");
+            let start = page_to_write
+                .as_ref()
+                .map_or(Some(owner.next_item), |page| page.item.checked_add(1))
+                .ok_or("item identity overflow")?;
+            let items = self
+                .physical
+                .next_unused_items(start, auto_authors.len())
+                .ok_or("item identity overflow")?;
+            if items.last().is_some_and(|id| *id == u64::MAX) {
+                return Err("item identity overflow".into());
+            }
+            let first_action = action_base
+                .checked_add(
+                    salvage_plan
+                        .as_ref()
+                        .map_or(0, |plan| plan.actions.len() as u64),
+                )
+                .and_then(|id| {
+                    id.checked_add(u64::from(
+                        manual_animal_feed.is_some()
+                            || manual_page_action.is_some()
+                            || !writing_output.is_empty(),
+                    ))
+                })
+                .ok_or("action count overflow")?;
+            first_action
+                .checked_add(auto_authors.len() as u64)
+                .ok_or("action count overflow")?;
+            auto_pages = auto_authors
+                .into_par_iter()
+                .zip(items.into_par_iter())
+                .enumerate()
+                .map(|(index, ((person, script, claim), item))| {
+                    (
+                        game_lot_runtime::WritingPage {
+                            action: first_action + index as u64,
+                            writer: person,
+                            paper: owner.paper,
+                            paper_quantity: owner.paper_quantity,
+                            ink: owner.ink,
+                            ink_quantity: owner.ink_quantity,
+                            page: owner.page,
+                            item,
+                        },
+                        WrittenPage {
+                            item,
+                            author: person,
+                            script,
+                            written_at: tick,
+                            claim,
+                        },
+                    )
+                })
+                .collect();
+            writing_output.par_extend(auto_pages.par_iter().map(|row| row.0));
         }
         game_economy_claims::include_care_farming!(claim_uses, care, farming);
         #[cfg(feature = "profile")]
@@ -5327,7 +5427,7 @@ impl Economy {
             && harvest.is_empty()
             && hunting_plan.yields.is_empty()
             && product_plan.yields.is_empty()
-            && writing_output.is_none()
+            && writing_output.is_empty()
             && compact.is_empty()
             && staged_custody.is_empty()
             && actions.par_iter().all(|action| {
@@ -5370,7 +5470,7 @@ impl Economy {
                         harvest,
                         animal_yield: &hunting_plan.yields,
                         animal_products: &product_plan.yields,
-                        writing: writing_output.as_slice(),
+                        writing: &writing_output,
                         compact_consumption: &compact,
                     },
                     staged_custody,
@@ -5385,7 +5485,7 @@ impl Economy {
         let page_action_id = manual_page_action
             .as_ref()
             .map(|action| action.id)
-            .or_else(|| writing_output.as_ref().map(|page| page.action));
+            .or_else(|| page_to_write.as_ref().map(|_| writing_output[0].action));
         let page_action_accepted = page_action_id.is_some_and(|action| {
             physical
                 .events()
@@ -5402,6 +5502,44 @@ impl Economy {
             let owner = writing.as_mut().expect("validated writing owner");
             owner.next_item = page.item + 1;
             owner.add_page(page);
+        }
+        if !auto_pages.is_empty() {
+            let outcomes: Vec<_> = auto_pages
+                .into_par_iter()
+                .map(|(action, page)| {
+                    let accepted = physical
+                        .events()
+                        .physical_actions
+                        .binary_search_by_key(&action.action, |row| row.id)
+                        .ok()
+                        .is_some_and(|i| physical.events().physical_actions[i].accepted);
+                    (page, accepted)
+                })
+                .collect();
+            let accepted: Vec<_> = outcomes
+                .par_iter()
+                .filter(|row| row.1)
+                .map(|row| row.0.clone())
+                .collect();
+            let owner = writing.as_mut().expect("authors require writing");
+            std::sync::Arc::make_mut(&mut owner.authors)
+                .par_iter_mut()
+                .for_each(|author| {
+                    if let Ok(i) = outcomes.binary_search_by_key(&author.person, |row| row.0.author)
+                    {
+                        author.completed = outcomes[i].1;
+                        if !author.completed {
+                            author.retry_at = tick.saturating_add(8);
+                        }
+                    }
+                });
+            if !accepted.is_empty() {
+                owner.next_item = owner
+                    .next_item
+                    .max(accepted.last().expect("nonempty").item + 1);
+                let pages = std::sync::Arc::make_mut(&mut owner.pages);
+                pages.par_extend(accepted);
+            }
         }
         let page_given = matches!(
             player_transfer,

@@ -7482,6 +7482,154 @@ fn autonomous_reading_is_personal_and_can_be_disregarded() {
 }
 
 #[test]
+fn autonomous_authors_write_private_memories_with_real_materials() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, has_ink| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-written-food.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                state.gathering = None;
+                let knowledge = state.knowledge.as_mut().unwrap();
+                let record = knowledge
+                    .minds
+                    .iter()
+                    .find(|mind| mind.person == 1)
+                    .unwrap()
+                    .records
+                    .iter()
+                    .find(|row| row.region == 2)
+                    .unwrap()
+                    .clone();
+                knowledge
+                    .minds
+                    .iter_mut()
+                    .find(|mind| mind.person == 2)
+                    .unwrap()
+                    .records
+                    .push(record.clone());
+                let writing = state.writing.as_mut().unwrap();
+                writing
+                    .literacy_mut()
+                    .iter_mut()
+                    .find(|row| row.person == 2)
+                    .unwrap()
+                    .write = true;
+                writing.authors = vec![game_economy::WritingAuthor {
+                    person: 2,
+                    script: 1,
+                    region: 2,
+                    food_delta: 12,
+                    completed: false,
+                    retry_at: 0,
+                }]
+                .into();
+                let (paper, ink) = (writing.paper, writing.ink);
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == game_lots::Place::Person(2))
+                    .unwrap();
+                let mut lots = holder.lots.clone();
+                lots.retain(|lot| lot.good != paper && lot.good != ink);
+                lots.push(game_lots::Lot {
+                    good: paper,
+                    quantity: 1,
+                    item: None,
+                    expires_at: None,
+                });
+                if has_ink {
+                    lots.push(game_lots::Lot {
+                        good: ink,
+                        quantity: 1,
+                        item: None,
+                        expires_at: None,
+                    });
+                }
+                *holder = game_lots::Container::new(holder.place, holder.capacity.max(100), lots)
+                    .unwrap();
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                let manual = Player::new(&mut world)
+                    .write_food(1, 2, None, None)
+                    .unwrap()
+                    .unwrap();
+                let state = world.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert_eq!(writing.pages.len(), if has_ink { 2 } else { 1 });
+                assert_eq!(writing.authors[0].completed, has_ink);
+                if has_ink {
+                    let page = writing.pages.iter().find(|page| page.author == 2).unwrap();
+                    assert_ne!(manual, page.item);
+                    assert_eq!(page.claim.food, record.food + 12);
+                    assert_eq!(page.claim.witness, record.witness);
+                    assert_eq!(
+                        world
+                            .known_food(2)
+                            .unwrap()
+                            .iter()
+                            .find(|row| row.region == 2)
+                            .unwrap()
+                            .food,
+                        record.food
+                    );
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|c| c.place == game_lots::Place::Person(2))
+                            .unwrap()
+                            .lots
+                            .iter()
+                            .filter(|lot| lot.good == paper || lot.good == ink)
+                            .count(),
+                        0
+                    );
+                } else {
+                    assert!(writing.authors[0].retry_at > state.physical.custody.tick);
+                    assert!(
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|c| c.place == game_lots::Place::Person(2))
+                            .unwrap()
+                            .lots
+                            .iter()
+                            .any(|lot| lot.good == paper)
+                    );
+                }
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    for has_ink in [false, true] {
+        assert_eq!(run(1, has_ink), run(4, has_ink));
+    }
+}
+
+#[test]
 fn invoked_memory_can_be_written_and_read_after_dismissal() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -7550,6 +7698,7 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
                 });
                 *holder = game_lots::Container::new(holder.place, holder.capacity, lots).unwrap();
                 state.writing = Some(game_economy::Writing {
+                    authors: Default::default(),
                     paper,
                     ink,
                     page,

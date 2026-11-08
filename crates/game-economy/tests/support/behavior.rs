@@ -237,6 +237,117 @@ fn fixture() -> State {
     }
 }
 
+fn independent_authors(count: u64) -> State {
+    let mut state = independent_readers(count);
+    for container in &mut state.physical.custody.containers {
+        if matches!(container.place, Place::Person(_)) {
+            *container = Container::new(
+                container.place,
+                10,
+                vec![
+                    Lot {
+                        good: 1,
+                        quantity: 1,
+                        item: None,
+                        expires_at: None,
+                    },
+                    Lot {
+                        good: 2,
+                        quantity: 1,
+                        item: None,
+                        expires_at: None,
+                    },
+                ],
+            )
+            .unwrap();
+        }
+    }
+    for mind in &mut state.knowledge.as_mut().unwrap().minds {
+        mind.records.push(game_economy_knowledge::Record {
+            region: 2,
+            food: 20,
+            observed_at: 0,
+            witness: 1,
+            learned_from: None,
+        });
+    }
+    let writing = state.writing.as_mut().unwrap();
+    writing.next_item = 1;
+    writing.pages = vec![].into();
+    writing.literacy = (1..=count)
+        .map(|person| Literacy {
+            person,
+            script: 1,
+            read: false,
+            write: true,
+            auto_read: false,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    writing.authors = (1..=count)
+        .map(|person| WritingAuthor {
+            person,
+            script: 1,
+            region: 2,
+            food_delta: 1,
+            completed: false,
+            retry_at: 0,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    state
+}
+
+#[test]
+fn independent_autonomous_authors_match_across_worker_counts() {
+    let initial = independent_authors(2048);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert_eq!(writing.pages.len(), 2048);
+                assert!(writing.authors.iter().all(|row| row.completed));
+                assert!(writing.pages.iter().all(|row| row.claim.food == 21));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_autonomous_authors_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut world = Economy::compile(independent_authors(count)).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            let seconds = start.elapsed().as_secs_f64();
+            assert_eq!(
+                world.snapshot().writing.unwrap().pages.len(),
+                count as usize
+            );
+            println!("authors={count} workers={workers} seconds={seconds:.6}");
+        });
+}
+
 fn independent_readers(count: u64) -> State {
     let mut state = fixture();
     state.agreements = None;
@@ -290,6 +401,7 @@ fn independent_readers(count: u64) -> State {
             .collect(),
     });
     state.writing = Some(Writing {
+        authors: Default::default(),
         paper: 1,
         ink: 2,
         page: 3,

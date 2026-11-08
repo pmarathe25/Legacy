@@ -88,6 +88,9 @@ impl Runtime {
     pub fn next_unused_item(&self, start: u64) -> Option<u64> {
         self.store.next_unused_item(start)
     }
+    pub fn next_unused_items(&self, start: u64, count: usize) -> Option<Vec<u64>> {
+        self.store.next_unused_items(start, count)
+    }
     pub fn tick_millis(&self) -> u64 {
         self.tick_millis
     }

@@ -30,6 +30,24 @@ pub struct Writing {
     /// Pages this person has already chosen to read, including disregarded claims.
     #[serde(default)]
     pub reads: Arc<Vec<(u64, u64)>>,
+    #[serde(default)]
+    pub authors: Arc<Vec<Author>>,
+}
+
+/// A person's independent choice to write one remembered food report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Author {
+    pub person: u64,
+    pub script: u32,
+    pub region: u64,
+    #[serde(default)]
+    pub food_delta: i64,
+    #[serde(default)]
+    pub completed: bool,
+    /// Next boundary at which this person will retry after a failed attempt.
+    #[serde(default)]
+    pub retry_at: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,6 +84,7 @@ impl Writing {
         Arc::make_mut(&mut self.literacy).par_sort_unstable_by_key(|row| (row.person, row.script));
         Arc::make_mut(&mut self.pages).par_sort_unstable_by_key(|row| row.item);
         Arc::make_mut(&mut self.reads).par_sort_unstable();
+        Arc::make_mut(&mut self.authors).par_sort_unstable_by_key(|row| row.person);
         let tick = physical.custody.tick;
         if self.paper == self.ink
             || self.paper == self.page
@@ -89,6 +108,13 @@ impl Writing {
                 .par_windows(2)
                 .any(|pair| pair[0].item == pair[1].item)
             || self.reads.par_windows(2).any(|pair| pair[0] == pair[1])
+            || self
+                .authors
+                .par_windows(2)
+                .any(|pair| pair[0].person == pair[1].person)
+            || self.authors.par_iter().any(|row| {
+                !people.contains(&row.person) || !regions.contains(&row.region) || row.script == 0
+            })
             || self.reads.par_iter().any(|&(person, item)| {
                 !people.contains(&person) || item == 0 || item >= self.next_item
             })

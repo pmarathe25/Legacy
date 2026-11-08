@@ -172,6 +172,9 @@ fn next_item_identity_skips_live_ids_and_detects_overflow() {
     assert_eq!(owner.next_unused_item(0), None);
     assert_eq!(owner.next_unused_item(1), Some(1));
     assert_eq!(owner.next_unused_item(10), Some(13));
+    assert_eq!(owner.next_unused_items(9, 5), Some(vec![9, 13, 14, 15, 16]));
+    assert_eq!(owner.next_unused_items(0, 0), None);
+    assert_eq!(owner.next_unused_items(u64::MAX, 2), None);
     let owner = Store::compile(State {
         tick: 0,
         revision: 0,
@@ -179,6 +182,7 @@ fn next_item_identity_skips_live_ids_and_detects_overflow() {
     })
     .unwrap();
     assert_eq!(owner.next_unused_item(u64::MAX), None);
+    assert_eq!(owner.next_unused_items(u64::MAX, 1), None);
 }
 
 #[test]

@@ -286,6 +286,34 @@ impl Store {
         }
         start.checked_add(u64::try_from(low).ok()?)
     }
+    /// Allocate distinct unused identities in ascending order without mutating custody.
+    pub fn next_unused_items(&self, start: u64, count: usize) -> Option<Vec<u64>> {
+        if start == 0 {
+            return None;
+        }
+        let base = self.items.partition_point(|row| row.0 < start);
+        (0..count)
+            .into_par_iter()
+            .map(|rank| {
+                let rank = u64::try_from(rank).ok()?;
+                let mut low = 0usize;
+                let mut high = self.items.len() - base;
+                while low < high {
+                    let middle = low + (high - low) / 2;
+                    let occupied_before = u64::try_from(middle).ok()?;
+                    let gaps = self.items[base + middle].0 - start - occupied_before;
+                    if gaps <= rank {
+                        low = middle + 1;
+                    } else {
+                        high = middle;
+                    }
+                }
+                start
+                    .checked_add(rank)?
+                    .checked_add(u64::try_from(low).ok()?)
+            })
+            .collect()
+    }
     fn touches_item(&self, movement: &Movement) -> bool {
         self.item_places.binary_search(&movement.from).is_ok()
             || movement
