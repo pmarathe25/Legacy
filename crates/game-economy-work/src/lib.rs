@@ -248,6 +248,8 @@ pub struct Context<'a> {
     pub site_classes: &'a [(u64, Option<u64>)],
     pub seed: u64,
     pub busy: &'a [u64],
+    /// Availability for a personal conversation, independent of site access.
+    pub ask_busy: Option<&'a [u64]>,
     pub unwilling: &'a [u64],
     pub max_job: Option<u64>,
     pub tick: u64,
@@ -321,7 +323,7 @@ impl Context<'_> {
                 self.tick,
             )
         });
-        let mut ask_busy = self.busy.to_vec();
+        let mut ask_busy = self.ask_busy.unwrap_or(self.busy).to_vec();
         if let Some(draft) = &request {
             ask_busy.par_extend(draft.decisions.par_iter().map(|row| row.worker));
         }

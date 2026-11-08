@@ -38024,6 +38024,68 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
             events: vec![],
         }),
     });
+    let store_run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .physical
+                    .custody
+                    .containers
+                    .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+                state
+                    .physical
+                    .custody
+                    .containers
+                    .sort_unstable_by_key(|row| row.place);
+                state.local_transport = Some(LocalTransport {
+                    stores: vec![LocalStore {
+                        id: 1,
+                        region: 1,
+                        name: "store".into(),
+                    }],
+                    policies: vec![],
+                    goal_fetchers: vec![],
+                    events: vec![],
+                    walking: Some(LocalWalking {
+                        routes: vec![].into(),
+                        preferences: vec![].into(),
+                        events: vec![],
+                        positions: [1, 2]
+                            .into_iter()
+                            .map(|person| LocalPosition {
+                                person,
+                                location: LocalLocation::At {
+                                    region: 1,
+                                    endpoint: LocalEndpoint::Store { id: 1 },
+                                },
+                            })
+                            .collect(),
+                    }),
+                });
+                let mut world = Economy::compile(state).unwrap();
+                assert!(world.advance().unwrap().started.is_empty());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .len(),
+                    1
+                );
+                assert!(world.advance().unwrap().started.is_empty());
+                world.snapshot()
+            })
+    };
+    assert_eq!(store_run(1), store_run(4));
     let run = |workers, recognize| {
         rayon::ThreadPoolBuilder::new()
             .num_threads(workers)

@@ -7259,12 +7259,43 @@ impl Economy {
                 std::borrow::Cow::Owned(usable)
             }
         });
+        let local_work_ask_busy = (self
+            .autowork
+            .as_ref()
+            .and_then(|auto| auto.requests.as_ref())
+            .is_some_and(|requests| !requests.askers.is_empty() || !practice_requests.is_empty())
+            && !local_nonstock.is_empty())
+        .then(|| {
+            let mut rows = local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                local_plan
+                    .as_ref()
+                    .map_or(&[][..], |plan| plan.actors.as_slice()),
+            );
+            game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, tool_repairs.iter().map(|row| row.0));
+            if let Some(plan) = &goal_fetch_plan {
+                game_economy_work::reserve(&mut rows, plan.actors.iter().copied());
+            }
+            game_economy_work::reserve(&mut rows, asked_actors.iter().copied());
+            game_economy_work::reserve(&mut rows, giving_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, medical_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, handling_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, restraint_plan.actors.iter().copied());
+            rows
+        });
         let mut work = game_economy_goals::prepare_work!(
             self,
             view,
             people,
             claims,
             busy,
+            local_work_ask_busy.as_deref(),
             tick,
             goal_work,
             site_classes,
@@ -7272,6 +7303,14 @@ impl Economy {
             practice_requests,
             usable_sites.as_deref()
         );
+        if local_work_ask_busy.is_some()
+            && let Some(plan) = &work
+        {
+            game_economy_work::reserve(
+                &mut local_prior_busy,
+                plan.asks().iter().map(|request| request.requester),
+            );
+        }
         #[cfg(feature = "profile")]
         {
             drop(work_phase);

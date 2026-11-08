@@ -9,7 +9,7 @@ use game_production_model::{PersonSnapshot, Recipe, person_index};
 use rayon::prelude::*;
 #[macro_export]
 macro_rules! prepare_work {
-    ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $tick:expr, $preplanned:expr, $site_classes:expr, $offers:expr, $practice_requests:expr, $sites:expr) => {{
+    ($world:expr, $view:expr, $people:expr, $claims:expr, $busy:expr, $ask_busy:expr, $tick:expr, $preplanned:expr, $site_classes:expr, $offers:expr, $practice_requests:expr, $sites:expr) => {{
         #[cfg(feature = "profile")]
         let mut work_prepare_phase = game_diagnostics::span("economy.work.unwilling");
         let mut unwilling: Vec<_> = $world
@@ -77,6 +77,7 @@ macro_rules! prepare_work {
                     site_classes: &$site_classes,
                     seed: $world.seed,
                     busy: &$busy,
+                    ask_busy: $ask_busy,
                     unwilling: &unwilling,
                     max_job: $world.physical.work().last().map(|row| row.job.id),
                     tick: $tick,
