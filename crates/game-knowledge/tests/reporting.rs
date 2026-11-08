@@ -5,6 +5,7 @@ use std::collections::HashSet;
 #[test]
 fn speaker_can_withhold_or_report_under_their_own_pressure() {
     let initial = Knowledge {
+        retention: vec![],
         max_records: 3,
         minds: vec![
             Mind {

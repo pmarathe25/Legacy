@@ -7710,6 +7710,162 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
 }
 
 #[test]
+fn faded_personal_memory_can_be_recovered_from_an_old_page() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-written-food.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                state
+                    .knowledge
+                    .as_mut()
+                    .unwrap()
+                    .retention
+                    .push(game_economy::Retention {
+                        person: 1,
+                        ticks: 2,
+                        traces: vec![],
+                    });
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                let item = Player::new(&mut world)
+                    .write_food(1, 2, None, None)
+                    .unwrap()
+                    .unwrap();
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                let before = world.snapshot();
+                assert!(
+                    Player::new(&mut world)
+                        .view()
+                        .unwrap()
+                        .food_reports
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                assert!(
+                    Player::new(&mut world)
+                        .write_food(1, 2, None, None)
+                        .is_err()
+                );
+                assert_eq!(before, world.snapshot());
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(Player::new(&mut world).read_page(item).unwrap());
+                assert!(Player::new(&mut restored).read_page(item).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let recovered = world
+                    .known_food(1)
+                    .unwrap()
+                    .into_iter()
+                    .find(|record| record.region == 2)
+                    .unwrap();
+                assert_eq!(
+                    (recovered.food, recovered.observed_at, recovered.witness),
+                    (37, 0, 1)
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn autonomous_writers_cannot_use_a_faded_memory() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, fades| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-written-food.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                state.gathering = None;
+                let knowledge = state.knowledge.as_mut().unwrap();
+                let record = knowledge
+                    .minds
+                    .iter()
+                    .find(|mind| mind.person == 1)
+                    .unwrap()
+                    .records
+                    .iter()
+                    .find(|record| record.region == 2)
+                    .unwrap()
+                    .clone();
+                knowledge
+                    .minds
+                    .iter_mut()
+                    .find(|mind| mind.person == 2)
+                    .unwrap()
+                    .records
+                    .push(record);
+                if fades {
+                    knowledge.retention.push(game_economy::Retention {
+                        person: 2,
+                        ticks: 1,
+                        traces: vec![],
+                    });
+                }
+                let writing = state.writing.as_mut().unwrap();
+                writing
+                    .literacy_mut()
+                    .iter_mut()
+                    .find(|row| row.person == 2)
+                    .unwrap()
+                    .write = true;
+                writing.authors = vec![game_economy::WritingAuthor {
+                    person: 2,
+                    script: 1,
+                    region: 2,
+                    food_delta: 0,
+                    completed: false,
+                    retry_at: 2,
+                }]
+                .into();
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let snapshot = world.snapshot();
+                assert_eq!(
+                    snapshot.writing.as_ref().unwrap().pages.len(),
+                    usize::from(!fades)
+                );
+                snapshot
+            })
+    };
+    for fades in [false, true] {
+        assert_eq!(run(1, fades), run(4, fades));
+    }
+}
+
+#[test]
 fn autonomous_written_claims_can_be_physically_shared_and_read() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

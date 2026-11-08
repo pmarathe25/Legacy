@@ -264,9 +264,9 @@ impl<'a> Player<'a> {
             .and_then(|id| {
                 state
                     .knowledge
-                    .and_then(|k| k.minds.par_iter().find_any(|m| m.person == id))
+                    .and_then(|knowledge| knowledge.recall_at(id, state.tick))
             })
-            .map_or_else(Vec::new, |m| m.records.clone());
+            .unwrap_or_default();
         let job = current
             .and_then(|id| {
                 state

@@ -21,6 +21,7 @@ fn encounter_reports_are_personal_bounded_and_keep_their_source() {
         observed_at: 3,
     });
     let initial = Knowledge {
+        retention: vec![],
         max_records: 1,
         minds: vec![speaker, empty(2), empty(3)],
     };
@@ -111,6 +112,7 @@ fn encounter_reports_are_personal_bounded_and_keep_their_source() {
 #[test]
 fn personal_encounter_memories_are_bounded_and_do_not_depend_on_report_acceptance() {
     let initial = Knowledge {
+        retention: vec![],
         max_records: 1,
         minds: vec![
             Mind {

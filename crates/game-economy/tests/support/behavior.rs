@@ -616,6 +616,7 @@ fn independent_readers(count: u64) -> State {
             .unwrap()
         }));
     state.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: (1..=count)
             .map(|person| game_economy_knowledge::Mind {
@@ -11348,6 +11349,7 @@ fn expedition_observation_requires_personal_fresh_evidence_at_destination() {
     use game_economy_knowledge::{Knowledge, Mind, Record};
     let mut initial = expedition_fixture();
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![Mind {
             person: 1,
@@ -17202,6 +17204,7 @@ fn knowledge_workload(count: u64) -> State {
         person.hunger = 0;
     }
     state.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: (1..=count)
             .map(|person| Mind {
@@ -22955,6 +22958,7 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         journeys: vec![],
     });
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![Mind {
             person: 2,
@@ -23120,6 +23124,7 @@ fn food_search_workload(count: u64) -> State {
         journeys: vec![],
     });
     state.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: (1..=count)
             .map(|person| Mind {
@@ -23179,6 +23184,43 @@ fn concentrated_personal_food_search_matches_across_workers() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn food_search_ignores_faded_personal_reports() {
+    let run = |workers, fades| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = food_search_workload(4);
+                for preference in &mut initial.food_search.as_mut().unwrap().people {
+                    preference.next_review = 1;
+                }
+                if fades {
+                    initial.knowledge.as_mut().unwrap().retention = (1..=4)
+                        .map(|person| Retention {
+                            person,
+                            ticks: 1,
+                            traces: vec![],
+                        })
+                        .collect();
+                }
+                let mut world = Economy::compile(initial).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state.travel.as_ref().unwrap().journeys.len(),
+                    if fades { 0 } else { 4 }
+                );
+                state
+            })
+    };
+    for fades in [false, true] {
+        assert_eq!(run(1, fades), run(4, fades));
+    }
 }
 
 #[test]
@@ -29720,6 +29762,7 @@ fn personal_encounter_memory_is_local_bounded_and_not_a_live_location() {
         .participants[1]
         .willing = true;
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 2,
         minds: vec![
             Mind {
@@ -29814,6 +29857,7 @@ fn personal_food_reporting_can_be_withheld_or_motivated_by_pressure() {
         affinity: 0,
     }];
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![
             Mind {
@@ -29924,6 +29968,7 @@ fn personal_reports_preserve_observation_time_and_respect_directed_trust() {
     )
     .unwrap();
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![
             Mind {
@@ -30044,6 +30089,7 @@ fn false_food_reports_are_personal_statements_not_physical_stock() {
         learned_from: None,
     };
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![
             Mind {
@@ -30185,6 +30231,7 @@ fn a_hungry_person_can_travel_on_a_false_report_then_observe_empty_stock() {
         .participants[1]
         .willing = true;
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![
             Mind {
@@ -30340,6 +30387,7 @@ fn stale_draft_does_not_publish_a_report_discrepancy_reaction() {
     use game_economy_knowledge::{Knowledge, Mind, Record};
     let mut state = expedition_fixture();
     state.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![Mind {
             person: 2,
@@ -30417,6 +30465,7 @@ fn invoked_memory_remains_in_the_past_mind_and_requires_control() {
         learned_from: None,
     };
     initial.knowledge = Some(Knowledge {
+        retention: vec![],
         max_records: 4,
         minds: vec![
             Mind {

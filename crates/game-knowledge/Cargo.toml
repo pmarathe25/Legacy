@@ -10,3 +10,6 @@ serde.workspace = true
 game-social = { path = "../game-social" }
 game-people = { path = "../game-people" }
 game-transport = { path = "../game-transport" }
+
+[dev-dependencies]
+serde_json.workspace = true

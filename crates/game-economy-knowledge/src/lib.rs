@@ -2,7 +2,9 @@
 use game_economy_person::Person;
 use game_families::Families;
 use game_knowledge::Observation;
-pub use game_knowledge::{Knowledge, Mind, Misreport, PersonReport, Record, Reporting, SeenPerson};
+pub use game_knowledge::{
+    Knowledge, Mind, Misreport, PersonReport, RecallTrace, Record, Reporting, Retention, SeenPerson,
+};
 use game_lots::{Place, View};
 use game_opinions::Opinions;
 use game_production_model::Good;
@@ -159,7 +161,13 @@ pub fn reclaim(owner: Option<Knowledge>) {
     }
 }
 /// Compare only each living person's direct local observation with their own earlier report.
-pub fn discrepancies(before: &Knowledge, after: &Knowledge, people: &[Person]) -> Vec<(u64, u64)> {
+pub fn discrepancies(
+    before: &Knowledge,
+    after: &Knowledge,
+    people: &[Person],
+    now: u64,
+) -> Vec<(u64, u64)> {
+    let recall = before.recall_index();
     let dense = people.first().zip(people.last()).and_then(|(first, last)| {
         (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
     });
@@ -184,8 +192,19 @@ pub fn discrepancies(before: &Knowledge, after: &Knowledge, people: &[Person]) -
             let current = next.records.iter().find(|r| {
                 r.region == region && r.learned_from.is_none() && r.witness == person.id
             })?;
+            let remembered = if before.retention.is_empty() {
+                std::borrow::Cow::Borrowed(old.records.as_slice())
+            } else {
+                std::borrow::Cow::Owned(
+                    old.records
+                        .iter()
+                        .filter(|record| recall.remembers(old.person, record, now))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                )
+            };
             game_knowledge::report_discrepancy(
-                &old.records,
+                &remembered,
                 Observation {
                     person: person.id,
                     health: person.health,
@@ -356,10 +375,7 @@ macro_rules! knowledge_methods {
             self.knowledge
                 .as_ref()
                 .ok_or("knowledge is disabled")?
-                .minds
-                .iter()
-                .find(|m| m.person == person)
-                .map(|mind| mind.records.clone())
+                .recall_at(person, self.tick())
                 .ok_or("person has no mind".into())
         }
         /// Access a past mind only while its life is actively invoked and the player has control.

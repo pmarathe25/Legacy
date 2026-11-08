@@ -29,7 +29,9 @@ use game_economy_family as family;
 pub use game_economy_family::Families;
 pub use game_economy_fatigue::Fatigue;
 pub use game_economy_goals::{Dream, Dreams, Goal, Goals, Learning};
-pub use game_economy_knowledge::{Knowledge, Misreport, PersonReport, Reporting, SeenPerson};
+pub use game_economy_knowledge::{
+    Knowledge, Misreport, PersonReport, RecallTrace, Reporting, Retention, SeenPerson,
+};
 pub use game_economy_local_transport::goal::Preference as GoalFetchPreference;
 pub use game_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
@@ -2461,7 +2463,7 @@ impl Economy {
             && accepted
             && let Some(knowledge) = &mut draft.knowledge
         {
-            knowledge.receive_report(target, report, local);
+            knowledge.receive_report_at(target, report, local, self.tick().saturating_add(1));
         }
         self.commit(draft)?;
         Ok(contact)
@@ -3066,6 +3068,7 @@ impl Economy {
             .as_ref()
             .zip(self.knowledge.as_ref())
             .map_or_else(Vec::new, |(owner, knowledge)| {
+                let recall = knowledge.recall_index();
                 owner
                     .authors
                     .par_iter()
@@ -3090,7 +3093,10 @@ impl Economy {
                         let mut claim = mind
                             .records
                             .iter()
-                            .find(|record| record.region == author.region)?
+                            .find(|record| {
+                                record.region == author.region
+                                    && recall.remembers(author.person, record, self.tick())
+                            })?
                             .clone();
                         claim.food = (i128::from(claim.food) + i128::from(author.food_delta))
                             .clamp(0, i128::from(u32::MAX))
@@ -6041,7 +6047,9 @@ impl Economy {
                     Some((person, statement, local))
                 })
                 .collect();
-            owner.receive_reports(&reports).map_err(str::to_owned)?;
+            owner
+                .receive_reports_at(&reports, tick)
+                .map_err(str::to_owned)?;
         }
         if page_read == Some(true)
             && let (Some(page), Some(owner)) = (page_to_read, &mut knowledge)
@@ -6064,7 +6072,7 @@ impl Economy {
                     .binary_search_by_key(&person, |p| p.id)
                     .ok()
                     .and_then(|i| self.people[i].region);
-                owner.receive_report(person, statement, local);
+                owner.receive_report_at(person, statement, local, tick);
             }
         }
         let mut skills = game_economy_skills::advance(
@@ -6903,7 +6911,7 @@ impl Economy {
             && let Some((before, after)) = self.knowledge.as_ref().zip(knowledge.as_ref())
         {
             opinions.learn_report_discrepancies(
-                &game_economy_knowledge::discrepancies(before, after, &self.people),
+                &game_economy_knowledge::discrepancies(before, after, &self.people, self.tick()),
                 tick,
             );
         }

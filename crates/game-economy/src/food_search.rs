@@ -184,13 +184,15 @@ impl Context<'_> {
         if minds.par_windows(2).any(|p| p[0].person > p[1].person) {
             minds.par_sort_unstable_by_key(|m| m.person);
         }
+        let recall = self.knowledge.recall_index();
         let mut destinations: Vec<_> = minds
             .par_iter()
             .flat_map_iter(|mind| {
                 mind.records
                     .iter()
                     .filter(|r| {
-                        r.food >= self.owner.min_report_food
+                        recall.remembers(mind.person, r, self.now)
+                            && r.food >= self.owner.min_report_food
                             && self.now.saturating_sub(r.observed_at) <= self.owner.max_report_age
                     })
                     .map(|r| r.region)
@@ -255,7 +257,8 @@ impl Context<'_> {
                         .iter()
                         .filter_map(|record| {
                             let (ticks, _) = routes.get(&(region, record.region))?;
-                            (record.region != region
+                            (recall.remembers(mind.person, record, self.now)
+                                && record.region != region
                                 && record.food >= self.owner.min_report_food
                                 && self.now.saturating_sub(record.observed_at)
                                     <= self.owner.max_report_age)

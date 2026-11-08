@@ -3,7 +3,7 @@ pub mod adapter;
 use game_social::Encounter;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -11,6 +11,58 @@ use std::sync::atomic::{AtomicU64, Ordering};
 pub struct Knowledge {
     pub max_records: usize,
     pub minds: Vec<Mind>,
+    /// Optional per-person food-memory retention; absent people retain the
+    /// existing bounded-record behavior.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retention: Vec<Retention>,
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Retention {
+    pub person: u64,
+    pub ticks: u64,
+    #[serde(default)]
+    pub traces: Vec<RecallTrace>,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecallTrace {
+    pub region: u64,
+    pub reinforced_at: u64,
+}
+
+impl Retention {
+    pub fn remembers(&self, record: &Record, now: u64) -> bool {
+        let last = self
+            .traces
+            .iter()
+            .find(|trace| trace.region == record.region)
+            .map_or(record.observed_at, |trace| trace.reinforced_at);
+        now.saturating_sub(last) < self.ticks
+    }
+    fn reinforce(&mut self, region: u64, tick: u64) {
+        if let Some(trace) = self.traces.iter_mut().find(|trace| trace.region == region) {
+            trace.reinforced_at = trace.reinforced_at.max(tick);
+        } else {
+            self.traces.push(RecallTrace {
+                region,
+                reinforced_at: tick,
+            });
+        }
+    }
+}
+
+/// Immutable lookup used by decisions and views; examining a memory is passive.
+pub struct RecallIndex<'a> {
+    rows: Vec<&'a Retention>,
+}
+impl RecallIndex<'_> {
+    pub fn remembers(&self, person: u64, record: &Record, now: u64) -> bool {
+        self.rows
+            .binary_search_by_key(&person, |row| row.person)
+            .ok()
+            .is_none_or(|index| self.rows[index].remembers(record, now))
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -105,6 +157,135 @@ pub fn report_discrepancy(records: &[Record], observation: Observation) -> Optio
 }
 
 impl Knowledge {
+    pub fn recall_index(&self) -> RecallIndex<'_> {
+        let mut rows: Vec<_> = self.retention.par_iter().collect();
+        if rows
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            rows.par_sort_unstable_by_key(|row| row.person);
+        }
+        RecallIndex { rows }
+    }
+    /// Recall is a pure view: looking at a memory does not reinforce it.
+    pub fn recall_at(&self, person: u64, now: u64) -> Option<Vec<Record>> {
+        let mind = self.minds.iter().find(|mind| mind.person == person)?;
+        let index = self.recall_index();
+        Some(
+            mind.records
+                .iter()
+                .filter(|record| index.remembers(person, record, now))
+                .cloned()
+                .collect(),
+        )
+    }
+    /// Apply accepted reception at the actual boundary without changing the claim's age.
+    pub fn receive_reports_at(
+        &mut self,
+        reports: &[(u64, Record, Option<u64>)],
+        now: u64,
+    ) -> Result<(), &'static str> {
+        if reports.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err("received reports must have unique ordered recipients");
+        }
+        if !self.retention.is_empty() {
+            let mut policies: Vec<_> = self.retention.par_iter().collect();
+            if policies
+                .par_windows(2)
+                .any(|pair| pair[0].person > pair[1].person)
+            {
+                policies.par_sort_unstable_by_key(|policy| policy.person);
+            }
+            self.minds.par_iter_mut().for_each(|mind| {
+                if reports
+                    .binary_search_by_key(&mind.person, |row| row.0)
+                    .is_ok()
+                    && let Ok(index) =
+                        policies.binary_search_by_key(&mind.person, |policy| policy.person)
+                {
+                    mind.records
+                        .retain(|record| policies[index].remembers(record, now));
+                }
+            });
+        }
+        self.receive_reports(reports)?;
+        if self.retention.is_empty() {
+            return Ok(());
+        }
+        let mut minds: Vec<_> = self.minds.par_iter().collect();
+        if minds
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            minds.par_sort_unstable_by_key(|mind| mind.person);
+        }
+        self.retention.par_iter_mut().for_each(|policy| {
+            let Some((_, report, _)) = reports
+                .binary_search_by_key(&policy.person, |row| row.0)
+                .ok()
+                .map(|i| &reports[i])
+            else {
+                return;
+            };
+            let Some(mind) = minds
+                .binary_search_by_key(&policy.person, |mind| mind.person)
+                .ok()
+                .map(|i| minds[i])
+            else {
+                return;
+            };
+            policy.traces.retain(|trace| {
+                mind.records
+                    .iter()
+                    .any(|record| record.region == trace.region)
+            });
+            if report.observed_at <= now
+                && mind
+                    .records
+                    .iter()
+                    .any(|record| same_evidence(record, report))
+            {
+                policy.reinforce(report.region, now);
+            }
+        });
+        Ok(())
+    }
+    pub fn receive_report_at(
+        &mut self,
+        recipient: u64,
+        report: Record,
+        local_region: Option<u64>,
+        now: u64,
+    ) -> bool {
+        if let (Some(policy), Some(mind)) = (
+            self.retention.iter().find(|row| row.person == recipient),
+            self.minds.iter_mut().find(|mind| mind.person == recipient),
+        ) {
+            mind.records.retain(|record| policy.remembers(record, now));
+        }
+        let changed = self.receive_report(recipient, report.clone(), local_region);
+        if let (Some(policy), Some(mind)) = (
+            self.retention
+                .iter_mut()
+                .find(|row| row.person == recipient),
+            self.minds.iter().find(|mind| mind.person == recipient),
+        ) {
+            policy.traces.retain(|trace| {
+                mind.records
+                    .iter()
+                    .any(|record| record.region == trace.region)
+            });
+            if report.observed_at <= now
+                && mind
+                    .records
+                    .iter()
+                    .any(|record| same_evidence(record, &report))
+            {
+                policy.reinforce(report.region, now);
+            }
+        }
+        changed
+    }
     /// Apply at most one received statement per person in a sorted independent batch.
     pub fn receive_reports(
         &mut self,
@@ -128,6 +309,25 @@ impl Knowledge {
                 mind.records.sort_unstable_by_key(|record| record.region);
             }
         });
+        if !self.retention.is_empty() {
+            let mut minds: Vec<_> = self.minds.par_iter().collect();
+            if minds
+                .par_windows(2)
+                .any(|pair| pair[0].person > pair[1].person)
+            {
+                minds.par_sort_unstable_by_key(|mind| mind.person);
+            }
+            self.retention.par_iter_mut().for_each(|policy| {
+                if let Ok(index) = minds.binary_search_by_key(&policy.person, |mind| mind.person) {
+                    policy.traces.retain(|trace| {
+                        minds[index].records.iter().any(|record| {
+                            record.region == trace.region
+                                && record.observed_at <= trace.reinforced_at
+                        })
+                    });
+                }
+            });
+        }
         Ok(())
     }
     /// Store one received statement under the same bounded, recency-aware rules
@@ -150,7 +350,19 @@ impl Knowledge {
             false,
         );
         mind.records.sort_unstable_by_key(|record| record.region);
-        mind.records != before
+        let changed = mind.records != before;
+        if let Some(policy) = self
+            .retention
+            .iter_mut()
+            .find(|row| row.person == recipient)
+        {
+            policy.traces.retain(|trace| {
+                mind.records.iter().any(|record| {
+                    record.region == trace.region && record.observed_at <= trace.reinforced_at
+                })
+            });
+        }
+        changed
     }
     pub fn validate(
         &self,
@@ -209,6 +421,32 @@ impl Knowledge {
                 {
                     return Err("invalid personal record");
                 }
+            }
+        }
+        if !self.retention.is_empty() {
+            let mind_by_person: HashMap<_, _> =
+                self.minds.iter().map(|mind| (mind.person, mind)).collect();
+            let mut policies = HashSet::new();
+            if self.retention.iter().any(|policy| {
+                let Some(mind) = mind_by_person.get(&policy.person) else {
+                    return true;
+                };
+                let mut regions_seen = HashSet::new();
+                policy.ticks == 0
+                    || !policies.insert(policy.person)
+                    || policy.traces.len() > self.max_records
+                    || policy.traces.iter().any(|trace| {
+                        !regions.contains(&trace.region)
+                            || trace.reinforced_at > now
+                            || !regions_seen.insert(trace.region)
+                            || mind
+                                .records
+                                .iter()
+                                .find(|record| record.region == trace.region)
+                                .is_none_or(|record| trace.reinforced_at < record.observed_at)
+                    })
+            }) {
+                return Err("invalid food-memory retention");
             }
         }
         Ok(())
@@ -300,6 +538,10 @@ impl Knowledge {
         let (accept, pressure) = policies;
         if self.max_records == 0 {
             return Err("invalid knowledge capacity");
+        }
+        if !validated && !self.retention.is_empty() {
+            let people: HashSet<_> = observations.par_iter().map(|row| row.person).collect();
+            self.validate(&people, regions, now)?;
         }
         let ordered = if observations
             .par_windows(2)
@@ -530,6 +772,7 @@ impl Knowledge {
                 Vec::new()
             };
         seen_contacts.par_sort_unstable();
+        let recall = self.recall_index();
         let next: Vec<Mind> = self
             .minds
             .par_iter()
@@ -539,6 +782,10 @@ impl Knowledge {
                 let observation = observations[position];
                 if observation.health == 0 {
                     return mind;
+                }
+                if !self.retention.is_empty() {
+                    mind.records
+                        .retain(|record| recall.remembers(mind.person, record, now));
                 }
                 if mind.remember_people {
                     let start = seen_contacts.partition_point(|row| row.0 < mind.person);
@@ -613,6 +860,7 @@ impl Knowledge {
                     let report = minds[j]
                         .records
                         .iter()
+                        .filter(|record| recall.remembers(partner, record, now))
                         .filter(|r| Some(r.region) != local_region)
                         .filter(|r| {
                             mind.records
@@ -698,11 +946,68 @@ impl Knowledge {
                 mind
             })
             .collect();
+        let retention = if self.retention.is_empty() {
+            Vec::new()
+        } else {
+            let mut next_index: Vec<_> = next.par_iter().collect();
+            if next_index
+                .par_windows(2)
+                .any(|pair| pair[0].person > pair[1].person)
+            {
+                next_index.par_sort_unstable_by_key(|mind| mind.person);
+            }
+            self.retention
+                .par_iter()
+                .map(|old_policy| {
+                    let mut policy = old_policy.clone();
+                    let Some(old_mind) = mind_index(policy.person).map(|i| minds[i]) else {
+                        return policy;
+                    };
+                    let Some(new_mind) = next_index
+                        .binary_search_by_key(&policy.person, |mind| mind.person)
+                        .ok()
+                        .map(|i| next_index[i])
+                    else {
+                        return policy;
+                    };
+                    let observation = observation_index(policy.person).map(|i| observations[i]);
+                    policy.traces.retain(|trace| {
+                        new_mind
+                            .records
+                            .iter()
+                            .any(|record| record.region == trace.region)
+                    });
+                    for record in &new_mind.records {
+                        let locally_observed = observation.is_some_and(|row| {
+                            row.health > 0
+                                && row.local.is_some_and(|(region, _)| region == record.region)
+                        });
+                        let changed = old_mind
+                            .records
+                            .iter()
+                            .find(|old| old.region == record.region)
+                            .is_none_or(|old| {
+                                old != record || !recall.remembers(policy.person, old, now)
+                            });
+                        if locally_observed {
+                            policy.reinforce(record.region, now);
+                        } else if changed {
+                            policy.reinforce(record.region, now.saturating_add(1));
+                        }
+                    }
+                    policy
+                })
+                .collect()
+        };
         Ok(Self {
             max_records: self.max_records,
             minds: next,
+            retention,
         })
     }
+}
+fn same_evidence(a: &Record, b: &Record) -> bool {
+    (a.region, a.food, a.observed_at, a.witness) == (b.region, b.food, b.observed_at, b.witness)
 }
 fn remember(
     records: &mut Vec<Record>,

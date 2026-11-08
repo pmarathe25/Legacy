@@ -13,6 +13,7 @@ fn record(region: u64, observed_at: u64) -> Record {
 #[test]
 fn received_reports_respect_recency_capacity_and_local_memory() {
     let mut knowledge = Knowledge {
+        retention: vec![],
         max_records: 2,
         minds: vec![Mind {
             person: 2,
@@ -47,6 +48,7 @@ fn batched_reports_are_independent_and_reject_duplicate_recipients_atomically() 
         records: vec![],
     };
     let initial = Knowledge {
+        retention: vec![],
         max_records: 2,
         minds: vec![mind(2), mind(4)],
     };
