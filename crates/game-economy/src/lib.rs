@@ -2309,6 +2309,70 @@ impl Economy {
     pub fn tick(&self) -> u64 {
         self.physical.tick()
     }
+    /// Attempt a real meeting and state one actively invoked past-life food memory.
+    /// The optional quantity is the speaker's chosen claim, which may be false.
+    /// The result reports contact, not the listener's private reception or belief.
+    pub fn share_invoked_food(
+        &mut self,
+        actor: u64,
+        target: u64,
+        life: u64,
+        region: u64,
+        claimed_food: Option<u32>,
+    ) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        if self
+            .campaign
+            .as_ref()
+            .and_then(|c| c.lineage.controlled_person(self.tick()))
+            != Some(actor)
+        {
+            return Err("sharing an invoked memory requires the controlled ruler".into());
+        }
+        let mut report = self
+            .invoked_knowledge(life)?
+            .into_iter()
+            .find(|record| record.region == region)
+            .ok_or("past life has no memory of that region")?;
+        if let Some(food) = claimed_food {
+            report.food = food;
+        }
+        report.learned_from = Some(actor);
+        let accepted = self
+            .opinions
+            .as_ref()
+            .and_then(Opinions::report_filter)
+            .is_none_or(|filter| filter.accepts(target, actor));
+        let local = self
+            .people
+            .binary_search_by_key(&target, |p| p.id)
+            .ok()
+            .and_then(|i| self.people[i].region);
+        let mut draft = self.prepare_interaction(
+            Some(game_economy_interaction::Request { actor, target }),
+            None,
+            None,
+            None,
+        )?;
+        let contact = draft
+            .dynamics
+            .as_ref()
+            .and_then(|d| d.social.as_ref())
+            .is_some_and(|social| {
+                social
+                    .events
+                    .iter()
+                    .any(|event| event.a == actor.min(target) && event.b == actor.max(target))
+            });
+        if contact
+            && accepted
+            && let Some(knowledge) = &mut draft.knowledge
+        {
+            knowledge.receive_report(target, report, local);
+        }
+        self.commit(draft)?;
+        Ok(contact)
+    }
     pub fn prepare(&self) -> Result<Draft, String> {
         self.prepare_interaction(None, None, None, None)
     }

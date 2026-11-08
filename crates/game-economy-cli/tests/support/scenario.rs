@@ -6906,3 +6906,146 @@ fn a_person_can_collect_deposit_and_spin_wool_without_player_orders() {
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn invoked_food_memories_can_be_told_and_retained_after_dismissal() {
+    use game_economy::ReportReception;
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, meets: bool, accepts: bool, lie: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-past-testimony.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                let social = state.dynamics.as_mut().unwrap().social.as_mut().unwrap();
+                social
+                    .participants
+                    .iter_mut()
+                    .find(|p| p.person == 2)
+                    .unwrap()
+                    .willing = meets;
+                let sensitivity = state
+                    .opinions
+                    .as_mut()
+                    .unwrap()
+                    .sensitivities_mut()
+                    .iter_mut()
+                    .find(|s| s.person == 2)
+                    .unwrap();
+                sensitivity.report_reception = Some(if accepts {
+                    ReportReception::Always
+                } else {
+                    ReportReception::Never
+                });
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                for _ in 0..10 {
+                    if world
+                        .snapshot()
+                        .campaign
+                        .as_ref()
+                        .unwrap()
+                        .lineage
+                        .current
+                        .is_some_and(|id| id != 1)
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                }
+                let current = world
+                    .snapshot()
+                    .campaign
+                    .as_ref()
+                    .unwrap()
+                    .lineage
+                    .current
+                    .unwrap();
+                assert_ne!(current, 1);
+                assert!(world.known_food(2).unwrap().iter().all(|r| r.region != 2));
+                assert!(Player::new(&mut world).past_knowledge(1).is_err());
+                Player::new(&mut world).invoke(&[1]).unwrap();
+                assert_eq!(
+                    Player::new(&mut world)
+                        .past_knowledge(1)
+                        .unwrap()
+                        .iter()
+                        .find(|r| r.region == 2)
+                        .unwrap()
+                        .food,
+                    37
+                );
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                let claim = lie.then_some(99);
+                assert_eq!(
+                    Player::new(&mut world)
+                        .share_invoked_food(1, 2, 2, claim)
+                        .unwrap(),
+                    meets
+                );
+                assert_eq!(
+                    Player::new(&mut restored)
+                        .share_invoked_food(1, 2, 2, claim)
+                        .unwrap(),
+                    meets
+                );
+                let statement = world
+                    .known_food(2)
+                    .unwrap()
+                    .into_iter()
+                    .find(|r| r.region == 2);
+                assert_eq!(statement.is_some(), meets && accepts);
+                if let Some(statement) = statement {
+                    assert_eq!(
+                        (statement.food, statement.witness, statement.learned_from),
+                        (if lie { 99 } else { 37 }, 1, Some(current))
+                    );
+                }
+                assert_eq!(
+                    world
+                        .invoked_knowledge(1)
+                        .unwrap()
+                        .iter()
+                        .find(|r| r.region == 2)
+                        .unwrap()
+                        .food,
+                    37
+                );
+                Player::new(&mut world).dismiss_invocation().unwrap();
+                Player::new(&mut restored).dismiss_invocation().unwrap();
+                assert!(Player::new(&mut world).past_knowledge(1).is_err());
+                assert_eq!(
+                    world.known_food(2).unwrap().iter().any(|r| r.region == 2),
+                    meets && accepts
+                );
+                let after_dismissal = world.snapshot();
+                assert!(
+                    Player::new(&mut world)
+                        .share_invoked_food(1, 2, 2, claim)
+                        .is_err()
+                );
+                assert_eq!(world.snapshot(), after_dismissal);
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    for (meets, accepts, lie) in [
+        (true, true, false),
+        (true, true, true),
+        (true, false, true),
+        (false, true, false),
+    ] {
+        assert_eq!(run(1, meets, accepts, lie), run(4, meets, accepts, lie));
+    }
+}

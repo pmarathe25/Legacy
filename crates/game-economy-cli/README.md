@@ -16,6 +16,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-succession.toml` starts with a dying ruler and an existing pregnancy. Time continues through the succession gap; a successor can arise only from an actual eligible birth, and the embodied guardians must travel to them. Once the successor exists, `invoke 1` invokes the deceased ruler, `past-knowledge 1` accesses that life's remembered food reports, and `dismiss-invocation` ends access. Invocation can pause time with a warning before imposing a cost; the player can accept the warning or dismiss it.
 
+`content/scenarios/economy-past-testimony.toml` gives the previous life a remembered food report for region 2. While invoking that life, `tell-past-food 1 2 2 remembered` attempts a real meeting with person 2 and states the remembered quantity; replace `remembered` with a number to make a different claim. The listener independently applies their report-reception policy, and an accepted bounded memory can persist after dismissal. The command reports whether contact occurred, not the listener's private assessment.
+
 `content/scenarios/economy-community.toml` lets two neighbors encounter shortages and actual help while the player observes as a third person. A neighbor may construct a food-aid proposal from personal experience; the other independently evaluates it and chooses later actions. The proposal itself creates no goods or binding institution.
 
 `content/scenarios/economy-personal-credit.toml` lets the player give food to a neighbor who may later offer a revocable promise in response. The offer and its eventual fulfillment are separate personal choices; the gift is not automatically repaid.

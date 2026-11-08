@@ -927,6 +927,20 @@ impl<'a> Player<'a> {
         self.current()?;
         self.world.invoked_knowledge(life)
     }
+    /// State a remembered or deliberately altered past-life food report in a meeting.
+    pub fn share_invoked_food(
+        &mut self,
+        life: u64,
+        target: u64,
+        region: u64,
+        claimed_food: Option<u32>,
+    ) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&target) {
+            return Err("person is not present".into());
+        }
+        self.world
+            .share_invoked_food(self.current()?, target, life, region, claimed_food)
+    }
     pub fn invoke(&mut self, lives: &[u64]) -> Result<(), String> {
         self.current()?;
         self.world.invoke_lives(lives)

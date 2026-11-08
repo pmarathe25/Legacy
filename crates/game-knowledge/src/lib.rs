@@ -105,6 +105,28 @@ pub fn report_discrepancy(records: &[Record], observation: Observation) -> Optio
 }
 
 impl Knowledge {
+    /// Store one received statement under the same bounded, recency-aware rules
+    /// as ordinary reports. The caller decides whether the listener accepts it.
+    pub fn receive_report(
+        &mut self,
+        recipient: u64,
+        report: Record,
+        local_region: Option<u64>,
+    ) -> bool {
+        let Some(mind) = self.minds.iter_mut().find(|mind| mind.person == recipient) else {
+            return false;
+        };
+        let before = mind.records.clone();
+        remember(
+            &mut mind.records,
+            report,
+            self.max_records,
+            local_region,
+            false,
+        );
+        mind.records.sort_unstable_by_key(|record| record.region);
+        mind.records != before
+    }
     pub fn validate(
         &self,
         people: &HashSet<u64>,
