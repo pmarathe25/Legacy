@@ -30,6 +30,10 @@ impl AdvanceDraft {
     pub fn events(&self) -> &Events {
         &self.events
     }
+    /// Work in this detached generation, ordered by job identity.
+    pub fn work(&self) -> &[Work] {
+        &self.work
+    }
     /// Staged identified-item custody changes, independent of receipt retention.
     pub fn item_updates(&self) -> &[(u64, Option<Place>)] {
         self.custody.item_updates()

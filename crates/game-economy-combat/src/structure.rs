@@ -14,6 +14,9 @@ pub struct Target {
     pub site: u64,
     pub region: u64,
     pub position: Point,
+    /// If enabled, combat damage at the wear limit destroys the site.
+    #[serde(default)]
+    pub collapses_at_limit: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -24,6 +27,8 @@ pub struct Event {
     pub attacker: u64,
     pub site: u64,
     pub damage: u32,
+    #[serde(default)]
+    pub collapsed: bool,
 }
 
 /// A person's choice to damage a particular site while fighting.
@@ -312,6 +317,7 @@ pub(crate) fn strikes(
                     attacker: intent.attacker,
                     site: intent.site,
                     damage: runtime.state.conflict.damage,
+                    collapsed: false,
                 })
         })
         .collect();

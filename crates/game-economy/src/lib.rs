@@ -110,6 +110,7 @@ mod hunting;
 mod medical;
 mod mission_deliveries;
 mod social_preferences;
+mod structure_collapse;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
 pub use giving::{
     Asking as FoodAsking, Giving, HelperAsking, Policy as GivingPolicy, Request as FoodRequest,
@@ -6693,6 +6694,14 @@ impl Economy {
                 owner.damage(current, &strikes);
             }
         }
+        let collapsed_sites = if let (Some(combat), Some(owner), Some(sites)) =
+            (combat.as_mut(), construction.as_mut(), work_sites.as_mut())
+        {
+            structure_collapse::apply(combat, owner, sites, &mut physical, &self.physical)?
+        } else {
+            Vec::new()
+        };
+        site_removed |= !collapsed_sites.is_empty();
         if let Some(combat) = &mut combat
             && !combat.state.structures.is_empty()
             && site_removed
@@ -6814,6 +6823,21 @@ impl Economy {
                                 site: e.site,
                                 destroyed: false,
                                 salvaged: true,
+                            }),
+                    );
+                }
+                if let Some(combat) = &combat {
+                    uses.par_extend(
+                        combat
+                            .state
+                            .structure_events
+                            .par_iter()
+                            .filter(|event| event.collapsed)
+                            .map(|event| game_economy_claims::SiteUse {
+                                person: event.attacker,
+                                site: event.site,
+                                destroyed: true,
+                                salvaged: false,
                             }),
                     );
                 }

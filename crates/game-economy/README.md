@@ -59,7 +59,7 @@ The ignored `immobilized_departure_benchmark` measures food-search decisions and
 
 The ignored `autonomous_wound_care_benchmark` measures a full boundary of independently chosen self-treatments, with physical medicine consumption. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to vary the workload and concurrency.
 
-The ignored `tactical_site_damage_benchmark` measures a full boundary of attacks on maintainable work sites. `LEGACY_ENCOUNTERS` controls strike count, `LEGACY_HOT=1` directs all strikes at one site, and `LEGACY_AUTONOMOUS=1` makes individual fighters choose the site attack. `LEGACY_WORKERS` controls concurrency.
+The ignored `tactical_site_damage_benchmark` measures a full boundary of attacks on maintainable work sites. `LEGACY_ENCOUNTERS` controls strike count, `LEGACY_HOT=1` directs all strikes at one site, `LEGACY_AUTONOMOUS=1` makes individual fighters choose the site attack, and `LEGACY_COLLAPSE=1` enables collapse. `LEGACY_WORKERS` controls concurrency.
 
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary
@@ -136,7 +136,7 @@ Individual hauling preferences can move real lots between regions. A carrier can
 
 Authored reusable tool requirements check personal custody before a work attempt competes for materials and before each work increment. Missing or expired tools pause work without consuming the tool.
 
-Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits and independently choose to destroy specific idle local sites, including when motivated by fear or felt obligation. Competing attempts remove a site only once. Blueprints may retain a specified portion of the actual dated kit in site custody; after destruction, people can independently recover the remaining local debris, subject to real carrying capacity and contested physical transfers.
+Physical work sites can limit concurrent jobs. Slots remain occupied by paused jobs, and contested site claims are provisional until inputs actually move. Individuals can construct sites from physical kits and independently choose to destroy specific idle local sites, including when motivated by fear or felt obligation. Combat can also collapse an explicitly configured site at its wear limit, interrupting bound jobs. Competing attempts remove a site only once. Blueprints may retain a specified portion of the actual dated kit in site custody; after destruction, people can independently recover the remaining local debris, subject to real carrying capacity and contested physical transfers.
 
 Named stores within a region have separate physical custody and capacities. A person can pick up goods and later deposit them in another store or regional stock, or stop while still carrying them. Each action takes a boundary; this model does not yet represent walking distances within a region.
 

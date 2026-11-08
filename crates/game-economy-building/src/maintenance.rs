@@ -218,6 +218,20 @@ impl Maintenance {
             })
             .collect()
     }
+    pub fn is_broken(&self, sites: &Facilities, site: u64) -> bool {
+        let Some(condition) =
+            index_by(&self.conditions, site, |row| row.site).map(|i| &self.conditions[i])
+        else {
+            return false;
+        };
+        let Some(site) = index_by(&sites.sites, site, |row| row.id).map(|i| &sites.sites[i]) else {
+            return false;
+        };
+        self.rules
+            .binary_search_by(|rule| rule.kind.cmp(&site.kind))
+            .ok()
+            .is_some_and(|i| condition.wear >= self.rules[i].wear_limit)
+    }
     pub fn finish(
         &mut self,
         prior: &Facilities,
