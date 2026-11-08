@@ -29,6 +29,7 @@ pub struct Context<'a> {
     /// The recipient's own bounded memories of actual food received previously.
     pub help_memories: &'a [HelpMemory],
     pub locations: &'a Colocation,
+    pub together: &'a (dyn Fn(u64, u64) -> bool + Sync),
     pub busy: &'a [u64],
     pub max_hunger: u32,
     pub tick: u64,
@@ -47,6 +48,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         requests,
         help_memories,
         locations,
+        together,
         busy,
         max_hunger,
         tick,
@@ -189,6 +191,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                 && locations
                     .region((actor.id, actor.region), (recipient.id, recipient.region))
                     .is_some()
+                && together(actor.id, recipient.id)
                 && busy.binary_search(&actor.id).is_err()
                 && (pressured || (policy.willing && trusts))
                 && !pending.contains(&(actor.id, recipient.id, policy.good)))
@@ -260,6 +263,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                     }
                     let recipient = find_person(memory.worker)?;
                     if recipient.health == 0
+                        || !together(actor.id, recipient.id)
                         || locations
                             .region((actor.id, actor.region), (recipient.id, recipient.region))
                             .is_none()

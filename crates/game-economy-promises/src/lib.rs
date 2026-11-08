@@ -2,6 +2,7 @@
 use game_agreements::{Agreements, Policy, Status};
 pub use game_agreements::{Decision, Proposal};
 use game_economy_person::{Person, travel::Colocation};
+use game_lot_projection::agreement::EndpointProximity;
 use game_opinions::Opinions;
 use game_production_model::{Good, PersonSnapshot, person_index};
 use rayon::prelude::*;
@@ -24,7 +25,11 @@ macro_rules! plan_world {
             &$people,
             $world.opinions.as_ref(),
             &$locations,
-            (&mut $busy, $blocked),
+            (
+                &mut $busy,
+                $blocked,
+                Some(&|a, b| $world.local_people_together(a, b)),
+            ),
             $tick,
             $base,
         )?;
@@ -38,6 +43,19 @@ macro_rules! manual_delivery {
         if let Some(game_economy_interaction::PhysicalChoice::Promise { person, contract }) =
             $choice
         {
+            if $world
+                .agreements
+                .as_ref()
+                .and_then(|owner| {
+                    owner
+                        .contracts
+                        .iter()
+                        .find(|row| row.id == contract && row.debtor == person)
+                })
+                .is_some_and(|row| !$world.local_people_together(row.debtor, row.creditor))
+            {
+                return Err("promise delivery requires people at the same local endpoint".into());
+            }
             if $world
                 .people
                 .binary_search_by_key(&person, |p| p.id)
@@ -76,7 +94,11 @@ pub fn plan(
     people: &[PersonSnapshot],
     opinions: Option<&Opinions>,
     locations: &Colocation,
-    (busy, blocked_receivers): (&mut Vec<u64>, &[u64]),
+    (busy, blocked_receivers, endpoint_together): (
+        &mut Vec<u64>,
+        &[u64],
+        Option<&EndpointProximity<'_>>,
+    ),
     tick: u64,
     action_base: u64,
 ) -> Result<Plans, String> {
@@ -91,6 +113,7 @@ pub fn plan(
         opinions,
         people,
         locations: Some(locations),
+        endpoint_together,
         busy,
         blocked_receivers,
         tick,
@@ -99,8 +122,16 @@ pub fn plan(
     busy.extend(delivery.actors());
     busy.par_sort_unstable();
     busy.dedup();
-    let automatic = automatic_optional(Some(owner), people, opinions, locations, busy, tick)
-        .expect("enabled owner");
+    let automatic = automatic_optional(
+        Some(owner),
+        people,
+        opinions,
+        locations,
+        busy,
+        tick,
+        endpoint_together,
+    )
+    .expect("enabled owner");
     Ok(Plans {
         delivery: Some(delivery),
         decisions: automatic.decisions,
@@ -114,6 +145,7 @@ pub fn automatic(
     locations: &Colocation,
     busy: &[u64],
     tick: u64,
+    endpoint_together: Option<&EndpointProximity<'_>>,
 ) -> AutomaticDecisions {
     let mut policies: Vec<_> = owner
         .policies
@@ -122,39 +154,41 @@ pub fn automatic(
         .collect();
     policies.par_sort_unstable_by_key(|p| p.person);
     let opinions = opinions.map(Opinions::index);
-    let mut candidates: Vec<_> =
-        owner
-            .contracts
-            .par_iter()
-            .filter_map(|contract| {
-                if contract.status != Status::Proposed
-                    || contract.due <= tick
-                    || busy.binary_search(&contract.creditor).is_ok()
-                {
-                    return None;
-                }
-                let policy = policies
-                    .binary_search_by_key(&contract.creditor, |p| p.person)
-                    .ok()
-                    .map(|i| policies[i])?;
-                let trust = opinions
-                    .as_ref()
-                    .map(|index| index.trust(contract.creditor, contract.debtor));
-                let feelings = opinions
-                    .as_ref()
-                    .map(|index| index.feelings(contract.creditor, contract.debtor));
-                if !policy.accepts(trust, feelings.map(|f| f.0), feelings.map(|f| f.1)) {
-                    return None;
-                }
-                let a = person_index(people, contract.debtor).map(|i| people[i])?;
-                let b = person_index(people, contract.creditor).map(|i| people[i])?;
-                let affinity = opinions.as_ref().map_or(0, |index| {
-                    index.affinity(contract.creditor, contract.debtor)
-                });
-                (a.2 > 0 && b.2 > 0 && locations.region((a.0, a.1), (b.0, b.1)).is_some())
-                    .then_some((contract.creditor, std::cmp::Reverse(affinity), contract.id))
-            })
-            .collect();
+    let mut candidates: Vec<_> = owner
+        .contracts
+        .par_iter()
+        .filter_map(|contract| {
+            if contract.status != Status::Proposed
+                || contract.due <= tick
+                || busy.binary_search(&contract.creditor).is_ok()
+            {
+                return None;
+            }
+            let policy = policies
+                .binary_search_by_key(&contract.creditor, |p| p.person)
+                .ok()
+                .map(|i| policies[i])?;
+            let trust = opinions
+                .as_ref()
+                .map(|index| index.trust(contract.creditor, contract.debtor));
+            let feelings = opinions
+                .as_ref()
+                .map(|index| index.feelings(contract.creditor, contract.debtor));
+            if !policy.accepts(trust, feelings.map(|f| f.0), feelings.map(|f| f.1)) {
+                return None;
+            }
+            let a = person_index(people, contract.debtor).map(|i| people[i])?;
+            let b = person_index(people, contract.creditor).map(|i| people[i])?;
+            let affinity = opinions.as_ref().map_or(0, |index| {
+                index.affinity(contract.creditor, contract.debtor)
+            });
+            (a.2 > 0
+                && b.2 > 0
+                && locations.region((a.0, a.1), (b.0, b.1)).is_some()
+                && endpoint_together.is_none_or(|check| check(a.0, b.0)))
+            .then_some((contract.creditor, std::cmp::Reverse(affinity), contract.id))
+        })
+        .collect();
     candidates.par_sort_unstable();
     let chosen: Vec<_> = candidates
         .par_chunk_by(|a, b| a.0 == b.0)
@@ -179,8 +213,17 @@ pub fn automatic_optional(
     locations: &Colocation,
     busy: &mut Vec<u64>,
     tick: u64,
+    endpoint_together: Option<&EndpointProximity<'_>>,
 ) -> Option<AutomaticDecisions> {
-    let plan = automatic(owner?, people, opinions, locations, busy, tick);
+    let plan = automatic(
+        owner?,
+        people,
+        opinions,
+        locations,
+        busy,
+        tick,
+        endpoint_together,
+    );
     busy.extend_from_slice(&plan.actors);
     busy.par_sort_unstable();
     busy.dedup();
@@ -303,6 +346,12 @@ macro_rules! promise_methods {
             if proposals.is_empty() {
                 return Ok(Vec::new());
             }
+            if proposals
+                .par_iter()
+                .any(|row| !self.local_people_together(row.debtor, row.creditor))
+            {
+                return Err("promise participants are not at the same local endpoint".into());
+            }
             let owner = self.agreements.as_ref().ok_or("promises are disabled")?;
             let (next, ids) = $crate::propose(
                 owner,
@@ -334,6 +383,30 @@ macro_rules! promise_methods {
                 return Ok(());
             }
             let owner = self.agreements.as_ref().ok_or("promises are disabled")?;
+            if self
+                .local_transport
+                .as_ref()
+                .and_then(|transport| transport.walking.as_ref())
+                .is_some()
+            {
+                let mut contracts: Vec<_> = owner.contracts.par_iter().collect();
+                contracts.par_sort_unstable_by_key(|contract| contract.id);
+                if decisions.par_iter().any(|decision| {
+                    contracts
+                        .binary_search_by_key(&decision.contract, |contract| contract.id)
+                        .ok()
+                        .is_some_and(|index| {
+                            !self.local_people_together(
+                                contracts[index].debtor,
+                                contracts[index].creditor,
+                            )
+                        })
+                }) {
+                    return Err(
+                        "promise discussion requires people at the same local endpoint".into(),
+                    );
+                }
+            }
             let next = $crate::decide(
                 owner,
                 &self.people,

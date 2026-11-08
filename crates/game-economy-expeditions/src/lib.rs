@@ -522,6 +522,11 @@ macro_rules! mission_methods {
             id: u64,
             target: u64,
         ) -> Result<Option<u64>, String> {
+            if !self.local_people_together(actor, target) {
+                return Err(
+                    "expedition invitations require people at the same local endpoint".into(),
+                );
+            }
             if self.family.as_ref().is_some_and(|f| {
                 f.members
                     .iter()

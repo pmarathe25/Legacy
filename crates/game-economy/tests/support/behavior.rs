@@ -14618,6 +14618,54 @@ fn expedition_fixture() -> State {
 }
 
 #[test]
+fn expedition_invitation_requires_a_shared_endpoint() {
+    let mut initial = expedition_fixture();
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    let id = world
+        .start_mission(MissionStart {
+            person: 1,
+            destination: 2,
+            visit_ticks: 1,
+        })
+        .unwrap();
+    let before = world.snapshot();
+    assert!(world.invite_mission(1, id, 2).is_err());
+    assert_eq!(world.snapshot(), before);
+}
+
+#[test]
 fn pressured_companion_can_leave_when_fear_or_obligation_no_longer_motivates_them() {
     let mut initial = expedition_fixture();
     initial.people[0].controlled = true;
@@ -29761,6 +29809,183 @@ fn witnessed_promise_outcomes_use_the_receivers_personal_trust_reactions() {
                     if deliver { -2 } else { 3 }
                 );
                 snapshot
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn promise_conversations_and_delivery_require_a_shared_endpoint() {
+    let mut initial = fixture();
+    initial.autowork = None;
+    initial.people[0].seek_meals = false;
+    initial.agreements = Some(Agreements {
+        offering: vec![],
+        work_offering: vec![],
+        next_id: 1,
+        policies: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![],
+        events: vec![],
+    });
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        }),
+    });
+    let mut offering = initial.clone();
+    offering.dynamics = None;
+    offering
+        .agreements
+        .as_mut()
+        .unwrap()
+        .offering
+        .push(PromiseOfferPolicy {
+            person: 1,
+            recipient: 2,
+            good: 1,
+            quantity: 1,
+            due_after: 3,
+            retry_ticks: 1,
+            willing: true,
+            recipient_hunger_at_least: 0,
+            minimum_trust: None,
+            pressure_threshold: None,
+            next_review: 0,
+            after_work_recipe: None,
+            last_work_offer_at: None,
+            after_help: false,
+            last_help_offer_at: None,
+        });
+    let run_offer = |away: bool| {
+        let mut state = offering.clone();
+        if away {
+            state
+                .local_transport
+                .as_mut()
+                .unwrap()
+                .walking
+                .as_mut()
+                .unwrap()
+                .positions
+                .push(LocalPosition {
+                    person: 2,
+                    location: LocalLocation::At {
+                        region: 1,
+                        endpoint: LocalEndpoint::Store { id: 1 },
+                    },
+                });
+        }
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        world.snapshot().agreements.unwrap().contracts.len()
+    };
+    assert_eq!(run_offer(false), 1);
+    assert_eq!(run_offer(true), 0);
+    let proposal = PromiseProposal {
+        debtor: 1,
+        creditor: 2,
+        good: 1,
+        quantity: 1,
+        due: 8,
+    };
+    let mut world = Economy::compile(initial).unwrap();
+    let id = world
+        .propose_promises(std::slice::from_ref(&proposal))
+        .unwrap()[0];
+    world.set_promise_choice(2, false).unwrap();
+    world.set_promise_accept_choice(2, true).unwrap();
+    world.set_promise_choice(1, true).unwrap();
+    let mut distant = world.snapshot();
+    distant
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .push(LocalPosition {
+            person: 2,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        });
+    let mut separated = Economy::compile(distant.clone()).unwrap();
+    let before = separated.snapshot();
+    assert!(separated.propose_promises(&[proposal]).is_err());
+    assert!(
+        separated
+            .decide_promises(&[PromiseDecision {
+                contract: id,
+                actor: 2,
+                accept: true
+            }])
+            .is_err()
+    );
+    assert_eq!(separated.snapshot(), before);
+    separated.advance().unwrap();
+    assert_eq!(
+        separated.snapshot().agreements.unwrap().contracts[0].status,
+        Status::Proposed
+    );
+    let mut active = distant;
+    active.agreements.as_mut().unwrap().contracts[0].status = Status::Active;
+    let mut controlled = active.clone();
+    controlled.people[0].controlled = true;
+    let mut controlled = Economy::compile(controlled).unwrap();
+    let before = controlled.snapshot();
+    assert!(controlled.fulfill_promise(1, id).is_err());
+    assert_eq!(controlled.snapshot(), before);
+    let run = |workers, away: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = active.clone();
+                if !away {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions
+                        .clear();
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state.agreements.as_ref().unwrap().contracts[0].delivered,
+                    u64::from(!away)
+                );
+                state
             })
     };
     assert_eq!(run(1, true), run(4, true));

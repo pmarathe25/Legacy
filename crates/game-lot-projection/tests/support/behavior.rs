@@ -332,6 +332,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         opinions: None,
         people: &people,
         locations: None,
+        endpoint_together: None,
         busy: &[],
         blocked_receivers: &[],
         tick: 1,
@@ -375,6 +376,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         opinions: Some(&opinions),
         people: &people,
         locations: None,
+        endpoint_together: None,
         busy: &[],
         blocked_receivers: &[],
         tick: 1,
@@ -382,6 +384,19 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
     .plan(100)
     .unwrap();
     assert_eq!(pressured.actions().len(), 1);
+    let distant = agreement::Context {
+        agreements: &agreements,
+        opinions: Some(&opinions),
+        people: &people,
+        locations: None,
+        endpoint_together: Some(&|_, _| false),
+        busy: &[],
+        blocked_receivers: &[],
+        tick: 1,
+    }
+    .plan(100)
+    .unwrap();
+    assert!(distant.actions().is_empty());
     let draft = runtime
         .prepare_advance(&[], pressured.actions(), 1)
         .unwrap();
@@ -479,6 +494,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
                     opinions: None,
                     people: &people,
                     locations: None,
+                    endpoint_together: None,
                     busy: &[1],
                     blocked_receivers: &[],
                     tick: 1,
@@ -597,6 +613,7 @@ fn concentrated_promise_delivery_benchmark() {
                     opinions: None,
                     people: &people,
                     locations: None,
+                    endpoint_together: None,
                     busy: &[],
                     blocked_receivers: &[],
                     tick: 1,

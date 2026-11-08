@@ -4614,6 +4614,7 @@ impl Economy {
                     .and_then(|auto| auto.requests.as_ref()),
                 help_memories: &help_memories,
                 locations: &locations,
+                together: &|a, b| self.local_people_together(a, b),
                 busy: &busy,
                 max_hunger: self.rules.max_work_hunger,
                 tick,
@@ -9381,7 +9382,10 @@ impl Economy {
                 &promises.decisions,
                 physical.events(),
                 &people,
-                Some(&locations),
+                (
+                    Some(&locations),
+                    Some(&|a, b| self.local_people_together(a, b)),
+                ),
                 next_opinions.as_mut(),
             )?;
         }

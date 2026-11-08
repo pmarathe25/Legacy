@@ -7,6 +7,8 @@ use game_opinions::Opinions;
 use game_production_model::{PersonSnapshot, person_index};
 use rayon::prelude::*;
 
+pub type EndpointProximity<'a> = dyn Fn(u64, u64) -> bool + Sync + 'a;
+
 fn together(a: PersonSnapshot, b: PersonSnapshot, locations: Option<&Colocation>) -> bool {
     a.2 > 0
         && b.2 > 0
@@ -38,7 +40,7 @@ pub fn advance(
     accepted: &[game_agreements::Decision],
     events: &Events,
     people: &[PersonSnapshot],
-    locations: Option<&Colocation>,
+    (locations, endpoint_together): (Option<&Colocation>, Option<&EndpointProximity<'_>>),
     opinions: Option<&mut Opinions>,
 ) -> Result<(), String> {
     let mut delivered = Vec::new();
@@ -95,6 +97,8 @@ pub fn advance(
                             .ok()
                             .map(|i| people[i]);
                         a.zip(b).is_some_and(|(a, b)| together(a, b, locations))
+                            && endpoint_together
+                                .is_none_or(|check| check(contract.debtor, contract.creditor))
                     })
             })
             .cloned()
@@ -225,6 +229,7 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub people: &'a [PersonSnapshot],
     pub locations: Option<&'a Colocation>,
+    pub endpoint_together: Option<&'a EndpointProximity<'a>>,
     pub busy: &'a [u64],
     /// Sorted people physically unreachable for a delivery.
     pub blocked_receivers: &'a [u64],
@@ -286,6 +291,9 @@ impl Context<'_> {
                     person_index(self.people, contract.creditor).map(|index| self.people[index]);
                 a.zip(b)
                     .is_some_and(|(a, b)| together(a, b, self.locations))
+                    && self
+                        .endpoint_together
+                        .is_none_or(|check| check(contract.debtor, contract.creditor))
                     && busy.binary_search(&contract.debtor).is_err()
             })
             .collect();
