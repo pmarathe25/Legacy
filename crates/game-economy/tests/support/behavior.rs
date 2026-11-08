@@ -5133,6 +5133,49 @@ fn concentrated_requested_hunting_benchmark() {
         });
 }
 
+fn benchmark_people_at_store(state: &mut State) {
+    assert!(state.local_transport.is_none());
+    state
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    state.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: state
+                .people
+                .iter()
+                .map(|person| {
+                    assert_eq!(person.region, Some(1));
+                    LocalPosition {
+                        person: person.id,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    }
+                })
+                .collect(),
+        }),
+    });
+}
+
 fn local_store_fixture() -> State {
     let mut state = fixture();
     state.autowork = None;
@@ -5325,6 +5368,190 @@ fn people_at_a_store_can_choose_autonomous_encounters() {
                     .unwrap()
                     .events;
                 assert!(events.iter().any(|event| (event.a, event.b) == (1, 2)));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_person_can_repair_carried_tools_at_a_store() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![
+            Lot {
+                item: None,
+                good: 2,
+                quantity: 1,
+                expires_at: None,
+            },
+            Lot {
+                item: Some(88),
+                good: 3,
+                quantity: 1,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    initial.tool_wear = Some(crate::ToolWear {
+        next_item: 89,
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 10,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![crate::ToolCondition {
+            item: 88,
+            good: 3,
+            damage: 2,
+        }],
+        repairs: vec![crate::ToolRepairChoice {
+            person: 2,
+            item: 88,
+            willing: true,
+        }],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let wear = state.tool_wear.as_ref().unwrap();
+                assert_eq!(wear.conditions[0].damage, 0);
+                assert!(
+                    wear.events
+                        .iter()
+                        .any(|event| event.item == 88 && event.accepted)
+                );
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.a != 2 && event.b != 2)
+                );
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                assert!(holder.lots.iter().all(|lot| lot.good != 2));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_person_can_treat_their_wound_at_a_store() {
+    use game_economy_combat::injury::Case;
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[1].health = 80;
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 2,
+        attacker: 1,
+        sustained_at: 0,
+        heals_at: 8,
+    }]));
+    initial.combat = Some(combat);
+    initial.medical = Some(Medical {
+        acquaintances: vec![],
+        policies: vec![MedicalPolicy {
+            person: 2,
+            patient: 2,
+            medicine: 2,
+            quantity: 1,
+            willing: true,
+            patient_health_at_most: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+    });
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(2))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .injuries
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty()
+                );
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                assert!(holder.lots.iter().all(|lot| lot.good != 2));
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.a != 2 && event.b != 2)
+                );
                 state
             })
     };
@@ -27739,6 +27966,9 @@ fn autonomous_wound_care_benchmark() {
             .collect(),
     ));
     initial.combat = Some(combat);
+    if std::env::var_os("LEGACY_AT_STORE").is_some() {
+        benchmark_people_at_store(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -49676,6 +49906,10 @@ fn identified_tool_wear_boundary_benchmark() {
         },
         events: vec![],
     });
+    if std::env::var_os("LEGACY_AT_STORE").is_some() {
+        assert!(repair && !active_repair);
+        benchmark_people_at_store(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()

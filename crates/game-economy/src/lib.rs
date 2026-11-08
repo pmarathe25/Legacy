@@ -4540,8 +4540,32 @@ impl Economy {
         } else {
             Vec::new()
         };
+        let local_medical_busy = (needs_medical && !local_nonstock.is_empty()).then(|| {
+            let mut rows = local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                &[],
+            );
+            game_economy_work::reserve(
+                &mut rows,
+                pickup
+                    .actors
+                    .iter()
+                    .copied()
+                    .chain(treatment.actors.iter().copied())
+                    .chain(asked_actors.iter().copied())
+                    .chain(giving_plan.actors.iter().copied()),
+            );
+            if let Some(family) = &self.family {
+                game_economy_work::reserve(&mut rows, game_economy_work::underage(family));
+            }
+            rows
+        });
+        let medical_base = local_medical_busy.as_deref().unwrap_or(&busy);
         let medical_busy = (!held_medical_actors.is_empty())
-            .then(|| game_economy_work::exclude_sorted(&busy, &held_medical_actors));
+            .then(|| game_economy_work::exclude_sorted(medical_base, &held_medical_actors));
         let blocked_holds = if needs_medical {
             game_economy_work::exclude_sorted(&held, &held_patients)
         } else {
@@ -4600,7 +4624,7 @@ impl Economy {
             opinions: self.opinions.as_ref(),
             goods: self.physical.goods(),
             view: &view,
-            busy: medical_busy.as_deref().unwrap_or(&busy),
+            busy: medical_busy.as_deref().unwrap_or(medical_base),
             blocked: &medical_blocked,
             available_patients: &available_patients,
             communication: &communication,
@@ -5126,6 +5150,7 @@ impl Economy {
                 game_economy_work::reserve(&mut excluded, game_economy_work::underage(family));
             }
             game_economy_work::reserve(&mut excluded, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut excluded, medical_plan.actors.iter().copied());
             excluded
         });
         let local_plan = self
@@ -6475,10 +6500,45 @@ impl Economy {
             let automatic_base = base
                 .checked_add(u64::from(manual.is_some()))
                 .ok_or("action count overflow")?;
+            let repair_busy = (!local_nonstock.is_empty()).then(|| {
+                let mut rows = local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    local_plan
+                        .as_ref()
+                        .map_or(&[][..], |plan| plan.actors.as_slice()),
+                );
+                game_economy_work::reserve(
+                    &mut rows,
+                    pickup
+                        .actors
+                        .iter()
+                        .copied()
+                        .chain(expedition_acquisition.actors.iter().copied())
+                        .chain(
+                            goal_fetch_plan
+                                .as_ref()
+                                .into_iter()
+                                .flat_map(|plan| plan.actors.iter().copied()),
+                        )
+                        .chain(treatment.actors.iter().copied())
+                        .chain(asked_actors.iter().copied())
+                        .chain(giving_plan.actors.iter().copied())
+                        .chain(medical_plan.actors.iter().copied())
+                        .chain(handling_plan.actors.iter().copied())
+                        .chain(restraint_plan.actors.iter().copied()),
+                );
+                if let Some(family) = &self.family {
+                    game_economy_work::reserve(&mut rows, game_economy_work::underage(family));
+                }
+                rows
+            });
             let mut plan = owner.prepare_repairs(
                 &self.physical,
                 &self.people,
-                &busy,
+                repair_busy.as_deref().unwrap_or(&busy),
                 &paused_tool_workers,
                 self.rules.max_work_hunger,
                 automatic_base,
@@ -7242,6 +7302,7 @@ impl Economy {
             );
             game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
             game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, tool_repairs.iter().map(|row| row.0));
             if let Some(plan) = &goal_fetch_plan {
                 game_economy_work::reserve(&mut rows, plan.actors.iter().copied());
             }
@@ -7579,6 +7640,7 @@ impl Economy {
             game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
             game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
             game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, tool_repairs.iter().map(|row| row.0));
             if let Some(plan) = &goal_fetch_plan {
                 game_economy_work::reserve(&mut rows, plan.actors.iter().copied());
             }
