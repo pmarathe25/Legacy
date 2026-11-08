@@ -3777,54 +3777,76 @@ impl Economy {
                 .goal_fetchers
                 .par_iter()
                 .any(|preference| preference.search.is_some());
-            let (visit_blocked, goal_walks, search_proposals) = if (!walking.positions.is_empty()
-                || !walking.preferences.is_empty()
-                || has_goal_search)
-                && owner
-                    .goal_fetchers
-                    .par_iter()
-                    .any(|preference| preference.enabled)
-                && let (Some(goals), Some(base)) = (&self.goals, &self.autowork)
-            {
-                let planned = goals.policies(base, tick.saturating_sub(1));
-                let underage = self
-                    .family
-                    .as_ref()
-                    .map_or_else(Vec::new, game_economy_work::underage);
-                let choices = local_walking::goal_walk(local_walking::GoalWalkContext {
-                    owner,
-                    walking,
-                    people: &self.people,
-                    view: &view,
-                    recipes: self.physical.recipes(),
-                    planned: &planned,
-                    base,
-                    busy: &busy,
-                    underage: &underage,
-                    max_hunger: self.rules.max_work_hunger,
-                });
-                let searches = if has_goal_search {
-                    local_walking::goal_search(local_walking::GoalSearchContext {
+            let (visit_blocked, mut goal_walks, search_proposals) =
+                if (!walking.positions.is_empty()
+                    || !walking.preferences.is_empty()
+                    || has_goal_search)
+                    && owner
+                        .goal_fetchers
+                        .par_iter()
+                        .any(|preference| preference.enabled)
+                    && let (Some(goals), Some(base)) = (&self.goals, &self.autowork)
+                {
+                    let planned = goals.policies(base, tick.saturating_sub(1));
+                    let underage = self
+                        .family
+                        .as_ref()
+                        .map_or_else(Vec::new, game_economy_work::underage);
+                    let choices = local_walking::goal_walk(local_walking::GoalWalkContext {
                         owner,
                         walking,
                         people: &self.people,
                         view: &view,
                         recipes: self.physical.recipes(),
-                        needs: &choices.needs,
+                        planned: &planned,
+                        base,
                         busy: &busy,
                         underage: &underage,
                         max_hunger: self.rules.max_work_hunger,
-                        tick,
-                    })?
+                    });
+                    let searches = if has_goal_search {
+                        local_walking::goal_search(local_walking::GoalSearchContext {
+                            owner,
+                            walking,
+                            people: &self.people,
+                            view: &view,
+                            recipes: self.physical.recipes(),
+                            needs: &choices.needs,
+                            busy: &busy,
+                            underage: &underage,
+                            max_hunger: self.rules.max_work_hunger,
+                            tick,
+                        })?
+                    } else {
+                        Vec::new()
+                    };
+                    early_goal_work = Some(planned);
+                    early_goal_needs = Some(choices.needs);
+                    (choices.blocked, choices.requests, searches)
                 } else {
-                    Vec::new()
+                    (Vec::new(), Vec::new(), Vec::new())
                 };
-                early_goal_work = Some(planned);
-                early_goal_needs = Some(choices.needs);
-                (choices.blocked, choices.requests, searches)
-            } else {
-                (Vec::new(), Vec::new(), Vec::new())
-            };
+            if (!walking.positions.is_empty() || !walking.preferences.is_empty())
+                && let Some(missions) = &self.missions
+                && missions
+                    .entries
+                    .par_iter()
+                    .any(|mission| mission.delivery_preference.is_some())
+            {
+                let walks = local_walking::mission_return(local_walking::MissionReturnContext {
+                    missions,
+                    walking,
+                    people: &self.people,
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    busy: &busy,
+                });
+                if !walks.is_empty() {
+                    goal_walks.par_extend(walks);
+                    goal_walks.par_sort_unstable_by_key(|request| request.person);
+                    goal_walks.dedup_by_key(|request| request.person);
+                }
+            }
             let mut requests = game_economy_local_transport::walking::personal_requests(
                 owner,
                 walking,

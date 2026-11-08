@@ -43,6 +43,115 @@ pub struct GoalSearchContext<'a> {
     pub tick: u64,
 }
 
+pub struct MissionReturnContext<'a> {
+    pub missions: &'a crate::Missions,
+    pub walking: &'a Walking,
+    pub people: &'a [game_economy_person::Person],
+    pub view: &'a game_lots::View,
+    pub opinions: Option<&'a game_opinions::Opinions>,
+    pub busy: &'a [u64],
+}
+
+/// A traveler who still wants to deliver can carry the actual goods to the
+/// regional exit, without learning anything about distant inventory.
+pub fn mission_return(
+    context: MissionReturnContext<'_>,
+) -> Vec<game_economy_local_transport::walking::Request> {
+    use game_economy_expeditions::{MissionPhase, Objective};
+    use game_economy_local_transport::walking::{Location, Request};
+    let opinions = context
+        .missions
+        .entries
+        .par_iter()
+        .any(|mission| {
+            mission
+                .delivery_preference
+                .is_some_and(|p| p.pressure_threshold.is_some())
+        })
+        .then(|| context.opinions.map(game_opinions::Opinions::index))
+        .flatten();
+    let mut choices: Vec<_> = context
+        .missions
+        .entries
+        .par_iter()
+        .filter_map(|mission| {
+            if !matches!(mission.phase, MissionPhase::Ready | MissionPhase::Outbound)
+                || mission.objective_met
+                || context.busy.binary_search(&mission.person).is_ok()
+            {
+                return None;
+            }
+            let Objective::Deliver {
+                person: recipient,
+                good,
+                quantity,
+                delivered,
+            } = mission.objective?
+            else {
+                return None;
+            };
+            let preference = mission.delivery_preference?;
+            let actor = &context.people[context
+                .people
+                .binary_search_by_key(&mission.person, |person| person.id)
+                .ok()?];
+            if actor.controlled || actor.health == 0 {
+                return None;
+            }
+            let region = actor.region?;
+            if region == mission.destination
+                || (mission.phase == MissionPhase::Ready && region != mission.origin)
+            {
+                return None;
+            }
+            let pressured = preference.pressure_threshold.is_some_and(|threshold| {
+                opinions.as_ref().is_some_and(|index| {
+                    let (fear, obligation) = index.feelings(actor.id, recipient);
+                    fear.saturating_add(obligation) >= threshold
+                })
+            });
+            if !preference.willing && !pressured {
+                return None;
+            }
+            let needed = quantity
+                .saturating_sub(delivered)
+                .saturating_add(preference.reserve);
+            if context
+                .view
+                .container(Place::Person(actor.id))?
+                .quantity(good)
+                < needed
+            {
+                return None;
+            }
+            match context.walking.location(actor.id, region) {
+                Location::At {
+                    endpoint: Endpoint::Stock,
+                    ..
+                } => None,
+                _ if context
+                    .walking
+                    .can_advance(actor.id, region, Endpoint::Stock) =>
+                {
+                    Some((
+                        actor.id,
+                        Some(Request {
+                            person: actor.id,
+                            region,
+                            destination: Endpoint::Stock,
+                        }),
+                    ))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+    if choices.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+        choices.par_sort_unstable_by_key(|choice| choice.0);
+    }
+    choices.par_iter().filter_map(|choice| choice.1).collect()
+}
+
 /// One bounded attempt at a personally chosen store; its contents are not read.
 pub fn goal_search(context: GoalSearchContext<'_>) -> Result<Vec<SearchProposal>, String> {
     use game_economy_local_transport::walking::{Location, Request};

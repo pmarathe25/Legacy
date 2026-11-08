@@ -22187,6 +22187,198 @@ fn expedition_pickup_reserves_time_against_goal_fetching() {
 }
 
 #[test]
+fn a_traveler_can_bring_acquired_supplies_to_the_regional_exit() {
+    let mut initial = autonomous_acquisition_workload(1, 0);
+    use_named_acquisition_store(&mut initial, 1);
+    initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        routes: vec![LocalWalkRoute {
+            region: 1,
+            from: LocalEndpoint::Store { id: 1 },
+            to: LocalEndpoint::Stock,
+            ticks: 2,
+        }]
+        .into(),
+        preferences: vec![].into(),
+        positions: vec![LocalPosition {
+            person: 1,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        }],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let picked = world.snapshot();
+                assert!(
+                    picked
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .any(|lot| lot.good == 2 && lot.quantity == 1)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&picked).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    world
+                        .set_mission_delivery_choices(1, 1, false, 0, None)
+                        .unwrap();
+                    world.advance().unwrap();
+                    assert!(
+                        world
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .events
+                            .is_empty()
+                    );
+                    world
+                        .set_mission_delivery_choices(1, 1, true, 0, None)
+                        .unwrap();
+                    world.advance().unwrap();
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .events[0]
+                            .outcome,
+                        LocalWalkOutcome::Progressed
+                    );
+                    world.advance().unwrap();
+                    assert_eq!(
+                        world
+                            .snapshot()
+                            .local_transport
+                            .unwrap()
+                            .walking
+                            .unwrap()
+                            .events[0]
+                            .outcome,
+                        LocalWalkOutcome::Arrived
+                    );
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert!(
+                        state
+                            .travel
+                            .as_ref()
+                            .unwrap()
+                            .journeys
+                            .iter()
+                            .any(|journey| journey.person == 1 && journey.destination == 2)
+                    );
+                    assert!(
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place == Place::Person(1))
+                            .unwrap()
+                            .lots
+                            .iter()
+                            .any(|lot| lot.good == 2 && lot.quantity == 1)
+                    );
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_traveler_may_return_with_supplies_due_to_personal_fear() {
+    let mut initial = autonomous_acquisition_workload(1, 0);
+    use_named_acquisition_store(&mut initial, 0);
+    initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+        routes: vec![LocalWalkRoute {
+            region: 1,
+            from: LocalEndpoint::Store { id: 1 },
+            to: LocalEndpoint::Stock,
+            ticks: 2,
+        }]
+        .into(),
+        preferences: vec![].into(),
+        positions: vec![LocalPosition {
+            person: 1,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        }],
+        events: vec![],
+    });
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let preference = initial.missions.as_mut().unwrap().entries[0]
+        .delivery_preference
+        .as_mut()
+        .unwrap();
+    preference.willing = false;
+    preference.pressure_threshold = Some(3);
+    let run = |fear| {
+        let mut state = initial.clone();
+        let mut opinions = fixture().opinions.unwrap();
+        opinions.records = vec![Opinion {
+            observer: 1,
+            target: 2,
+            trust: 0,
+            fear,
+            obligation: 0,
+            affinity: 0,
+        }];
+        state.opinions = Some(opinions);
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        world
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+    };
+    assert!(run(0).is_empty());
+    assert_eq!(run(5)[0].outcome, LocalWalkOutcome::Progressed);
+}
+
+#[test]
 #[ignore = "manual shared-stock acquisition benchmark"]
 fn concentrated_expedition_acquisition_benchmark() {
     use std::hash::{Hash, Hasher};
@@ -22205,12 +22397,24 @@ fn concentrated_expedition_acquisition_benchmark() {
     assert!(count > 0 && available <= count);
     let mut initial = autonomous_acquisition_workload(count, available);
     let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    let returning = std::env::var_os("LEGACY_MISSION_RETURN").is_some();
+    assert!(!returning || at_store);
     if at_store || std::env::var_os("LEGACY_NAMED_STORE").is_some() {
         use_named_acquisition_store(&mut initial, available);
     }
     if at_store {
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
-            routes: vec![].into(),
+            routes: if returning {
+                vec![LocalWalkRoute {
+                    region: 1,
+                    from: LocalEndpoint::Store { id: 1 },
+                    to: LocalEndpoint::Stock,
+                    ticks: 2,
+                }]
+            } else {
+                vec![]
+            }
+            .into(),
             preferences: vec![].into(),
             positions: (1..=count)
                 .map(|person| LocalPosition {
@@ -22233,6 +22437,7 @@ fn concentrated_expedition_acquisition_benchmark() {
             let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
+                if returning { world.advance().unwrap(); }
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
@@ -22248,6 +22453,9 @@ fn concentrated_expedition_acquisition_benchmark() {
                     .map(|lot| lot.quantity)
                     .sum();
                 assert_eq!(acquired, available);
+                if returning {
+                    assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), available as usize);
+                }
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 serde_json::to_vec(&state).unwrap().hash(&mut hash);
                 let actual = hash.finish();
@@ -22259,7 +22467,7 @@ fn concentrated_expedition_acquisition_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} travelers={count} stock={available} at_store={at_store} elapsed={:.6} fingerprint={:016x}",
+                "workers={workers} travelers={count} stock={available} at_store={at_store} returning={returning} elapsed={:.6} fingerprint={:016x}",
                 samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]
