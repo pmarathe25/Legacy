@@ -5701,6 +5701,127 @@ fn people_at_a_store_can_choose_to_give_carried_goods() {
 }
 
 #[test]
+fn a_person_at_a_store_can_ask_without_compelling_a_gift() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[0].hunger = 5;
+    for person in [1, 2] {
+        let holder = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == Place::Person(person))
+            .unwrap();
+        *holder = Container::new(
+            holder.place,
+            holder.capacity,
+            if person == 2 {
+                vec![Lot {
+                    item: None,
+                    good: 1,
+                    quantity: 1,
+                    expires_at: Some(10),
+                }]
+            } else {
+                vec![]
+            },
+        )
+        .unwrap();
+    }
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: vec![GivingPolicy {
+            person: 2,
+            recipient: 1,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 5,
+            willing: false,
+            requires_request: true,
+            pressured_by: None,
+            pressure_threshold: None,
+        }]
+        .into(),
+        responses: vec![].into(),
+        learning: vec![],
+        acquaintance_asking: vec![],
+        requests: vec![],
+        asking: vec![FoodAsking {
+            person: 1,
+            target: 2,
+            alternatives: vec![],
+            next_target: 0,
+            min_hunger: 5,
+            enabled: true,
+            retry_ticks: 8,
+            request_lifetime: 4,
+            next_review: 0,
+        }],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                assert_eq!(world.food_requests().len(), 1);
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.a != 1 && event.b != 1)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap();
+                    assert!(holder.lots.is_empty());
+                    world.set_giving_choice(2, true).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let holder = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap();
+                    assert!(
+                        holder
+                            .lots
+                            .iter()
+                            .any(|lot| lot.good == 1 && lot.quantity == 1)
+                    );
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn local_carrying_walks_before_each_physical_transfer_and_can_pause() {
     let initial = local_walking_fixture();
     let run = |threads| {
@@ -25248,6 +25369,7 @@ fn giving_nonfood_does_not_satisfy_a_food_request() {
 #[test]
 #[ignore]
 fn concentrated_food_requests_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -25256,25 +25378,37 @@ fn concentrated_food_requests_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = food_asking_workload(count);
+    let mut initial = food_asking_workload(count);
+    let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    if at_store {
+        benchmark_people_at_store(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                assert_eq!(world.food_requests().len(), count as usize - 1);
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&world.snapshot()).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} at_store={at_store} ticks=1 elapsed={:.6} fingerprint={:016x}",
+                samples[1], fingerprint.unwrap()
             );
         });
 }

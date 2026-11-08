@@ -4315,8 +4315,45 @@ impl Economy {
                     game_economy_work::reserve(&mut askable, idle_underage.iter().copied());
                 }
             }
-            let mut asking_busy =
-                (!askable.is_empty()).then(|| game_economy_work::exclude_sorted(&busy, &askable));
+            let has_local_asking = !giving.asking.is_empty()
+                || !giving.acquaintance_asking.is_empty()
+                || giving
+                    .learning
+                    .par_iter()
+                    .any(|row| row.ask_helper.is_some())
+                || self
+                    .giving
+                    .as_ref()
+                    .and_then(|owner| owner.practices.as_ref())
+                    .is_some_and(|practices| {
+                        practices.minds.par_iter().any(|mind| mind.ask_willing)
+                    });
+            let local_asking_busy = (has_local_asking && !local_nonstock.is_empty()).then(|| {
+                let mut rows = local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    &[],
+                );
+                game_economy_work::reserve(
+                    &mut rows,
+                    pickup
+                        .actors
+                        .iter()
+                        .copied()
+                        .chain(treatment.actors.iter().copied()),
+                );
+                rows
+            });
+            let mut asking_busy = if !askable.is_empty() {
+                Some(game_economy_work::exclude_sorted(
+                    local_asking_busy.as_deref().unwrap_or(&busy),
+                    &askable,
+                ))
+            } else {
+                local_asking_busy
+            };
             let askers = giving.ask(
                 &self.people,
                 self.physical.goods(),
@@ -4334,7 +4371,7 @@ impl Economy {
             if let Some(asking_busy) = &mut asking_busy {
                 game_economy_work::reserve(asking_busy, askers.iter().copied());
             }
-            let mut request_actors: Vec<_> = if askable.is_empty() {
+            let mut request_actors: Vec<_> = if askable.is_empty() && local_nonstock.is_empty() {
                 Vec::new()
             } else {
                 askers.par_iter().copied().collect()
@@ -4360,10 +4397,12 @@ impl Economy {
                     tick,
                 },
             )?;
-            if !askable.is_empty() {
+            if !askable.is_empty() || !local_nonstock.is_empty() {
                 request_actors.par_extend(askers.par_iter().copied());
                 request_actors.par_sort_unstable();
                 asked_actors = request_actors.clone();
+            }
+            if !askable.is_empty() {
                 reserved_can_give = askable
                     .into_par_iter()
                     .filter(|person| request_actors.binary_search(person).is_err())
@@ -5185,6 +5224,7 @@ impl Economy {
             game_economy_work::reserve(&mut excluded, pickup.actors.iter().copied());
             game_economy_work::reserve(&mut excluded, treatment.actors.iter().copied());
             game_economy_work::reserve(&mut excluded, giving_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut excluded, asked_actors.iter().copied());
             game_economy_work::reserve(&mut excluded, medical_plan.actors.iter().copied());
             excluded
         });
@@ -7338,6 +7378,7 @@ impl Economy {
             game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
             game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
             game_economy_work::reserve(&mut rows, giving_plan.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, asked_actors.iter().copied());
             game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
             game_economy_work::reserve(&mut rows, tool_repairs.iter().map(|row| row.0));
             if let Some(plan) = &goal_fetch_plan {
