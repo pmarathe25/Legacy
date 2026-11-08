@@ -64,6 +64,46 @@ fn authored_local_visit_is_an_independent_personal_choice() {
 }
 
 #[test]
+fn authored_local_food_search_leads_to_a_real_meal() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-local-food-search.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut visited = false;
+                let mut acquired = false;
+                for _ in 0..5 {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let local = state.local_transport.as_ref().unwrap();
+                    visited |= local.walking.as_ref().unwrap().events.iter().any(|event| {
+                        event.person == 2
+                            && event.outcome == game_economy::LocalWalkOutcome::Arrived
+                    });
+                    acquired |= state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|container| container.place == game_lots::Place::Person(2))
+                        .is_some_and(|container| !container.lots.is_empty());
+                }
+                assert!(visited && acquired);
+                assert!(world.snapshot().people[1].hunger < 9);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn authored_goal_search_reaches_a_store_and_returns_with_material() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers, fixture: &str, source| {

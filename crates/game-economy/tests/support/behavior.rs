@@ -6190,11 +6190,224 @@ fn hungry_people_can_take_visible_food_at_their_local_store() {
 }
 
 #[test]
+fn hungry_people_can_visit_a_known_store_without_knowing_its_food() {
+    let run = |workers, stocked| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = local_walking_fixture();
+                initial.local_transport.as_mut().unwrap().policies.clear();
+                initial.people[1].hunger = 5;
+                initial.people[1].seek_meals = true;
+                initial
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .preferences = vec![LocalWalkPreference {
+                    person: 2,
+                    region: 1,
+                    destination: LocalEndpoint::Store { id: 1 },
+                    willing: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                    meal_hunger: Some(5),
+                }]
+                .into();
+                let source = initial
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|row| row.place == Place::Inventory(1))
+                    .unwrap();
+                *source = Container::new(
+                    source.place,
+                    source.capacity,
+                    if stocked {
+                        vec![Lot {
+                            item: None,
+                            good: 1,
+                            quantity: 1,
+                            expires_at: None,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                )
+                .unwrap();
+                let mut world = Economy::compile(initial).unwrap();
+                world.advance().unwrap();
+                let opening = world.snapshot();
+                let travel = opening
+                    .local_transport
+                    .as_ref()
+                    .unwrap()
+                    .walking
+                    .as_ref()
+                    .unwrap()
+                    .positions
+                    .clone();
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    for _ in 0..2 {
+                        world.advance().unwrap();
+                    }
+                    let state = world.snapshot();
+                    let has_food = state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(2))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .any(|lot| lot.good == 1);
+                    assert_eq!(has_food, stocked);
+                    if stocked {
+                        let hunger = state.people[1].hunger;
+                        world.advance().unwrap();
+                        assert!(world.snapshot().people[1].hunger < hunger);
+                    }
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                (travel, world.snapshot())
+            })
+    };
+    let (stocked_travel, stocked) = run(1, true);
+    let (empty_travel, empty) = run(1, false);
+    assert_eq!(stocked_travel, empty_travel);
+    assert_eq!(stocked, run(4, true).1);
+    assert_eq!(empty, run(4, false).1);
+}
+
+#[test]
+fn a_food_visit_respects_hunger_and_food_at_hand() {
+    let mut initial = local_walking_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[1].seek_meals = true;
+    initial.people[1].hunger = 2;
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 1 },
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+        meal_hunger: Some(5),
+    }]
+    .into();
+    let mut below_threshold = Economy::compile(initial.clone()).unwrap();
+    below_threshold.advance().unwrap();
+    assert!(
+        below_threshold
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    initial.people[1].hunger = 5;
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut locally_fed = Economy::compile(initial.clone()).unwrap();
+    locally_fed.advance().unwrap();
+    assert!(
+        locally_fed
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = vec![LocalPosition {
+        person: 2,
+        location: LocalLocation::At {
+            region: 1,
+            endpoint: LocalEndpoint::Store { id: 2 },
+        },
+    }];
+    let store = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(2))
+        .unwrap();
+    *store = Container::new(
+        store.place,
+        store.capacity,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut already_at_food = Economy::compile(initial).unwrap();
+    already_at_food.advance().unwrap();
+    assert!(
+        already_at_food
+            .snapshot()
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
 fn a_person_can_choose_to_visit_and_discover_food_without_a_carrying_task() {
     let mut initial = local_walking_fixture();
     let transport = initial.local_transport.as_mut().unwrap();
     transport.policies.clear();
     transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Store { id: 1 },
@@ -6296,6 +6509,7 @@ fn a_person_may_visit_from_personal_fear_without_willingness() {
     let transport = initial.local_transport.as_mut().unwrap();
     transport.policies.clear();
     transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Store { id: 1 },
@@ -6336,6 +6550,7 @@ fn an_unreachable_visit_does_not_prevent_seeking_local_food() {
     let walking = transport.walking.as_mut().unwrap();
     walking.routes = vec![].into();
     walking.preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Store { id: 1 },
@@ -6844,6 +7059,7 @@ fn goal_fetch_at_a_store_does_not_depend_on_remote_stock() {
         },
     }];
     walking.preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Stock,
@@ -6987,6 +7203,7 @@ fn a_person_can_visit_fetch_return_and_complete_a_work_goal() {
         max_quantity: 1,
     }];
     transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Store { id: 1 },
@@ -7457,6 +7674,7 @@ fn a_personal_visit_takes_priority_over_goal_search() {
         .as_mut()
         .unwrap()
         .preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Store { id: 2 },
@@ -7748,6 +7966,7 @@ fn a_blocked_work_goal_does_not_permanently_prevent_a_visit() {
         max_quantity: 1,
     }];
     transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        meal_hunger: None,
         person: 2,
         region: 1,
         destination: LocalEndpoint::Store { id: 1 },
@@ -33091,6 +33310,7 @@ fn hungry_people_compete_for_real_named_store_food_deterministically() {
 #[test]
 #[ignore = "manual concentrated named food provisioning benchmark"]
 fn concentrated_named_food_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|value| value.parse().ok())
@@ -33109,13 +33329,44 @@ fn concentrated_named_food_benchmark() {
             && count.is_multiple_of(stores)
             && (count / 2).is_multiple_of(stores)
     );
-    let initial = named_food_workload(count, count / 2, stores);
+    let visits = std::env::var_os("LEGACY_FOOD_VISITS").is_some();
+    let mut initial = named_food_workload(count, count / 2, stores);
+    if visits {
+        initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
+            routes: (1..=stores)
+                .map(|id| LocalWalkRoute {
+                    region: 1,
+                    from: LocalEndpoint::Stock,
+                    to: LocalEndpoint::Store { id },
+                    ticks: 2,
+                })
+                .collect::<Vec<_>>()
+                .into(),
+            preferences: (1..=count)
+                .map(|person| LocalWalkPreference {
+                    person,
+                    region: 1,
+                    destination: LocalEndpoint::Store {
+                        id: 1 + (person - 1) % stores,
+                    },
+                    willing: true,
+                    pressured_by: None,
+                    pressure_threshold: None,
+                    meal_hunger: Some(5),
+                })
+                .collect::<Vec<_>>()
+                .into(),
+            positions: vec![],
+            events: vec![],
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
@@ -33132,16 +33383,26 @@ fn concentrated_named_food_benchmark() {
                     .filter(|lot| lot.good == 1)
                     .map(|lot| lot.quantity)
                     .sum();
-                assert_eq!(held, count / 2);
+                if visits {
+                    assert_eq!(held, 0);
+                    assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.len(), count as usize);
+                } else {
+                    assert_eq!(held, count / 2);
+                }
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} stores={stores} food={} elapsed={:.6}",
+                "workers={workers} people={count} stores={stores} visits={visits} food={} elapsed={:.6} fingerprint={:016x}",
                 count / 2,
-                samples[1]
+                samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]
             for (name, measurement) in game_diagnostics::snapshot() {

@@ -3854,7 +3854,11 @@ impl Economy {
                 &view,
                 (&busy, &visit_blocked),
                 self.opinions.as_ref(),
-                self.rules.max_work_hunger,
+                (
+                    self.rules.max_work_hunger,
+                    self.physical.goods(),
+                    claims.as_ref(),
+                ),
             );
             let mut carrying_candidates: Vec<_> = goal_walks
                 .par_iter()

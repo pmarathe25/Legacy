@@ -119,7 +119,7 @@ fn main() {
             initial.physical.custody.containers.sort_unstable_by_key(|container| container.place);
             let preferences = initial.people.iter().filter(|person| !person.controlled && person.id.is_multiple_of(4)).filter_map(|person| {
                 let region = person.region?;
-                Some(LocalWalkPreference { person: person.id, region, destination: LocalEndpoint::Store { id: region }, willing: true, pressured_by: None, pressure_threshold: None })
+                Some(LocalWalkPreference { meal_hunger: None, person: person.id, region, destination: LocalEndpoint::Store { id: region }, willing: true, pressured_by: None, pressure_threshold: None })
             }).collect::<Vec<_>>();
             let routes = regions.into_iter().map(|region| LocalWalkRoute { region, from: LocalEndpoint::Stock, to: LocalEndpoint::Store { id: region }, ticks: 2 }).collect::<Vec<_>>();
             initial.local_transport = Some(LocalTransport { stores, policies: vec![], goal_fetchers: vec![], events: vec![], walking: Some(LocalWalking { routes: routes.into(), preferences: preferences.into(), positions: vec![], events: vec![] }) });

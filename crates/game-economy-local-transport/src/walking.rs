@@ -60,6 +60,9 @@ pub struct Preference {
     pub pressured_by: Option<u64>,
     #[serde(default)]
     pub pressure_threshold: Option<u64>,
+    /// If set, visit only when seeking a meal at or above this hunger.
+    #[serde(default)]
+    pub meal_hunger: Option<u32>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -397,7 +400,11 @@ pub fn personal_requests(
     view: &View,
     (busy, visit_blocked): (&[u64], &[u64]),
     opinions: Option<&Opinions>,
-    max_hunger: u32,
+    (max_hunger, goods, claims): (
+        u32,
+        &[game_production_model::Good],
+        Option<&crate::Claims<'_>>,
+    ),
 ) -> Vec<Request> {
     let feelings = opinions
         .filter(|_| {
@@ -491,6 +498,47 @@ pub fn personal_requests(
                 });
             if !preference.willing && !pressured {
                 return None;
+            }
+            if let Some(threshold) = preference.meal_hunger {
+                if !person.seek_meals || person.hunger < threshold {
+                    return None;
+                }
+                let holder = view.container(Place::Person(person.id))?;
+                let location = walking.location(person.id, preference.region);
+                let at_stock = matches!(
+                    location,
+                    Location::At {
+                        endpoint: Endpoint::Stock,
+                        ..
+                    }
+                );
+                let local_store = match location {
+                    Location::At {
+                        endpoint: Endpoint::Store { id },
+                        ..
+                    } => view.container(Place::Inventory(id)),
+                    _ => None,
+                };
+                if goods
+                    .iter()
+                    .filter_map(|good| good.food.as_ref().map(|food| (good.id, food.portion)))
+                    .any(|(good, portion)| {
+                        holder.quantity(good) >= portion
+                            || local_store.is_some_and(|store| store.quantity(good) >= portion)
+                            || (at_stock
+                                && claims.is_none_or(|index| {
+                                    index.allows(person.id, preference.region, good)
+                                })
+                                && view
+                                    .container(Place::Stock {
+                                        region: preference.region,
+                                        good,
+                                    })
+                                    .is_some_and(|stock| stock.quantity(good) >= portion))
+                    })
+                {
+                    return None;
+                }
             }
             match walking.location(person.id, preference.region) {
                 Location::At { endpoint, .. } if endpoint == preference.destination => None,
