@@ -6794,3 +6794,115 @@ fn renewable_wool_can_support_another_persons_independent_production() {
         };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn a_person_can_collect_deposit_and_spin_wool_without_player_orders() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-autonomous-fleece.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let initial = world.snapshot();
+                let yarn = initial
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|g| g.name == "wool-yarn")
+                    .unwrap()
+                    .id;
+                let wool = initial
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|g| g.name == "raw-wool")
+                    .unwrap()
+                    .id;
+                let mut collected = false;
+                let mut deposited = false;
+                for _ in 0..20 {
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    collected |= state
+                        .animal_products
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|e| {
+                            e.person == 2
+                                && e.outcome == game_economy::AnimalProductOutcome::Collected
+                        });
+                    deposited |= state
+                        .local_transport
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|e| {
+                            e.person == 2
+                                && e.good == wool
+                                && e.moved
+                                && e.to
+                                    == (game_lots::Place::Stock {
+                                        region: 1,
+                                        good: wool,
+                                    })
+                        });
+                    if collected && deposited {
+                        break;
+                    }
+                }
+                assert!(collected && deposited);
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                for _ in 0..30 {
+                    if world
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .any(|c| {
+                            c.place
+                                == (game_lots::Place::Stock {
+                                    region: 1,
+                                    good: yarn,
+                                })
+                                && c.used > 0
+                        })
+                    {
+                        break;
+                    }
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(state.physical.custody.containers.iter().any(|c| c.place
+                    == (game_lots::Place::Stock {
+                        region: 1,
+                        good: yarn
+                    })
+                    && c.used == 1));
+                assert!(
+                    state
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .any(|a| a.id == 1 && a.health > 0)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}

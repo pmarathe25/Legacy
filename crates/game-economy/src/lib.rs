@@ -3854,6 +3854,8 @@ impl Economy {
                 product_blocked.dedup();
             }
         }
+        #[cfg(feature = "profile")]
+        let product_phase = game_diagnostics::span("economy.animal_products.plan");
         let product_plan = animal_products::Context {
             owner: self.animal_products.as_ref(),
             fauna: self.fauna.as_ref(),
@@ -3868,6 +3870,8 @@ impl Economy {
             tick,
         }
         .prepare(action_base)?;
+        #[cfg(feature = "profile")]
+        drop(product_phase);
         action_base = action_base
             .checked_add(product_plan.yields.len() as u64)
             .ok_or("action count overflow")?;
@@ -5096,12 +5100,16 @@ impl Economy {
         });
         let hunted_animals = hunting_plan.accepted(physical.events());
         let hunted = manual_hunt.map(|(person, _)| hunting_plan.caught(person, &hunted_animals));
+        #[cfg(feature = "profile")]
+        let product_phase = game_diagnostics::span("economy.animal_products.publish");
         let (product_events, product_handling) = product_plan.publish(physical.events());
         let next_animal_products = self
             .animal_products
             .as_ref()
             .zip(self.fauna.as_ref())
             .map(|(owner, fauna)| owner.advance(fauna, product_events));
+        #[cfg(feature = "profile")]
+        drop(product_phase);
         if !product_handling.is_empty() {
             handling_plan.events.extend(product_handling);
             handling_plan

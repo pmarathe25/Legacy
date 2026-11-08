@@ -42302,3 +42302,193 @@ fn personally_felt_pressure_can_motivate_unwilling_animal_product_collection() {
     run(true);
     run(false);
 }
+
+fn autonomous_animal_production_workload(count: u64) -> State {
+    let mut state = animal_products_workload(count, false);
+    for person in &mut state.people {
+        person.willing_to_work = true;
+    }
+    let products = state.animal_products.as_mut().unwrap();
+    products.rules[0].grow_ticks = 100;
+    for progress in &mut products.progress {
+        progress.growth = 100;
+    }
+    let stock = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    state
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), count * 2, vec![]).unwrap());
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|c| c.place);
+    state.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "empty supply store".into(),
+        }],
+        policies: (1..=count)
+            .map(|person| LocalTransportPolicy {
+                person,
+                region: 1,
+                source: LocalEndpoint::Store { id: 1 },
+                destination: LocalEndpoint::Stock,
+                good: 2,
+                quantity: 1,
+                willing: true,
+                pressured_by: None,
+                pressure_threshold: None,
+                disregard_claims: false,
+            })
+            .collect(),
+        goal_fetchers: vec![],
+        events: vec![],
+    });
+    state.autowork = Some(Autowork {
+        next_id: 1,
+        policies: (1..=count)
+            .map(|person| WorkPolicy {
+                person,
+                recipe: 1,
+                enabled: true,
+                disregard_claims: false,
+            })
+            .collect(),
+        requests: None,
+    });
+    state
+}
+
+fn advance_animal_production(world: &mut Economy, count: u64, inspect: bool) -> usize {
+    world.advance().unwrap();
+    if inspect {
+        assert_eq!(
+            world
+                .snapshot()
+                .animal_products
+                .as_ref()
+                .unwrap()
+                .events
+                .iter()
+                .filter(|e| e.outcome == AnimalProductOutcome::Collected)
+                .count(),
+            count as usize
+        );
+    }
+    world.advance().unwrap();
+    if inspect {
+        assert_eq!(
+            world
+                .snapshot()
+                .local_transport
+                .as_ref()
+                .unwrap()
+                .events
+                .iter()
+                .filter(|e| e.moved)
+                .count(),
+            count as usize
+        );
+    }
+    let mut started = 0usize;
+    let mut finished = 0usize;
+    let mut delivered = 0usize;
+    let mut ticks = 2;
+    for _ in 0..6 {
+        let events = world.advance().unwrap();
+        ticks += 1;
+        started += events.started.len();
+        finished += events.finished.len();
+        delivered += events.delivered.len();
+        if delivered == count as usize {
+            break;
+        }
+    }
+    assert_eq!(
+        (started, finished, delivered),
+        (count as usize, count as usize, count as usize)
+    );
+    if inspect {
+        let state = world.snapshot();
+        assert_eq!(
+            state
+                .physical
+                .custody
+                .containers
+                .iter()
+                .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                .unwrap()
+                .used,
+            count
+        );
+    }
+    ticks
+}
+
+#[test]
+fn autonomous_animal_collection_transport_and_production_scale_deterministically() {
+    let initial = autonomous_animal_production_workload(2048);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                advance_animal_production(&mut world, 2048, true);
+                let state = world.snapshot();
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "integrated autonomous animal production benchmark"]
+fn autonomous_animal_production_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let initial = autonomous_animal_production_workload(count);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut times = Vec::new(); let mut fingerprint = 0; let mut ticks = 0;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            ticks = advance_animal_production(&mut world, count, false);
+            times.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            assert_eq!(state.physical.custody.containers.iter().find(|c| c.place == Place::Stock { region: 1, good: 3 }).unwrap().used, count);
+            let mut hash = std::collections::hash_map::DefaultHasher::new(); serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish(); if fingerprint != 0 { assert_eq!(actual, fingerprint); } fingerprint = actual;
+        }
+        times.remove(0); times.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} people={count} ticks={ticks} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={fingerprint:016x}", times[0], times[1], times[2]);
+        #[cfg(feature = "profile")]
+        if std::env::var_os("LEGACY_PROFILE").is_some() {
+            for (name, measurement) in game_diagnostics::snapshot() {
+                eprintln!("{name}: {:.3} ms/call", measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0);
+            }
+        }
+    });
+}
