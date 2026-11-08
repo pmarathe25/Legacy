@@ -28,6 +28,8 @@ In `content/scenarios/economy-shared-work.toml`, person 3 chooses to assist pers
 
 Once a local job is active, `assist-work LEAD RECIPE respect|disregard` lets the controlled person attempt to help for one boundary. Admission is subject to the job's crew limit; the claim option expresses that person's own choice. In the shared-work scenario, use `step 2`, then `assist-work 2 66 respect` (or check the recipe ID with `catalog`).
 
+When an enabled succession rule leaves unfinished work vacant, `view` lists local `vacant-work` entries with their job, recipe, site and expiry boundary. `take-over-work JOB respect|disregard` attempts to take one over, competing fairly with other candidates and spending a boundary even if the attempt is denied. A successful takeover preserves the site's reserved inputs; the controlled character uses `continue-work` to make further progress. See `content/scenarios/economy-work-succession.toml` for the data schema.
+
 In `content/scenarios/economy-fear-retreat.toml`, use `attack 3` and advance the combat. The other fighter can gain personal fear from an actual strike and choose to retreat in a later round; another person's fear or a fighter without that inclination does not compel retreat.
 
 In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the combat. Person 2 can independently interrupt their work and enter the encounter on person 3's side after the current round, provided both combatants remain and a visible tactical entry is available.

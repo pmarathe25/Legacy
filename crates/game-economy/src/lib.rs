@@ -343,6 +343,33 @@ impl Economy {
         self.commit(draft)?;
         Ok(admitted)
     }
+    /// Attempt to take over one vacant local job, competing with other people.
+    pub fn take_over_work(
+        &mut self,
+        actor: u64,
+        job: u64,
+        disregard_claims: bool,
+    ) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            Some(game_economy_interaction::WorkAction::TakeOver {
+                actor,
+                job,
+                disregard_claims,
+            }),
+            None,
+            None,
+        )?;
+        let admitted = draft
+            .physical
+            .events()
+            .adopted
+            .iter()
+            .any(|row| row.job == job && row.worker == actor);
+        self.commit(draft)?;
+        Ok(admitted)
+    }
     /// Change this person's willingness to build for their own production goals.
     pub fn set_goal_building_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
@@ -6021,6 +6048,21 @@ impl Economy {
             unavailable_sites.par_sort_unstable();
             unavailable_sites.dedup();
         }
+        let manual_succession = match player_work {
+            Some(game_economy_interaction::WorkAction::TakeOver {
+                actor,
+                job,
+                disregard_claims,
+            }) => Some(WorkSuccessionPreference {
+                person: actor,
+                job,
+                willing: true,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims,
+            }),
+            _ => None,
+        };
         let adoptions = if let (Some(owner), Some(sites)) = (
             self.shared_work
                 .as_ref()
@@ -6033,6 +6075,7 @@ impl Economy {
                 work: self.physical.work(),
                 busy: &busy,
                 resting: &resting,
+                manual: manual_succession.as_ref(),
                 sites,
                 unavailable_sites: &unavailable_sites,
                 site_classes: &site_classes,
@@ -6602,6 +6645,9 @@ impl Economy {
         }
         if self.fatigue.is_some() {
             shared_people.extend(adoptions.iter().map(|row| row.worker));
+            if let Some(manual) = &manual_succession {
+                shared_people.push(manual.person);
+            }
             if let Some(plan) = &irrigation_plan {
                 shared_people.extend(plan.actors());
             }

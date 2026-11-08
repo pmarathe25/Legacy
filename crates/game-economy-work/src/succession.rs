@@ -169,6 +169,7 @@ pub struct Context<'a> {
     pub work: &'a [Work],
     pub busy: &'a [u64],
     pub resting: &'a [u64],
+    pub manual: Option<&'a Preference>,
     pub sites: &'a Facilities,
     pub unavailable_sites: &'a [u64],
     pub site_classes: &'a [(u64, Option<u64>)],
@@ -194,7 +195,7 @@ fn priority(seed: u64, tick: u64, job: u64, person: u64) -> u64 {
 
 impl Context<'_> {
     pub fn prepare(&self) -> Vec<Adoption> {
-        if self.owner.preferences.is_empty()
+        if (self.owner.preferences.is_empty() && self.manual.is_none())
             || !self
                 .work
                 .par_iter()
@@ -213,113 +214,122 @@ impl Context<'_> {
             .map(Opinions::index);
         // Reduce locally first, so a highly contested vacancy does not need a
         // global sort or a serial scan through all of its candidates.
-        let reduced: Vec<Vec<(u64, u64, u64, u64)>> = self
+        let reduce = |chunk: &[Preference]| {
+            let mut best = HashMap::new();
+            for p in chunk {
+                let candidate = (|| {
+                    let manual = self.manual.is_some_and(|choice| std::ptr::eq(choice, p));
+                    if self.manual.is_some_and(|choice| choice.person == p.person) && !manual {
+                        return None;
+                    }
+                    if (!manual && self.busy.binary_search(&p.person).is_ok())
+                        || self.resting.binary_search(&p.person).is_ok()
+                        || underage.binary_search(&p.person).is_ok()
+                    {
+                        return None;
+                    }
+                    let person =
+                        &self.people[self.people.binary_search_by_key(&p.person, |p| p.id).ok()?];
+                    if (person.controlled && !manual)
+                        || person.health == 0
+                        || person.hunger > self.max_hunger
+                    {
+                        return None;
+                    }
+                    let row =
+                        &self.work[self.work.binary_search_by_key(&p.job, |w| w.job.id).ok()?];
+                    if !matches!(row.phase, Phase::Suspended { until } if until > self.tick)
+                        || row.job.worker == p.person
+                        || person.region != Some(row.job.region)
+                    {
+                        return None;
+                    }
+                    let binding = &self.sites.bindings[self
+                        .sites
+                        .bindings
+                        .binary_search_by_key(&p.job, |b| b.job)
+                        .ok()?];
+                    if self.unavailable_sites.binary_search(&binding.site).is_ok() {
+                        return None;
+                    }
+                    let class = self
+                        .site_classes
+                        .binary_search_by_key(&binding.site, |r| r.0)
+                        .ok()
+                        .map(|i| self.site_classes[i].1);
+                    if class.is_some_and(|owner| owner != Some(person.id))
+                        && !p.disregard_claims
+                        && (manual
+                            || self
+                                .claims
+                                .is_none_or(|claims| !claims.disregards(person.id)))
+                    {
+                        return None;
+                    }
+                    if self.tool_wear.map_or_else(
+                        || !tools::available(self.tools, self.view, person.id, row.job.recipe),
+                        |wear| {
+                            wear.select(
+                                self.tools,
+                                self.physical,
+                                self.view,
+                                person.id,
+                                row.job.recipe,
+                            )
+                            .is_none()
+                        },
+                    ) {
+                        return None;
+                    }
+                    if self.injuries.is_some_and(|injuries| {
+                        injuries.rules.work_percent == 0
+                            && injuries
+                                .cases
+                                .binary_search_by_key(&person.id, |c| c.person)
+                                .ok()
+                                .is_some_and(|i| {
+                                    injuries.cases[i].heals_at > self.tick.saturating_sub(1)
+                                })
+                    }) {
+                        return None;
+                    }
+                    let (fear, obligation) = feelings
+                        .as_ref()
+                        .map_or((0, 0), |i| i.feelings(person.id, row.job.worker));
+                    if !p.willing
+                        && !p.fear_at_least.is_some_and(|v| fear >= v)
+                        && !p.obligation_at_least.is_some_and(|v| obligation >= v)
+                    {
+                        return None;
+                    }
+                    Some((
+                        p.job,
+                        priority(self.seed, self.tick, p.job, p.person),
+                        p.person,
+                        row.job.worker,
+                    ))
+                })();
+                if let Some(candidate) = candidate {
+                    best.entry(candidate.0)
+                        .and_modify(|old: &mut (u64, u64, u64, u64)| {
+                            if candidate < *old {
+                                *old = candidate;
+                            }
+                        })
+                        .or_insert(candidate);
+                }
+            }
+            best.into_values().collect::<Vec<_>>()
+        };
+        let mut reduced: Vec<Vec<(u64, u64, u64, u64)>> = self
             .owner
             .preferences
             .par_chunks(1024)
-            .map(|chunk| {
-                let mut best = HashMap::new();
-                for p in chunk {
-                    let candidate = (|| {
-                        if self.busy.binary_search(&p.person).is_ok()
-                            || self.resting.binary_search(&p.person).is_ok()
-                            || underage.binary_search(&p.person).is_ok()
-                        {
-                            return None;
-                        }
-                        let person = &self.people
-                            [self.people.binary_search_by_key(&p.person, |p| p.id).ok()?];
-                        if person.controlled
-                            || person.health == 0
-                            || person.hunger > self.max_hunger
-                        {
-                            return None;
-                        }
-                        let row = &self.work
-                            [self.work.binary_search_by_key(&p.job, |w| w.job.id).ok()?];
-                        if !matches!(row.phase, Phase::Suspended { until } if until > self.tick)
-                            || row.job.worker == p.person
-                            || person.region != Some(row.job.region)
-                        {
-                            return None;
-                        }
-                        let binding = &self.sites.bindings[self
-                            .sites
-                            .bindings
-                            .binary_search_by_key(&p.job, |b| b.job)
-                            .ok()?];
-                        if self.unavailable_sites.binary_search(&binding.site).is_ok() {
-                            return None;
-                        }
-                        let class = self
-                            .site_classes
-                            .binary_search_by_key(&binding.site, |r| r.0)
-                            .ok()
-                            .map(|i| self.site_classes[i].1);
-                        if class.is_some_and(|owner| owner != Some(person.id))
-                            && !p.disregard_claims
-                            && self
-                                .claims
-                                .is_none_or(|claims| !claims.disregards(person.id))
-                        {
-                            return None;
-                        }
-                        if self.tool_wear.map_or_else(
-                            || !tools::available(self.tools, self.view, person.id, row.job.recipe),
-                            |wear| {
-                                wear.select(
-                                    self.tools,
-                                    self.physical,
-                                    self.view,
-                                    person.id,
-                                    row.job.recipe,
-                                )
-                                .is_none()
-                            },
-                        ) {
-                            return None;
-                        }
-                        if self.injuries.is_some_and(|injuries| {
-                            injuries.rules.work_percent == 0
-                                && injuries
-                                    .cases
-                                    .binary_search_by_key(&person.id, |c| c.person)
-                                    .ok()
-                                    .is_some_and(|i| {
-                                        injuries.cases[i].heals_at > self.tick.saturating_sub(1)
-                                    })
-                        }) {
-                            return None;
-                        }
-                        let (fear, obligation) = feelings
-                            .as_ref()
-                            .map_or((0, 0), |i| i.feelings(person.id, row.job.worker));
-                        if !p.willing
-                            && !p.fear_at_least.is_some_and(|v| fear >= v)
-                            && !p.obligation_at_least.is_some_and(|v| obligation >= v)
-                        {
-                            return None;
-                        }
-                        Some((
-                            p.job,
-                            priority(self.seed, self.tick, p.job, p.person),
-                            p.person,
-                            row.job.worker,
-                        ))
-                    })();
-                    if let Some(candidate) = candidate {
-                        best.entry(candidate.0)
-                            .and_modify(|old: &mut (u64, u64, u64, u64)| {
-                                if candidate < *old {
-                                    *old = candidate;
-                                }
-                            })
-                            .or_insert(candidate);
-                    }
-                }
-                best.into_values().collect()
-            })
+            .map(reduce)
             .collect();
+        if let Some(manual) = self.manual {
+            reduced.push(reduce(std::slice::from_ref(manual)));
+        }
         let mut candidates: Vec<_> = reduced.into_par_iter().flatten().collect();
         candidates.par_sort_unstable();
         candidates

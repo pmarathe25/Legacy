@@ -48,6 +48,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             );
             println!("tell-route PERSON SOURCE DEST remembered|open|closed remembered|TICKS");
             println!("assist-work LEAD RECIPE respect|disregard");
+            println!("take-over-work JOB respect|disregard");
         }
         ["view"] => {
             let view = player.view()?;
@@ -125,6 +126,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             }
             for site in view.work_sites {
                 println!("work-site={site:?}");
+            }
+            for work in view.vacant_work {
+                println!("vacant-work={work:?}");
             }
             for debris in view.debris {
                 println!("debris={debris:?}");
@@ -788,6 +792,17 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                     recipe.parse().map_err(|_| "invalid recipe")?,
                     disregard
                 )?
+            );
+        }
+        ["take-over-work", job, claims] => {
+            let disregard = match *claims {
+                "respect" => false,
+                "disregard" => true,
+                _ => return Err("expected respect or disregard".into()),
+            };
+            println!(
+                "adopted={}",
+                player.take_over_work(job.parse().map_err(|_| "invalid job")?, disregard)?
             );
         }
         ["feed-animal", animal, good, quantity] => println!(

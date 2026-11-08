@@ -31,6 +31,12 @@ pub enum WorkAction {
         recipe: u32,
         disregard_claims: bool,
     },
+    /// Attempt to take over a local vacant job for one boundary.
+    TakeOver {
+        actor: u64,
+        job: u64,
+        disregard_claims: bool,
+    },
     /// Respond to a request personally received by the controlled worker.
     Respond {
         actor: u64,
@@ -44,6 +50,7 @@ impl WorkAction {
             Self::Start { actor, .. }
             | Self::Continue { actor }
             | Self::Assist { actor, .. }
+            | Self::TakeOver { actor, .. }
             | Self::Respond { actor, .. } => actor,
         }
     }
@@ -237,6 +244,23 @@ macro_rules! validate_work_world {
                         })
                     {
                         return Err("no eligible local job to assist".into());
+                    }
+                }
+                $crate::WorkAction::TakeOver { job, .. } => {
+                    if working
+                        || $world
+                            .shared_work
+                            .as_ref()
+                            .and_then(|owner| owner.succession.as_ref())
+                            .is_none()
+                        || !$world.physical.work().iter().any(|row| {
+                            row.job.id == job
+                                && row.job.worker != actor
+                                && matches!(row.phase, game_lot_runtime::Phase::Suspended { .. })
+                                && Some(row.job.region) == person.region
+                        })
+                    {
+                        return Err("no eligible local vacant job".into());
                     }
                 }
                 _ => {}

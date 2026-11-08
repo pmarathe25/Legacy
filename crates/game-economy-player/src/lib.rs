@@ -29,6 +29,14 @@ pub struct WorkSiteView {
     /// Current wear, wear limit, repair good, and repair quantity when configured.
     pub maintenance: Option<(u64, u64, u32, u64)>,
 }
+/// Physical unfinished work visible at a local site.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VacantWorkView {
+    pub job: u64,
+    pub recipe: u32,
+    pub site: u64,
+    pub until: u64,
+}
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DebrisView {
     pub site: u64,
@@ -140,6 +148,7 @@ pub struct View {
     /// Only route observations made by the controlled person.
     pub route_observations: Vec<game_economy::RouteObservation>,
     pub job: Option<Job>,
+    pub vacant_work: Vec<VacantWorkView>,
     pub shared_work: Vec<game_economy::SharedWorkEvent>,
     /// Only the controlled person's own goals are visible.
     pub goals: Vec<game_economy::Goal>,
@@ -662,6 +671,37 @@ impl<'a> Player<'a> {
                 })
             })
             .unwrap_or_default();
+        let vacant_work = person
+            .as_ref()
+            .and_then(|p| p.region)
+            .map_or_else(Vec::new, |region| {
+                state.work_sites.map_or_else(Vec::new, |sites| {
+                    state
+                        .physical
+                        .work()
+                        .par_iter()
+                        .filter_map(|row| {
+                            let game_lot_runtime::Phase::Suspended { until } = row.phase else {
+                                return None;
+                            };
+                            if row.job.region != region {
+                                return None;
+                            }
+                            let binding = sites
+                                .bindings
+                                .binary_search_by_key(&row.job.id, |b| b.job)
+                                .ok()
+                                .map(|i| &sites.bindings[i])?;
+                            Some(VacantWorkView {
+                                job: row.job.id,
+                                recipe: row.job.recipe,
+                                site: binding.site,
+                                until,
+                            })
+                        })
+                        .collect()
+                })
+            });
         let shared_work = state.shared_work.map_or_else(Vec::new, |owner| {
             owner
                 .events
@@ -722,6 +762,7 @@ impl<'a> Player<'a> {
             food_reports,
             route_observations,
             job,
+            vacant_work,
             shared_work,
             goals: current.map_or_else(Vec::new, |id| {
                 state.goals.map_or_else(Vec::new, |owner| {
@@ -1596,6 +1637,13 @@ impl<'a> Player<'a> {
         }
         self.world
             .assist_work(self.current()?, lead, recipe, disregard_claims)
+    }
+    pub fn take_over_work(&mut self, job: u64, disregard_claims: bool) -> Result<bool, String> {
+        if !self.view()?.vacant_work.iter().any(|row| row.job == job) {
+            return Err("vacant work is not locally visible".into());
+        }
+        self.world
+            .take_over_work(self.current()?, job, disregard_claims)
     }
     pub fn eat(&mut self, good: u32) -> Result<bool, String> {
         self.world.eat(self.current()?, good)

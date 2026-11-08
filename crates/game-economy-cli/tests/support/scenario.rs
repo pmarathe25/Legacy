@@ -2,6 +2,44 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn player_observes_and_takes_over_authored_local_work() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/scenarios/economy-work-succession.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut state = world.snapshot();
+    state
+        .shared_work
+        .as_mut()
+        .unwrap()
+        .succession
+        .as_mut()
+        .unwrap()
+        .preferences
+        .clear();
+    let mut world = game_economy::Economy::compile(state).unwrap();
+    for _ in 0..12 {
+        if !world.advance().unwrap().started.is_empty() {
+            break;
+        }
+    }
+    let job = world.snapshot().physical.work[0].job.id;
+    world.set_work_choice(2, false).unwrap();
+    assert_eq!(world.advance().unwrap().suspended, vec![job]);
+    let mut player = game_economy_player::Player::new(&mut world);
+    let view = player.view().unwrap();
+    assert!(
+        view.vacant_work
+            .iter()
+            .any(|row| row.job == job && row.site == 1)
+    );
+    assert!(player.take_over_work(job, false).unwrap());
+    assert!(player.view().unwrap().vacant_work.is_empty());
+}
+
+#[test]
 fn playable_care_uses_real_medicine_and_can_transmit_illness_during_a_project() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers, willing: bool| {

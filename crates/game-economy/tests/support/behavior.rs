@@ -45250,6 +45250,98 @@ fn takeover_respects_subjective_pressure_and_vacancies_expire() {
 }
 
 #[test]
+fn controlled_takeover_competes_with_individuals_and_obeys_site_claim_choice() {
+    use game_economy_claims::Claims;
+    let mut initial = shared_work_fixture();
+    initial.construction.as_mut().unwrap().maintenance = None;
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims::default()),
+    });
+    let shared = initial.shared_work.as_mut().unwrap();
+    shared.preferences.clear();
+    shared.succession = Some(WorkSuccession {
+        retention: 5,
+        preferences: vec![],
+        engagements: vec![],
+    });
+    let run = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                world.claim_site(2, 1).unwrap();
+                world.set_work_choice(2, false).unwrap();
+                assert_eq!(world.advance().unwrap().suspended, vec![1]);
+                let before = world.snapshot();
+                assert!(world.take_over_work(3, 1, false).is_err());
+                assert_eq!(world.snapshot(), before);
+                assert!(!world.take_over_work(1, 1, false).unwrap());
+                assert_eq!(world.tick(), before.physical.custody.tick + 1);
+                assert!(world.take_over_work(1, 1, true).unwrap());
+                let state = world.snapshot();
+                assert_eq!(state.physical.work[0].job.worker, 1);
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .claims
+                        .as_ref()
+                        .unwrap()
+                        .site_events
+                        .iter()
+                        .any(|e| e.person == 1 && e.site == 1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+
+    let mut contested = initial;
+    contested
+        .shared_work
+        .as_mut()
+        .unwrap()
+        .succession
+        .as_mut()
+        .unwrap()
+        .preferences
+        .push(WorkSuccessionPreference {
+            person: 3,
+            job: 1,
+            willing: true,
+            fear_at_least: None,
+            obligation_at_least: None,
+            disregard_claims: true,
+        });
+    let run = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(contested.clone()).unwrap();
+                world.advance().unwrap();
+                world.set_work_choice(2, false).unwrap();
+                world.advance().unwrap();
+                let admitted = world.take_over_work(1, 1, false).unwrap();
+                let state = world.snapshot();
+                assert_eq!(admitted, state.physical.work[0].job.worker == 1);
+                assert!([1, 3].contains(&state.physical.work[0].job.worker));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn individuals_share_one_physical_job_and_learn_only_their_own_practice() {
     let initial = shared_work_fixture();
     let run = |workers| {
