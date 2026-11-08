@@ -6,6 +6,12 @@ Work sites can optionally wear with completed production and require real repair
 
 Optional renewable animal products grow as bounded individual biological state. Collection uses an animal's response and the collector's choices, produces real dated goods, and competes with other actions involving that animal. An existing physical hold can support explicitly forced collection without implying consent.
 
+Optional written food claims use identified physical pages. Writing consumes configured paper and ink in the same transaction that creates a page, preserving the author's chosen claim, original witness and observation time. A controlled person can write an actively invoked memory, including a deliberately altered quantity, hand over a specific page, or read a held page in a known script. A person with `auto_read = true` can independently choose to read a held page; their personal report-reception setting separately controls whether they retain its claim. Handover alone teaches nobody. Reading attempts are remembered so an uninterested or distrustful person is not forced to read the same page every boundary. Pages follow physical custody and are removed from the writing owner if the physical item is consumed. Literacy practice, general writing, and autonomous writing remain future work.
+
+The writing owner's literacy, page, and reading-history collections share immutable storage across staged generations. Rust callers editing an authored literacy list can use `literacy_mut()`; serialized data remains ordinary arrays.
+
+The ignored `independent_autonomous_readers_benchmark` measures one full economy boundary with `LEGACY_PEOPLE` independent readers; `LEGACY_WORKERS` selects concurrency. It excludes world construction and reports the median of three warmed runs.
+
 Giving policies and responses are shared immutable collections across staged generations. Rust callers constructing `Giving` can convert vectors into the shared fields; callers changing them use `policies_mut()` or `responses_mut()`, which detach on write. Their serialized representation remains ordinary arrays.
 
 Regional exposure uses finite shelter and authored seasons; seasonal planting, growth and harvest rules affect actual fields. Travelers face source-region exposure. Shelter allocation and crop growth are deterministic across worker counts and saves.

@@ -257,10 +257,34 @@ impl Store {
     }
     /// Current physical custody of an identified item, if it exists.
     pub fn item_place(&self, id: u64) -> Option<Place> {
-        self.items
-            .binary_search_by_key(&id, |row| row.0)
-            .ok()
+        let direct = self
+            .items
+            .first()
+            .and_then(|row| id.checked_sub(row.0))
+            .and_then(|offset| usize::try_from(offset).ok())
+            .filter(|&index| self.items.get(index).is_some_and(|row| row.0 == id));
+        direct
+            .or_else(|| self.items.binary_search_by_key(&id, |row| row.0).ok())
             .map(|i| self.items[i].1)
+    }
+    /// Find the first unused item identity at or above `start`.
+    pub fn next_unused_item(&self, start: u64) -> Option<u64> {
+        if start == 0 {
+            return None;
+        }
+        let base = self.items.partition_point(|row| row.0 < start);
+        let mut low = 0usize;
+        let mut high = self.items.len() - base;
+        while low < high {
+            let middle = low + (high - low) / 2;
+            let expected = start.checked_add(u64::try_from(middle).ok()?);
+            if expected == Some(self.items[base + middle].0) {
+                low = middle + 1;
+            } else {
+                high = middle;
+            }
+        }
+        start.checked_add(u64::try_from(low).ok()?)
     }
     fn touches_item(&self, movement: &Movement) -> bool {
         self.item_places.binary_search(&movement.from).is_ok()

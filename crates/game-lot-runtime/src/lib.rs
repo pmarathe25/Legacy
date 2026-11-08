@@ -3,7 +3,7 @@ mod advance;
 mod receipts;
 pub use advance::{AdvanceDraft, Events};
 use game_lot_content::Catalog;
-pub use game_lot_content::Growth;
+pub use game_lot_content::{Growth, WritingPage};
 pub use game_lot_work::{Phase, Snapshot, Work};
 use game_lots::{Outcome, Place, Spoilage, Store, Transaction, TransactionOutcome};
 use game_production_model::{Good, JobPhase, Recipe, Start};
@@ -80,6 +80,13 @@ impl Runtime {
     }
     pub fn tick(&self) -> u64 {
         self.store.tick()
+    }
+    /// Current custody of a unique physical item.
+    pub fn item_place(&self, id: u64) -> Option<Place> {
+        self.store.item_place(id)
+    }
+    pub fn next_unused_item(&self, start: u64) -> Option<u64> {
+        self.store.next_unused_item(start)
     }
     pub fn tick_millis(&self) -> u64 {
         self.tick_millis

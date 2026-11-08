@@ -59,6 +59,8 @@ pub struct State {
     #[serde(default)]
     pub knowledge: Option<game_economy_knowledge::Knowledge>,
     #[serde(default)]
+    pub writing: Option<crate::writing::Writing>,
+    #[serde(default)]
     pub combat: Option<game_economy_combat::Combat>,
     #[serde(default)]
     pub fatigue: Option<game_economy_fatigue::Fatigue>,

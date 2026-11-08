@@ -941,6 +941,33 @@ impl<'a> Player<'a> {
         self.world
             .share_invoked_food(self.current()?, target, life, region, claimed_food)
     }
+    pub fn held_pages(&self) -> Result<Vec<u64>, String> {
+        Ok(self
+            .world
+            .held_pages(self.current()?)?
+            .into_iter()
+            .map(|page| page.item)
+            .collect())
+    }
+    pub fn write_food(
+        &mut self,
+        script: u32,
+        region: u64,
+        life: Option<u64>,
+        claimed_food: Option<u32>,
+    ) -> Result<Option<u64>, String> {
+        self.world
+            .write_food(self.current()?, script, region, life, claimed_food)
+    }
+    pub fn give_page(&mut self, recipient: u64, item: u64) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&recipient) {
+            return Err("person is not present".into());
+        }
+        self.world.give_page(self.current()?, recipient, item)
+    }
+    pub fn read_page(&mut self, item: u64) -> Result<bool, String> {
+        self.world.read_page(self.current()?, item)
+    }
     pub fn invoke(&mut self, lives: &[u64]) -> Result<(), String> {
         self.current()?;
         self.world.invoke_lives(lives)

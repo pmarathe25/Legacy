@@ -79,6 +79,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                     harvest: &[output(1, Some(5))],
                     animal_yield: &[],
                     animal_products: &[],
+                    writing: &[],
                     compact_consumption: &[]
                 },
                 1
@@ -96,6 +97,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                 harvest: &[output(1, None), output(2, None)],
                 animal_yield: &[],
                 animal_products: &[],
+                writing: &[],
                 compact_consumption: &[],
             },
             1,
@@ -157,6 +159,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                     harvest: &[],
                     animal_yield: &[yield_, invalid],
                     animal_products: &[],
+                    writing: &[],
                     compact_consumption: &[]
                 },
                 7
@@ -174,6 +177,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                 harvest: &[],
                 animal_yield: &[yield_],
                 animal_products: &[],
+                writing: &[],
                 compact_consumption: &[],
             },
             7,
@@ -213,6 +217,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                 harvest: &[],
                 animal_yield: &[next],
                 animal_products: &[],
+                writing: &[],
                 compact_consumption: &[],
             },
             7,
@@ -796,6 +801,7 @@ fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_action
                             harvest: &[],
                             animal_yield: &[],
                             animal_products: &[],
+                            writing: &[],
                             compact_consumption: &compact,
                         },
                         19,
@@ -1835,6 +1841,7 @@ fn renewable_products_and_hunts_use_distinct_atomic_animal_claims() {
                         harvest: &[],
                         animal_yield: &[hunt],
                         animal_products: &[invalid],
+                        writing: &[],
                         compact_consumption: &[]
                     },
                     7
@@ -1853,6 +1860,7 @@ fn renewable_products_and_hunts_use_distinct_atomic_animal_claims() {
                 harvest: &[],
                 animal_yield: &[hunt],
                 animal_products: &[product],
+                writing: &[],
                 compact_consumption: &[],
             },
             7,

@@ -214,6 +214,7 @@ fn fixture() -> State {
         campaign: None,
         skills: None,
         knowledge: None,
+        writing: None,
         combat: None,
         fatigue: None,
         environment: None,
@@ -234,6 +235,159 @@ fn fixture() -> State {
         hauling: None,
         local_transport: None,
     }
+}
+
+fn independent_readers(count: u64) -> State {
+    let mut state = fixture();
+    state.agreements = None;
+    state.opinions = None;
+    state.autowork = None;
+    state.nutrition = None;
+    state.people = (1..=count)
+        .map(|id| Person {
+            id,
+            region: Some(1),
+            health: 100,
+            hunger: 0,
+            immortal: None,
+            willing_to_work: false,
+            seek_meals: false,
+            controlled: false,
+        })
+        .collect();
+    let stock = |region| Container::new(Place::Stock { region, good: 1 }, 10, vec![]).unwrap();
+    state.physical.custody.containers = vec![stock(1), stock(2)];
+    state
+        .physical
+        .custody
+        .containers
+        .extend((1..=count).map(|id| {
+            Container::new(
+                Place::Person(id),
+                10,
+                vec![Lot {
+                    good: 3,
+                    quantity: 1,
+                    item: Some(id),
+                    expires_at: None,
+                }],
+            )
+            .unwrap()
+        }));
+    state.knowledge = Some(Knowledge {
+        max_records: 4,
+        minds: (1..=count)
+            .map(|person| game_economy_knowledge::Mind {
+                person,
+                remember_people: false,
+                people_seen: vec![],
+                people_reporting: None,
+                people_reports: vec![],
+                reporting: None,
+                misreport: None,
+                records: vec![],
+            })
+            .collect(),
+    });
+    state.writing = Some(Writing {
+        paper: 1,
+        ink: 2,
+        page: 3,
+        paper_quantity: 1,
+        ink_quantity: 1,
+        next_item: count + 1,
+        literacy: (1..=count)
+            .map(|person| Literacy {
+                person,
+                script: 1,
+                read: true,
+                write: false,
+                auto_read: true,
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        pages: (1..=count)
+            .map(|item| WrittenPage {
+                item,
+                author: 1,
+                script: 1,
+                written_at: 0,
+                claim: game_economy_knowledge::Record {
+                    region: 2,
+                    food: 99,
+                    observed_at: 0,
+                    witness: 1,
+                    learned_from: None,
+                },
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        reads: vec![].into(),
+    });
+    state
+}
+
+#[test]
+fn independent_autonomous_readers_match_across_worker_counts() {
+    let initial = independent_readers(2048);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.writing.as_ref().unwrap().reads.len(), 2048);
+                assert!(state.knowledge.as_ref().unwrap().minds.iter().all(|mind| {
+                    mind.records
+                        .iter()
+                        .any(|row| row.region == 2 && row.food == 99)
+                }));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_autonomous_readers_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let initial = independent_readers(count);
+            let mut samples = Vec::new();
+            for round in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(
+                    world.snapshot().writing.unwrap().reads.len(),
+                    count as usize
+                );
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "readers={count} workers={workers} seconds={:.6}",
+                samples[1]
+            );
+        });
 }
 
 #[test]

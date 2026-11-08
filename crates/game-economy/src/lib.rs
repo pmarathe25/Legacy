@@ -131,6 +131,7 @@ pub use gathering::{Gathering, Node as ResourceNode, Policy as GatherPolicy};
 pub use recovery::Rules as RecoveryRules;
 mod state;
 mod teaching;
+mod writing;
 use game_autowork::Autowork;
 pub use game_economy_agriculture::{
     Agriculture, Crop, Field, Phase as CropPhase, Policy as FarmPolicy,
@@ -146,6 +147,7 @@ use game_production_model::FoodEffect;
 use rayon::prelude::*;
 pub use state::{Agreements, Immortal, Person, Rules, State};
 use std::collections::HashSet;
+pub use writing::{Literacy, Page as WrittenPage, Writing};
 pub struct Economy {
     physical: Runtime,
     seed: u64,
@@ -172,6 +174,7 @@ pub struct Economy {
     campaign: Option<Campaign>,
     skills: Option<Skills>,
     knowledge: Option<Knowledge>,
+    writing: Option<Writing>,
     combat: Option<game_economy_combat::Runtime>,
     fatigue: Option<Fatigue>,
     environment: Option<Environment>,
@@ -226,6 +229,7 @@ pub struct Draft {
     campaign: Option<Campaign>,
     skills: Option<Skills>,
     knowledge: Option<Knowledge>,
+    writing: Option<Writing>,
     combat: Option<game_economy_combat::Draft>,
     fatigue: Option<game_economy_fatigue::Draft>,
     purpose: Option<Purpose>,
@@ -248,6 +252,9 @@ pub struct Draft {
     animal_captured: Option<bool>,
     animal_released: Option<bool>,
     animal_defended: Option<bool>,
+    written_item: Option<u64>,
+    page_given: Option<bool>,
+    page_read: Option<bool>,
     taking_outcome: Option<TakingOutcome>,
     hunting_births: Vec<HuntingPolicy>,
     animal_care_births: Vec<AnimalCarePolicy>,
@@ -1171,6 +1178,74 @@ impl Economy {
         self.commit(draft)?;
         Ok(delivered)
     }
+    /// Pages physically held by this person; merely possessing one does not read it.
+    pub fn held_pages(&self, person: u64) -> Result<Vec<WrittenPage>, String> {
+        let writing = self.writing.as_ref().ok_or("writing is disabled")?;
+        Ok(writing
+            .pages
+            .iter()
+            .filter(|page| {
+                self.physical.item_place(page.item) == Some(game_lots::Place::Person(person))
+            })
+            .cloned()
+            .collect())
+    }
+    /// Write a known or invoked food claim using carried paper and ink.
+    pub fn write_food(
+        &mut self,
+        person: u64,
+        script: u32,
+        region: u64,
+        life: Option<u64>,
+        claimed_food: Option<u32>,
+    ) -> Result<Option<u64>, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::WriteFood {
+                person,
+                script,
+                region,
+                life,
+                claimed_food,
+            }),
+        )?;
+        let written = draft.written_item;
+        self.commit(draft)?;
+        Ok(written)
+    }
+    /// Attempt to hand over the specified page, subject to physical capacity.
+    pub fn give_page(&mut self, person: u64, recipient: u64, item: u64) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::GivePage {
+                person,
+                recipient,
+                item,
+            }),
+        )?;
+        let given = draft.page_given.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(given)
+    }
+    /// Read one physically held page in a known script.
+    pub fn read_page(&mut self, person: u64, item: u64) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::ReadPage { person, item }),
+        )?;
+        let read = draft.page_read.unwrap_or(false);
+        self.commit(draft)?;
+        Ok(read)
+    }
     /// Attempt to feed a nearby animal with real carried food.
     pub fn feed_animal(
         &mut self,
@@ -2072,6 +2147,20 @@ impl Economy {
         }
         let combat = game_economy_combat::compile_world!(state, physical, view);
         game_economy_knowledge::validate_world!(state, ids, view, physical);
+        if let Some(writing) = &mut state.writing {
+            if state.knowledge.is_none() {
+                return Err("writing requires personal knowledge".into());
+            }
+            let regions: HashSet<_> = view
+                .containers
+                .par_iter()
+                .filter_map(|holder| match holder.place {
+                    game_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            writing.normalize_and_validate(&ids, &goods, &regions, &physical.snapshot())?;
+        }
         game_economy_dynamics::validate_world!(state, ids, goods, view, physical);
         game_economy_expeditions::validate_world!(state, physical, view, ids, goods);
         let _ = game_lot_projection::cargo(&view, state.rules.carrying_capacity)?;
@@ -2236,6 +2325,7 @@ impl Economy {
             campaign: state.campaign,
             skills: state.skills,
             knowledge: state.knowledge,
+            writing: state.writing,
             combat,
             fatigue: state.fatigue,
             environment: state.environment,
@@ -2285,6 +2375,7 @@ impl Economy {
             campaign: self.campaign.clone(),
             skills: self.skills.clone(),
             knowledge: self.knowledge.clone(),
+            writing: self.writing.clone(),
             combat: self.combat.as_ref().map(|combat| combat.state.clone()),
             fatigue: self.fatigue.clone(),
             environment: self.environment.clone(),
@@ -2397,10 +2488,13 @@ impl Economy {
                             game_economy_interaction::PhysicalChoice::Rest { .. }
                                 | game_economy_interaction::PhysicalChoice::Treat { .. }
                                 | game_economy_interaction::PhysicalChoice::Escape { .. }
+                                | game_economy_interaction::PhysicalChoice::ReadPage { .. }
+                                | game_economy_interaction::PhysicalChoice::WriteFood { .. }
                         ) || matches!(
                             row,
                             game_economy_interaction::PhysicalChoice::AskFood { .. }
                                 | game_economy_interaction::PhysicalChoice::Give { .. }
+                                | game_economy_interaction::PhysicalChoice::GivePage { .. }
                                 | game_economy_interaction::PhysicalChoice::TakeFrom { .. }
                                 | game_economy_interaction::PhysicalChoice::TreatOther { .. }
                         ))
@@ -2411,6 +2505,11 @@ impl Economy {
                     }
                     game_economy_interaction::PhysicalChoice::Give {
                         person, recipient, ..
+                    } => !owner.can_communicate(person, recipient),
+                    game_economy_interaction::PhysicalChoice::GivePage {
+                        person,
+                        recipient,
+                        ..
                     } => !owner.can_communicate(person, recipient),
                     game_economy_interaction::PhysicalChoice::TreatOther {
                         person,
@@ -2562,7 +2661,8 @@ impl Economy {
                 use game_economy_interaction::PhysicalChoice;
                 taking_blocked.push(choice.person());
                 match choice {
-                    PhysicalChoice::Give { recipient, .. } => taking_blocked.push(recipient),
+                    PhysicalChoice::Give { recipient, .. }
+                    | PhysicalChoice::GivePage { recipient, .. } => taking_blocked.push(recipient),
                     PhysicalChoice::TreatOther { patient, .. } => taking_blocked.push(patient),
                     PhysicalChoice::AskFood { target, .. }
                     | PhysicalChoice::Confine { target, .. }
@@ -2655,7 +2755,8 @@ impl Economy {
             if let Some(choice) = player_transfer {
                 use game_economy_interaction::PhysicalChoice;
                 match choice {
-                    PhysicalChoice::Give { recipient, .. } => unavailable.push(recipient),
+                    PhysicalChoice::Give { recipient, .. }
+                    | PhysicalChoice::GivePage { recipient, .. } => unavailable.push(recipient),
                     PhysicalChoice::TreatOther { patient, .. } => unavailable.push(patient),
                     PhysicalChoice::AskFood { target, .. } => unavailable.push(target),
                     PhysicalChoice::AskHaul { carrier, .. } => unavailable.push(carrier),
@@ -2741,7 +2842,8 @@ impl Economy {
             if let Some(choice) = player_transfer {
                 use game_economy_interaction::PhysicalChoice;
                 let target = match choice {
-                    PhysicalChoice::Give { recipient, .. } => Some(recipient),
+                    PhysicalChoice::Give { recipient, .. }
+                    | PhysicalChoice::GivePage { recipient, .. } => Some(recipient),
                     PhysicalChoice::TreatOther { patient, .. } => Some(patient),
                     PhysicalChoice::AskFood { target, .. }
                     | PhysicalChoice::Confine { target, .. }
@@ -2951,6 +3053,12 @@ impl Economy {
         if !held.is_empty() {
             game_economy_work::reserve(&mut busy, held.iter().copied());
         }
+        let auto_page_reads = self.writing.as_ref().map_or_else(Vec::new, |owner| {
+            owner.auto_reads(&self.people, &busy, &self.physical)
+        });
+        if !auto_page_reads.is_empty() {
+            game_economy_work::reserve(&mut busy, auto_page_reads.iter().map(|row| row.0));
+        }
         if let Some(owner) = next_confinement
             .as_mut()
             .filter(|owner| !owner.release_policies.is_empty())
@@ -2958,7 +3066,10 @@ impl Economy {
             use game_economy_interaction::PhysicalChoice;
             let mut reserved_targets: Vec<_> = request.map(|row| row.target).into_iter().collect();
             let target = match player_transfer {
-                Some(PhysicalChoice::Give { recipient, .. }) => Some(recipient),
+                Some(
+                    PhysicalChoice::Give { recipient, .. }
+                    | PhysicalChoice::GivePage { recipient, .. },
+                ) => Some(recipient),
                 Some(PhysicalChoice::TreatOther { patient, .. }) => Some(patient),
                 Some(PhysicalChoice::AskFood { target, .. })
                 | Some(PhysicalChoice::Confine { target, .. })
@@ -3031,7 +3142,8 @@ impl Economy {
             if let Some(choice) = player_transfer {
                 use game_economy_interaction::PhysicalChoice;
                 let target = match choice {
-                    PhysicalChoice::Give { recipient, .. } => Some(recipient),
+                    PhysicalChoice::Give { recipient, .. }
+                    | PhysicalChoice::GivePage { recipient, .. } => Some(recipient),
                     PhysicalChoice::TreatOther { patient, .. } => Some(patient),
                     PhysicalChoice::AskFood { target, .. }
                     | PhysicalChoice::Confine { target, .. }
@@ -3178,6 +3290,7 @@ impl Economy {
                 player_transfer,
                 Some(
                     game_economy_interaction::PhysicalChoice::Give { .. }
+                        | game_economy_interaction::PhysicalChoice::GivePage { .. }
                         | game_economy_interaction::PhysicalChoice::TreatOther { .. }
                         | game_economy_interaction::PhysicalChoice::AskFood { .. }
                         | game_economy_interaction::PhysicalChoice::AskHaul { .. }
@@ -4810,6 +4923,139 @@ impl Economy {
             } else {
                 None
             };
+        let mut page_to_write = None;
+        let mut page_to_read = None;
+        let mut manual_page_action = None;
+        let mut writing_output = None;
+        if let Some(
+            choice @ (game_economy_interaction::PhysicalChoice::WriteFood { .. }
+            | game_economy_interaction::PhysicalChoice::ReadPage { .. }
+            | game_economy_interaction::PhysicalChoice::GivePage { .. }),
+        ) = player_transfer
+        {
+            let person = choice.person();
+            let actor = self
+                .people
+                .binary_search_by_key(&person, |p| p.id)
+                .ok()
+                .map(|i| &self.people[i])
+                .ok_or("unknown person")?;
+            if !actor.controlled
+                || actor.health == 0
+                || actor.region.is_none()
+                || self.physical.work().iter().any(|work| {
+                    work.job.worker == person && work.phase == game_lot_runtime::Phase::Working
+                })
+            {
+                return Err("writing requires an available controlled person".into());
+            }
+            let owner = self.writing.as_ref().ok_or("writing is disabled")?;
+            let action = action_base
+                .checked_add(salvage_plan.as_ref().map_or(0, |p| p.actions.len() as u64))
+                .ok_or("action count overflow")?;
+            action.checked_add(1).ok_or("action count overflow")?;
+            match choice {
+                game_economy_interaction::PhysicalChoice::WriteFood {
+                    script,
+                    region,
+                    life,
+                    claimed_food,
+                    ..
+                } => {
+                    if !owner.can_write(person, script) {
+                        return Err("person cannot write this script".into());
+                    }
+                    let records = if let Some(life) = life {
+                        if self
+                            .campaign
+                            .as_ref()
+                            .and_then(|c| c.lineage.controlled_person(self.tick()))
+                            != Some(person)
+                        {
+                            return Err("invoked writing requires the controlled ruler".into());
+                        }
+                        self.invoked_knowledge(life)?
+                    } else {
+                        self.known_food(person)?
+                    };
+                    let mut claim = records
+                        .into_iter()
+                        .find(|record| record.region == region)
+                        .ok_or("person has no memory of that region")?;
+                    if let Some(food) = claimed_food {
+                        claim.food = food;
+                    }
+                    let item = self
+                        .physical
+                        .next_unused_item(owner.next_item)
+                        .ok_or("item identity overflow")?;
+                    item.checked_add(1).ok_or("item identity overflow")?;
+                    let page = WrittenPage {
+                        item,
+                        author: person,
+                        script,
+                        written_at: tick,
+                        claim,
+                    };
+                    writing_output = Some(game_lot_runtime::WritingPage {
+                        action,
+                        writer: person,
+                        paper: owner.paper,
+                        paper_quantity: owner.paper_quantity,
+                        ink: owner.ink,
+                        ink_quantity: owner.ink_quantity,
+                        page: owner.page,
+                        item: page.item,
+                    });
+                    page_to_write = Some(page);
+                }
+                game_economy_interaction::PhysicalChoice::ReadPage { item, .. } => {
+                    let page = owner.page(item).ok_or("unknown written page")?;
+                    if self.physical.item_place(item) != Some(game_lots::Place::Person(person))
+                        || !owner.can_read(person, page.script)
+                    {
+                        return Err("reading requires a held page and a known script".into());
+                    }
+                    page_to_read = Some(page.clone());
+                }
+                game_economy_interaction::PhysicalChoice::GivePage {
+                    recipient, item, ..
+                } => {
+                    let target = self
+                        .people
+                        .binary_search_by_key(&recipient, |p| p.id)
+                        .ok()
+                        .map(|i| &self.people[i])
+                        .ok_or("unknown recipient")?;
+                    if owner.page(item).is_none()
+                        || self.physical.item_place(item) != Some(game_lots::Place::Person(person))
+                        || person == recipient
+                        || target.health == 0
+                        || !communication.allows(person, recipient)
+                        || locations
+                            .region((person, actor.region), (recipient, target.region))
+                            .is_none()
+                    {
+                        return Err(
+                            "page handover requires a held page and a local recipient".into()
+                        );
+                    }
+                    manual_page_action = Some(Transaction {
+                        id: action,
+                        movements: vec![game_lots::Movement {
+                            id: 1,
+                            from: game_lots::Place::Person(person),
+                            to: Some(game_lots::Place::Person(recipient)),
+                            good: owner.page,
+                            quantity: 1,
+                            item: Some(item),
+                        }],
+                        creations: vec![],
+                    });
+                }
+                _ => unreachable!(),
+            }
+        }
         game_economy_claims::include_care_farming!(claim_uses, care, farming);
         #[cfg(feature = "profile")]
         {
@@ -4823,6 +5069,9 @@ impl Economy {
             .as_mut()
             .map_or_else(Vec::new, |plan| plan.take_actions());
         if let Some((_, _, action)) = &manual_animal_feed {
+            actions.push(action.clone());
+        }
+        if let Some(action) = &manual_page_action {
             actions.push(action.clone());
         }
         if let Some(plan) = tool_pickup {
@@ -5078,6 +5327,7 @@ impl Economy {
             && harvest.is_empty()
             && hunting_plan.yields.is_empty()
             && product_plan.yields.is_empty()
+            && writing_output.is_none()
             && compact.is_empty()
             && staged_custody.is_empty()
             && actions.par_iter().all(|action| {
@@ -5120,6 +5370,7 @@ impl Economy {
                         harvest,
                         animal_yield: &hunting_plan.yields,
                         animal_products: &product_plan.yields,
+                        writing: writing_output.as_slice(),
                         compact_consumption: &compact,
                     },
                     staged_custody,
@@ -5127,6 +5378,67 @@ impl Economy {
                 self.seed,
             )?
         };
+        let mut writing = self.writing.clone();
+        if let Some(owner) = &mut writing {
+            owner.retire(physical.item_updates());
+        }
+        let page_action_id = manual_page_action
+            .as_ref()
+            .map(|action| action.id)
+            .or_else(|| writing_output.as_ref().map(|page| page.action));
+        let page_action_accepted = page_action_id.is_some_and(|action| {
+            physical
+                .events()
+                .physical_actions
+                .binary_search_by_key(&action, |row| row.id)
+                .ok()
+                .is_some_and(|i| physical.events().physical_actions[i].accepted)
+        });
+        let written_item = page_to_write
+            .as_ref()
+            .filter(|_| page_action_accepted)
+            .map(|page| page.item);
+        if page_action_accepted && let Some(page) = page_to_write {
+            let owner = writing.as_mut().expect("validated writing owner");
+            owner.next_item = page.item + 1;
+            owner.add_page(page);
+        }
+        let page_given = matches!(
+            player_transfer,
+            Some(game_economy_interaction::PhysicalChoice::GivePage { .. })
+        )
+        .then_some(page_action_accepted);
+        let page_read = page_to_read.as_ref().map(|page| {
+            let person = player_transfer.expect("read action").person();
+            physical
+                .item_updates()
+                .binary_search_by_key(&page.item, |row| row.0)
+                .ok()
+                .is_none_or(|i| {
+                    physical.item_updates()[i].1 == Some(game_lots::Place::Person(person))
+                })
+        });
+        let completed_auto_reads: Vec<_> = auto_page_reads
+            .par_iter()
+            .copied()
+            .filter(|&(person, item)| {
+                physical
+                    .item_updates()
+                    .binary_search_by_key(&item, |row| row.0)
+                    .ok()
+                    .is_none_or(|i| {
+                        physical.item_updates()[i].1 == Some(game_lots::Place::Person(person))
+                    })
+            })
+            .collect();
+        if let Some(owner) = &mut writing {
+            owner.record_reads(&completed_auto_reads);
+            if page_read == Some(true)
+                && let Some(page) = &page_to_read
+            {
+                owner.record_reads(&[(player_transfer.expect("read action").person(), page.item)]);
+            }
+        }
         let fatigue = game_economy_fatigue::prepare_world!(
             self,
             (rates, starts, physical),
@@ -5551,6 +5863,57 @@ impl Economy {
             profile_phase = game_diagnostics::span("economy.knowledge_and_skills");
         }
         let mut knowledge = game_economy_knowledge::prepare_world!(self, dynamics);
+        if !completed_auto_reads.is_empty()
+            && let (Some(writing), Some(owner)) = (&self.writing, &mut knowledge)
+        {
+            let reception = self.opinions.as_ref().and_then(Opinions::report_filter);
+            let reports: Vec<_> = completed_auto_reads
+                .par_iter()
+                .filter_map(|&(person, item)| {
+                    let page = writing.page(item)?;
+                    if reception
+                        .as_ref()
+                        .is_some_and(|filter| !filter.accepts(person, page.author))
+                    {
+                        return None;
+                    }
+                    let mut statement = page.claim.clone();
+                    statement.learned_from = if page.author == person {
+                        statement.learned_from.filter(|&source| source != person)
+                    } else {
+                        Some(page.author)
+                    };
+                    let local = writing::ordered_index(&self.people, person, |p| p.id)
+                        .and_then(|i| self.people[i].region);
+                    Some((person, statement, local))
+                })
+                .collect();
+            owner.receive_reports(&reports).map_err(str::to_owned)?;
+        }
+        if page_read == Some(true)
+            && let (Some(page), Some(owner)) = (page_to_read, &mut knowledge)
+        {
+            let person = player_transfer.expect("read action").person();
+            if self
+                .opinions
+                .as_ref()
+                .and_then(Opinions::report_filter)
+                .is_none_or(|filter| filter.accepts(person, page.author))
+            {
+                let mut statement = page.claim;
+                statement.learned_from = if page.author == person {
+                    statement.learned_from.filter(|&source| source != person)
+                } else {
+                    Some(page.author)
+                };
+                let local = self
+                    .people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .and_then(|i| self.people[i].region);
+                owner.receive_report(person, statement, local);
+            }
+        }
         let mut skills = game_economy_skills::advance(
             self.skills.as_ref(),
             self.physical.work(),
@@ -6560,6 +6923,7 @@ impl Economy {
             campaign,
             skills,
             knowledge,
+            writing,
             combat,
             fatigue,
             purpose,
@@ -6582,6 +6946,9 @@ impl Economy {
             animal_captured,
             animal_released,
             animal_defended,
+            written_item,
+            page_given,
+            page_read,
             taking_outcome,
             hunting_births,
             animal_care_births,
@@ -6636,6 +7003,7 @@ impl Economy {
         self.campaign = draft.campaign;
         self.skills = draft.skills;
         let old_knowledge = std::mem::replace(&mut self.knowledge, draft.knowledge);
+        self.writing = draft.writing;
         game_economy_combat::publish_world!(self, draft.combat);
         self.fatigue = draft.fatigue.map(|fatigue| fatigue.state);
         self.purpose = draft.purpose;

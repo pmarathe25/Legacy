@@ -167,6 +167,37 @@ fn item_identity_survives_transfer_and_stale_drafts_cannot_change_it() {
 }
 
 #[test]
+fn next_item_identity_skips_live_ids_and_detects_overflow() {
+    let owner = store();
+    assert_eq!(owner.next_unused_item(0), None);
+    assert_eq!(owner.next_unused_item(1), Some(1));
+    assert_eq!(owner.next_unused_item(10), Some(13));
+    let owner = Store::compile(State {
+        tick: 0,
+        revision: 0,
+        containers: vec![Container::new(Place::Person(1), 1, vec![item(u64::MAX)]).unwrap()],
+    })
+    .unwrap();
+    assert_eq!(owner.next_unused_item(u64::MAX), None);
+}
+
+#[test]
+fn item_lookup_falls_back_when_identifiers_have_gaps() {
+    let owner = Store::compile(State {
+        tick: 0,
+        revision: 0,
+        containers: vec![
+            Container::new(Place::Person(1), 3, vec![item(10), item(12), item(13)]).unwrap(),
+        ],
+    })
+    .unwrap();
+    assert_eq!(owner.item_place(10), Some(Place::Person(1)));
+    assert_eq!(owner.item_place(11), None);
+    assert_eq!(owner.item_place(12), Some(Place::Person(1)));
+    assert_eq!(owner.item_place(13), Some(Place::Person(1)));
+}
+
+#[test]
 fn duplicate_identity_and_invalid_items_are_rejected() {
     assert!(
         Container::new(

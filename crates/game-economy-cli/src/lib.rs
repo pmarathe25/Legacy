@@ -75,6 +75,8 @@ struct Scenario {
     #[serde(default)]
     knowledge: Option<game_economy::Knowledge>,
     #[serde(default)]
+    writing: Option<WritingConfig>,
+    #[serde(default)]
     combat: Option<game_economy_combat::Config>,
     #[serde(default)]
     fatigue: Option<game_economy::Fatigue>,
@@ -112,6 +114,23 @@ struct Scenario {
     hauling: Option<HaulingConfig>,
     #[serde(default)]
     local_transport: Option<LocalTransportConfig>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WritingConfig {
+    paper: String,
+    ink: String,
+    page: String,
+    paper_quantity: u64,
+    ink_quantity: u64,
+    next_item: u64,
+    #[serde(default)]
+    literacy: Vec<game_economy::Literacy>,
+    #[serde(default)]
+    pages: Vec<game_economy::WrittenPage>,
+    #[serde(default)]
+    reads: Vec<(u64, u64)>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -772,6 +791,28 @@ pub fn scenario_with_options(
         .iter()
         .map(|good| (good.name.as_str(), good.id))
         .collect();
+    let writing = scenario
+        .writing
+        .map(|config| {
+            let resolve = |name: &str| {
+                goods
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown writing good {name}"))
+            };
+            Ok::<_, String>(game_economy::Writing {
+                paper: resolve(&config.paper)?,
+                ink: resolve(&config.ink)?,
+                page: resolve(&config.page)?,
+                paper_quantity: config.paper_quantity,
+                ink_quantity: config.ink_quantity,
+                next_item: config.next_item,
+                literacy: config.literacy.into(),
+                pages: config.pages.into(),
+                reads: config.reads.into(),
+            })
+        })
+        .transpose()?;
     let recipes: BTreeMap<_, _> = production
         .recipes
         .iter()
@@ -1406,6 +1447,7 @@ pub fn scenario_with_options(
         campaign: scenario.campaign,
         skills,
         knowledge: scenario.knowledge,
+        writing,
         combat,
         fatigue: scenario.fatigue,
         environment,

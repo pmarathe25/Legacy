@@ -15,7 +15,77 @@ pub struct Growth<'a> {
     pub animal_yield: &'a [AnimalYield],
     /// Renewable products, distinct from death-linked hunting yields.
     pub animal_products: &'a [AnimalProduct],
+    /// Domain-validated writing consumes materials to create an identified page.
+    pub writing: &'a [WritingPage],
     pub compact_consumption: &'a [u64],
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WritingPage {
+    pub action: u64,
+    pub writer: u64,
+    pub paper: u32,
+    pub paper_quantity: u64,
+    pub ink: u32,
+    pub ink_quantity: u64,
+    pub page: u32,
+    pub item: u64,
+}
+
+pub fn prepare_writing(
+    catalog: &Catalog,
+    pages: &[WritingPage],
+    tick: u64,
+) -> Result<Vec<Transaction>, String> {
+    pages
+        .par_iter()
+        .map(|p| {
+            if p.action == 0
+                || p.writer == 0
+                || p.item == 0
+                || p.paper == p.ink
+                || p.paper == p.page
+                || p.ink == p.page
+                || p.paper_quantity == 0
+                || p.ink_quantity == 0
+                || !catalog.contains(p.paper)
+                || !catalog.contains(p.ink)
+            {
+                return Err("invalid writing action".into());
+            }
+            let mut lot = catalog.fresh(p.page, 1, tick)?;
+            if lot.expires_at.is_some() {
+                return Err("written pages must not expire".into());
+            }
+            lot.item = Some(p.item);
+            let place = Place::Person(p.writer);
+            Ok(Transaction {
+                id: p.action,
+                movements: vec![
+                    game_lot_model::Movement {
+                        id: 1,
+                        from: place,
+                        to: None,
+                        good: p.paper,
+                        quantity: p.paper_quantity,
+                        item: None,
+                    },
+                    game_lot_model::Movement {
+                        id: 2,
+                        from: place,
+                        to: None,
+                        good: p.ink,
+                        quantity: p.ink_quantity,
+                        item: None,
+                    },
+                ],
+                creations: vec![Creation {
+                    id: 3,
+                    to: place,
+                    lot,
+                }],
+            })
+        })
+        .collect()
 }
 /// A domain-validated yield tied to one prey and one hunter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

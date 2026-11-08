@@ -115,6 +115,22 @@ pub enum PhysicalChoice {
         good: u32,
         lifetime: u64,
     },
+    WriteFood {
+        person: u64,
+        script: u32,
+        region: u64,
+        life: Option<u64>,
+        claimed_food: Option<u32>,
+    },
+    ReadPage {
+        person: u64,
+        item: u64,
+    },
+    GivePage {
+        person: u64,
+        recipient: u64,
+        item: u64,
+    },
     TreatOther {
         person: u64,
         patient: u64,
@@ -166,6 +182,9 @@ impl PhysicalChoice {
             | Self::DefendAnimal { person, .. }
             | Self::AskFood { person, .. }
             | Self::AskHaul { person, .. }
+            | Self::WriteFood { person, .. }
+            | Self::ReadPage { person, .. }
+            | Self::GivePage { person, .. }
             | Self::TreatOther { person, .. }
             | Self::Rest { person }
             | Self::Escape { person } => person,

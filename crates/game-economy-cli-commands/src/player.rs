@@ -43,6 +43,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             println!(
                 "taking-watch PERSON [on|off] | taking-report|taking-relay RECIPIENT ACTOR truthful|transferred|unavailable|resisted|conflict|off | taking-details RECIPIENT ACTOR TARGET|same GOOD|same QUANTITY|same | taking-belief unassessed|believe|doubt | taking-compare match|different off|TRUST AFFINITY FEAR OBLIGATION | taking-reports"
             );
+            println!(
+                "pages | write-food SCRIPT REGION current|LIFE remembered|FOOD | give-page PERSON ITEM | read-page ITEM"
+            );
         }
         ["view"] => {
             let view = player.view()?;
@@ -212,6 +215,39 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 )?
             );
         }
+        ["pages"] => println!("pages={:?}", player.held_pages()?),
+        ["write-food", script, region, life, claim] => {
+            let life = if *life == "current" {
+                None
+            } else {
+                Some(life.parse().map_err(|_| "invalid past life")?)
+            };
+            let claimed = if *claim == "remembered" {
+                None
+            } else {
+                Some(claim.parse().map_err(|_| "invalid food quantity")?)
+            };
+            println!(
+                "page={:?}",
+                player.write_food(
+                    script.parse().map_err(|_| "invalid script")?,
+                    region.parse().map_err(|_| "invalid region")?,
+                    life,
+                    claimed
+                )?
+            );
+        }
+        ["give-page", person, item] => println!(
+            "given={}",
+            player.give_page(
+                person.parse().map_err(|_| "invalid person")?,
+                item.parse().map_err(|_| "invalid item")?
+            )?
+        ),
+        ["read-page", item] => println!(
+            "read={}",
+            player.read_page(item.parse().map_err(|_| "invalid item")?)?
+        ),
         ["build-site", blueprint] => println!(
             "built={}",
             player.build_site(blueprint.parse().map_err(|_| "invalid blueprint")?)?

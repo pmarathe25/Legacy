@@ -105,6 +105,31 @@ pub fn report_discrepancy(records: &[Record], observation: Observation) -> Optio
 }
 
 impl Knowledge {
+    /// Apply at most one received statement per person in a sorted independent batch.
+    pub fn receive_reports(
+        &mut self,
+        reports: &[(u64, Record, Option<u64>)],
+    ) -> Result<(), &'static str> {
+        if reports.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err("received reports must have unique ordered recipients");
+        }
+        let limit = self.max_records;
+        let first = reports.first().map(|row| row.0);
+        self.minds.par_iter_mut().for_each(|mind| {
+            let direct = first
+                .and_then(|id| mind.person.checked_sub(id))
+                .and_then(|offset| usize::try_from(offset).ok())
+                .filter(|&index| reports.get(index).is_some_and(|row| row.0 == mind.person));
+            if let Some(index) =
+                direct.or_else(|| reports.binary_search_by_key(&mind.person, |row| row.0).ok())
+            {
+                let (_, report, local) = &reports[index];
+                remember(&mut mind.records, report.clone(), limit, *local, false);
+                mind.records.sort_unstable_by_key(|record| record.region);
+            }
+        });
+        Ok(())
+    }
     /// Store one received statement under the same bounded, recency-aware rules
     /// as ordinary reports. The caller decides whether the listener accepts it.
     pub fn receive_report(

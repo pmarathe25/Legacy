@@ -254,6 +254,7 @@ pub fn physical_growth<'a>(
         harvest: plan.map_or(&[], |plan| plan.harvest.as_slice()),
         animal_yield: &[],
         animal_products: &[],
+        writing: &[],
         compact_consumption: compact,
     }
 }
