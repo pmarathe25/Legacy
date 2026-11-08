@@ -3543,6 +3543,9 @@ impl Economy {
         if manual_guard.is_some() && self.confinement.is_none() {
             return Err("confinement is disabled".into());
         }
+        if manual_guard.is_some_and(|(person, _)| !self.local_person_at_stock(person)) {
+            return Err("guarding requires being at the cell's local endpoint".into());
+        }
         if manual_guard.is_some_and(|(person, _)| {
             self.physical.work().iter().any(|job| {
                 job.job.worker == person && job.phase == game_lot_runtime::Phase::Working
@@ -3556,6 +3559,22 @@ impl Economy {
             .filter(|owner| manual_guard.is_some() || !owner.guard_policies.is_empty())
         {
             let mut guard_busy = busy.clone();
+            if let Some(walking) = self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref())
+            {
+                guard_busy.par_extend(walking.positions.par_iter().filter_map(|position| {
+                    (!matches!(
+                        position.location,
+                        LocalLocation::At {
+                            endpoint: LocalEndpoint::Stock,
+                            ..
+                        }
+                    ))
+                    .then_some(position.person)
+                }));
+            }
             if let Some(row) = request {
                 guard_busy.extend([row.actor, row.target]);
             }
@@ -3605,14 +3624,42 @@ impl Economy {
         if manual_escape.is_some() && self.confinement.is_none() {
             return Err("confinement is disabled".into());
         }
-        let confinement_busy = taking_plan
+        if manual_escape.is_some_and(|person| !self.local_person_at_stock(person)) {
+            return Err("escape requires being at the cell's local endpoint".into());
+        }
+        let held_away: Vec<_> = if held.is_empty() {
+            Vec::new()
+        } else {
+            self.local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref())
+                .map_or(&[][..], |walking| walking.positions.as_slice())
+                .par_iter()
+                .filter_map(|position| {
+                    (held.binary_search(&position.person).is_ok()
+                        && !matches!(
+                            position.location,
+                            LocalLocation::At {
+                                endpoint: LocalEndpoint::Stock,
+                                ..
+                            }
+                        ))
+                    .then_some(position.person)
+                })
+                .collect()
+        };
+        let confinement_busy = (taking_plan
             .as_ref()
-            .filter(|plan| !plan.targets.is_empty())
-            .map(|plan| {
-                let mut rows = busy.clone();
+            .is_some_and(|plan| !plan.targets.is_empty())
+            || !held_away.is_empty())
+        .then(|| {
+            let mut rows = busy.clone();
+            if let Some(plan) = &taking_plan {
                 game_economy_work::reserve(&mut rows, plan.targets.iter().copied());
-                rows
-            });
+            }
+            game_economy_work::reserve(&mut rows, held_away.iter().copied());
+            rows
+        });
         let (mut next_confinement, mut escape_actors, escape_efforts) = self
             .confinement
             .as_ref()
@@ -3672,6 +3719,9 @@ impl Economy {
                 target,
                 site,
             }) => {
+                if !self.local_person_at_stock(person) || !self.local_person_at_stock(target) {
+                    return Err("confinement requires people at the cell's local endpoint".into());
+                }
                 if self.physical.work().iter().any(|job| {
                     job.job.worker == person && job.phase == game_lot_runtime::Phase::Working
                 }) {
@@ -3709,6 +3759,9 @@ impl Economy {
                 }
             }
             Some(game_economy_interaction::PhysicalChoice::ReleaseHeld { person, target }) => {
+                if !self.local_person_at_stock(person) || !self.local_person_at_stock(target) {
+                    return Err("release requires people at the cell's local endpoint".into());
+                }
                 if self.physical.work().iter().any(|job| {
                     job.job.worker == person && job.phase == game_lot_runtime::Phase::Working
                 }) {
@@ -5372,7 +5425,15 @@ impl Economy {
                 .filter(|r| r.expires_at >= tick)
                 .cloned()
                 .collect();
-            let askers = hauling.ask(&self.people, &busy, &locations, tick)?;
+            let askers = hauling.ask(
+                &self.people,
+                &busy,
+                &locations,
+                tick,
+                self.local_transport
+                    .as_ref()
+                    .and_then(|owner| owner.walking.as_ref()),
+            )?;
             if !askers.is_empty() {
                 busy.par_extend(askers.into_par_iter());
                 busy.par_sort_unstable();
@@ -5410,6 +5471,13 @@ impl Economy {
                 || actor.health == 0
                 || recipient.health == 0
                 || person == carrier
+                || !local_walking::people_together(
+                    self.local_transport
+                        .as_ref()
+                        .and_then(|owner| owner.walking.as_ref()),
+                    actor,
+                    recipient,
+                )
                 || lifetime == 0
                 || locations
                     .region((actor.id, actor.region), (recipient.id, recipient.region))

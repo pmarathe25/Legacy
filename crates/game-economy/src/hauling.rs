@@ -193,6 +193,7 @@ impl Hauling {
         busy: &[u64],
         locations: &Colocation,
         tick: u64,
+        walking: Option<&game_economy_local_transport::walking::Walking>,
     ) -> Result<Vec<u64>, String> {
         if self.asking.is_empty() {
             return Ok(Vec::new());
@@ -218,6 +219,7 @@ impl Hauling {
                     && carrier.health > 0
                     && busy.binary_search(&actor.id).is_err()
                     && pending.binary_search(&actor.id).is_err()
+                    && crate::local_walking::people_together(walking, actor, carrier)
                     && locations
                         .region((actor.id, actor.region), (carrier.id, carrier.region))
                         .is_some())

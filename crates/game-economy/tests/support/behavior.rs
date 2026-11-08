@@ -13888,6 +13888,121 @@ fn hauling_requests_can_be_refused_followed_or_abandoned_without_a_contract() {
 }
 
 #[test]
+fn hauling_requests_require_a_nearby_carrier_at_the_same_endpoint() {
+    let mut initial = expedition_fixture();
+    initial.missions = None;
+    initial.dynamics = None;
+    initial.hauling = Some(Hauling {
+        policies: vec![HaulingPolicy {
+            person: 2,
+            source: 1,
+            destination: 2,
+            good: 2,
+            quantity: 1,
+            willing: false,
+            requires_request: true,
+            empty_backoff: None,
+            retry_at: 0,
+            request_pressure_threshold: None,
+            pressured_by: None,
+            pressure_threshold: None,
+        }],
+        asking: vec![HaulingAsking {
+            person: 1,
+            carrier: 2,
+            source: 1,
+            destination: 2,
+            good: 2,
+            enabled: true,
+            retry_ticks: 5,
+            request_lifetime: 4,
+            next_review: 0,
+        }],
+        requests: vec![],
+    });
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        }),
+    });
+    let run = |workers, separated| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if separated {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions
+                        .push(LocalPosition {
+                            person: 2,
+                            location: LocalLocation::At {
+                                region: 1,
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                            },
+                        });
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                assert_eq!(!world.hauling_requests().is_empty(), !separated);
+                world.snapshot()
+            })
+    };
+    for separated in [false, true] {
+        assert_eq!(run(1, separated), run(4, separated));
+    }
+    let mut separated = initial;
+    separated.people[0].controlled = true;
+    separated
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .push(LocalPosition {
+            person: 2,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        });
+    let mut world = Economy::compile(separated).unwrap();
+    let before = world.snapshot();
+    assert!(world.ask_haul(1, 2, 1, 2, 2, 4).is_err());
+    assert_eq!(before, world.snapshot());
+}
+
+#[test]
 fn autonomous_people_can_request_hauling_without_compelling_the_carrier() {
     let mut initial = expedition_fixture();
     initial.missions = None;
@@ -20636,6 +20751,159 @@ fn guarded_opening_fixture() -> State {
         events: vec![],
     });
     state
+}
+
+fn confinement_with_local_store() -> State {
+    let mut state = guarded_opening_fixture();
+    state
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    state
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    state.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        }),
+    });
+    state
+}
+
+#[test]
+fn cell_actions_require_the_regional_site_endpoint() {
+    let mut initial = confinement_with_local_store();
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = [1, 2]
+        .into_iter()
+        .map(|person| LocalPosition {
+            person,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        })
+        .collect();
+    let mut manual = Economy::compile(initial.clone()).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.guard_cell(1, 1).is_err());
+    assert!(manual.release_held_person(1, 3).is_err());
+    assert!(manual.confine_person(1, 5, 1).is_err());
+    assert_eq!(manual.snapshot(), before);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let confinement = state.confinement.as_ref().unwrap();
+                assert!(!confinement.events.iter().any(|event| event.person == 2
+                    && event.kind == game_economy_confinement::EventKind::Guarded));
+                assert!(!confinement.held(4));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn escape_effort_does_not_reach_a_remote_cell() {
+    let mut initial = confinement_with_local_store();
+    let owner = initial.confinement.as_mut().unwrap();
+    owner.guard_policies.clear();
+    owner.release_policies.clear();
+    owner.escape.push(EscapePreference {
+        person: 3,
+        willing: true,
+        effort: 1,
+    });
+    let run = |workers, away| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if away {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions
+                        .push(LocalPosition {
+                            person: 3,
+                            location: LocalLocation::At {
+                                region: 1,
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                            },
+                        });
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .confinement
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.person == 3
+                            && event.kind == game_economy_confinement::EventKind::EscapeAttempt),
+                    !away
+                );
+                state
+            })
+    };
+    for away in [false, true] {
+        assert_eq!(run(1, away), run(4, away));
+    }
+    let mut away = initial;
+    away.people[2].controlled = true;
+    away.local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .push(LocalPosition {
+            person: 3,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        });
+    let mut manual = Economy::compile(away).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.escape_confinement(3).is_err());
+    assert_eq!(manual.snapshot(), before);
 }
 
 #[test]
