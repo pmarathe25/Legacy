@@ -25,6 +25,8 @@ pub struct AdvanceDraft {
     custody: game_lots::Draft,
     work: Vec<Work>,
     events: Events,
+    produced_items: Vec<crate::ProducedItem>,
+    next_produced_item: Option<u64>,
 }
 impl AdvanceDraft {
     pub fn events(&self) -> &Events {
@@ -37,6 +39,12 @@ impl AdvanceDraft {
     /// Staged identified-item custody changes, independent of receipt retention.
     pub fn item_updates(&self) -> &[(u64, Option<Place>)] {
         self.custody.item_updates()
+    }
+    pub fn produced_items(&self) -> &[crate::ProducedItem] {
+        &self.produced_items
+    }
+    pub fn next_produced_item(&self) -> Option<u64> {
+        self.next_produced_item
     }
 }
 impl Runtime {
@@ -190,6 +198,8 @@ impl Runtime {
             epoch: self.epoch,
             custody,
             work: Vec::new(),
+            produced_items: Vec::new(),
+            next_produced_item: None,
             events: Events {
                 tick,
                 started: Vec::new(),
@@ -291,6 +301,8 @@ impl Runtime {
             epoch: self.epoch,
             custody,
             work: Vec::new(),
+            produced_items: Vec::new(),
+            next_produced_item: None,
             events: Events {
                 tick,
                 started: Vec::new(),
@@ -356,6 +368,28 @@ impl Runtime {
         abandon: &[(u64, u64)],
         (growth, custody): (Growth<'_>, &[(u64, game_lots::Container)]),
         seed: u64,
+    ) -> Result<AdvanceDraft, String> {
+        self.prepare_with_identified_production(
+            rates,
+            external,
+            starts,
+            abandon,
+            (growth, custody),
+            seed,
+            None,
+        )
+    }
+    /// Stage optional identified production in the same transaction as job completion.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_identified_production(
+        &self,
+        rates: &[(u64, u64)],
+        external: &[Transaction],
+        starts: &[Start],
+        abandon: &[(u64, u64)],
+        (growth, custody): (Growth<'_>, &[(u64, game_lots::Container)]),
+        seed: u64,
+        identified: Option<crate::IdentifiedProduction<'_>>,
     ) -> Result<AdvanceDraft, String> {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("physical.validate_and_plan");
@@ -484,7 +518,17 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Working && row.job.remaining == 0)
             .map(|row| (&row.job, work_custody(Place::JobInput(row.job.id))))
             .collect();
-        let finished = game_lot_work::finish(&finishing, &self.catalog, next_tick)?;
+        let mut finished = game_lot_work::finish(&finishing, &self.catalog, next_tick)?;
+        let identified_plan = identified
+            .map(|config| {
+                crate::identified_output::prepare(
+                    &self.store,
+                    &mut finished.transactions,
+                    external,
+                    config,
+                )
+            })
+            .transpose()?;
         let mut interrupted = finished.interrupted;
         interrupted.par_sort_unstable();
         next.par_iter_mut()
@@ -532,6 +576,20 @@ impl Runtime {
             &compact,
             true,
         )?;
+        let produced_items = identified_plan.as_ref().map_or_else(Vec::new, |plan| {
+            plan.items
+                .par_iter()
+                .filter(|item| {
+                    draft
+                        .item_updates()
+                        .binary_search_by_key(&item.item, |row| row.0)
+                        .ok()
+                        .is_some_and(|i| draft.item_updates()[i].1.is_some())
+                })
+                .copied()
+                .collect()
+        });
+        let next_produced_item = identified_plan.map(|plan| plan.next_item);
         #[cfg(feature = "profile")]
         {
             drop(profile_phase);
@@ -772,6 +830,8 @@ impl Runtime {
             custody: draft,
             work: next,
             events,
+            produced_items,
+            next_produced_item,
         })
     }
     /// Check before publishing other owners in the same generation.

@@ -247,3 +247,5 @@ Try `cargo run -p game-economy-cli -- content/scenarios/economy-irrigation.toml`
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-active-tool-repair.toml` and use `step 1` and `tool-condition` repeatedly to follow a worker who repairs a broken tool while retaining the current job.
 
 Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-tool-repair.toml`; `view` lists the condition and identity of carried tools, and `repair-tool 1001` attempts repair using the ruler's carried material. Repair consumes a boundary and may fail if the material is unavailable.
+
+Run `cargo run -p game-economy-cli -- content/scenarios/economy-tool-production.toml`, then `step 6` and `tool-condition` to see a newly produced tool receive its own identity and undamaged condition. It is delivered as a physical item on the usual following boundary.

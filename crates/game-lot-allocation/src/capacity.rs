@@ -12,6 +12,24 @@ pub struct Destination {
     pub id: u64,
     pub quantity: u64,
 }
+fn incoming(group: &[Destination]) -> u128 {
+    if group.len() >= CHUNK {
+        group.par_iter().map(|row| u128::from(row.quantity)).sum()
+    } else {
+        group.iter().map(|row| u128::from(row.quantity)).sum()
+    }
+}
+fn grant(group: &[Destination], accepted: &[AtomicBool]) {
+    if group.len() >= CHUNK {
+        group
+            .par_iter()
+            .for_each(|row| accepted[row.index].store(true, Ordering::Relaxed));
+    } else {
+        for row in group {
+            accepted[row.index].store(true, Ordering::Relaxed);
+        }
+    }
+}
 fn prefixes(values: &[u128]) -> Vec<u128> {
     let totals: Vec<u128> = values
         .par_chunks(CHUNK)
@@ -61,7 +79,7 @@ pub fn grant_destinations(
             // temporary vectors. Most job-input containers are private in this way.
             if groups.len() == 1 {
                 let group = groups[0];
-                let incoming: u128 = group.iter().map(|row| u128::from(row.quantity)).sum();
+                let incoming = incoming(group);
                 let granted = incoming <= available || {
                     let key = (group[0].transaction, place);
                     let own = outgoing
@@ -70,16 +88,14 @@ pub fn grant_destinations(
                     incoming.saturating_sub(own) <= available
                 };
                 if granted {
-                    for row in group {
-                        accepted[row.index].store(true, Ordering::Relaxed);
-                    }
+                    grant(group, accepted);
                 }
                 return;
             }
             let needs: Vec<_> = groups
                 .par_iter()
                 .map(|group| {
-                    let incoming: u128 = group.iter().map(|row| u128::from(row.quantity)).sum();
+                    let incoming = incoming(group);
                     let key = (group[0].transaction, place);
                     let own = outgoing
                         .binary_search_by_key(&key, |row| (row.0, row.1))
@@ -94,9 +110,7 @@ pub fn grant_destinations(
                 .zip(offsets.par_iter())
                 .for_each(|((group, &need), &before)| {
                     if before + need <= available {
-                        for row in *group {
-                            accepted[row.index].store(true, Ordering::Relaxed);
-                        }
+                        grant(group, accepted);
                     }
                 });
         });

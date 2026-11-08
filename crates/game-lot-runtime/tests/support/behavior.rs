@@ -1898,3 +1898,178 @@ fn renewable_products_and_hunts_use_distinct_atomic_animal_claims() {
         1
     );
 }
+
+#[test]
+fn identified_job_outputs_avoid_simultaneous_written_item_and_respect_stale_drafts() {
+    let mut initial = runtime().snapshot();
+    for id in [3, 4, 5] {
+        initial.goods.push(Good {
+            id,
+            name: format!("good-{id}"),
+            food: None,
+        });
+    }
+    initial.recipes[0].outputs[0].quantity = 2;
+    initial.custody.containers.push(
+        Container::new(
+            Place::Person(1),
+            10,
+            vec![
+                Lot {
+                    good: 3,
+                    quantity: 1,
+                    item: None,
+                    expires_at: None,
+                },
+                Lot {
+                    good: 5,
+                    quantity: 1,
+                    item: None,
+                    expires_at: None,
+                },
+            ],
+        )
+        .unwrap(),
+    );
+    let mut world = Runtime::compile(initial).unwrap();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let page = WritingPage {
+        action: 1,
+        writer: 1,
+        paper: 3,
+        paper_quantity: 1,
+        ink: 5,
+        ink_quantity: 1,
+        page: 4,
+        item: 100,
+    };
+    let prepare = |world: &Runtime| {
+        world
+            .prepare_with_identified_production(
+                &[(1, 2)],
+                &[],
+                &[],
+                &[],
+                (
+                    Growth {
+                        writing: &[page],
+                        ..Growth::default()
+                    },
+                    &[],
+                ),
+                1,
+                Some(IdentifiedProduction {
+                    goods: &[2],
+                    next_item: 1,
+                }),
+            )
+            .unwrap()
+    };
+    let unchanged = world.snapshot();
+    assert!(
+        world
+            .prepare_with_identified_production(
+                &[(1, 2)],
+                &[],
+                &[],
+                &[],
+                (
+                    Growth {
+                        writing: &[page],
+                        ..Growth::default()
+                    },
+                    &[]
+                ),
+                1,
+                Some(IdentifiedProduction {
+                    goods: &[2],
+                    next_item: u64::MAX
+                }),
+            )
+            .is_err()
+    );
+    assert_eq!(world.snapshot(), unchanged);
+    let draft = prepare(&world);
+    let stale = prepare(&world);
+    assert_eq!(
+        draft
+            .produced_items()
+            .iter()
+            .map(|item| (item.job, item.item, item.good))
+            .collect::<Vec<_>>(),
+        vec![(1, 101, 2), (1, 102, 2)]
+    );
+    assert_eq!(draft.next_produced_item(), Some(103));
+    assert_eq!(world.item_place(101), None);
+    world.commit_advance(draft).unwrap();
+    assert!(world.commit_advance(stale).is_err());
+    assert_eq!(world.item_place(100), Some(Place::Person(1)));
+    assert_eq!(world.item_place(101), Some(Place::JobOutput(1)));
+    assert_eq!(world.item_place(102), Some(Place::JobOutput(1)));
+}
+
+#[test]
+fn spoiled_job_inputs_do_not_allocate_or_publish_tool_identities() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let mut snapshot = world.snapshot();
+    let input = snapshot
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::JobInput(1))
+        .unwrap();
+    *input = Container::new(
+        input.place,
+        input.capacity,
+        vec![Lot {
+            good: 1,
+            quantity: 2,
+            item: None,
+            expires_at: Some(1),
+        }],
+    )
+    .unwrap();
+    let mut world = Runtime::compile(snapshot).unwrap();
+    let draft = world
+        .prepare_with_identified_production(
+            &[(1, 2)],
+            &[],
+            &[],
+            &[],
+            (Growth::default(), &[]),
+            1,
+            Some(IdentifiedProduction {
+                goods: &[2],
+                next_item: 1,
+            }),
+        )
+        .unwrap();
+    assert!(draft.produced_items().is_empty());
+    assert_eq!(draft.next_produced_item(), Some(1));
+    assert_eq!(draft.events().interrupted, vec![1]);
+    world.commit_advance(draft).unwrap();
+    assert_eq!(world.item_place(1), None);
+}

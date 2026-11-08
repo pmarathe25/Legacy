@@ -3246,3 +3246,162 @@ fn shared_compact_matches_general_for_empty_scarce_and_abundant_stock() {
         }
     }
 }
+
+#[test]
+fn large_identified_transfer_preserves_every_item_and_receipt_across_workers() {
+    let source = Place::Person(1);
+    let target = Place::Person(2);
+    let initial = vec![
+        container(
+            source,
+            4000,
+            (1..=3000)
+                .map(|id| Lot {
+                    good: 1,
+                    quantity: 1,
+                    item: Some(id),
+                    expires_at: None,
+                })
+                .collect(),
+        ),
+        container(target, 4000, vec![]),
+    ];
+    let action = Transaction {
+        id: 1,
+        movements: vec![Movement {
+            id: 1,
+            from: source,
+            to: Some(target),
+            good: 1,
+            quantity: 2500,
+            item: None,
+        }],
+        creations: vec![],
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = store(initial.clone());
+                let draft = world
+                    .prepare_with_empty(7, std::slice::from_ref(&action), vec![], true)
+                    .unwrap();
+                assert!(draft.transactions()[0].accepted);
+                let outcomes = draft.outcomes();
+                let receipt = outcomes.first().unwrap();
+                assert_eq!(receipt.lots.len(), 2500);
+                assert_eq!(receipt.lots.first().unwrap().item, Some(1));
+                assert_eq!(receipt.lots.last().unwrap().item, Some(2500));
+                world.commit(draft).unwrap();
+                for id in 1..=3000 {
+                    assert_eq!(
+                        world.item_place(id),
+                        Some(if id <= 2500 { target } else { source })
+                    );
+                }
+                world.export()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn large_creation_batches_preserve_transaction_ownership_and_identity() {
+    let first = Place::Person(1);
+    let second = Place::Person(2);
+    let initial = vec![
+        container(first, 3000, vec![]),
+        container(second, 3000, vec![]),
+    ];
+    let actions: Vec<_> = (1..=2)
+        .map(|action| Transaction {
+            id: action,
+            movements: vec![],
+            creations: (0..2500)
+                .map(|offset| {
+                    let id = (action - 1) * 2500 + offset + 1;
+                    Creation {
+                        id,
+                        to: if action == 1 { first } else { second },
+                        lot: Lot {
+                            good: 1,
+                            quantity: 1,
+                            item: Some(id),
+                            expires_at: None,
+                        },
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = store(initial.clone());
+                let draft = world.prepare_with_empty(7, &actions, vec![], true).unwrap();
+                assert_eq!(
+                    draft
+                        .transactions()
+                        .iter()
+                        .filter(|row| row.accepted)
+                        .count(),
+                    2
+                );
+                world.commit(draft).unwrap();
+                for id in 1..=5000 {
+                    assert_eq!(
+                        world.item_place(id),
+                        Some(if id <= 2500 { first } else { second })
+                    );
+                }
+                world.export()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn oversized_large_creation_transaction_is_rejected_atomically() {
+    let target = Place::Person(1);
+    let initial = vec![container(target, 2000, vec![])];
+    let action = Transaction {
+        id: 1,
+        movements: vec![],
+        creations: (1..=2500)
+            .map(|id| Creation {
+                id,
+                to: target,
+                lot: Lot {
+                    good: 1,
+                    quantity: 1,
+                    item: Some(id),
+                    expires_at: None,
+                },
+            })
+            .collect(),
+    };
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = store(initial.clone());
+                let draft = world
+                    .prepare_with_empty(7, std::slice::from_ref(&action), vec![], true)
+                    .unwrap();
+                assert!(!draft.transactions()[0].accepted);
+                world.commit(draft).unwrap();
+                for id in 1..=2500 {
+                    assert_eq!(world.item_place(id), None);
+                }
+                world.export()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}

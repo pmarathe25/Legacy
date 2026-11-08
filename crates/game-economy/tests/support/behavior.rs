@@ -47569,6 +47569,7 @@ fn identified_tool_wear_follows_custody_and_repairs_consume_material() {
     )
     .unwrap();
     initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
         rules: vec![crate::ToolWearRule {
             good: 3,
             durability: 1,
@@ -47722,6 +47723,7 @@ fn identified_tool_wear_boundary_benchmark() {
         }
     }
     initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
         rules: vec![crate::ToolWearRule {
             good: 3,
             durability: if active_repair { 1 } else { 10 },
@@ -47828,6 +47830,7 @@ fn broken_or_unidentified_tools_cannot_enable_work_and_unfunded_repairs_fail() {
     )
     .unwrap();
     state.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
         rules: vec![crate::ToolWearRule {
             good: 3,
             durability: 2,
@@ -48224,6 +48227,7 @@ fn tool_repair_attempts_cause_fatigue_when_material_is_present_or_absent() {
         }
         *holder = Container::new(holder.place, holder.capacity, lots).unwrap();
         state.tool_wear = Some(crate::ToolWear {
+            next_item: 1,
             rules: vec![crate::ToolWearRule {
                 good: 3,
                 durability: 2,
@@ -48341,6 +48345,7 @@ fn autonomous_worker_repairs_broken_tool_without_abandoning_active_work() {
     )
     .unwrap();
     initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
         rules: vec![crate::ToolWearRule {
             good: 3,
             durability: 1,
@@ -48489,6 +48494,7 @@ fn controlled_person_can_repair_carried_tool_without_losing_job() {
     )
     .unwrap();
     initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
         rules: vec![crate::ToolWearRule {
             good: 3,
             durability: 1,
@@ -48549,4 +48555,436 @@ fn controlled_person_can_repair_carried_tool_without_losing_job() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn finished_tool_outputs_gain_unique_durable_identities_atomically() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    initial.physical.recipes[0].outputs = vec![Amount {
+        good: 3,
+        quantity: 2,
+    }];
+    let other = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(3))
+        .unwrap();
+    *other = Container::new(
+        other.place,
+        other.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            item: Some(5),
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 5,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![crate::ToolCondition {
+            item: 5,
+            good: 3,
+            damage: 2,
+        }],
+        repairs: vec![],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.start_work(1, 1, 1).unwrap().started.len(), 1);
+                let before = world.snapshot();
+                assert_eq!(before.tool_wear.as_ref().unwrap().conditions.len(), 1);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let events = world.continue_work(1).unwrap();
+                restored.continue_work(1).unwrap();
+                assert_eq!(events.finished.len(), 1);
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let tool = state.tool_wear.as_ref().unwrap();
+                assert_eq!(tool.next_item, 8);
+                assert_eq!(
+                    tool.conditions
+                        .iter()
+                        .map(|c| (c.item, c.damage))
+                        .collect::<Vec<_>>(),
+                    vec![(5, 2), (6, 0), (7, 0)]
+                );
+                let output = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::JobOutput(events.finished[0]))
+                    .unwrap();
+                assert_eq!(
+                    output.lots.iter().map(|lot| lot.item).collect::<Vec<_>>(),
+                    vec![Some(6), Some(7)]
+                );
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let delivered = world.snapshot();
+                assert_eq!(delivered, restored.snapshot());
+                let stock = delivered
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+                    .unwrap();
+                assert_eq!(
+                    stock.lots.iter().map(|lot| lot.item).collect::<Vec<_>>(),
+                    vec![Some(6), Some(7)]
+                );
+                let mut consumer = delivered;
+                consumer.people[1].willing_to_work = true;
+                consumer.work_tools = vec![WorkTool {
+                    recipe: 1,
+                    good: 3,
+                    quantity: 1,
+                }];
+                consumer.autowork.as_mut().unwrap().policies = vec![WorkPolicy {
+                    person: 2,
+                    recipe: 1,
+                    enabled: true,
+                    disregard_claims: false,
+                }];
+                let mut consumer = Economy::compile(consumer).unwrap();
+                consumer.advance().unwrap();
+                let equipped = consumer.snapshot();
+                let held = equipped
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Person(2))
+                    .unwrap();
+                assert!(held.lots.iter().any(|lot| lot.item == Some(6)));
+                assert_eq!(
+                    equipped
+                        .tool_wear
+                        .as_ref()
+                        .unwrap()
+                        .conditions
+                        .iter()
+                        .find(|condition| condition.item == 6)
+                        .unwrap()
+                        .damage,
+                    0
+                );
+                assert_eq!(consumer.advance().unwrap().started.len(), 1);
+                consumer.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut perishable = initial;
+    perishable.tool_wear.as_mut().unwrap().rules[0].good = 1;
+    perishable.tool_wear.as_mut().unwrap().conditions.clear();
+    assert!(Economy::compile(perishable).is_err());
+}
+
+#[test]
+#[ignore]
+fn identified_tool_production_boundary_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20000);
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let hot = std::env::var_os("LEGACY_HOT_TOOL_OUTPUT").is_some();
+    let jobs = if hot { 1 } else { count };
+    let mut initial = concentrated(jobs);
+    initial.nutrition = None;
+    initial.physical.recipes[0].ticks = 1;
+    initial.physical.recipes[0].outputs = vec![Amount {
+        good: 3,
+        quantity: if hot { count } else { 1 },
+    }];
+    initial.autowork.as_mut().unwrap().policies = (1..=jobs)
+        .map(|person| WorkPolicy {
+            person,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        })
+        .collect();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+        person.willing_to_work = true;
+    }
+    let input = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *input = Container::new(
+        input.place,
+        jobs.max(1),
+        vec![Lot {
+            good: 2,
+            quantity: jobs,
+            item: None,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let output = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *output = Container::new(output.place, count.max(1), vec![]).unwrap();
+    initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 5,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![],
+        repairs: vec![],
+        events: vec![],
+    });
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut production = Vec::new(); let mut delivery = Vec::new(); let mut fingerprint = None;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            assert_eq!(world.advance().unwrap().started.len(), jobs as usize);
+            let start = std::time::Instant::now(); let finished = world.advance().unwrap(); production.push(start.elapsed().as_secs_f64()); assert_eq!(finished.finished.len(), jobs as usize);
+            let start = std::time::Instant::now(); world.advance().unwrap(); delivery.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot(); assert_eq!(state.tool_wear.as_ref().unwrap().conditions.len(), count as usize);
+            let stock = state.physical.custody.containers.iter().find(|c| c.place == Place::Stock { region: 1, good: 3 }).unwrap(); assert_eq!(stock.used, count);
+            let mut hash = std::collections::hash_map::DefaultHasher::new(); serde_json::to_vec(&state).unwrap().hash(&mut hash); let hash = hash.finish(); if let Some(expected) = fingerprint { assert_eq!(expected, hash); } fingerprint = Some(hash);
+        }
+        production.remove(0); delivery.remove(0); production.sort_by(f64::total_cmp); delivery.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} items={count} jobs={jobs} production_median={:.6} delivery_median={:.6} fingerprint={:016x}", production[1], delivery[1], fingerprint.unwrap());
+    });
+}
+
+#[test]
+fn imported_tool_identity_is_not_reused_after_consumption_and_reload() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            item: Some(5),
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.physical.recipes[0].inputs = vec![Amount {
+        good: 3,
+        quantity: 1,
+    }];
+    initial.physical.recipes[0].outputs = vec![Amount {
+        good: 2,
+        quantity: 1,
+    }];
+    initial.physical.recipes.push(Recipe {
+        id: 2,
+        name: "new tool".into(),
+        ticks: 1,
+        inputs: vec![Amount {
+            good: 2,
+            quantity: 1,
+        }],
+        outputs: vec![Amount {
+            good: 3,
+            quantity: 1,
+        }],
+    });
+    initial.tool_wear = Some(crate::ToolWear {
+        next_item: 1,
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 5,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![crate::ToolCondition {
+            item: 5,
+            good: 3,
+            damage: 0,
+        }],
+        repairs: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(world.snapshot().tool_wear.as_ref().unwrap().next_item, 6);
+    assert_eq!(world.start_work(1, 1, 1).unwrap().started.len(), 1);
+    world.continue_work(1).unwrap();
+    assert!(
+        world
+            .snapshot()
+            .tool_wear
+            .as_ref()
+            .unwrap()
+            .conditions
+            .is_empty()
+    );
+    let saved = serde_json::to_string(&world.snapshot()).unwrap();
+    let mut world = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    world.advance().unwrap();
+    assert_eq!(world.start_work(1, 2, 1).unwrap().started.len(), 1);
+    world.continue_work(1).unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.tool_wear.as_ref().unwrap().conditions[0].item, 6);
+    assert_eq!(state.tool_wear.as_ref().unwrap().next_item, 7);
+}
+
+#[test]
+fn writing_advances_tool_identity_cursor_and_round_trips_with_no_tool_production() {
+    use game_economy_knowledge::{Mind, Record};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.nutrition = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![
+            Lot {
+                good: 1,
+                quantity: 1,
+                item: None,
+                expires_at: Some(10),
+            },
+            Lot {
+                good: 2,
+                quantity: 1,
+                item: None,
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    initial.knowledge = Some(Knowledge {
+        retention: vec![],
+        max_records: 4,
+        minds: vec![Mind {
+            person: 1,
+            reporting: None,
+            remember_people: false,
+            people_reporting: None,
+            people_reports: vec![],
+            people_seen: vec![],
+            misreport: None,
+            records: vec![Record {
+                region: 1,
+                food: 0,
+                observed_at: 0,
+                witness: 1,
+                learned_from: None,
+            }],
+        }],
+    });
+    initial.writing = Some(Writing {
+        paper: 1,
+        ink: 2,
+        page: 3,
+        paper_quantity: 1,
+        ink_quantity: 1,
+        next_item: 1,
+        literacy: vec![Literacy {
+            person: 1,
+            script: 1,
+            read: true,
+            write: true,
+            auto_read: false,
+        }]
+        .into(),
+        pages: vec![].into(),
+        reads: vec![].into(),
+        authors: vec![].into(),
+        study: vec![].into(),
+        practice: vec![].into(),
+    });
+    initial.tool_wear = Some(crate::ToolWear {
+        next_item: 10,
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 5,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![],
+        repairs: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(world.write_food(1, 1, 1, None, Some(5)).unwrap(), Some(10));
+    let saved = world.snapshot();
+    assert_eq!(saved.tool_wear.as_ref().unwrap().next_item, 11);
+    let restored =
+        Economy::compile(serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap())
+            .unwrap();
+    assert_eq!(saved, restored.snapshot());
 }

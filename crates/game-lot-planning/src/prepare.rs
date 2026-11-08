@@ -86,10 +86,22 @@ pub fn prepare(
                     && m.end <= moves.len()
                     && c.end <= creations.len()
                     && !(m.is_empty() && c.is_empty())
-                    && batch.move_owners[m.clone()].iter().all(|owner| owner == id)
-                    && batch.creation_owners[c.clone()]
-                        .iter()
-                        .all(|owner| owner == id)
+                    && if m.len() >= 2048 {
+                        batch.move_owners[m.clone()]
+                            .par_iter()
+                            .all(|owner| owner == id)
+                    } else {
+                        batch.move_owners[m.clone()].iter().all(|owner| owner == id)
+                    }
+                    && if c.len() >= 2048 {
+                        batch.creation_owners[c.clone()]
+                            .par_iter()
+                            .all(|owner| owner == id)
+                    } else {
+                        batch.creation_owners[c.clone()]
+                            .iter()
+                            .all(|owner| owner == id)
+                    }
             })
             && batch.compact.par_windows(2).all(|pair| pair[0] < pair[1])
             && groups
@@ -423,6 +435,28 @@ pub fn prepare(
             .groups
             .par_iter()
             .map(|(id, movement_range, creation_range)| {
+                if movement_range.len().saturating_add(creation_range.len()) >= 2048 {
+                    let granted = movement_range.clone().into_par_iter().all(|i| {
+                        accepted[original_positions[i].load(Ordering::Relaxed)]
+                            .load(Ordering::Relaxed)
+                    }) && creation_range
+                        .clone()
+                        .into_par_iter()
+                        .all(|i| accepted[claims.len() + i].load(Ordering::Relaxed));
+                    if !granted {
+                        movement_range.clone().into_par_iter().for_each(|i| {
+                            accepted[original_positions[i].load(Ordering::Relaxed)]
+                                .store(false, Ordering::Relaxed);
+                        });
+                        creation_range.clone().into_par_iter().for_each(|i| {
+                            accepted[claims.len() + i].store(false, Ordering::Relaxed);
+                        });
+                    }
+                    return TransactionOutcome {
+                        id: *id,
+                        accepted: granted,
+                    };
+                }
                 let indices = || {
                     movement_range
                         .clone()
@@ -508,6 +542,37 @@ pub fn prepare(
                 let stock = &containers[claim.source].lots;
                 let first = stock.partition_point(|lot| lot.good < claim.movement.good);
                 let last = stock.partition_point(|lot| lot.good <= claim.movement.good);
+                if last - first >= 2048 {
+                    let lots: Vec<_> = stock[first..last]
+                        .par_iter()
+                        .filter(|lot| live(lot, next))
+                        .collect();
+                    let amounts: Vec<_> = lots.par_iter().map(|lot| lot.quantity).collect();
+                    let prefixes = allocation::prefixes(&amounts);
+                    let parts: Vec<_> = lots
+                        .par_iter()
+                        .zip(prefixes.par_iter())
+                        .filter_map(|(lot, &before)| {
+                            let quantity = u128::from(claim.movement.quantity)
+                                .saturating_sub(before)
+                                .min(u128::from(lot.quantity))
+                                as u64;
+                            (quantity > 0).then_some(Lot {
+                                item: lot.item,
+                                good: lot.good,
+                                quantity,
+                                expires_at: lot.expires_at,
+                            })
+                        })
+                        .collect();
+                    return (
+                        claim.source,
+                        claim.movement.good,
+                        claim.movement.quantity,
+                        vec![(claim.original, claim.destination, parts)],
+                        Vec::new(),
+                    );
+                }
                 let mut remaining = claim.movement.quantity;
                 let mut parts = Vec::new();
                 for lot in &stock[first..last] {

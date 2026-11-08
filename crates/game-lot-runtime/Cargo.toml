@@ -11,6 +11,7 @@ profile = ["dep:game-diagnostics", "game-lots/profile"]
 game-diagnostics = { path = "../game-diagnostics", optional = true }
 game-lots = { path = "../game-lots" }
 game-lot-content = { path = "../game-lot-content" }
+game-lot-allocation = { path = "../game-lot-allocation" }
 game-lot-work = { path = "../game-lot-work" }
 game-production-model = { path = "../game-production-model" }
 rayon.workspace = true

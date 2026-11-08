@@ -2459,8 +2459,25 @@ impl Economy {
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
             game_economy_work::tools::validate(&state.work_tools, &recipes, &goods)?;
         }
-        if let Some(wear) = &state.tool_wear {
+        if let Some(wear) = &mut state.tool_wear {
+            if let Some(highest) = physical.highest_item() {
+                wear.next_item = wear
+                    .next_item
+                    .max(highest.checked_add(1).ok_or("item identity overflow")?);
+            }
             wear.validate(&physical, &goods, &ids, physical.tick())?;
+            if wear.rules.par_iter().any(|rule| {
+                physical.goods().par_iter().any(|good| {
+                    good.id == rule.good
+                        && good
+                            .food
+                            .as_ref()
+                            .and_then(|food| food.shelf_days)
+                            .is_some()
+                })
+            }) {
+                return Err("wearable tool goods must be nonperishable".into());
+            }
         }
         if let Some(irrigation) = &state.irrigation {
             irrigation.validate(
@@ -5482,7 +5499,11 @@ impl Economy {
                     }
                     let item = self
                         .physical
-                        .next_unused_item(owner.next_item)
+                        .next_unused_item(
+                            owner
+                                .next_item
+                                .max(self.tool_wear.as_ref().map_or(1, |wear| wear.next_item)),
+                        )
                         .ok_or("item identity overflow")?;
                     item.checked_add(1).ok_or("item identity overflow")?;
                     let page = WrittenPage {
@@ -5556,7 +5577,14 @@ impl Economy {
             let owner = self.writing.as_ref().expect("authors require writing");
             let start = page_to_write
                 .as_ref()
-                .map_or(Some(owner.next_item), |page| page.item.checked_add(1))
+                .map_or(
+                    Some(
+                        owner
+                            .next_item
+                            .max(self.tool_wear.as_ref().map_or(1, |wear| wear.next_item)),
+                    ),
+                    |page| page.item.checked_add(1),
+                )
                 .ok_or("item identity overflow")?;
             let items = self
                 .physical
@@ -6223,6 +6251,13 @@ impl Economy {
         } else {
             None
         };
+        let identified_goods: Vec<_> = self
+            .tool_wear
+            .as_ref()
+            .map_or(&[][..], |wear| wear.rules.as_slice())
+            .par_iter()
+            .map(|rule| rule.good)
+            .collect();
         let mut physical = if let Some(draft) = flat {
             draft
         } else {
@@ -6231,7 +6266,7 @@ impl Economy {
                 movements: vec![row.movement],
                 creations: vec![],
             }));
-            self.physical.prepare_with_growth_and_custody(
+            self.physical.prepare_with_identified_production(
                 &rates,
                 &actions,
                 &starts,
@@ -6247,6 +6282,14 @@ impl Economy {
                     staged_custody,
                 ),
                 self.seed,
+                self.tool_wear
+                    .as_ref()
+                    .map(|wear| game_lot_runtime::IdentifiedProduction {
+                        goods: &identified_goods,
+                        next_item: wear
+                            .next_item
+                            .max(self.writing.as_ref().map_or(1, |writing| writing.next_item)),
+                    }),
             )?
         };
         let mut writing = self.writing.clone();
@@ -8060,6 +8103,40 @@ impl Economy {
                 physical.item_updates(),
                 tick,
             );
+            if let Some(next_item) = physical.next_produced_item() {
+                owner.next_item = next_item;
+            }
+            if let Some(highest) = physical
+                .item_updates()
+                .par_iter()
+                .filter_map(|(id, place)| place.map(|_| *id))
+                .max()
+            {
+                owner.next_item = owner
+                    .next_item
+                    .max(highest.checked_add(1).ok_or("item identity overflow")?);
+            }
+            owner
+                .conditions
+                .par_extend(
+                    physical
+                        .produced_items()
+                        .par_iter()
+                        .map(|item| ToolCondition {
+                            item: item.item,
+                            good: item.good,
+                            damage: 0,
+                        }),
+                );
+            if owner
+                .conditions
+                .par_windows(2)
+                .any(|pair| pair[0].item > pair[1].item)
+            {
+                owner
+                    .conditions
+                    .par_sort_unstable_by_key(|condition| condition.item);
+            }
         }
         if let Some(owner) = &mut shared_work {
             let mut finished = physical.events().finished.clone();

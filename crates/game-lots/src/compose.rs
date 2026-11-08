@@ -64,11 +64,25 @@ pub fn compose(mut actions: Vec<(u32, Transaction)>) -> Result<Composed, String>
             row.id = index as u64 + 1;
             let base = offsets[index] as u64;
             let movement_count = row.movements.len();
-            for (n, item) in row.movements.iter_mut().enumerate() {
-                item.id = base + n as u64 + 1;
+            if row.movements.len() >= 2048 {
+                row.movements
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(n, item)| item.id = base + n as u64 + 1);
+            } else {
+                for (n, item) in row.movements.iter_mut().enumerate() {
+                    item.id = base + n as u64 + 1;
+                }
             }
-            for (n, item) in row.creations.iter_mut().enumerate() {
-                item.id = base + movement_count as u64 + n as u64 + 1;
+            if row.creations.len() >= 2048 {
+                row.creations
+                    .par_iter_mut()
+                    .enumerate()
+                    .for_each(|(n, item)| item.id = base + movement_count as u64 + n as u64 + 1);
+            } else {
+                for (n, item) in row.creations.iter_mut().enumerate() {
+                    item.id = base + movement_count as u64 + n as u64 + 1;
+                }
             }
             row
         })

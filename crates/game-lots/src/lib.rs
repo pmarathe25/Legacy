@@ -267,6 +267,10 @@ impl Store {
             .or_else(|| self.items.binary_search_by_key(&id, |row| row.0).ok())
             .map(|i| self.items[i].1)
     }
+    /// Highest currently held unique item identity, if any.
+    pub fn highest_item(&self) -> Option<u64> {
+        self.items.last().map(|row| row.0)
+    }
     /// Find the first unused item identity at or above `start`.
     pub fn next_unused_item(&self, start: u64) -> Option<u64> {
         if start == 0 {
@@ -353,17 +357,40 @@ impl Store {
             }
             let mut removed: Vec<_> = changes
                 .par_iter()
+                .filter(|(index, _)| containers[*index].lots.len() < 2048)
                 .flat_map_iter(|(index, _)| {
                     containers[*index].lots.iter().filter_map(|lot| lot.item)
                 })
+                .chain(
+                    changes
+                        .par_iter()
+                        .filter(|(index, _)| containers[*index].lots.len() >= 2048)
+                        .flat_map(|(index, _)| {
+                            containers[*index]
+                                .lots
+                                .par_iter()
+                                .filter_map(|lot| lot.item)
+                        }),
+                )
                 .collect();
             let mut added: Vec<_> = changes
                 .par_iter()
+                .filter(|(_, row)| row.lots.len() < 2048)
                 .flat_map_iter(|(_, row)| {
                     row.lots
                         .iter()
                         .filter_map(|lot| lot.item.map(|id| (id, row.place)))
                 })
+                .chain(
+                    changes
+                        .par_iter()
+                        .filter(|(_, row)| row.lots.len() >= 2048)
+                        .flat_map(|(_, row)| {
+                            row.lots
+                                .par_iter()
+                                .filter_map(|lot| lot.item.map(|id| (id, row.place)))
+                        }),
+                )
                 .collect();
             rayon::join(
                 || removed.par_sort_unstable(),
@@ -408,11 +435,23 @@ impl Store {
         })
     }
     fn check_creations(&self, transactions: &[Transaction]) -> Result<bool, String> {
-        let mut ids: Vec<_> = transactions
-            .par_iter()
-            .flat_map_iter(|row| &row.creations)
-            .filter_map(|creation| creation.lot.item.map(|id| (id, &creation.lot)))
-            .collect();
+        let large = transactions.len() < 64
+            && transactions
+                .par_iter()
+                .any(|row| row.creations.len() >= 2048);
+        let mut ids: Vec<_> = if large {
+            transactions
+                .par_iter()
+                .flat_map(|row| row.creations.par_iter())
+                .filter_map(|creation| creation.lot.item.map(|id| (id, &creation.lot)))
+                .collect()
+        } else {
+            transactions
+                .par_iter()
+                .flat_map_iter(|row| &row.creations)
+                .filter_map(|creation| creation.lot.item.map(|id| (id, &creation.lot)))
+                .collect()
+        };
         if ids.par_iter().any(|(id, lot)| {
             *id == 0
                 || lot.quantity != 1

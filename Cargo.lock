@@ -880,6 +880,7 @@ version = "0.2.0"
 dependencies = [
  "game-content-import",
  "game-diagnostics",
+ "game-lot-allocation",
  "game-lot-content",
  "game-lot-work",
  "game-lots",

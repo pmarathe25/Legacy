@@ -41,6 +41,9 @@ pub struct RepairEvent {
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolWear {
+    /// Next candidate identity for newly produced tools; never moved backwards.
+    #[serde(default = "first_item")]
+    pub next_item: u64,
     pub rules: Vec<Rule>,
     pub conditions: Vec<Condition>,
     #[serde(default)]
@@ -48,9 +51,13 @@ pub struct ToolWear {
     #[serde(default)]
     pub events: Vec<RepairEvent>,
 }
+fn first_item() -> u64 {
+    1
+}
 impl Clone for ToolWear {
     fn clone(&self) -> Self {
         Self {
+            next_item: self.next_item,
             rules: self.rules.par_iter().cloned().collect(),
             conditions: self.conditions.par_iter().cloned().collect(),
             repairs: self.repairs.par_iter().cloned().collect(),
@@ -66,7 +73,8 @@ impl ToolWear {
         people: &HashSet<u64>,
         tick: u64,
     ) -> Result<(), String> {
-        if self.rules.par_windows(2).any(|p| p[0].good >= p[1].good)
+        if self.next_item == 0
+            || self.rules.par_windows(2).any(|p| p[0].good >= p[1].good)
             || self
                 .conditions
                 .par_windows(2)

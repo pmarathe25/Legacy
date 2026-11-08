@@ -329,14 +329,32 @@ fn prepare_impl(
         drop(phase);
         phase = game_diagnostics::span("physical.batches.flatten");
     }
-    let moves: Vec<_> = transactions
-        .par_iter()
-        .flat_map_iter(|row| row.movements.iter().copied())
-        .collect();
-    let creations: Vec<_> = transactions
-        .par_iter()
-        .flat_map_iter(|row| row.creations.iter().cloned())
-        .collect();
+    let large = transactions.len() < 64
+        && transactions
+            .par_iter()
+            .any(|row| row.movements.len() >= 2048 || row.creations.len() >= 2048);
+    let moves: Vec<_> = if large {
+        transactions
+            .par_iter()
+            .flat_map(|row| row.movements.par_iter().copied())
+            .collect()
+    } else {
+        transactions
+            .par_iter()
+            .flat_map_iter(|row| row.movements.iter().copied())
+            .collect()
+    };
+    let creations: Vec<_> = if large {
+        transactions
+            .par_iter()
+            .flat_map(|row| row.creations.par_iter().cloned())
+            .collect()
+    } else {
+        transactions
+            .par_iter()
+            .flat_map_iter(|row| row.creations.iter().cloned())
+            .collect()
+    };
     let move_counts: Vec<_> = transactions
         .par_iter()
         .map(|row| row.movements.len() as u64)
@@ -360,14 +378,36 @@ fn prepare_impl(
             )
         })
         .collect();
-    let move_owners: Vec<_> = transactions
-        .par_iter()
-        .flat_map_iter(|row| std::iter::repeat_n(row.id, row.movements.len()))
-        .collect();
-    let creation_owners: Vec<_> = transactions
-        .par_iter()
-        .flat_map_iter(|row| std::iter::repeat_n(row.id, row.creations.len()))
-        .collect();
+    let move_owners: Vec<_> = if large {
+        transactions
+            .par_iter()
+            .flat_map(|row| {
+                (0..row.movements.len())
+                    .into_par_iter()
+                    .map(move |_| row.id)
+            })
+            .collect()
+    } else {
+        transactions
+            .par_iter()
+            .flat_map_iter(|row| std::iter::repeat_n(row.id, row.movements.len()))
+            .collect()
+    };
+    let creation_owners: Vec<_> = if large {
+        transactions
+            .par_iter()
+            .flat_map(|row| {
+                (0..row.creations.len())
+                    .into_par_iter()
+                    .map(move |_| row.id)
+            })
+            .collect()
+    } else {
+        transactions
+            .par_iter()
+            .flat_map_iter(|row| std::iter::repeat_n(row.id, row.creations.len()))
+            .collect()
+    };
     #[cfg(feature = "profile")]
     {
         drop(phase);

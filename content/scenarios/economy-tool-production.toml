@@ -1,0 +1,51 @@
+# A worker produces a new individually identified tool.
+seed = 7
+tick_millis = 900000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { timber = 20, bread = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+recipe = "fixture-tool"
+goods = { timber = 2 }
+items = [{ id = 1001, good = "tool" }]
+
+[[work_tools]]
+recipe = "fixture-tool"
+good = "tool"
+quantity = 1
+
+[[tool_wear.rules]]
+good = "tool"
+durability = 10
+wear = 1
+repair_good = "timber"
+repair_quantity = 1
+
+[[tool_wear.conditions]]
+item = 1001
+good = "tool"
+damage = 0
+
+[[tool_wear.repairs]]
+person = 1
+item = 1001
+willing = true

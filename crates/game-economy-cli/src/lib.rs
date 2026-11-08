@@ -1030,6 +1030,7 @@ pub fn scenario_with_options(
             let mut repairs = config.repairs;
             repairs.sort_unstable_by_key(|choice| choice.person);
             Ok::<_, String>(game_economy::ToolWear {
+                next_item: 1,
                 rules,
                 conditions,
                 repairs,

@@ -1,5 +1,6 @@
 //! Dated physical production; callers own character decisions and observation.
 mod advance;
+mod identified_output;
 mod receipts;
 pub use advance::{AdvanceDraft, Events};
 use game_lot_content::Catalog;
@@ -7,6 +8,7 @@ pub use game_lot_content::{Growth, WritingPage};
 pub use game_lot_work::{Phase, Snapshot, Work};
 use game_lots::{Outcome, Place, Spoilage, Store, Transaction, TransactionOutcome};
 use game_production_model::{Good, JobPhase, Recipe, Start};
+pub use identified_output::{IdentifiedProduction, ProducedItem};
 use rayon::prelude::*;
 pub use receipts::{
     ExternalReceipt, ExternalReceiptBatch, ExternalReceiptHeader, ExternalReceiptRef,
@@ -84,6 +86,9 @@ impl Runtime {
     /// Current custody of a unique physical item.
     pub fn item_place(&self, id: u64) -> Option<Place> {
         self.store.item_place(id)
+    }
+    pub fn highest_item(&self) -> Option<u64> {
+        self.store.highest_item()
     }
     pub fn next_unused_item(&self, start: u64) -> Option<u64> {
         self.store.next_unused_item(start)
