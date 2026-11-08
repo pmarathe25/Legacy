@@ -63,6 +63,9 @@ pub use game_economy_work::sites::{
     Binding as WorkSiteBinding, Facilities as WorkSites, Requirement as WorkSiteRequirement,
     Site as WorkSite,
 };
+pub use game_economy_work::succession::{
+    Preference as WorkSuccessionPreference, Succession as WorkSuccession,
+};
 pub use game_economy_work::tool_wear::{
     Condition as ToolCondition, RepairChoice as ToolRepairChoice, RepairEvent as ToolRepairEvent,
     Rule as ToolWearRule, ToolWear,
@@ -2542,6 +2545,9 @@ impl Economy {
                 .map(|recipe| recipe.id)
                 .collect();
             shared.validate(&ids, &recipes, physical.tick())?;
+            if let Some(succession) = &shared.succession {
+                succession.validate_links(physical.work())?;
+            }
         }
         Ok(Self {
             physical,
@@ -4989,13 +4995,19 @@ impl Economy {
         };
         let work_offers =
             game_autowork::requests::OfferIndex::with_practices(work_offers, practice_offers);
+        let continuing_successors = self
+            .shared_work
+            .as_ref()
+            .and_then(|shared| shared.succession.as_ref())
+            .map_or_else(Vec::new, |owner| owner.continuing(self.opinions.as_ref()));
         let (mut rates, mut abandon) = family::work_rates!(
             self,
             meal_candidates,
             player_work,
             fighters,
             resting,
-            work_offers
+            work_offers,
+            continuing_successors
         );
         if let Some(injuries) = self
             .combat
@@ -6009,6 +6021,69 @@ impl Economy {
             unavailable_sites.par_sort_unstable();
             unavailable_sites.dedup();
         }
+        let adoptions = if let (Some(owner), Some(sites)) = (
+            self.shared_work
+                .as_ref()
+                .and_then(|shared| shared.succession.as_ref()),
+            self.work_sites.as_ref(),
+        ) {
+            game_economy_work::succession::Context {
+                owner,
+                people: &self.people,
+                work: self.physical.work(),
+                busy: &busy,
+                resting: &resting,
+                sites,
+                unavailable_sites: &unavailable_sites,
+                site_classes: &site_classes,
+                claims: claims.as_ref(),
+                injuries: self
+                    .combat
+                    .as_ref()
+                    .and_then(|combat| combat.state.injuries.as_ref()),
+                family: self.family.as_ref(),
+                tools: &self.work_tools,
+                tool_wear: self.tool_wear.as_ref(),
+                physical: &self.physical,
+                view: &view,
+                opinions: self.opinions.as_ref(),
+                max_hunger: self.rules.max_work_hunger,
+                seed: self.seed,
+                tick,
+            }
+            .prepare()
+        } else {
+            Vec::new()
+        };
+        if !adoptions.is_empty() {
+            game_economy_work::reserve(&mut busy, adoptions.iter().map(|row| row.worker));
+        }
+        let suspensions: Vec<_> = if let (Some(owner), Some(sites)) = (
+            self.shared_work
+                .as_ref()
+                .and_then(|shared| shared.succession.as_ref()),
+            self.work_sites.as_ref(),
+        ) {
+            let until = tick
+                .checked_add(owner.retention)
+                .and_then(|value| value.checked_add(1))
+                .ok_or("work retention overflow")?;
+            abandon
+                .par_iter()
+                .filter_map(|&(job, worker)| {
+                    let binding = sites
+                        .bindings
+                        .binary_search_by_key(&job, |binding| binding.job)
+                        .ok()?;
+                    (unavailable_sites
+                        .binary_search(&sites.bindings[binding].site)
+                        .is_err())
+                    .then_some(game_lot_runtime::Suspension { job, worker, until })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let usable_sites = self.work_sites.as_ref().map(|sites| {
             if unavailable_sites.is_empty() {
                 std::borrow::Cow::Borrowed(sites)
@@ -6306,6 +6381,8 @@ impl Economy {
             && rates.is_empty()
             && starts.is_empty()
             && abandon.is_empty()
+            && adoptions.is_empty()
+            && suspensions.is_empty()
             && harvest.is_empty()
             && hunting_plan.yields.is_empty()
             && product_plan.yields.is_empty()
@@ -6349,7 +6426,7 @@ impl Economy {
                 movements: vec![row.movement],
                 creations: vec![],
             }));
-            self.physical.prepare_with_identified_production(
+            self.physical.prepare_with_work_transitions(
                 &rates,
                 &actions,
                 &starts,
@@ -6373,6 +6450,10 @@ impl Economy {
                             .next_item
                             .max(self.writing.as_ref().map_or(1, |writing| writing.next_item)),
                     }),
+                game_lot_runtime::WorkTransitions {
+                    suspend: &suspensions,
+                    adopt: &adoptions,
+                },
             )?
         };
         let mut writing = self.writing.clone();
@@ -6520,6 +6601,7 @@ impl Economy {
             }
         }
         if self.fatigue.is_some() {
+            shared_people.extend(adoptions.iter().map(|row| row.worker));
             if let Some(plan) = &irrigation_plan {
                 shared_people.extend(plan.actors());
             }
@@ -7274,6 +7356,29 @@ impl Economy {
                 .then_some(person.id)
             })
             .collect();
+        if !incapacitated.is_empty()
+            && let (Some(owner), Some(sites)) = (
+                self.shared_work
+                    .as_ref()
+                    .and_then(|shared| shared.succession.as_ref()),
+                self.work_sites.as_ref(),
+            )
+        {
+            let until = tick
+                .checked_add(owner.retention)
+                .and_then(|value| value.checked_add(1))
+                .ok_or("work retention overflow")?;
+            let mut eligible: Vec<_> = sites
+                .bindings
+                .par_iter()
+                .filter(|binding| unavailable_sites.binary_search(&binding.site).is_err())
+                .map(|binding| binding.job)
+                .collect();
+            eligible.par_sort_unstable();
+            eligible.dedup();
+            self.physical
+                .suspend_workers_in(&mut physical, &incapacitated, &eligible, until)?;
+        }
         self.physical
             .interrupt_workers_in(&mut physical, &incapacitated)?;
         let mut work_sites = self
@@ -7434,6 +7539,18 @@ impl Economy {
                             salvaged: false,
                         })
                     }));
+                    uses.par_extend(physical.events().adopted.par_iter().filter_map(|event| {
+                        let index = sites
+                            .bindings
+                            .binary_search_by_key(&event.job, |binding| binding.job)
+                            .ok()?;
+                        Some(game_economy_claims::SiteUse {
+                            person: event.worker,
+                            site: sites.bindings[index].site,
+                            destroyed: false,
+                            salvaged: false,
+                        })
+                    }));
                 }
                 let mut workers: Vec<_> = starts
                     .par_iter()
@@ -7512,7 +7629,7 @@ impl Economy {
                     );
                 }
             }
-            if !shared_events.is_empty() && uses.len() > 1 {
+            if (!shared_events.is_empty() || !adoptions.is_empty()) && uses.len() > 1 {
                 uses.par_sort_unstable_by_key(|row| {
                     (row.person, row.site, row.destroyed, row.salvaged)
                 });
@@ -8222,6 +8339,9 @@ impl Economy {
             }
         }
         if let Some(owner) = &mut shared_work {
+            if let Some(succession) = &mut owner.succession {
+                succession.publish(physical.events(), physical.work());
+            }
             let mut finished = physical.events().finished.clone();
             let mut interrupted = physical.events().interrupted.clone();
             finished.par_sort_unstable();

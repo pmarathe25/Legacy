@@ -285,6 +285,8 @@ struct SharedWorkConfig {
     rules: Vec<SharedCrewConfig>,
     #[serde(default)]
     preferences: Vec<SharedPreferenceConfig>,
+    #[serde(default)]
+    succession: Option<game_economy::WorkSuccession>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -974,6 +976,7 @@ pub fn scenario_with_options(
                     })
                     .collect::<Result<_, String>>()?,
                 events: vec![],
+                succession: config.succession,
             })
         })
         .transpose()?;

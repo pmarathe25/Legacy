@@ -2073,3 +2073,166 @@ fn spoiled_job_inputs_do_not_allocate_or_publish_tool_identities() {
     world.commit_advance(draft).unwrap();
     assert_eq!(world.item_place(1), None);
 }
+
+#[test]
+fn suspended_job_preserves_inputs_and_is_adopted_without_retroactive_work() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let suspend = [Suspension {
+        job: 1,
+        worker: 1,
+        until: 4,
+    }];
+    let prepare = |world: &Runtime| {
+        world
+            .prepare_with_work_transitions(
+                &[],
+                &[],
+                &[],
+                &[(1, 1)],
+                (Growth::default(), &[]),
+                1,
+                None,
+                WorkTransitions {
+                    suspend: &suspend,
+                    adopt: &[],
+                },
+            )
+            .unwrap()
+    };
+    let draft = prepare(&world);
+    let stale = prepare(&world);
+    assert_eq!(draft.events().suspended, vec![1]);
+    assert!(draft.events().abandoned.is_empty());
+    world.commit_advance(draft).unwrap();
+    assert!(world.commit_advance(stale).is_err());
+    let state = world.snapshot();
+    assert_eq!(state.work[0].phase, Phase::Suspended { until: 4 });
+    assert_eq!(state.work[0].job.remaining, 2);
+    assert_eq!(world.custody(Place::JobInput(1)).unwrap().used, 2);
+    let mut restored =
+        Runtime::compile(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+            .unwrap();
+    let adoption = [Adoption {
+        job: 1,
+        previous_worker: 1,
+        worker: 2,
+    }];
+    let adopt = |world: &Runtime| {
+        world
+            .prepare_with_work_transitions(
+                &[],
+                &[],
+                &[],
+                &[],
+                (Growth::default(), &[]),
+                1,
+                None,
+                WorkTransitions {
+                    suspend: &[],
+                    adopt: &adoption,
+                },
+            )
+            .unwrap()
+    };
+    let next = adopt(&world);
+    let restored_next = adopt(&restored);
+    assert_eq!(next.events().adopted, adoption);
+    world.commit_advance(next).unwrap();
+    restored.commit_advance(restored_next).unwrap();
+    assert_eq!(world.snapshot(), restored.snapshot());
+    assert_eq!(world.work()[0].job.worker, 2);
+    assert_eq!(world.work()[0].job.remaining, 2);
+    world.advance(&[(1, 1)], 1).unwrap();
+    assert_eq!(world.work()[0].job.remaining, 1);
+    assert_eq!(world.advance(&[(1, 1)], 1).unwrap().finished, vec![1]);
+}
+
+#[test]
+fn expired_suspension_returns_real_reserved_inputs() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let suspend = [Suspension {
+        job: 1,
+        worker: 1,
+        until: 3,
+    }];
+    let draft = world
+        .prepare_with_work_transitions(
+            &[],
+            &[],
+            &[],
+            &[(1, 1)],
+            (Growth::default(), &[]),
+            1,
+            None,
+            WorkTransitions {
+                suspend: &suspend,
+                adopt: &[],
+            },
+        )
+        .unwrap();
+    world.commit_advance(draft).unwrap();
+    world.advance(&[], 1).unwrap();
+    let events = world.advance(&[], 1).unwrap();
+    assert_eq!(events.interrupted, vec![1]);
+    assert_eq!(events.returned, vec![1]);
+    assert!(world.work().is_empty());
+    assert_eq!(
+        world
+            .custody(Place::Stock { region: 1, good: 1 })
+            .unwrap()
+            .used,
+        4
+    );
+}
+
+#[test]
+fn incapacitation_preserves_unfinished_work_until_its_site_is_destroyed() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let mut draft = world.prepare_advance(&[(1, 1)], &[], 1).unwrap();
+    world.suspend_workers_in(&mut draft, &[1], &[1], 4).unwrap();
+    world.interrupt_workers_in(&mut draft, &[1]).unwrap();
+    assert_eq!(draft.events().suspended, vec![1]);
+    assert!(draft.events().interrupted.is_empty());
+    assert_eq!(draft.work()[0].job.remaining, 1);
+    world.interrupt_jobs_in(&mut draft, &[1]).unwrap();
+    assert_eq!(draft.events().interrupted, vec![1]);
+    assert_eq!(draft.work()[0].phase, Phase::Returning);
+    world.commit_advance(draft).unwrap();
+    assert_eq!(world.advance(&[], 1).unwrap().returned, vec![1]);
+}

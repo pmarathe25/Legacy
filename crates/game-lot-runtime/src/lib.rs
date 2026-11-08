@@ -2,7 +2,7 @@
 mod advance;
 mod identified_output;
 mod receipts;
-pub use advance::{AdvanceDraft, Events};
+pub use advance::{Adoption, AdvanceDraft, Events, Suspension, WorkTransitions};
 use game_lot_content::Catalog;
 pub use game_lot_content::{Growth, WritingPage};
 pub use game_lot_work::{Phase, Snapshot, Work};
@@ -56,7 +56,7 @@ impl Runtime {
                     || job.region == 0
                     || !recipes.contains(&job.recipe)
                     || match row.phase {
-                        Phase::Working | Phase::Returning => {
+                        Phase::Working | Phase::Returning | Phase::Suspended { .. } => {
                             job.phase != JobPhase::Working
                                 || store.container(Place::JobInput(job.id)).is_none()
                                 || store.container(Place::JobOutput(job.id)).is_none()

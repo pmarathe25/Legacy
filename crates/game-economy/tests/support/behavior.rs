@@ -45049,6 +45049,7 @@ fn shared_work_fixture() -> State {
         affinity: 0,
     });
     state.shared_work = Some(SharedWork {
+        succession: None,
         rules: vec![SharedCrewRule {
             recipe: 1,
             max_helpers: 2,
@@ -45076,6 +45077,176 @@ fn shared_work_fixture() -> State {
         events: vec![],
     });
     state
+}
+
+#[test]
+fn departed_leads_work_can_be_adopted_by_a_separately_willing_person() {
+    let mut initial = shared_work_fixture();
+    initial.people[2].willing_to_work = false;
+    initial.construction.as_mut().unwrap().maintenance = None;
+    let shared = initial.shared_work.as_mut().unwrap();
+    shared.preferences.clear();
+    shared.succession = Some(WorkSuccession {
+        retention: 4,
+        engagements: vec![],
+        preferences: vec![WorkSuccessionPreference {
+            person: 3,
+            job: 1,
+            willing: true,
+            fear_at_least: None,
+            obligation_at_least: None,
+            disregard_claims: false,
+        }],
+    });
+    let run = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started, vec![1]);
+                world.set_work_choice(2, false).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(events.suspended, vec![1]);
+                assert!(events.abandoned.is_empty());
+                let suspended = world.snapshot();
+                assert!(matches!(
+                    suspended.physical.work[0].phase,
+                    game_lot_runtime::Phase::Suspended { .. }
+                ));
+                assert_eq!(suspended.work_sites.as_ref().unwrap().bindings.len(), 1);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&suspended).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let events = world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(events.adopted.len(), 1);
+                assert_eq!(
+                    (events.adopted[0].previous_worker, events.adopted[0].worker),
+                    (2, 3)
+                );
+                let adopted = world.snapshot();
+                assert_eq!(adopted, restored.snapshot());
+                assert_eq!(
+                    adopted.physical.work[0].job.remaining,
+                    suspended.physical.work[0].job.remaining
+                );
+                restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&adopted).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let mut finished = Vec::new();
+                for _ in 0..5 {
+                    finished.extend(world.advance().unwrap().finished);
+                    restored.advance().unwrap();
+                }
+                assert_eq!(finished, vec![1]);
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn takeover_respects_subjective_pressure_and_vacancies_expire() {
+    let mut initial = shared_work_fixture();
+    initial.people[3].willing_to_work = false;
+    initial.construction.as_mut().unwrap().maintenance = None;
+    let shared = initial.shared_work.as_mut().unwrap();
+    shared.preferences.clear();
+    shared.succession = Some(WorkSuccession {
+        retention: 1,
+        engagements: vec![],
+        preferences: vec![
+            WorkSuccessionPreference {
+                person: 3,
+                job: 1,
+                willing: false,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims: false,
+            },
+            WorkSuccessionPreference {
+                person: 4,
+                job: 1,
+                willing: false,
+                fear_at_least: Some(5),
+                obligation_at_least: None,
+                disregard_claims: false,
+            },
+        ],
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    world.set_work_choice(2, false).unwrap();
+    world.advance().unwrap();
+    assert_eq!(world.advance().unwrap().adopted[0].worker, 4);
+    let before = world.snapshot().physical.work[0].job.remaining;
+    world.advance().unwrap();
+    assert!(world.snapshot().physical.work[0].job.remaining < before);
+    let mut withdrawn = world.snapshot();
+    withdrawn
+        .shared_work
+        .as_mut()
+        .unwrap()
+        .succession
+        .as_mut()
+        .unwrap()
+        .preferences[1]
+        .fear_at_least = Some(6);
+    let mut withdrawn = Economy::compile(withdrawn).unwrap();
+    assert_eq!(withdrawn.advance().unwrap().suspended, vec![1]);
+
+    let mut obligation = initial.clone();
+    let preference = &mut obligation
+        .shared_work
+        .as_mut()
+        .unwrap()
+        .succession
+        .as_mut()
+        .unwrap()
+        .preferences[1];
+    preference.fear_at_least = None;
+    preference.obligation_at_least = Some(1);
+    obligation
+        .opinions
+        .as_mut()
+        .unwrap()
+        .records
+        .iter_mut()
+        .find(|r| r.observer == 4 && r.target == 2)
+        .unwrap()
+        .obligation = 1;
+    let mut obligated = Economy::compile(obligation).unwrap();
+    obligated.advance().unwrap();
+    obligated.set_work_choice(2, false).unwrap();
+    obligated.advance().unwrap();
+    assert_eq!(obligated.advance().unwrap().adopted[0].worker, 4);
+    let before = obligated.snapshot().physical.work[0].job.remaining;
+    obligated.advance().unwrap();
+    assert!(obligated.snapshot().physical.work[0].job.remaining < before);
+
+    initial
+        .shared_work
+        .as_mut()
+        .unwrap()
+        .succession
+        .as_mut()
+        .unwrap()
+        .preferences[1]
+        .fear_at_least = Some(6);
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    world.set_work_choice(2, false).unwrap();
+    world.advance().unwrap();
+    assert!(world.advance().unwrap().adopted.is_empty());
+    let expiry = world.advance().unwrap();
+    assert_eq!(expiry.interrupted, vec![1]);
+    assert_eq!(expiry.returned, vec![1]);
+    assert!(world.snapshot().work_sites.unwrap().bindings.is_empty());
 }
 
 #[test]
@@ -45158,6 +45329,8 @@ fn shared_work_boundary_benchmark() {
         .unwrap_or(1);
     let hot = std::env::var_os("LEGACY_HOT").is_some();
     let shared_site = std::env::var_os("LEGACY_SHARED_SITE").is_some();
+    let continuing = std::env::var_os("LEGACY_CONTINUE").is_some();
+    let succession = continuing || std::env::var_os("LEGACY_SUCCESSION").is_some();
     let crew_limit: u64 = std::env::var("LEGACY_CREW_LIMIT")
         .ok()
         .and_then(|s| s.parse().ok())
@@ -45221,6 +45394,20 @@ fn shared_work_boundary_benchmark() {
         bindings: vec![],
     });
     initial.shared_work = Some(SharedWork {
+        succession: succession.then(|| WorkSuccession {
+            retention: 4,
+            engagements: vec![],
+            preferences: (1..=count)
+                .map(|index| WorkSuccessionPreference {
+                    person: leads + index,
+                    job: if hot { 1 } else { index },
+                    willing: true,
+                    fear_at_least: None,
+                    obligation_at_least: None,
+                    disregard_claims: false,
+                })
+                .collect(),
+        }),
         rules: vec![SharedCrewRule {
             recipe: 1,
             max_helpers: crew_limit,
@@ -45245,6 +45432,14 @@ fn shared_work_boundary_benchmark() {
             let mut world = Economy::compile(initial.clone()).unwrap();
             let starts = world.advance().unwrap();
             assert_eq!(starts.started.len(), leads as usize);
+            if succession {
+                let mut opening = world.snapshot();
+                for person in &mut opening.people {
+                    if person.id <= leads { person.willing_to_work = false; }
+                }
+                world = Economy::compile(opening).unwrap();
+                assert_eq!(world.advance().unwrap().suspended.len(), leads as usize);
+            }
             if contenders > 0 {
                 let mut opening = world.snapshot();
                 for person in &mut opening.people {
@@ -45253,12 +45448,22 @@ fn shared_work_boundary_benchmark() {
                 opening.autowork.as_mut().unwrap().policies.extend((leads + count + 1..=leads + count + contenders).map(|person| WorkPolicy { person, recipe: 1, enabled: true, disregard_claims: false }));
                 world = Economy::compile(opening).unwrap();
             }
+            if continuing {
+                assert_eq!(world.advance().unwrap().adopted.len(), leads as usize);
+            }
             let start = std::time::Instant::now();
             let boundary = world.advance().unwrap();
             samples.push(start.elapsed().as_secs_f64());
             if contenders > 0 { assert!(boundary.started.is_empty()); }
             let state = world.snapshot();
-            assert_eq!(state.shared_work.as_ref().unwrap().events.len(), if hot { count.min(crew_limit) as usize } else { count as usize });
+            if succession {
+                assert_eq!(boundary.adopted.len(), if continuing { 0 } else { leads as usize });
+                if continuing {
+                    assert!(state.physical.work.iter().all(|row| row.job.remaining < u64::from(initial.physical.recipes[0].ticks)));
+                }
+            } else {
+                assert_eq!(state.shared_work.as_ref().unwrap().events.len(), if hot { count.min(crew_limit) as usize } else { count as usize });
+            }
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&state).unwrap().hash(&mut hash);
             let actual = hash.finish();
@@ -45267,7 +45472,7 @@ fn shared_work_boundary_benchmark() {
         }
         samples.remove(0);
         samples.sort_by(f64::total_cmp);
-        eprintln!("workers={workers} helpers={count} jobs={leads} hot={hot} shared_site={shared_site} crew_limit={crew_limit} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
+        eprintln!("workers={workers} helpers={count} jobs={leads} hot={hot} shared_site={shared_site} succession={succession} continuing={continuing} crew_limit={crew_limit} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
     });
 }
 

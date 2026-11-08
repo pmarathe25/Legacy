@@ -2,6 +2,7 @@
 pub mod care;
 pub mod shared;
 mod site_filter;
+pub mod succession;
 pub use game_work_sites as sites;
 pub mod tool_wear;
 pub mod tools;
@@ -695,6 +696,7 @@ impl Plan {
                     Some((link.job, true))
                 } else if physical.interrupted.binary_search(&link.job).is_ok()
                     || physical.abandoned.binary_search(&link.job).is_ok()
+                    || physical.suspended.binary_search(&link.job).is_ok()
                 {
                     Some((link.job, false))
                 } else {
@@ -759,7 +761,8 @@ impl Plan {
             .par_iter()
             .filter_map(|row| {
                 (physical.interrupted.binary_search(&row.1).is_ok()
-                    || physical.abandoned.binary_search(&row.1).is_ok())
+                    || physical.abandoned.binary_search(&row.1).is_ok()
+                    || physical.suspended.binary_search(&row.1).is_ok())
                 .then_some((row.1, false))
             })
             .collect();

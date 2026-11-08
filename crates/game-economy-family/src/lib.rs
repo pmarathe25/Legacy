@@ -439,9 +439,9 @@ macro_rules! prepare_people {
 }
 #[macro_export]
 macro_rules! work_rates {
-    ($world:expr, $meals:expr, $work:expr, $fighters:expr, $resting:expr, $offers:expr) => {{
+    ($world:expr, $meals:expr, $work:expr, $fighters:expr, $resting:expr, $offers:expr, $successors:expr) => {{
         let (mut rates, mut abandon) =
-            game_economy_skills::continuing_work!($world, $meals, $offers);
+            game_economy_skills::continuing_work!($world, $meals, $offers, $successors);
         game_economy_interaction::work_rate!($world, $work, rates);
         game_economy_combat::interrupt($fighters, $world.physical.work(), &mut rates, &mut abandon);
         game_economy_fatigue::pause_rates(&$resting, $world.physical.work(), &mut rates);

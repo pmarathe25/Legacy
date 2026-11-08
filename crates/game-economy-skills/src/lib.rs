@@ -11,10 +11,13 @@ use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 #[macro_export]
 macro_rules! continuing_work {
-    ($world:expr, $meals:expr, $offers:expr) => {{
-        let pressured = $world.autowork.as_ref().map_or_else(Vec::new, |auto| {
+    ($world:expr, $meals:expr, $offers:expr, $successors:expr) => {{
+        let mut pressured = $world.autowork.as_ref().map_or_else(Vec::new, |auto| {
             game_economy_work::pressured_workers(auto, $world.opinions.as_ref(), $offers.as_ref())
         });
+        if !$successors.is_empty() {
+            game_economy_work::reserve(&mut pressured, $successors.iter().copied());
+        }
         let (mut rates, abandon) = game_economy_person::occupation::continuing(
             $world.physical.work(),
             &$world.people,

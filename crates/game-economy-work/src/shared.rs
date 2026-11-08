@@ -60,6 +60,9 @@ pub struct SharedWork {
     pub preferences: Vec<Preference>,
     #[serde(default)]
     pub events: Vec<Event>,
+    /// Optional personal choices to take responsibility for abandoned work.
+    #[serde(default)]
+    pub succession: Option<crate::succession::Succession>,
 }
 impl Clone for SharedWork {
     fn clone(&self) -> Self {
@@ -67,6 +70,7 @@ impl Clone for SharedWork {
             rules: self.rules.par_iter().cloned().collect(),
             preferences: self.preferences.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
+            succession: self.succession.clone(),
         }
     }
 }
@@ -102,6 +106,9 @@ impl SharedWork {
             })
         {
             return Err("invalid shared work state".into());
+        }
+        if let Some(succession) = &self.succession {
+            succession.validate(people)?;
         }
         Ok(())
     }

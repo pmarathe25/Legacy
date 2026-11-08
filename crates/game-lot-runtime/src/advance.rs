@@ -4,12 +4,34 @@ use game_lots::{Place, PlaceIndex, SimpleTransfer, Spoilage, Transaction, Transa
 use game_production_model::{JobPhase, Start};
 use rayon::prelude::*;
 
+/// An outgoing lead leaves physical inputs with the job for a bounded period.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Suspension {
+    pub job: u64,
+    pub worker: u64,
+    pub until: u64,
+}
+/// A new lead independently takes over one committed suspended job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Adoption {
+    pub job: u64,
+    pub previous_worker: u64,
+    pub worker: u64,
+}
+#[derive(Default)]
+pub struct WorkTransitions<'a> {
+    pub suspend: &'a [Suspension],
+    pub adopt: &'a [Adoption],
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub struct Events {
     pub tick: u64,
     pub started: Vec<u64>,
     pub start_denied: Vec<u64>,
     pub abandoned: Vec<u64>,
+    pub suspended: Vec<u64>,
+    pub adopted: Vec<Adoption>,
     pub finished: Vec<u64>,
     pub delivered: Vec<u64>,
     pub output_lost: Vec<u64>,
@@ -48,6 +70,75 @@ impl AdvanceDraft {
     }
 }
 impl Runtime {
+    /// Preserve eligible unfinished work when its worker becomes incapacitated.
+    /// Eligibility is decided by the site owner; completed work is never reopened.
+    pub fn suspend_workers_in(
+        &self,
+        draft: &mut AdvanceDraft,
+        workers: &[u64],
+        eligible_jobs: &[u64],
+        until: u64,
+    ) -> Result<(), String> {
+        if workers.is_empty() || eligible_jobs.is_empty() {
+            return Ok(());
+        }
+        self.validate_advance(draft)?;
+        if until <= draft.events.tick
+            || workers.par_windows(2).any(|pair| pair[0] >= pair[1])
+            || eligible_jobs.par_windows(2).any(|pair| pair[0] >= pair[1])
+        {
+            return Err("invalid incapacitated work suspension".into());
+        }
+        let suspended: Vec<_> = draft
+            .work
+            .par_iter_mut()
+            .filter_map(|row| {
+                if row.phase == Phase::Working
+                    && row.job.remaining > 0
+                    && workers.binary_search(&row.job.worker).is_ok()
+                    && eligible_jobs.binary_search(&row.job.id).is_ok()
+                {
+                    row.phase = Phase::Suspended { until };
+                    Some(row.job.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        draft.events.suspended.par_extend(suspended);
+        draft.events.suspended.par_sort_unstable();
+        draft.events.suspended.dedup();
+        Ok(())
+    }
+
+    /// Interrupt the specified jobs when their physical sites are destroyed.
+    pub fn interrupt_jobs_in(&self, draft: &mut AdvanceDraft, jobs: &[u64]) -> Result<(), String> {
+        if jobs.is_empty() {
+            return Ok(());
+        }
+        self.validate_advance(draft)?;
+        if jobs.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("job ids must be sorted and unique".into());
+        }
+        let interrupted: Vec<_> = draft
+            .work
+            .par_iter_mut()
+            .filter_map(|row| {
+                if matches!(row.phase, Phase::Working | Phase::Suspended { .. })
+                    && jobs.binary_search(&row.job.id).is_ok()
+                {
+                    row.phase = Phase::Returning;
+                    Some(row.job.id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        draft.events.interrupted.par_extend(interrupted);
+        draft.events.interrupted.par_sort_unstable();
+        draft.events.interrupted.dedup();
+        Ok(())
+    }
     /// Interrupt active work in a detached generation after its worker dies.
     /// Worker IDs must be strictly increasing.
     /// Reserved material remains in its physical holder until the usual return succeeds.
@@ -205,6 +296,8 @@ impl Runtime {
                 started: Vec::new(),
                 start_denied: Vec::new(),
                 abandoned: Vec::new(),
+                suspended: Vec::new(),
+                adopted: Vec::new(),
                 finished: Vec::new(),
                 delivered: Vec::new(),
                 output_lost: Vec::new(),
@@ -308,6 +401,8 @@ impl Runtime {
                 started: Vec::new(),
                 start_denied: Vec::new(),
                 abandoned: Vec::new(),
+                suspended: Vec::new(),
+                adopted: Vec::new(),
                 finished: Vec::new(),
                 delivered: Vec::new(),
                 output_lost: Vec::new(),
@@ -390,6 +485,30 @@ impl Runtime {
         (growth, custody): (Growth<'_>, &[(u64, game_lots::Container)]),
         seed: u64,
         identified: Option<crate::IdentifiedProduction<'_>>,
+    ) -> Result<AdvanceDraft, String> {
+        self.prepare_with_work_transitions(
+            rates,
+            external,
+            starts,
+            abandon,
+            (growth, custody),
+            seed,
+            identified,
+            WorkTransitions::default(),
+        )
+    }
+    /// Apply checked job suspension and adoption in the detached generation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn prepare_with_work_transitions(
+        &self,
+        rates: &[(u64, u64)],
+        external: &[Transaction],
+        starts: &[Start],
+        abandon: &[(u64, u64)],
+        (growth, custody): (Growth<'_>, &[(u64, game_lots::Container)]),
+        seed: u64,
+        identified: Option<crate::IdentifiedProduction<'_>>,
+        transitions: WorkTransitions<'_>,
     ) -> Result<AdvanceDraft, String> {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("physical.validate_and_plan");
@@ -491,11 +610,78 @@ impl Runtime {
         {
             return Err("invalid work abandonment".into());
         }
-        let abandoned_ids: Vec<_> = abandoned.par_iter().map(|row| row.0).collect();
+        let mut suspensions = transitions.suspend.to_vec();
+        suspensions.par_sort_unstable_by_key(|row| row.job);
+        let mut adoptions = transitions.adopt.to_vec();
+        adoptions.par_sort_unstable_by_key(|row| row.job);
+        let mut adopting_workers: Vec<_> = adoptions.par_iter().map(|row| row.worker).collect();
+        adopting_workers.par_sort_unstable();
+        let mut occupied_workers: Vec<_> = if adoptions.is_empty() {
+            Vec::new()
+        } else {
+            self.work
+                .par_iter()
+                .filter(|work| work.phase == Phase::Working)
+                .map(|work| work.job.worker)
+                .chain(starts.par_iter().map(|start| start.worker))
+                .collect()
+        };
+        if occupied_workers
+            .par_windows(2)
+            .any(|pair| pair[0] > pair[1])
+        {
+            occupied_workers.par_sort_unstable();
+        }
+        if suspensions.par_windows(2).any(|pair| pair[0].job == pair[1].job)
+            || adoptions.par_windows(2).any(|pair| pair[0].job == pair[1].job)
+            || adopting_workers.par_windows(2).any(|pair| pair[0] == pair[1])
+            || suspensions.par_iter().any(|row| row.until <= next_tick
+                || abandoned.binary_search(&(row.job, row.worker)).is_err())
+            || adoptions.par_iter().any(|row| {
+                row.worker == 0 || row.worker == row.previous_worker
+                    || occupied_workers.binary_search(&row.worker).is_ok()
+                    || self.work.binary_search_by_key(&row.job, |work| work.job.id).ok().is_none_or(|i| {
+                        let work = &self.work[i];
+                        work.job.worker != row.previous_worker || !matches!(work.phase, Phase::Suspended { until } if until > next_tick)
+                    })
+            })
+        {
+            return Err("invalid suspended work transition".into());
+        }
+        let suspended_ids: Vec<_> = suspensions.par_iter().map(|row| row.job).collect();
+        let abandoned_ids: Vec<_> = abandoned
+            .par_iter()
+            .filter(|row| suspended_ids.binary_search(&row.0).is_err())
+            .map(|row| row.0)
+            .collect();
+        let expired_ids: Vec<_> = self
+            .work
+            .par_iter()
+            .filter(|work| matches!(work.phase, Phase::Suspended { until } if until <= next_tick))
+            .map(|work| work.job.id)
+            .collect();
         let mut next: Vec<_> = self.work.par_iter().cloned().collect();
         next.par_iter_mut()
             .filter(|row| abandoned_ids.binary_search(&row.job.id).is_ok())
             .for_each(|row| row.phase = Phase::Returning);
+        if !suspensions.is_empty() || !adoptions.is_empty() || !expired_ids.is_empty() {
+            next.par_iter_mut().for_each(|row| {
+                if let Ok(i) =
+                    suspensions.binary_search_by_key(&row.job.id, |transition| transition.job)
+                {
+                    row.phase = Phase::Suspended {
+                        until: suspensions[i].until,
+                    };
+                } else if let Ok(i) =
+                    adoptions.binary_search_by_key(&row.job.id, |transition| transition.job)
+                {
+                    row.job.worker = adoptions[i].worker;
+                    row.phase = Phase::Working;
+                } else if expired_ids.binary_search(&row.job.id).is_ok() {
+                    row.phase = Phase::Returning;
+                }
+            });
+        }
         next.par_iter_mut()
             .filter(|row| row.phase == Phase::Working)
             .for_each(|row| {
@@ -530,6 +716,7 @@ impl Runtime {
             })
             .transpose()?;
         let mut interrupted = finished.interrupted;
+        interrupted.par_extend(expired_ids);
         interrupted.par_sort_unstable();
         next.par_iter_mut()
             .filter(|row| interrupted.binary_search(&row.job.id).is_ok())
@@ -813,6 +1000,8 @@ impl Runtime {
             started: started_ids,
             start_denied: denied_ids,
             abandoned: abandoned_ids,
+            suspended: suspended_ids,
+            adopted: adoptions,
             finished: finished_ids,
             delivered: delivered_ids,
             output_lost,

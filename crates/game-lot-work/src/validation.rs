@@ -98,8 +98,9 @@ pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
         !valid_items(&job.outputs, &goods)
             || job.remaining > u64::from(recipe.ticks) * units
             || match work.phase {
-                Phase::Working | Phase::Returning => {
+                Phase::Working | Phase::Returning | Phase::Suspended { .. } => {
                     job.phase != JobPhase::Working
+                        || matches!(work.phase, Phase::Suspended { until } if until <= state.custody.tick)
                         || !valid_items(&job.reserved, &goods)
                         || multiplier(&job.reserved, &recipe.inputs) != Some(units)
                 }

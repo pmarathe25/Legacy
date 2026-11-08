@@ -2,7 +2,7 @@
 use game_economy_building::Construction;
 use game_economy_combat::Draft as CombatDraft;
 use game_economy_work::sites::Facilities;
-use game_lot_runtime::{AdvanceDraft, Phase, Runtime};
+use game_lot_runtime::{AdvanceDraft, Runtime};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
@@ -47,24 +47,15 @@ pub fn apply(
         return Ok(collapsed);
     }
     collapsed.par_sort_unstable();
-    let staged = physical.work();
-    let mut workers: Vec<_> = sites
+    let mut jobs: Vec<_> = sites
         .bindings
         .par_iter()
         .filter(|binding| collapsed.binary_search(&binding.site).is_ok())
-        .map(|binding| {
-            staged
-                .binary_search_by_key(&binding.job, |work| work.job.id)
-                .ok()
-                .map(|i| &staged[i])
-                .filter(|work| work.phase == Phase::Working)
-                .map(|work| work.job.worker)
-                .ok_or("collapsed site has an invalid work binding")
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    workers.par_sort_unstable();
-    workers.dedup();
-    runtime.interrupt_workers_in(physical, &workers)?;
+        .map(|binding| binding.job)
+        .collect();
+    jobs.par_sort_unstable();
+    jobs.dedup();
+    runtime.interrupt_jobs_in(physical, &jobs)?;
     sites.bindings = sites
         .bindings
         .par_iter()

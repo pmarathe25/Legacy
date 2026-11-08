@@ -123,19 +123,24 @@ impl Facilities {
                 .ok()
                 .map(|i| &self.sites[i]);
             match (job, site) {
-                (Some(job), Some(site)) if job.phase == Phase::Working => self
-                    .requirements
-                    .binary_search_by_key(&job.job.recipe, |r| r.recipe)
-                    .ok()
-                    .is_none_or(|i| {
-                        let r = &self.requirements[i];
-                        job.job.region != site.region || r.kind != site.kind || r.slots != b.slots
-                    }),
+                (Some(job), Some(site))
+                    if matches!(job.phase, Phase::Working | Phase::Suspended { .. }) =>
+                {
+                    self.requirements
+                        .binary_search_by_key(&job.job.recipe, |r| r.recipe)
+                        .ok()
+                        .is_none_or(|i| {
+                            let r = &self.requirements[i];
+                            job.job.region != site.region
+                                || r.kind != site.kind
+                                || r.slots != b.slots
+                        })
+                }
                 _ => true,
             }
         }) || work
             .par_iter()
-            .filter(|w| w.phase == Phase::Working)
+            .filter(|w| matches!(w.phase, Phase::Working | Phase::Suspended { .. }))
             .any(|w| {
                 self.requirements
                     .binary_search_by_key(&w.job.recipe, |r| r.recipe)

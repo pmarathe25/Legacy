@@ -6,6 +6,11 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "snake_case")]
 pub enum Phase {
     Working,
+    /// The last lead has departed; custody and site capacity remain reserved
+    /// until the given boundary, when normal return begins if nobody takes over.
+    Suspended {
+        until: u64,
+    },
     Waiting,
     Returning,
 }

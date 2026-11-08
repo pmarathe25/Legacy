@@ -7,6 +7,8 @@ fn events(physical_actions: Vec<TransactionOutcome>) -> Events {
         started: vec![],
         start_denied: vec![],
         abandoned: vec![],
+        suspended: vec![],
+        adopted: vec![],
         finished: vec![],
         delivered: vec![],
         output_lost: vec![],
