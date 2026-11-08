@@ -7079,6 +7079,90 @@ fn a_person_can_visit_fetch_return_and_complete_a_work_goal() {
 }
 
 #[test]
+fn a_blocked_work_goal_does_not_permanently_prevent_a_visit() {
+    use game_economy_claims::{Claim, Claims};
+    use game_goals::Goal;
+    let mut initial = local_walking_fixture();
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.goal_fetchers = vec![GoalFetchPreference {
+        person: 2,
+        enabled: true,
+        max_quantity: 1,
+    }];
+    transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 1 },
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    }]
+    .into();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+            recognize_help: false,
+        }],
+        events: vec![],
+    });
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            claims: vec![Claim {
+                person: 1,
+                region: 1,
+                good: 2,
+            }],
+            ..Default::default()
+        }),
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    assert!(world.advance().unwrap().started.is_empty());
+    let state = world.snapshot();
+    assert!(state.goals.as_ref().unwrap().people[0].next_review > 1);
+    assert!(
+        state
+            .local_transport
+            .as_ref()
+            .unwrap()
+            .walking
+            .as_ref()
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(
+        state
+            .local_transport
+            .unwrap()
+            .walking
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.person == 2 && event.outcome == LocalWalkOutcome::Progressed)
+    );
+}
+
+#[test]
 fn goal_fetching_finds_inputs_for_a_real_production_chain() {
     use game_goals::Goal;
     let mut initial = local_store_fixture();
