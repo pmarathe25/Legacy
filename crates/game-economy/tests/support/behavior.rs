@@ -24275,6 +24275,9 @@ fn combat_rules() -> Combat {
         interventions: vec![],
         intervention_events: vec![],
         injuries: None,
+        structures: vec![],
+        structure_events: vec![],
+        structure_preferences: vec![],
     }
 }
 
@@ -27496,6 +27499,9 @@ fn concentrated_combat(count: u64) -> State {
         interventions: vec![],
         intervention_events: vec![],
         injuries: None,
+        structures: vec![],
+        structure_events: vec![],
+        structure_preferences: vec![],
     });
     state
 }
@@ -43941,6 +43947,474 @@ fn maintenance_fixture() -> State {
     )
     .unwrap();
     state
+}
+
+#[test]
+fn tactical_strikes_damage_the_real_site_and_later_repair_reopens_it() {
+    use game_economy_combat::{Order, Point, structure::Target};
+    let mut initial = maintenance_fixture();
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 0, y: 1 },
+    }];
+    initial.combat = Some(combat);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let fight = world.attack(1, 3).unwrap();
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .combat_order(1, fight, Order::AttackSite { site: 99 })
+                        .is_err()
+                );
+                assert_eq!(world.snapshot(), before);
+                world
+                    .combat_order(1, fight, Order::AttackSite { site: 1 })
+                    .unwrap();
+                let opening = world.snapshot();
+                drop(world.prepare().unwrap());
+                assert_eq!(world.snapshot(), opening);
+                let events = world.advance().unwrap();
+                assert_eq!(events.started.len(), 1);
+                let state = world.snapshot();
+                let combat = state.combat.as_ref().unwrap();
+                assert_eq!(combat.structure_events.len(), 1);
+                assert_eq!(
+                    (
+                        combat.structure_events[0].attacker,
+                        combat.structure_events[0].site
+                    ),
+                    (1, 1)
+                );
+                assert!(
+                    combat
+                        .conflict
+                        .events
+                        .iter()
+                        .all(|event| event.attacker != 1)
+                );
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.combat_order(1, fight, Order::Retreat).unwrap();
+                restored.combat_order(1, fight, Order::Retreat).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert!(world.repair_site(1, 1).unwrap());
+                assert!(restored.repair_site(1, 1).unwrap());
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    0
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn a_site_outside_tactical_reach_takes_no_damage() {
+    use game_economy_combat::{Order, Point, structure::Target};
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 10, y: 10 },
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    let fight = world.attack(1, 3).unwrap();
+    world
+        .combat_order(1, fight, Order::AttackSite { site: 1 })
+        .unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.combat.as_ref().unwrap().structure_events.is_empty());
+    assert_eq!(
+        state.construction.unwrap().maintenance.unwrap().conditions[0].wear,
+        0
+    );
+}
+
+#[test]
+fn a_tactical_obstacle_blocks_a_site_strike_even_within_range() {
+    use game_economy_combat::{Order, Point, structure::Target};
+    use game_tactics::Obstacle;
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let mut combat = combat_rules();
+    combat.tactics.maps[0].rules.attack_range = 10;
+    combat.tactics.maps[0].obstacles = vec![Obstacle {
+        min: Point { x: 1, y: 0 },
+        max: Point { x: 2, y: 2 },
+    }];
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 3, y: 0 },
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    let fight = world.attack(1, 3).unwrap();
+    world
+        .combat_order(1, fight, Order::AttackSite { site: 1 })
+        .unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.combat.as_ref().unwrap().structure_events.is_empty());
+    assert_eq!(
+        state.construction.unwrap().maintenance.unwrap().conditions[0].wear,
+        0
+    );
+}
+
+#[test]
+fn an_autonomous_fighter_does_not_replace_a_strike_with_an_unreachable_site() {
+    use game_economy_combat::{
+        Point,
+        structure::{Preference, Target},
+    };
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 10, y: 10 },
+    }];
+    combat.structure_preferences = vec![Preference {
+        person: 3,
+        site: 1,
+        willing: true,
+        pressure_from: None,
+        fear_at_least: None,
+        obligation_at_least: None,
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(3, 1).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(state.combat.as_ref().unwrap().structure_events.is_empty());
+    assert!(
+        state
+            .combat
+            .as_ref()
+            .unwrap()
+            .conflict
+            .events
+            .iter()
+            .any(|event| event.attacker == 3 && event.target == 1)
+    );
+}
+
+#[test]
+fn an_individual_can_choose_or_feel_pressured_to_attack_a_site() {
+    use game_economy_combat::{
+        Point,
+        structure::{Preference, Target},
+    };
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 0, y: 1 },
+    }];
+    combat.structure_preferences = vec![Preference {
+        person: 3,
+        site: 1,
+        willing: true,
+        pressure_from: Some(2),
+        fear_at_least: Some(3),
+        obligation_at_least: None,
+    }];
+    initial.combat = Some(combat);
+    let run = |workers, willing, fear| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state.combat.as_mut().unwrap().structure_preferences[0].willing = willing;
+                state.opinions.as_mut().unwrap().records = vec![Opinion {
+                    observer: 3,
+                    target: 2,
+                    trust: 0,
+                    fear,
+                    obligation: 0,
+                    affinity: 0,
+                }];
+                let mut world = Economy::compile(state).unwrap();
+                world.attack(3, 1).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let acted = willing || fear >= 3;
+                assert_eq!(
+                    !state.combat.as_ref().unwrap().structure_events.is_empty(),
+                    acted
+                );
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    u64::from(acted)
+                );
+                assert_eq!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .events
+                        .iter()
+                        .any(|event| event.attacker == 3),
+                    !acted
+                );
+                state
+            })
+    };
+    for (willing, fear) in [(true, 0), (false, 3), (false, 0)] {
+        assert_eq!(run(1, willing, fear), run(4, willing, fear));
+    }
+}
+
+#[test]
+fn removing_a_tactical_site_clears_orders_without_stale_references() {
+    use game_economy_combat::{Order, Point, structure::Target};
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    initial.people[3].controlled = true;
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 0, y: 1 },
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    let fight = world.attack(1, 3).unwrap();
+    world
+        .combat_order(1, fight, Order::AttackSite { site: 1 })
+        .unwrap();
+    assert!(world.destroy_site(4, 1).unwrap());
+    let state = world.snapshot();
+    let combat = state.combat.as_ref().unwrap();
+    assert!(combat.structures.is_empty());
+    assert!(
+        combat.conflict.encounters[0]
+            .fighters
+            .iter()
+            .any(|fighter| fighter.person == 1 && fighter.order == Order::Defend)
+    );
+    Economy::compile(state).unwrap();
+}
+
+#[test]
+fn a_simultaneous_site_strike_can_damage_a_just_repaired_site() {
+    use game_economy_combat::{Order, Point, structure::Target};
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    initial.people[3].controlled = true;
+    initial
+        .construction
+        .as_mut()
+        .unwrap()
+        .maintenance
+        .as_mut()
+        .unwrap()
+        .conditions = vec![game_economy_building::maintenance::Condition { site: 1, wear: 1 }];
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(4))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(4),
+        10,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 0, y: 1 },
+    }];
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    let fight = world.attack(1, 3).unwrap();
+    world
+        .combat_order(1, fight, Order::AttackSite { site: 1 })
+        .unwrap();
+    assert!(world.repair_site(4, 1).unwrap());
+    let state = world.snapshot();
+    assert_eq!(
+        state
+            .construction
+            .as_ref()
+            .unwrap()
+            .maintenance
+            .as_ref()
+            .unwrap()
+            .conditions[0]
+            .wear,
+        1
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(4))
+            .unwrap()
+            .used,
+        0
+    );
+    assert_eq!(state.combat.as_ref().unwrap().structure_events.len(), 1);
+    Economy::compile(state).unwrap();
+}
+
+#[test]
+#[ignore = "tactical work-site damage performance measurement"]
+fn tactical_site_damage_benchmark() {
+    use game_economy_combat::{
+        Order, Point,
+        structure::{Preference, Target},
+    };
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_ENCOUNTERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let hot = std::env::var_os("LEGACY_HOT").is_some();
+    let autonomous = std::env::var_os("LEGACY_AUTONOMOUS").is_some();
+    let mut initial = if hot {
+        concentrated_combat(count + 1)
+    } else {
+        independent_combats(count)
+    };
+    let sites = if hot { 1 } else { count };
+    initial.work_sites = Some(WorkSites {
+        next_id: sites + 1,
+        sites: (1..=sites)
+            .map(|id| WorkSite {
+                id,
+                region: 1,
+                kind: "workshop".into(),
+                capacity: 1,
+            })
+            .collect(),
+        requirements: vec![],
+        bindings: vec![],
+    });
+    initial.construction = maintenance_fixture().construction;
+    let combat = initial.combat.as_mut().unwrap();
+    combat.structures = (1..=sites)
+        .map(|site| Target {
+            site,
+            region: 1,
+            position: if hot {
+                Point { x: 0, y: 1 }
+            } else {
+                Point { x: 1, y: 1 }
+            },
+        })
+        .collect();
+    for fight in &mut combat.conflict.encounters {
+        for fighter in &mut fight.fighters {
+            if matches!(fighter.order, Order::Attack { .. }) {
+                let site = if hot { 1 } else { fight.id };
+                if autonomous {
+                    combat.structure_preferences.push(Preference {
+                        person: fighter.person,
+                        site,
+                        willing: true,
+                        pressure_from: None,
+                        fear_at_least: None,
+                        obligation_at_least: None,
+                    });
+                } else {
+                    fighter.order = Order::AttackSite { site };
+                }
+            }
+        }
+    }
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut samples = Vec::new();
+        let mut fingerprint = None;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            samples.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            assert_eq!(state.combat.as_ref().unwrap().structure_events.len(), count as usize);
+            assert!(state.combat.as_ref().unwrap().conflict.events.is_empty());
+            assert!(state.construction.as_ref().unwrap().maintenance.as_ref().unwrap().conditions.iter().all(|c| c.wear == 1));
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if let Some(expected) = fingerprint { assert_eq!(expected, actual); }
+            fingerprint = Some(actual);
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} strikes={count} sites={sites} hot={hot} autonomous={autonomous} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
+    });
 }
 
 #[test]

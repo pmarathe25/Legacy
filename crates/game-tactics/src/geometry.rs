@@ -107,6 +107,15 @@ impl Index {
             .is_some_and(|i| self.actors[i].encounter == encounter)
             && self.can_attack_between(attacker, target)
     }
+    /// Test a fighter's reach and line of sight to a fixed local point.
+    pub fn can_attack_point(&self, encounter: u64, attacker: u64, target: Point) -> bool {
+        self.locate(attacker).is_some_and(|i| {
+            let actor = &self.actors[i];
+            actor.active
+                && actor.encounter == encounter
+                && self.maps[actor.map].can_attack(actor.point, target)
+        })
+    }
 }
 pub(super) fn locate(actors: &[Geometry], id: u64) -> Option<usize> {
     let first = actors.first()?.id;

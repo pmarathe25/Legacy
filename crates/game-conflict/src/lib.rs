@@ -30,7 +30,13 @@ pub struct Fighter {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Order {
-    Attack { target: u64 },
+    Attack {
+        target: u64,
+    },
+    /// Attack a mapped physical work site instead of another fighter.
+    AttackSite {
+        site: u64,
+    },
     Defend,
     Retreat,
 }
@@ -102,6 +108,7 @@ impl Conflict {
                         .fighters
                         .iter()
                         .any(|other| other.person == target && other.side != fighter.side),
+                    Order::AttackSite { site } => site == 0,
                     _ => false,
                 })
             } else {
@@ -117,6 +124,7 @@ impl Conflict {
                         Order::Attack { target } => {
                             !sides.get(&target).is_some_and(|&side| side != fighter.side)
                         }
+                        Order::AttackSite { site } => site == 0,
                         _ => false,
                     })
             }
@@ -240,6 +248,9 @@ impl Conflict {
                     return Err("invalid attack target".into());
                 }
             }
+            if matches!(command.order, Order::AttackSite { site: 0 }) {
+                return Err("invalid attack target".into());
+            }
             changes.push((fight_index, index, &command.order));
         }
         changes.sort_unstable_by_key(|row| (row.0, row.1));
@@ -283,6 +294,9 @@ impl Conflict {
                         .get(&(command.encounter, target))
                         .is_some_and(|row| row.2 != side)
                 {
+                    return Err("invalid attack target".into());
+                }
+                if matches!(command.order, Order::AttackSite { site: 0 }) {
                     return Err("invalid attack target".into());
                 }
                 Ok((fight, index, &command.order))

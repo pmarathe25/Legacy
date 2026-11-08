@@ -412,6 +412,8 @@ mod tests {
             plan: Plan::compile(&state.conflict).unwrap(),
             index: state.tactics.index().unwrap(),
             actors: vec![],
+            structure_orders: vec![],
+            structure_candidates: vec![],
             goods: Default::default(),
             state,
         };
@@ -526,6 +528,8 @@ mod tests {
             plan: Plan::compile(&state.conflict).unwrap(),
             index: state.tactics.index().unwrap(),
             actors: vec![],
+            structure_orders: vec![],
+            structure_candidates: vec![],
             goods: Default::default(),
             state,
         };

@@ -2,6 +2,7 @@
 pub mod confrontation;
 pub mod injury;
 pub mod intervention;
+pub mod structure;
 pub use game_conflict::{Command, Order};
 use game_conflict::{Conflict, Encounter, Fighter};
 use game_conflict_packed::{Plan, Round};
@@ -49,6 +50,10 @@ pub struct Config {
     pub interventions: Vec<intervention::Preference>,
     #[serde(default)]
     pub injuries: Option<InjuryConfig>,
+    #[serde(default)]
+    pub structures: Vec<structure::Target>,
+    #[serde(default)]
+    pub structure_preferences: Vec<structure::Preference>,
     #[serde(default)]
     pub protection: Vec<ProtectionConfig>,
     #[serde(default)]
@@ -127,6 +132,8 @@ impl Config {
                 })
             })
             .transpose()?;
+        combat.structures = self.structures;
+        combat.structure_preferences = self.structure_preferences;
         Ok(combat)
     }
 }
@@ -156,6 +163,12 @@ pub struct Combat {
     #[serde(default)]
     pub injuries: Option<injury::Injuries>,
     #[serde(default)]
+    pub structures: Vec<structure::Target>,
+    #[serde(default)]
+    pub structure_events: Vec<structure::Event>,
+    #[serde(default)]
+    pub structure_preferences: Vec<structure::Preference>,
+    #[serde(default)]
     pub protection: Vec<Protection>,
     #[serde(default)]
     pub weapons: Vec<Weapon>,
@@ -165,6 +178,8 @@ pub struct Runtime {
     plan: Plan,
     index: Index,
     actors: Vec<u64>,
+    structure_orders: Vec<structure::Intent>,
+    structure_candidates: Vec<structure::Candidate>,
     goods: HashSet<u32>,
 }
 pub struct Draft {
@@ -204,6 +219,9 @@ pub fn initial(
         interventions: vec![],
         intervention_events: vec![],
         injuries: None,
+        structures: vec![],
+        structure_events: vec![],
+        structure_preferences: vec![],
         protection: vec![],
         weapons: vec![],
     })
@@ -246,6 +264,9 @@ fn clone_state(state: &Combat) -> Combat {
             rules: injuries.rules.clone(),
             cases: injuries.cases.par_iter().cloned().collect(),
         }),
+        structures: state.structures.par_iter().cloned().collect(),
+        structure_events: vec![],
+        structure_preferences: state.structure_preferences.par_iter().cloned().collect(),
         protection: state.protection.par_iter().cloned().collect(),
         weapons: state.weapons.par_iter().cloned().collect(),
     }
@@ -301,6 +322,35 @@ impl Runtime {
         state
             .tactics
             .validate_world(&state.conflict, &regions, tick)?;
+        if state
+            .structures
+            .par_windows(2)
+            .any(|pair| pair[0].site > pair[1].site)
+        {
+            state
+                .structures
+                .par_sort_unstable_by_key(|target| target.site);
+        }
+        structure::validate(&state)?;
+        if state
+            .structure_preferences
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            state
+                .structure_preferences
+                .par_sort_unstable_by_key(|row| row.person);
+        }
+        structure::validate_preferences(&state.structure_preferences, &ids)?;
+        if state.structure_events.par_iter().any(|event| {
+            event.tick > tick
+                || event.site == 0
+                || event.damage == 0
+                || event.encounter >= state.conflict.next_id
+                || !ids.contains(&event.attacker)
+        }) {
+            return Err("invalid tactical site event".into());
+        }
         let mut reactions: Vec<_> = state.reactions.par_iter().map(|r| r.person).collect();
         reactions.par_sort_unstable();
         if reactions.par_windows(2).any(|p| p[0] == p[1])
@@ -332,11 +382,15 @@ impl Runtime {
         let plan = Plan::compile(&state.conflict).map_err(str::to_owned)?;
         let index = state.tactics.index().map_err(str::to_owned)?;
         let actors = state.conflict.actors();
+        let structure_orders = structure::orders(&state);
+        let structure_candidates = structure::candidates(&state);
         Ok(Self {
             state,
             plan,
             index,
             actors,
+            structure_orders,
+            structure_candidates,
             goods: goods.clone(),
         })
     }
@@ -421,6 +475,13 @@ impl Runtime {
             })
             .collect();
         retreating.par_sort_unstable();
+        let autonomous = structure::choose(self, personal, opinions, &retreating);
+        let mut structural_actors: Vec<_> = autonomous
+            .par_iter()
+            .map(|intent| intent.attacker)
+            .collect();
+        structural_actors.par_sort_unstable();
+        let structure_events = structure::strikes(self, people, &retreating, &autonomous, tick);
         let mut pursuers: Vec<_> = self
             .state
             .reactions
@@ -431,6 +492,7 @@ impl Runtime {
                     && retreating.binary_search(&r.person).is_err()
                     && self.actors.binary_search(&r.person).is_ok()
                     && !immobilized.contains(&r.person)
+                    && structural_actors.binary_search(&r.person).is_err()
             })
             .map(|r| r.person)
             .collect();
@@ -451,7 +513,11 @@ impl Runtime {
                     .ok()
                     .is_some_and(|i| people[i].1 == Some(region) && people[i].2 > 0)
             },
-            |a, b| retreating.binary_search(&a).is_err() && self.index.can_attack_between(a, b),
+            |a, b| {
+                retreating.binary_search(&a).is_err()
+                    && structural_actors.binary_search(&a).is_err()
+                    && self.index.can_attack_between(a, b)
+            },
         );
         if !self.state.protection.is_empty() {
             let protection: std::collections::HashMap<_, _> = self
@@ -544,6 +610,7 @@ impl Runtime {
             });
         }
         state.conflict.events = round.expand();
+        state.structure_events = structure_events;
         if let Some(injuries) = &mut state.injuries {
             injuries.advance(&state.conflict.events, tick);
         }
@@ -559,6 +626,8 @@ impl Runtime {
         if let Some((plan, index, actors)) = draft.replacement {
             if let Some(plan) = plan {
                 self.plan = plan;
+                self.structure_orders = structure::orders(&self.state);
+                self.structure_candidates = structure::candidates(&self.state);
             }
             self.index = index;
             if let Some(actors) = actors {

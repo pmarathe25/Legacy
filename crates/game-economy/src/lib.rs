@@ -2340,6 +2340,32 @@ impl Economy {
         {
             return Err("site custody requires construction metadata".into());
         }
+        if let Some(combat) = &combat
+            && !combat.state.structures.is_empty()
+        {
+            let sites = state
+                .work_sites
+                .as_ref()
+                .ok_or("tactical sites require work sites")?;
+            let maintenance = state
+                .construction
+                .as_ref()
+                .and_then(|owner| owner.maintenance.as_ref())
+                .ok_or("tactical sites require maintenance rules")?;
+            if combat.state.structures.par_iter().any(|target| {
+                sites
+                    .sites
+                    .binary_search_by_key(&target.site, |site| site.id)
+                    .ok()
+                    .is_none_or(|i| sites.sites[i].region != target.region)
+                    || maintenance
+                        .conditions
+                        .binary_search_by_key(&target.site, |condition| condition.site)
+                        .is_err()
+            }) {
+                return Err("tactical target must reference a maintainable local site".into());
+            }
+        }
         if !state.work_tools.is_empty() {
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
             game_economy_work::tools::validate(&state.work_tools, &recipes, &goods)?;
@@ -6628,6 +6654,7 @@ impl Economy {
         ) {
             owner.demolition_events = plan.publish(tick, prior, site_plan.as_ref(), sites);
         }
+        let mut site_removed = manually_destroyed.is_some();
         if let Some(owner) = &mut construction {
             let mut destroyed: Vec<_> = owner
                 .demolition_events
@@ -6637,6 +6664,7 @@ impl Economy {
                 .chain(manually_destroyed.map(|(_, site)| site).into_par_iter())
                 .collect();
             if !destroyed.is_empty() {
+                site_removed = true;
                 destroyed.par_sort_unstable();
                 owner
                     .materials
@@ -6655,6 +6683,28 @@ impl Economy {
             let repairs =
                 repair_plan.map_or_else(Vec::new, |plan| plan.publish(tick, physical.events()));
             owner.finish(prior, current, physical.events(), repairs);
+            if let Some(combat) = &combat {
+                let strikes: Vec<_> = combat
+                    .state
+                    .structure_events
+                    .par_iter()
+                    .map(|event| (event.site, event.damage))
+                    .collect();
+                owner.damage(current, &strikes);
+            }
+        }
+        if let Some(combat) = &mut combat
+            && !combat.state.structures.is_empty()
+            && site_removed
+        {
+            let mut sites: Vec<_> = work_sites
+                .as_ref()
+                .map_or(&[][..], |owner| owner.sites.as_slice())
+                .par_iter()
+                .map(|site| site.id)
+                .collect();
+            sites.par_sort_unstable();
+            combat.retain_structures(&sites)?;
         }
         if let (Some(confinement), Some(sites)) = (&mut next_confinement, &work_sites) {
             let built: Vec<_> = construction

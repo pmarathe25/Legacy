@@ -51,6 +51,7 @@ pub struct BattleView {
     pub encounter: u64,
     pub map: Map,
     pub fighters: Vec<FighterView>,
+    pub structures: Vec<game_economy_combat::structure::Target>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TreatmentView {
@@ -381,10 +382,24 @@ impl<'a> Player<'a> {
                         })
                 })
                 .collect();
+            let actor_position = placements
+                .people
+                .iter()
+                .find(|placement| placement.person == id)?
+                .position;
+            let structures = combat
+                .structures
+                .par_iter()
+                .filter(|target| {
+                    target.region == fight.region && map.visible(actor_position, target.position)
+                })
+                .cloned()
+                .collect();
             Some(BattleView {
                 encounter: fight.id,
                 map,
                 fighters,
+                structures,
             })
         });
         let requests = state.autowork.and_then(|a| a.requests.as_ref());
@@ -1339,11 +1354,13 @@ impl<'a> Player<'a> {
     }
     pub fn combat_order(&mut self, order: Order) -> Result<(), String> {
         let actor = self.current()?;
-        let encounter = self
-            .view()?
-            .battle
-            .ok_or("person is not in combat")?
-            .encounter;
+        let battle = self.view()?.battle.ok_or("person is not in combat")?;
+        if let Order::AttackSite { site } = order
+            && !battle.structures.iter().any(|target| target.site == site)
+        {
+            return Err("site is not visible in this encounter".into());
+        }
+        let encounter = battle.encounter;
         self.world.combat_order(actor, encounter, order)
     }
     pub fn combat_move(&mut self, destination: Point) -> Result<(), String> {

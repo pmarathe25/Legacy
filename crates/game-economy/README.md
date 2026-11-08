@@ -59,6 +59,8 @@ The ignored `immobilized_departure_benchmark` measures food-search decisions and
 
 The ignored `autonomous_wound_care_benchmark` measures a full boundary of independently chosen self-treatments, with physical medicine consumption. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to vary the workload and concurrency.
 
+The ignored `tactical_site_damage_benchmark` measures a full boundary of attacks on maintainable work sites. `LEGACY_ENCOUNTERS` controls strike count, `LEGACY_HOT=1` directs all strikes at one site, and `LEGACY_AUTONOMOUS=1` makes individual fighters choose the site attack. `LEGACY_WORKERS` controls concurrency.
+
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary
 the population and concurrency. It reports a state fingerprint and times two

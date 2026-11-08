@@ -67,6 +67,58 @@ pub struct Maintenance {
     pub events: Vec<Event>,
 }
 impl Maintenance {
+    /// Apply simultaneous, attributed external damage to persistent site wear.
+    /// Existing work has already resolved for this boundary; later jobs see
+    /// the resulting condition through the usual site-admission rules.
+    pub fn damage(&mut self, sites: &Facilities, strikes: &[(u64, u32)]) {
+        if strikes.is_empty() {
+            return;
+        }
+        let mut rows: Vec<_> = strikes.par_iter().copied().collect();
+        if rows.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            rows.par_sort_unstable_by_key(|row| row.0);
+        }
+        let totals: Vec<_> = rows
+            .par_chunk_by(|a, b| a.0 == b.0)
+            .map(|group| {
+                (
+                    group[0].0,
+                    group
+                        .par_iter()
+                        .map(|row| u64::from(row.1))
+                        .reduce(|| 0, u64::saturating_add),
+                )
+            })
+            .collect();
+        let rules = &self.rules;
+        self.conditions.par_chunks_mut(2048).for_each(|chunk| {
+            let first = chunk[0].site;
+            let last = chunk[chunk.len() - 1].site;
+            let start = totals.partition_point(|row| row.0 < first);
+            let end = totals.partition_point(|row| row.0 <= last);
+            if start == end {
+                return;
+            }
+            let local = &totals[start..end];
+            for condition in chunk {
+                let Ok(i) = local.binary_search_by_key(&condition.site, |row| row.0) else {
+                    continue;
+                };
+                let Some(site) =
+                    index_by(&sites.sites, condition.site, |site| site.id).map(|i| &sites.sites[i])
+                else {
+                    continue;
+                };
+                let Ok(rule) = rules.binary_search_by(|rule| rule.kind.cmp(&site.kind)) else {
+                    continue;
+                };
+                condition.wear = condition
+                    .wear
+                    .saturating_add(local[i].1)
+                    .min(rules[rule].wear_limit);
+            }
+        });
+    }
     pub fn normalize(&mut self) {
         self.rules.par_sort_unstable_by(|a, b| a.kind.cmp(&b.kind));
         self.conditions.par_sort_unstable_by_key(|r| r.site);

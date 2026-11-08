@@ -34,6 +34,10 @@ In `content/scenarios/economy-wounds.toml`, use `attack 3` and advance until the
 
 In `content/scenarios/economy-autonomous-wound-care.toml`, person 3 carries herbs and has an individual preference to treat their own wound. After `attack 3`, advance until the fight ends and then another boundary; their own choice can consume their herbs and clear their wound.
 
+In `content/scenarios/economy-combat-site.toml`, use `attack 2`, then `combat-order site 1` and `step`. The workshop's visible wear increases; it cannot admit later jobs until repaired. The attack uses the same map, reach, line of sight, and shared combat round as other strikes.
+
+In `content/scenarios/economy-autonomous-site-attack.toml`, person 2 has an individual preference to strike the workshop while fighting. Use `attack 2` and `step` to observe their independent choice.
+
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
 
 `content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.
