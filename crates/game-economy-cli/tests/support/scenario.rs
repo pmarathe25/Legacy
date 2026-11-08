@@ -7630,6 +7630,81 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
 }
 
 #[test]
+fn a_person_learns_a_script_from_observing_a_page_during_encounters() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, enabled| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-written-food.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                state.autowork = None;
+                state.goals = None;
+                state.dreams = None;
+                let writing = state.writing.as_mut().unwrap();
+                let student = writing
+                    .literacy_mut()
+                    .iter_mut()
+                    .find(|row| row.person == 2)
+                    .unwrap();
+                student.read = false;
+                student.auto_read = false;
+                writing.study = vec![game_economy::WritingStudy {
+                    person: 2,
+                    script: 1,
+                    required: 2,
+                    progress: 0,
+                    enabled,
+                }]
+                .into();
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                assert_eq!(
+                    world.snapshot().writing.as_ref().unwrap().study[0].progress,
+                    0
+                );
+                Player::new(&mut world)
+                    .write_food(1, 2, None, Some(99))
+                    .unwrap()
+                    .unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                let halfway = world.snapshot();
+                assert_eq!(
+                    halfway.writing.as_ref().unwrap().study[0].progress,
+                    u32::from(enabled)
+                );
+                assert!(!halfway.writing.as_ref().unwrap().can_read(2, 1));
+                let saved = serde_json::to_string(&halfway).unwrap();
+                let mut restored =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(Player::new(&mut world).meet(2).unwrap());
+                assert!(Player::new(&mut restored).meet(2).unwrap());
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let after = world.snapshot();
+                assert_eq!(after.writing.as_ref().unwrap().can_read(2, 1), enabled);
+                assert!(
+                    world
+                        .known_food(2)
+                        .unwrap()
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                after
+            })
+    };
+    for enabled in [false, true] {
+        assert_eq!(run(1, enabled), run(4, enabled));
+    }
+}
+
+#[test]
 fn invoked_memory_can_be_written_and_read_after_dismissal() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -7698,6 +7773,7 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
                 });
                 *holder = game_lots::Container::new(holder.place, holder.capacity, lots).unwrap();
                 state.writing = Some(game_economy::Writing {
+                    study: Default::default(),
                     authors: Default::default(),
                     paper,
                     ink,

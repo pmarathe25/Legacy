@@ -32,6 +32,21 @@ pub struct Writing {
     pub reads: Arc<Vec<(u64, u64)>>,
     #[serde(default)]
     pub authors: Arc<Vec<Author>>,
+    #[serde(default)]
+    pub study: Arc<Vec<Study>>,
+}
+
+/// A personal decision to learn a script by observing a literate encounter partner.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Study {
+    pub person: u64,
+    pub script: u32,
+    pub required: u32,
+    #[serde(default)]
+    pub progress: u32,
+    #[serde(default)]
+    pub enabled: bool,
 }
 
 /// A person's independent choice to write one remembered food report.
@@ -85,6 +100,7 @@ impl Writing {
         Arc::make_mut(&mut self.pages).par_sort_unstable_by_key(|row| row.item);
         Arc::make_mut(&mut self.reads).par_sort_unstable();
         Arc::make_mut(&mut self.authors).par_sort_unstable_by_key(|row| row.person);
+        Arc::make_mut(&mut self.study).par_sort_unstable_by_key(|row| (row.person, row.script));
         let tick = physical.custody.tick;
         if self.paper == self.ink
             || self.paper == self.page
@@ -114,6 +130,17 @@ impl Writing {
                 .any(|pair| pair[0].person == pair[1].person)
             || self.authors.par_iter().any(|row| {
                 !people.contains(&row.person) || !regions.contains(&row.region) || row.script == 0
+            })
+            || self
+                .study
+                .par_windows(2)
+                .any(|pair| (pair[0].person, pair[0].script) == (pair[1].person, pair[1].script))
+            || self.study.par_iter().any(|row| {
+                !people.contains(&row.person)
+                    || row.script == 0
+                    || row.required == 0
+                    || row.progress > row.required
+                    || (row.progress == row.required && !self.can_read(row.person, row.script))
             })
             || self.reads.par_iter().any(|&(person, item)| {
                 !people.contains(&person) || item == 0 || item >= self.next_item
@@ -189,6 +216,118 @@ impl Writing {
     }
     pub fn add_page(&mut self, page: Page) {
         Arc::make_mut(&mut self.pages).push(page);
+    }
+
+    /// Observe an actual page during an encounter; no teacher's consent or
+    /// automatic acceptance of the page's claim is implied.
+    pub fn advance_study(
+        &mut self,
+        opening: &Writing,
+        physical: &game_lot_runtime::Runtime,
+        updates: &[(u64, Option<game_lots::Place>)],
+        events: &[game_social::Encounter],
+        tick: u64,
+    ) {
+        if opening.study.is_empty() || events.is_empty() || opening.pages.is_empty() {
+            return;
+        }
+        let mut pages: Vec<_> = opening
+            .pages
+            .par_iter()
+            .filter_map(|page| {
+                let place = physical.item_place(page.item)?;
+                let game_lots::Place::Person(holder) = place else {
+                    return None;
+                };
+                if updates
+                    .binary_search_by_key(&page.item, |row| row.0)
+                    .ok()
+                    .is_some_and(|i| updates[i].1 != Some(place))
+                {
+                    return None;
+                }
+                Some((holder, page.script))
+            })
+            .collect();
+        pages.par_sort_unstable();
+        let mut partners: Vec<_> = events
+            .par_iter()
+            .filter(|event| event.tick == tick)
+            .flat_map_iter(|event| [(event.a, event.b), (event.b, event.a)])
+            .collect();
+        partners.par_sort_unstable();
+        let eligible: Vec<_> = opening
+            .study
+            .par_iter()
+            .enumerate()
+            .filter_map(|(index, study)| {
+                if !study.enabled
+                    || study.progress >= study.required
+                    || opening.can_read(study.person, study.script)
+                {
+                    return None;
+                }
+                let start = partners.partition_point(|row| row.0 < study.person);
+                partners[start..]
+                    .iter()
+                    .take_while(|row| row.0 == study.person)
+                    .any(|&(_, other)| {
+                        opening.can_read(other, study.script)
+                            && (pages.binary_search(&(study.person, study.script)).is_ok()
+                                || pages.binary_search(&(other, study.script)).is_ok())
+                    })
+                    .then_some(index)
+            })
+            .collect();
+        if eligible.is_empty() {
+            return;
+        }
+        let selected: Vec<_> = eligible
+            .par_chunk_by(|a, b| opening.study[*a].person == opening.study[*b].person)
+            .map(|group| group[0])
+            .collect();
+        let studies = Arc::make_mut(&mut self.study);
+        studies
+            .par_iter_mut()
+            .enumerate()
+            .for_each(|(index, study)| {
+                if selected.binary_search(&index).is_ok() {
+                    study.progress += 1;
+                }
+            });
+        let learned: Vec<_> = selected
+            .par_iter()
+            .filter_map(|&index| {
+                let study = &studies[index];
+                (study.progress == study.required).then_some((study.person, study.script))
+            })
+            .collect();
+        if learned.is_empty() {
+            return;
+        }
+        let literacy = Arc::make_mut(&mut self.literacy);
+        literacy.par_iter_mut().for_each(|row| {
+            if learned.binary_search(&(row.person, row.script)).is_ok() {
+                row.read = true;
+            }
+        });
+        let missing: Vec<_> = learned
+            .par_iter()
+            .filter(|key| {
+                literacy
+                    .binary_search_by_key(*key, |row| (row.person, row.script))
+                    .is_err()
+            })
+            .map(|&(person, script)| Literacy {
+                person,
+                script,
+                read: true,
+                write: false,
+                auto_read: false,
+            })
+            .collect();
+        literacy.par_extend(missing);
+        literacy.par_sort_unstable_by_key(|row| (row.person, row.script));
     }
 
     /// Independent people choose a held, unread page; no other person's knowledge is inspected.

@@ -358,6 +358,98 @@ fn independent_autonomous_authors_benchmark() {
         });
 }
 
+fn independent_study(count: u64) -> (State, Vec<game_social::Encounter>) {
+    let mut state = independent_readers(count * 2);
+    let writing = state.writing.as_mut().unwrap();
+    for row in writing.literacy_mut() {
+        row.read = row.person % 2 == 1;
+        row.auto_read = false;
+    }
+    writing.study = (1..=count)
+        .map(|n| WritingStudy {
+            person: n * 2,
+            script: 1,
+            required: 1,
+            progress: 0,
+            enabled: true,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let events = (1..=count)
+        .map(|n| game_social::Encounter {
+            tick: 1,
+            region: 1,
+            a: n * 2 - 1,
+            b: n * 2,
+            pressured: None,
+            also_pressured: None,
+        })
+        .collect();
+    (state, events)
+}
+
+#[test]
+fn independent_study_matches_across_worker_counts() {
+    let (initial, events) = independent_study(2048);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let world = Economy::compile(initial.clone()).unwrap();
+                let opening = world.writing.as_ref().unwrap();
+                let mut next = opening.clone();
+                next.advance_study(opening, &world.physical, &[], &events, 1);
+                assert!(next.study.iter().all(|row| row.progress == 1));
+                assert!(next.literacy.iter().all(|row| row.read));
+                let mut removed = opening.clone();
+                removed.advance_study(
+                    opening,
+                    &world.physical,
+                    &[(1, None), (2, None)],
+                    &events,
+                    1,
+                );
+                assert_eq!(removed.study[0].progress, 0);
+                assert_eq!(removed.study[1].progress, 1);
+                let mut stale = opening.clone();
+                stale.advance_study(opening, &world.physical, &[], &events, 2);
+                assert!(stale.study.iter().all(|row| row.progress == 0));
+                next
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_study_benchmark() {
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let (initial, events) = independent_study(count);
+            let world = Economy::compile(initial).unwrap();
+            let opening = world.writing.as_ref().unwrap();
+            let mut next = opening.clone();
+            let start = std::time::Instant::now();
+            next.advance_study(opening, &world.physical, &[], &events, 1);
+            let seconds = start.elapsed().as_secs_f64();
+            assert!(next.study.iter().all(|row| row.progress == 1));
+            println!("students={count} workers={workers} seconds={seconds:.6}");
+        });
+}
+
 fn independent_readers(count: u64) -> State {
     let mut state = fixture();
     state.agreements = None;
@@ -411,6 +503,7 @@ fn independent_readers(count: u64) -> State {
             .collect(),
     });
     state.writing = Some(Writing {
+        study: Default::default(),
         authors: Default::default(),
         paper: 1,
         ink: 2,

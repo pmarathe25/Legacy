@@ -133,6 +133,8 @@ struct WritingConfig {
     reads: Vec<(u64, u64)>,
     #[serde(default)]
     authors: Vec<game_economy::WritingAuthor>,
+    #[serde(default)]
+    study: Vec<game_economy::WritingStudy>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -813,6 +815,7 @@ pub fn scenario_with_options(
                 pages: config.pages.into(),
                 reads: config.reads.into(),
                 authors: config.authors.into(),
+                study: config.study.into(),
             })
         })
         .transpose()?;

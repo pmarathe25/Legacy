@@ -147,7 +147,9 @@ use game_production_model::FoodEffect;
 use rayon::prelude::*;
 pub use state::{Agreements, Immortal, Person, Rules, State};
 use std::collections::HashSet;
-pub use writing::{Author as WritingAuthor, Literacy, Page as WrittenPage, Writing};
+pub use writing::{
+    Author as WritingAuthor, Literacy, Page as WrittenPage, Study as WritingStudy, Writing,
+};
 pub struct Economy {
     physical: Runtime,
     seed: u64,
@@ -5946,6 +5948,19 @@ impl Economy {
             open_conversations
                 .then_some(&social_opening as &(dyn Fn(u64) -> Option<(u64, bool)> + Sync))
         );
+        if let (Some(opening), Some(owner), Some(social)) = (
+            self.writing.as_ref(),
+            writing.as_mut(),
+            dynamics.as_ref().and_then(|row| row.social.as_ref()),
+        ) {
+            owner.advance_study(
+                opening,
+                &self.physical,
+                physical.item_updates(),
+                &social.events,
+                tick,
+            );
+        }
         medical_plan.apply(
             dynamics.as_mut().and_then(|d| d.disease.as_mut()),
             physical.events(),
