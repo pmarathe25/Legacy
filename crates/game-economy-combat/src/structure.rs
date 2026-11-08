@@ -1,11 +1,15 @@
 //! Tactical strikes against explicitly mapped physical work sites.
-use super::{Combat, Draft, Order, Plan, Point, Runtime};
+use super::{Combat, Draft, Obstacle, Order, Plan, Point, Runtime};
 use game_economy_person::Person;
 use game_opinions::Opinions;
 use game_production_model::{PersonSnapshot, person_index};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+
+fn barrier_key(region: u64, wall: Obstacle) -> (u64, u32, u32, u32, u32) {
+    (region, wall.min.x, wall.min.y, wall.max.x, wall.max.y)
+}
 
 /// A site's attackable point on its persistent local tactical map.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,6 +21,9 @@ pub struct Target {
     /// If enabled, combat damage at the wear limit destroys the site.
     #[serde(default)]
     pub collapses_at_limit: bool,
+    /// An obstacle physically belonging to this site, removed with it.
+    #[serde(default)]
+    pub barrier: Option<Obstacle>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -212,15 +219,43 @@ pub(crate) fn validate(state: &Combat) -> Result<(), String> {
         .par_iter()
         .map(|map| (map.region, map))
         .collect();
+    let mut barriers: Vec<_> = state
+        .structures
+        .par_iter()
+        .filter_map(|target| target.barrier.map(|wall| barrier_key(target.region, wall)))
+        .collect();
+    barriers.par_sort_unstable();
+    let mut obstacles: Vec<_> = if barriers.is_empty() {
+        Vec::new()
+    } else {
+        state
+            .tactics
+            .maps
+            .par_iter()
+            .flat_map(|map| {
+                map.obstacles
+                    .par_iter()
+                    .map(move |&wall| barrier_key(map.region, wall))
+            })
+            .collect()
+    };
+    obstacles.par_sort_unstable();
     if state
         .structures
         .par_windows(2)
         .any(|pair| pair[0].site >= pair[1].site)
+        || barriers.par_windows(2).any(|pair| pair[0] == pair[1])
         || state.structures.par_iter().any(|target| {
             target.site == 0
-                || maps
-                    .get(&target.region)
-                    .is_none_or(|map| !map.open(target.position))
+                || maps.get(&target.region).is_none_or(|map| {
+                    !map.open(target.position)
+                        || target.barrier.is_some_and(|wall| {
+                            let key = barrier_key(target.region, wall);
+                            obstacles.partition_point(|item| *item <= key)
+                                - obstacles.partition_point(|item| *item < key)
+                                != 1
+                        })
+                })
         })
         || state.conflict.encounters.par_iter().any(|fight| {
             fight
@@ -341,6 +376,21 @@ impl Draft {
             .all(|target| sites.binary_search(&target.site).is_ok())
         {
             return Ok(());
+        }
+        let removed: HashSet<_> = self
+            .state
+            .structures
+            .par_iter()
+            .filter(|target| sites.binary_search(&target.site).is_err())
+            .filter_map(|target| target.barrier.map(|wall| barrier_key(target.region, wall)))
+            .collect();
+        if !removed.is_empty() {
+            self.state.tactics.maps.par_iter_mut().for_each(|map| {
+                map.obstacles = std::mem::take(&mut map.obstacles)
+                    .into_par_iter()
+                    .filter(|wall| !removed.contains(&barrier_key(map.region, *wall)))
+                    .collect();
+            });
         }
         self.state.structures = self
             .state

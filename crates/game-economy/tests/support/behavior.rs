@@ -43959,6 +43959,7 @@ fn tactical_strikes_damage_the_real_site_and_later_repair_reopens_it() {
         region: 1,
         position: Point { x: 0, y: 1 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     initial.combat = Some(combat);
     let run = |workers| {
@@ -44055,6 +44056,7 @@ fn a_site_outside_tactical_reach_takes_no_damage() {
         region: 1,
         position: Point { x: 10, y: 10 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     initial.combat = Some(combat);
     let mut world = Economy::compile(initial).unwrap();
@@ -44088,6 +44090,7 @@ fn a_tactical_obstacle_blocks_a_site_strike_even_within_range() {
         region: 1,
         position: Point { x: 3, y: 0 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     initial.combat = Some(combat);
     let mut world = Economy::compile(initial).unwrap();
@@ -44118,6 +44121,7 @@ fn an_autonomous_fighter_does_not_replace_a_strike_with_an_unreachable_site() {
         region: 1,
         position: Point { x: 10, y: 10 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     combat.structure_preferences = vec![Preference {
         person: 3,
@@ -44159,6 +44163,7 @@ fn an_individual_can_choose_or_feel_pressured_to_attack_a_site() {
         region: 1,
         position: Point { x: 0, y: 1 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     combat.structure_preferences = vec![Preference {
         person: 3,
@@ -44237,6 +44242,7 @@ fn removing_a_tactical_site_clears_orders_without_stale_references() {
         region: 1,
         position: Point { x: 0, y: 1 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     initial.combat = Some(combat);
     let mut world = Economy::compile(initial).unwrap();
@@ -44255,6 +44261,63 @@ fn removing_a_tactical_site_clears_orders_without_stale_references() {
             .any(|fighter| fighter.person == 1 && fighter.order == Order::Defend)
     );
     Economy::compile(state).unwrap();
+}
+
+#[test]
+fn collapsing_a_site_removes_only_its_barrier_and_persists_the_open_route() {
+    use game_economy_combat::{Obstacle, Order, Point, structure::Target};
+    let mut initial = maintenance_fixture();
+    let mut combat = combat_rules();
+    let wall = Obstacle {
+        min: Point { x: 2, y: 2 },
+        max: Point { x: 3, y: 3 },
+    };
+    let other = Obstacle {
+        min: Point { x: 7, y: 7 },
+        max: Point { x: 8, y: 8 },
+    };
+    combat.tactics.maps[0].obstacles = vec![wall, other];
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 0, y: 1 },
+        collapses_at_limit: true,
+        barrier: Some(wall),
+    }];
+    initial.combat = Some(combat);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                let map = &before.combat.as_ref().unwrap().tactics.maps[0];
+                assert!(!map.visible(Point { x: 1, y: 2 }, Point { x: 4, y: 2 }));
+                let fight = world.attack(1, 3).unwrap();
+                world
+                    .combat_order(1, fight, Order::AttackSite { site: 1 })
+                    .unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let map = &state.combat.as_ref().unwrap().tactics.maps[0];
+                assert_eq!(map.obstacles, vec![other]);
+                assert!(map.visible(Point { x: 1, y: 2 }, Point { x: 4, y: 2 }));
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut invalid = initial;
+    invalid.combat.as_mut().unwrap().tactics.maps[0]
+        .obstacles
+        .push(wall);
+    assert!(Economy::compile(invalid).is_err());
 }
 
 #[test]
@@ -44294,6 +44357,7 @@ fn combat_collapse_interrupts_work_and_preserves_real_debris_for_salvage() {
                     region: 1,
                     position: Point { x: 0, y: 1 },
                     collapses_at_limit: true,
+                    barrier: None,
                 }];
                 built.combat = Some(combat);
                 let mut world = Economy::compile(built).unwrap();
@@ -44374,6 +44438,7 @@ fn a_collapse_interrupts_work_started_in_the_same_boundary() {
         region: 1,
         position: Point { x: 0, y: 1 },
         collapses_at_limit: true,
+        barrier: None,
     }];
     initial.combat = Some(combat);
     let run = |workers| {
@@ -44442,6 +44507,7 @@ fn a_simultaneous_site_strike_can_damage_a_just_repaired_site() {
         region: 1,
         position: Point { x: 0, y: 1 },
         collapses_at_limit: false,
+        barrier: None,
     }];
     initial.combat = Some(combat);
     let mut world = Economy::compile(initial).unwrap();
@@ -44497,6 +44563,8 @@ fn tactical_site_damage_benchmark() {
     let hot = std::env::var_os("LEGACY_HOT").is_some();
     let autonomous = std::env::var_os("LEGACY_AUTONOMOUS").is_some();
     let collapse = std::env::var_os("LEGACY_COLLAPSE").is_some();
+    let barrier = std::env::var_os("LEGACY_BARRIER").is_some();
+    assert!(!barrier || (hot && collapse));
     let mut initial = if hot {
         concentrated_combat(count + 1)
     } else {
@@ -44518,6 +44586,13 @@ fn tactical_site_damage_benchmark() {
     });
     initial.construction = maintenance_fixture().construction;
     let combat = initial.combat.as_mut().unwrap();
+    let wall = game_economy_combat::Obstacle {
+        min: Point { x: 2, y: 7 },
+        max: Point { x: 3, y: 8 },
+    };
+    if barrier {
+        combat.tactics.maps[0].obstacles.push(wall);
+    }
     combat.structures = (1..=sites)
         .map(|site| Target {
             site,
@@ -44528,6 +44603,7 @@ fn tactical_site_damage_benchmark() {
                 Point { x: 1, y: 1 }
             },
             collapses_at_limit: collapse,
+            barrier: barrier.then_some(wall),
         })
         .collect();
     for fight in &mut combat.conflict.encounters {
@@ -44564,6 +44640,9 @@ fn tactical_site_damage_benchmark() {
                 assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
                 assert!(state.construction.as_ref().unwrap().maintenance.as_ref().unwrap().conditions.is_empty());
                 assert!(state.combat.as_ref().unwrap().structures.is_empty());
+                if barrier {
+                    assert!(state.combat.as_ref().unwrap().tactics.maps[0].obstacles.is_empty());
+                }
                 assert!(state.combat.as_ref().unwrap().structure_events.iter().all(|event| event.collapsed));
             } else {
                 assert!(state.construction.as_ref().unwrap().maintenance.as_ref().unwrap().conditions.iter().all(|c| c.wear == 1));
@@ -44576,7 +44655,7 @@ fn tactical_site_damage_benchmark() {
         }
         samples.remove(0);
         samples.sort_by(f64::total_cmp);
-        eprintln!("workers={workers} strikes={count} sites={sites} hot={hot} autonomous={autonomous} collapse={collapse} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
+        eprintln!("workers={workers} strikes={count} sites={sites} hot={hot} autonomous={autonomous} collapse={collapse} barrier={barrier} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
     });
 }
 

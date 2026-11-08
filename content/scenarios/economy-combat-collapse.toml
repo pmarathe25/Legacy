@@ -127,7 +127,7 @@ repair_quantity = 1
 
 [combat]
 damage = 1
-structures = [{ site = 1, region = 1, position = { x = 0, y = 1 }, collapses_at_limit = true }]
+structures = [{ site = 1, region = 1, position = { x = 0, y = 1 }, collapses_at_limit = true, barrier = { min = { x = 2, y = 2 }, max = { x = 3, y = 3 } } }]
 
 [combat.map_rules]
 width = 10

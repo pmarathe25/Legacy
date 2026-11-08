@@ -12,7 +12,7 @@ use game_lots::{Place, View};
 use game_opinions::Opinions;
 use game_production_model::PersonSnapshot;
 use game_tactics::{Battle, Index, Placement, Tactics};
-pub use game_tactics::{Map, Move, Point, Rules};
+pub use game_tactics::{Map, Move, Obstacle, Point, Rules};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -132,6 +132,23 @@ impl Config {
                 })
             })
             .transpose()?;
+        // Authored barriers become part of the persistent map, not a separate
+        // visibility rule. Save files already contain the resulting geometry.
+        let map_indices: std::collections::HashMap<_, _> = combat
+            .tactics
+            .maps
+            .iter()
+            .enumerate()
+            .map(|(index, map)| (map.region, index))
+            .collect();
+        for target in &self.structures {
+            if let Some(barrier) = target.barrier {
+                let &index = map_indices
+                    .get(&target.region)
+                    .ok_or("unknown tactical structure region")?;
+                combat.tactics.maps[index].obstacles.push(barrier);
+            }
+        }
         combat.structures = self.structures;
         combat.structure_preferences = self.structure_preferences;
         Ok(combat)
