@@ -2,6 +2,7 @@
 use game_lot_model::{Container, SimpleTransfer, State, Transaction};
 use game_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
+mod compact_shared;
 mod fan_in;
 mod fan_out;
 mod grouped_sources;
@@ -251,7 +252,9 @@ fn prepare_impl(
         return Err("invalid or duplicate transaction id".into());
     }
     let mut compact = compact.to_vec();
-    compact.par_sort_unstable();
+    if compact.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        compact.par_sort_unstable();
+    }
     if compact.par_windows(2).any(|pair| pair[0] == pair[1])
         || compact.par_iter().any(|id| ids.binary_search(id).is_err())
         || transactions.par_iter().any(|row| {
@@ -273,6 +276,13 @@ fn prepare_impl(
     {
         drop(phase);
         phase = game_diagnostics::span("physical.batches.partition");
+    }
+    if partition
+        && additions.is_empty()
+        && let Some(draft) =
+            compact_shared::prepare(state, instance, seed, transactions, &compact, advance)?
+    {
+        return Ok((draft, additions));
     }
     if partition
         && additions.is_empty()

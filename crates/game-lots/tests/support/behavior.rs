@@ -3086,3 +3086,163 @@ fn partitioned_transfer_benchmark() {
             }
         });
 }
+
+#[test]
+fn shared_compact_consumption_matches_general_arbitration_and_expiry() {
+    let source = Place::Stock { region: 1, good: 1 };
+    let initial = vec![
+        container(
+            source,
+            1000,
+            vec![lot(1, 7, Some(1)), lot(1, 220, Some(4)), lot(1, 80, None)],
+        ),
+        container(Place::Person(1), 10, vec![lot(2, 4, Some(1))]),
+    ];
+    let actions: Vec<_> = (1..=256)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id: 1000 - id,
+                from: source,
+                to: None,
+                good: 1,
+                quantity: if id % 17 == 0 { 320 } else { 1 + id % 3 },
+                item: None,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let ids: Vec<_> = actions.iter().map(|action| action.id).collect();
+    let run = |workers, reverse| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut actions = actions.clone();
+                if reverse {
+                    actions.reverse();
+                }
+                let mut general = store(initial.clone());
+                let mut fast = store(initial.clone());
+                let expected = unpartitioned(&general, 31, &actions, vec![], &ids, true);
+                let actual = fast
+                    .prepare_with_empty_compact(31, &actions, vec![], &ids, true)
+                    .unwrap();
+                let stale = fast
+                    .prepare_with_empty_compact(31, &actions, vec![], &ids, true)
+                    .unwrap();
+                assert_eq!(expected.transactions(), actual.transactions());
+                assert_eq!(expected.spoiled(), actual.spoiled());
+                for (a, b) in expected.outcomes().iter().zip(actual.outcomes()) {
+                    assert_eq!((a.id, a.accepted), (b.id, b.accepted));
+                    assert!(b.lots.is_empty());
+                }
+                general.commit(expected).unwrap();
+                fast.commit(actual).unwrap();
+                assert!(fast.commit(stale).is_err());
+                assert_eq!(general.export(), fast.export());
+                fast.export()
+            })
+    };
+    assert_eq!(run(1, false), run(4, true));
+}
+
+#[test]
+fn shared_compact_consumption_falls_back_for_identified_items_and_rejects_stale_drafts() {
+    let source = Place::Person(1);
+    let initial = vec![container(
+        source,
+        500,
+        vec![
+            Lot {
+                good: 1,
+                quantity: 1,
+                item: Some(42),
+                expires_at: None,
+            },
+            lot(1, 200, None),
+        ],
+    )];
+    let actions: Vec<_> = (1..=128)
+        .map(|id| Transaction {
+            id,
+            movements: vec![Movement {
+                id: 1000 - id,
+                from: source,
+                to: None,
+                good: 1,
+                quantity: 1,
+                item: None,
+            }],
+            creations: vec![],
+        })
+        .collect();
+    let ids: Vec<_> = actions.iter().map(|action| action.id).collect();
+    let mut reference = store(initial.clone());
+    let mut actual = store(initial);
+    let normal = reference
+        .prepare_with_empty(7, &actions, vec![], true)
+        .unwrap();
+    let short = actual
+        .prepare_with_empty_compact(7, &actions, vec![], &ids, true)
+        .unwrap();
+    let stale = actual
+        .prepare_with_empty_compact(7, &actions, vec![], &ids, true)
+        .unwrap();
+    assert_eq!(normal.transactions(), short.transactions());
+    reference.commit(normal).unwrap();
+    actual.commit(short).unwrap();
+    assert_eq!(reference.export(), actual.export());
+    assert_eq!(reference.item_place(42), actual.item_place(42));
+    assert!(actual.commit(stale).is_err());
+}
+
+#[test]
+fn shared_compact_matches_general_for_empty_scarce_and_abundant_stock() {
+    let source = Place::Stock { region: 1, good: 1 };
+    for available in [0, 3, 250, 1000] {
+        for seed in [1, 7, 99] {
+            let lots = if available == 0 {
+                vec![]
+            } else {
+                vec![lot(1, available, None)]
+            };
+            let initial = vec![container(source, 2000, lots)];
+            let actions: Vec<_> = (1..=160)
+                .rev()
+                .map(|id| Transaction {
+                    id,
+                    movements: vec![Movement {
+                        id: 900 - id,
+                        from: source,
+                        to: None,
+                        good: 1,
+                        quantity: if id % 13 == 0 { 500 } else { 1 + id % 5 },
+                        item: None,
+                    }],
+                    creations: vec![],
+                })
+                .collect();
+            let ids: Vec<_> = actions.iter().map(|action| action.id).collect();
+            let mut expected_owner = store(initial.clone());
+            let mut actual_owner = store(initial);
+            let expected = unpartitioned(
+                &expected_owner,
+                seed,
+                &actions,
+                vec![],
+                &ids.iter().rev().copied().collect::<Vec<_>>(),
+                true,
+            );
+            let actual = actual_owner
+                .prepare_with_empty_compact(seed, &actions, vec![], &ids, true)
+                .unwrap();
+            assert_eq!(expected.transactions(), actual.transactions());
+            assert_eq!(expected.outcomes(), actual.outcomes());
+            expected_owner.commit(expected).unwrap();
+            actual_owner.commit(actual).unwrap();
+            assert_eq!(expected_owner.export(), actual_owner.export());
+        }
+    }
+}
