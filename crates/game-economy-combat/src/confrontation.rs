@@ -285,6 +285,14 @@ impl Draft {
             .ok_or("encounter identity overflow")?;
         let mut reactions: Vec<_> = self.state.reactions.par_iter().collect();
         reactions.par_sort_unstable_by_key(|row| row.person);
+        let immobilized: std::collections::HashSet<_> = self
+            .state
+            .injuries
+            .as_ref()
+            .filter(|injuries| injuries.rules.immobilizes)
+            .map_or_else(Default::default, |injuries| {
+                injuries.cases.par_iter().map(|case| case.person).collect()
+            });
         let (encounters, battles): (Vec<_>, Vec<_>) = choices
             .par_iter()
             .enumerate()
@@ -299,7 +307,9 @@ impl Draft {
                 } else {
                     match response {
                         Some(Response::Fight) => Order::Attack { target: row.actor },
-                        Some(Response::Retreat) => Order::Retreat,
+                        Some(Response::Retreat) if !immobilized.contains(&row.target) => {
+                            Order::Retreat
+                        }
                         _ => Order::Defend,
                     }
                 };

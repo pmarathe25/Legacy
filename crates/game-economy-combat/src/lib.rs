@@ -1,5 +1,6 @@
 //! Tactical encounters over the economic world's authoritative people.
 pub mod confrontation;
+pub mod injury;
 pub mod intervention;
 pub use game_conflict::{Command, Order};
 use game_conflict::{Conflict, Encounter, Fighter};
@@ -47,6 +48,8 @@ pub struct Config {
     #[serde(default)]
     pub interventions: Vec<intervention::Preference>,
     #[serde(default)]
+    pub injuries: Option<InjuryConfig>,
+    #[serde(default)]
     pub protection: Vec<ProtectionConfig>,
     #[serde(default)]
     pub weapons: Vec<WeaponConfig>,
@@ -62,6 +65,17 @@ pub struct ProtectionConfig {
 pub struct WeaponConfig {
     pub good: String,
     pub bonus: u32,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InjuryConfig {
+    pub minimum_damage: u32,
+    pub recovery_ticks: u64,
+    pub work_percent: u8,
+    #[serde(default)]
+    pub immobilizes: bool,
+    pub medicine: String,
+    pub medicine_quantity: u64,
 }
 impl Config {
     pub fn build(
@@ -96,6 +110,23 @@ impl Config {
         combat.protection = protection;
         combat.weapons = weapons;
         combat.interventions = self.interventions;
+        combat.injuries = self
+            .injuries
+            .map(|rules| {
+                Ok::<_, String>(injury::Injuries {
+                    rules: injury::Rules {
+                        minimum_damage: rules.minimum_damage,
+                        recovery_ticks: rules.recovery_ticks,
+                        work_percent: rules.work_percent,
+                        immobilizes: rules.immobilizes,
+                        medicine: lookup(&rules.medicine)
+                            .ok_or_else(|| format!("unknown injury medicine {}", rules.medicine))?,
+                        medicine_quantity: rules.medicine_quantity,
+                    },
+                    cases: vec![],
+                })
+            })
+            .transpose()?;
         Ok(combat)
     }
 }
@@ -122,6 +153,8 @@ pub struct Combat {
     pub interventions: Vec<intervention::Preference>,
     #[serde(default)]
     pub intervention_events: Vec<intervention::Event>,
+    #[serde(default)]
+    pub injuries: Option<injury::Injuries>,
     #[serde(default)]
     pub protection: Vec<Protection>,
     #[serde(default)]
@@ -170,6 +203,7 @@ pub fn initial(
         reactions,
         interventions: vec![],
         intervention_events: vec![],
+        injuries: None,
         protection: vec![],
         weapons: vec![],
     })
@@ -208,6 +242,10 @@ fn clone_state(state: &Combat) -> Combat {
         reactions: state.reactions.par_iter().cloned().collect(),
         interventions: state.interventions.par_iter().cloned().collect(),
         intervention_events: vec![],
+        injuries: state.injuries.as_ref().map(|injuries| injury::Injuries {
+            rules: injuries.rules.clone(),
+            cases: injuries.cases.par_iter().cloned().collect(),
+        }),
         protection: state.protection.par_iter().cloned().collect(),
         weapons: state.weapons.par_iter().cloned().collect(),
     }
@@ -271,6 +309,9 @@ impl Runtime {
             return Err("invalid personal combat reaction".into());
         }
         intervention::validate(&state.interventions, &ids)?;
+        if let Some(injuries) = &state.injuries {
+            injuries.validate(&ids, goods, tick)?;
+        }
         if state.conflict.encounters.par_iter().any(|fight| {
             fight.fighters.par_iter().any(|f| {
                 people
@@ -329,6 +370,14 @@ impl Runtime {
         if chosen_opponents.par_windows(2).any(|w| w[0].0 > w[1].0) {
             chosen_opponents.par_sort_unstable_by_key(|row| row.0);
         }
+        let immobilized: HashSet<_> = self
+            .state
+            .injuries
+            .as_ref()
+            .filter(|i| i.rules.immobilizes && !self.actors.is_empty())
+            .map_or_else(HashSet::new, |i| {
+                i.cases.par_iter().map(|case| case.person).collect()
+            });
         let mut retreating: Vec<_> = self
             .state
             .reactions
@@ -359,6 +408,7 @@ impl Runtime {
                 (!person.controlled
                     && person.health > 0
                     && (health_reason || fear_reason)
+                    && !immobilized.contains(&person.id)
                     && self.actors.binary_search(&person.id).is_ok())
                 .then_some(person.id)
             })
@@ -373,6 +423,7 @@ impl Runtime {
                     && matches!(r.response, Response::Fight)
                     && retreating.binary_search(&r.person).is_err()
                     && self.actors.binary_search(&r.person).is_ok()
+                    && !immobilized.contains(&r.person)
             })
             .map(|r| r.person)
             .collect();
@@ -486,6 +537,9 @@ impl Runtime {
             });
         }
         state.conflict.events = round.expand();
+        if let Some(injuries) = &mut state.injuries {
+            injuries.advance(&state.conflict.events, tick);
+        }
         Draft {
             state,
             round,
@@ -560,9 +614,14 @@ impl Runtime {
             .iter()
             .find(|r| r.person == target)
             .map_or(&Response::Defend, |r| &r.response);
+        let immobilized = self.state.injuries.as_ref().is_some_and(|injuries| {
+            injuries.rules.immobilizes
+                && injuries.cases.par_iter().any(|case| case.person == target)
+        });
         let target_order = match response {
             Response::Defend => Order::Defend,
             Response::Fight => Order::Attack { target: actor },
+            Response::Retreat if immobilized => Order::Defend,
             Response::Retreat => Order::Retreat,
         };
         let mut state = self.state.clone();
@@ -619,6 +678,17 @@ impl Runtime {
         tick: u64,
         command: game_conflict::Command,
     ) -> Result<Self, String> {
+        if matches!(command.order, Order::Retreat)
+            && self.state.injuries.as_ref().is_some_and(|injuries| {
+                injuries.rules.immobilizes
+                    && injuries
+                        .cases
+                        .par_iter()
+                        .any(|case| case.person == command.person)
+            })
+        {
+            return Err("a wound prevents retreat".into());
+        }
         let mut state = self.state.clone();
         state.conflict.order(&[command])?;
         Self::compile_known(state, people, view, tick, &self.goods)
@@ -630,6 +700,15 @@ impl Runtime {
         tick: u64,
         command: game_tactics::Move,
     ) -> Result<Self, String> {
+        if self.state.injuries.as_ref().is_some_and(|injuries| {
+            injuries.rules.immobilizes
+                && injuries
+                    .cases
+                    .par_iter()
+                    .any(|case| case.person == command.person)
+        }) {
+            return Err("a wound prevents tactical movement".into());
+        }
         let mut state = self.state.clone();
         state.tactics = state
             .tactics

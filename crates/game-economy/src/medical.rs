@@ -63,6 +63,7 @@ impl Medical {
         people: &HashSet<u64>,
         goods: &HashSet<u32>,
         disease: Option<&Disease>,
+        injury_medicine: Option<u32>,
         social: bool,
     ) -> Result<(), String> {
         let mut actors: Vec<_> = self
@@ -79,8 +80,9 @@ impl Medical {
                     || !goods.contains(&p.medicine)
                     || p.quantity == 0
                     || p.pressure_threshold == Some(0)
-                    || disease
-                        .is_none_or(|d| !d.treatments.iter().any(|t| t.medicine == p.medicine))
+                    || (injury_medicine != Some(p.medicine)
+                        && disease
+                            .is_none_or(|d| !d.treatments.iter().any(|t| t.medicine == p.medicine)))
             })
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
@@ -92,8 +94,9 @@ impl Medical {
                         .is_some_and(|id| id == p.person || !people.contains(&id))
                     || p.pressure_threshold == Some(0)
                     || p.pressured_by.is_some() != p.pressure_threshold.is_some()
-                    || disease
-                        .is_none_or(|d| !d.treatments.iter().any(|t| t.medicine == p.medicine))
+                    || (injury_medicine != Some(p.medicine)
+                        && disease
+                            .is_none_or(|d| !d.treatments.iter().any(|t| t.medicine == p.medicine)))
             })
         {
             return Err("invalid personal medical preference".into());
@@ -117,6 +120,7 @@ pub struct Plan {
 pub struct Context<'a> {
     pub owner: Option<&'a Medical>,
     pub disease: Option<&'a Disease>,
+    pub injury_medicine: Option<u32>,
     pub social: Option<&'a game_social::Social>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
@@ -295,7 +299,7 @@ impl Context<'_> {
         if let Some((actor, patient, medicine, quantity)) = self.manual {
             let a = find(actor).ok_or("unknown caregiver")?;
             let p = find(patient).ok_or("unknown patient")?;
-            if self.disease.is_none()
+            if (self.disease.is_none() && self.injury_medicine != Some(medicine))
                 || !a.controlled
                 || a.health == 0
                 || p.health == 0
@@ -399,6 +403,12 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    pub fn accepted_treatments(&self, events: &Events) -> Vec<(u64, u32, u64)> {
+        self.accepted(events)
+            .into_par_iter()
+            .map(|choice| (choice.patient, choice.medicine, choice.quantity))
+            .collect()
+    }
     pub fn caregivers(&self) -> Vec<u64> {
         self.records.par_iter().map(|(_, c)| c.actor).collect()
     }

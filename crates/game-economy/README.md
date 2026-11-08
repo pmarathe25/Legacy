@@ -4,6 +4,8 @@ This composed simulation joins personal work, actual dated goods, food acquisiti
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.
 
+Optional combat wounds persist independently of health. They can pause or reduce continuing work and optionally prevent tactical movement and retreat. A real, accepted treatment using configured medicine can clear an earlier wound; a new wound in the same boundary remains. The player's local view shows who is visibly wounded without exposing private causes. Strategic travel is not yet limited by these wounds.
+
 Optional renewable animal products grow as bounded individual biological state. Collection uses an animal's response and the collector's choices, produces real dated goods, and competes with other actions involving that animal. An existing physical hold can support explicitly forced collection without implying consent.
 
 Optional written food claims use identified physical pages. Writing consumes configured paper and ink in the same transaction that creates a page, preserving the author's chosen claim, original witness and observation time. A controlled person can write an actively invoked memory, including a deliberately altered quantity, hand over a specific page, or read a held page in a known script. Authored `authors` entries let independent people choose to write a remembered region once, with a personal `food_delta` that can misstate the quantity; failed attempts retry after a delay. Enabled `study` entries let a person learn to read a script over repeated encounters with a literate person when either holds a page in that script. Observation does not require the other person's consent or convey the page's claim. A `practice` entry lets a person who can read a script learn to write it through successful sessions consuming paper and ink; people can practice autonomously or the player can initiate a session. A person with `auto_read = true` can independently choose to read a held page; their personal report-reception setting separately controls whether they retain its claim. Handover alone teaches nobody. Reading attempts are remembered so an uninterested or distrustful person is not forced to read the same page every boundary. Pages follow physical custody and are removed from the writing owner if the physical item is consumed. General writing remains future work.
@@ -48,6 +50,8 @@ separately. Set `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` to vary the workload.
 It is a synthetic tactical workload, not a complete war or mixed campaign.
 
 The ignored `independent_reinforcement_benchmark` measures a full boundary of personal attempts to join existing fights. Set `LEGACY_HOT=1` to put all attempts into one fight and exercise its finite tactical capacity; `LEGACY_ENCOUNTERS` controls the number of helpers, and `LEGACY_WORKERS` controls concurrency.
+
+The ignored `combat_wounds_benchmark` measures a full boundary of real strikes producing wounds. Set `LEGACY_HOT=1` to direct all strikes at one person; `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` select the workload and concurrency.
 
 The ignored `help_promise_benchmark` stages actual food gifts followed by
 independent personal offers. Set `LEGACY_PAIRS` and `LEGACY_WORKERS` to vary

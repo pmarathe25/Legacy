@@ -24274,7 +24274,321 @@ fn combat_rules() -> Combat {
         weapons: vec![],
         interventions: vec![],
         intervention_events: vec![],
+        injuries: None,
     }
+}
+
+fn injury_rules(
+    cases: Vec<game_economy_combat::injury::Case>,
+) -> game_economy_combat::injury::Injuries {
+    use game_economy_combat::injury::{Injuries, Rules};
+    Injuries {
+        rules: Rules {
+            minimum_damage: 5,
+            recovery_ticks: 4,
+            work_percent: 0,
+            immobilizes: true,
+            medicine: 2,
+            medicine_quantity: 1,
+        },
+        cases,
+    }
+}
+
+#[test]
+fn actual_strikes_create_attributed_wounds_that_recover_over_time() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    let mut combat = combat_rules();
+    combat.reactions[0].response = game_economy_combat::Response::Defend;
+    combat.injuries = Some(injury_rules(vec![]));
+    initial.combat = Some(combat);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let fight = world.attack(1, 2).unwrap();
+                let opening = world.snapshot();
+                drop(world.prepare().unwrap());
+                assert_eq!(world.snapshot(), opening);
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let cases = &state
+                    .combat
+                    .as_ref()
+                    .unwrap()
+                    .injuries
+                    .as_ref()
+                    .unwrap()
+                    .cases;
+                assert!(cases.iter().any(|c| c.person == 2
+                    && c.attacker == 1
+                    && c.sustained_at == 1
+                    && c.heals_at == 5));
+                assert!(
+                    world
+                        .combat_move(2, fight, game_economy_combat::Point { x: 1, y: 1 })
+                        .is_err()
+                );
+                assert!(
+                    world
+                        .combat_order(2, fight, game_economy_combat::Order::Retreat)
+                        .is_err()
+                );
+                assert_eq!(world.snapshot(), state);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world
+                    .combat_order(1, fight, game_economy_combat::Order::Retreat)
+                    .unwrap();
+                restored
+                    .combat_order(1, fight, game_economy_combat::Order::Retreat)
+                    .unwrap();
+                for _ in 0..4 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .injuries
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .iter()
+                        .all(|c| c.person != 2)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn an_open_wound_can_pause_work_until_natural_recovery() {
+    use game_economy_combat::injury::Case;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.dynamics = None;
+    initial.nutrition = None;
+    initial.people[0].seek_meals = false;
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 2,
+        attacker: 1,
+        sustained_at: 0,
+        heals_at: 5,
+    }]));
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(world.advance().unwrap().started, vec![1]);
+    let before = world.snapshot().physical.work[0].job.remaining;
+    world.advance().unwrap();
+    assert_eq!(world.snapshot().physical.work[0].job.remaining, before);
+    for _ in 0..3 {
+        world.advance().unwrap();
+    }
+    assert!(
+        world
+            .snapshot()
+            .combat
+            .as_ref()
+            .unwrap()
+            .injuries
+            .as_ref()
+            .unwrap()
+            .cases
+            .is_empty()
+    );
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .physical
+            .work
+            .iter()
+            .all(|work| work.job.remaining < before)
+    );
+}
+
+#[test]
+fn an_immobilized_fighter_cannot_automatically_retreat_from_fear() {
+    use game_economy_combat::injury::Case;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    let mut combat = combat_rules();
+    combat.reactions[0].retreat_fear_at_least = Some(0);
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 2,
+        attacker: 1,
+        sustained_at: 0,
+        heals_at: 5,
+    }]));
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.combat.as_ref().unwrap().conflict.encounters.len(), 1);
+    assert!(
+        state
+            .combat
+            .as_ref()
+            .unwrap()
+            .conflict
+            .events
+            .iter()
+            .any(|event| event.attacker == 2)
+    );
+}
+
+#[test]
+fn wound_treatment_requires_real_medicine_and_no_disease() {
+    use game_economy_combat::injury::Case;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.dynamics = None;
+    initial.people[0].controlled = true;
+    initial.people[0].seek_meals = false;
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 3,
+        attacker: 2,
+        sustained_at: 0,
+        heals_at: 8,
+    }]));
+    initial.combat = Some(combat);
+    let run = |workers, medicine| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|c| c.place == Place::Person(1))
+                    .unwrap();
+                *holder = Container::new(
+                    Place::Person(1),
+                    10,
+                    if medicine {
+                        vec![Lot {
+                            item: None,
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                )
+                .unwrap();
+                let mut world = Economy::compile(state).unwrap();
+                assert_eq!(world.treat_other(1, 3, 2, 1).unwrap(), medicine);
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .injuries
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty(),
+                    medicine
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    for medicine in [false, true] {
+        assert_eq!(run(1, medicine), run(4, medicine));
+    }
+}
+
+#[test]
+fn treatment_can_reach_a_worker_whose_wound_has_paused_their_job() {
+    use game_economy_combat::injury::Case;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.dynamics = None;
+    initial.nutrition = None;
+    initial.people[0].controlled = true;
+    initial.people[0].seek_meals = false;
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        Place::Person(1),
+        10,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 2,
+        attacker: 1,
+        sustained_at: 0,
+        heals_at: 8,
+    }]));
+    initial.combat = Some(combat);
+    let mut world = Economy::compile(initial).unwrap();
+    assert_eq!(world.advance().unwrap().started, vec![1]);
+    assert!(world.treat_other(1, 2, 2, 1).unwrap());
+    let state = world.snapshot();
+    assert!(state.combat.unwrap().injuries.unwrap().cases.is_empty());
+    assert_eq!(state.physical.work[0].job.remaining, 1);
+    world.advance().unwrap();
+    assert!(
+        world
+            .snapshot()
+            .physical
+            .work
+            .iter()
+            .all(|work| work.job.remaining == 0)
+    );
 }
 
 #[test]
@@ -26506,6 +26820,7 @@ fn concentrated_combat(count: u64) -> State {
         weapons: vec![],
         interventions: vec![],
         intervention_events: vec![],
+        injuries: None,
     });
     state
 }
@@ -26557,6 +26872,49 @@ fn independent_combats(count: u64) -> State {
         })
         .collect();
     state
+}
+
+#[test]
+#[ignore = "persistent combat wounds performance measurement"]
+fn combat_wounds_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_ENCOUNTERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let hot = std::env::var_os("LEGACY_HOT").is_some();
+    let mut initial = if hot {
+        concentrated_combat(count + 1)
+    } else {
+        independent_combats(count)
+    };
+    let mut injuries = injury_rules(vec![]);
+    injuries.rules.minimum_damage = 1;
+    initial.combat.as_mut().unwrap().injuries = Some(injuries);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut samples = Vec::new();
+        let mut fingerprint = None;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            samples.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            assert_eq!(state.combat.as_ref().unwrap().injuries.as_ref().unwrap().cases.len(), if hot { 1 } else { count as usize });
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if let Some(expected) = fingerprint { assert_eq!(expected, actual); }
+            fingerprint = Some(actual);
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} targets={count} hot={hot} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
+    });
 }
 
 fn independent_reinforcements(count: u64) -> State {

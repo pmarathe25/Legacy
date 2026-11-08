@@ -53,6 +53,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 "tick={} person={:?} held={} nearby={:?} possessions={:?} job={:?}",
                 view.tick, view.person, view.held, view.nearby, view.possessions, view.job
             );
+            if !view.wounded.is_empty() {
+                println!("wounded={:?}", view.wounded);
+            }
             if let Some(journey) = view.journey {
                 println!("journey={journey:?}");
             }

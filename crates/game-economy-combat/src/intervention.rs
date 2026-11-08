@@ -95,6 +95,14 @@ pub fn select(
         })
         .collect();
     let feelings = opinions.map(Opinions::index);
+    let immobilized: HashSet<_> = runtime
+        .state
+        .injuries
+        .as_ref()
+        .filter(|injuries| injuries.rules.immobilizes)
+        .map_or_else(HashSet::new, |injuries| {
+            injuries.cases.par_iter().map(|case| case.person).collect()
+        });
     let mut choices: Vec<_> = runtime
         .state
         .interventions
@@ -105,6 +113,7 @@ pub fn select(
                 || person.health == 0
                 || unavailable.binary_search(&row.person).is_ok()
                 || runtime.actors().binary_search(&row.person).is_ok()
+                || immobilized.contains(&row.person)
             {
                 return None;
             }
@@ -160,6 +169,11 @@ impl Runtime {
         }
         if self.actors().binary_search(&actor).is_ok() {
             return Err("person is already fighting".into());
+        }
+        if self.state.injuries.as_ref().is_some_and(|injuries| {
+            injuries.rules.immobilizes && injuries.cases.par_iter().any(|case| case.person == actor)
+        }) {
+            return Err("a wound prevents tactical entry".into());
         }
         let person = people
             .binary_search_by_key(&actor, |p| p.id)

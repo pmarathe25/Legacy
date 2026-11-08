@@ -2187,6 +2187,11 @@ impl Economy {
                 &ids,
                 &goods,
                 state.dynamics.as_ref().and_then(|d| d.disease.as_ref()),
+                state
+                    .combat
+                    .as_ref()
+                    .and_then(|c| c.injuries.as_ref())
+                    .map(|injuries| injuries.rules.medicine),
                 state.dynamics.as_ref().is_some_and(|d| d.social.is_some()),
             )?;
         }
@@ -3872,6 +3877,16 @@ impl Economy {
         if needs_medical && !free_underage.is_empty() {
             game_economy_work::reserve(&mut available_patients, free_underage.iter().copied());
         }
+        if needs_medical
+            && let Some(injuries) = self
+                .combat
+                .as_ref()
+                .and_then(|combat| combat.state.injuries.as_ref())
+        {
+            available_patients.par_extend(injuries.cases.par_iter().map(|case| case.person));
+            available_patients.par_sort_unstable();
+            available_patients.dedup();
+        }
         let mut medical_blocked: Vec<_> = if needs_medical {
             treatment
                 .actors
@@ -3900,6 +3915,11 @@ impl Economy {
         let medical_plan = medical::Context {
             owner: self.medical.as_ref(),
             disease: self.dynamics.as_ref().and_then(|d| d.disease.as_ref()),
+            injury_medicine: self
+                .combat
+                .as_ref()
+                .and_then(|c| c.state.injuries.as_ref())
+                .map(|injuries| injuries.rules.medicine),
             social: self.dynamics.as_ref().and_then(|d| d.social.as_ref()),
             people: &self.people,
             opinions: self.opinions.as_ref(),
@@ -4618,6 +4638,14 @@ impl Economy {
             resting,
             work_offers
         );
+        if let Some(injuries) = self
+            .combat
+            .as_ref()
+            .and_then(|combat| combat.state.injuries.as_ref())
+        {
+            injuries.reduce_work(self.physical.work(), &mut rates, tick.saturating_sub(1));
+        }
+        game_economy_fatigue::pause_rates(&medical_plan.actors, self.physical.work(), &mut rates);
         if let Some(plan) = &taking_plan {
             game_economy_combat::interrupt(
                 &plan.actors,
@@ -6113,6 +6141,14 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.dynamics");
         }
+        if self
+            .combat
+            .as_ref()
+            .and_then(|combat| combat.state.injuries.as_ref())
+            .is_some_and(|injuries| tick.checked_add(injuries.rules.recovery_ticks).is_none())
+        {
+            return Err("injury recovery deadline overflow".into());
+        }
         let mut combat = self.combat.as_ref().map(|combat| {
             combat.prepare(
                 &people,
@@ -6232,6 +6268,14 @@ impl Economy {
             dynamics.as_mut().and_then(|d| d.disease.as_mut()),
             physical.events(),
         );
+        if let Some((opening, draft)) = self.combat.as_ref().zip(combat.as_mut())
+            && let (Some(before), Some(after)) = (
+                opening.state.injuries.as_ref(),
+                draft.state.injuries.as_mut(),
+            )
+        {
+            after.treat_opening(before, &medical_plan.accepted_treatments(physical.events()));
+        }
         let treated_other = manual_medical.map(|(actor, patient, _, _)| {
             medical_plan.attempted(actor, patient, physical.events())
         });

@@ -113,6 +113,8 @@ pub struct View {
     pub journey: Option<game_economy::Journey>,
     pub held: bool,
     pub nearby: Vec<u64>,
+    /// Visible wounds on the ruler or local people, without private causes.
+    pub wounded: Vec<u64>,
     pub bodies: Vec<BodyView>,
     /// Observable local animals, without their genetics or hidden pregnancy.
     pub animals: Vec<AnimalView>,
@@ -211,6 +213,26 @@ impl<'a> Player<'a> {
         if nearby.par_windows(2).any(|pair| pair[0] > pair[1]) {
             nearby.par_sort_unstable();
         }
+        let mut wounded: Vec<_> = state
+            .combat
+            .and_then(|combat| combat.injuries.as_ref())
+            .map_or_else(Vec::new, |injuries| {
+                injuries
+                    .cases
+                    .par_iter()
+                    .filter(|case| {
+                        current.is_some_and(|id| {
+                            id == case.person
+                                || (nearby.binary_search(&case.person).is_ok()
+                                    && state
+                                        .confinement
+                                        .is_none_or(|owner| owner.can_touch(id, case.person)))
+                        })
+                    })
+                    .map(|case| case.person)
+                    .collect()
+            });
+        wounded.par_sort_unstable();
         let bodies = person
             .as_ref()
             .and_then(|p| p.region)
@@ -607,6 +629,7 @@ impl<'a> Player<'a> {
             person,
             journey,
             nearby,
+            wounded,
             bodies,
             animals,
             possessions,

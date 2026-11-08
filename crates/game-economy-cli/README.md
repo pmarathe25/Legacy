@@ -30,6 +30,8 @@ In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the
 
 In `content/scenarios/economy-player-reinforcement.toml`, use `step` to let two other people start a fight, then `reinforce 3 2` to join person 3's side against person 2. Joining selects an open visible entry position without advancing time; subsequent combat rounds interrupt the player's other work and advance the world normally.
 
+In `content/scenarios/economy-wounds.toml`, use `attack 3` and advance until the fight ends. `view` shows local wounded people. Use `catalog` to find the healing-herbs good ID, then `treat-other 3 GOOD 1` to consume one carried herb and treat that person's wound. Wounds otherwise recover over time; the example wound pauses continuing work but does not prevent tactical movement.
+
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
 
 `content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.
