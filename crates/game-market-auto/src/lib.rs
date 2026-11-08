@@ -6,6 +6,7 @@ use game_goods_cargo::{Exchange, GoodsCargo};
 use game_market::{Decision, DecisionDraft, Influence, Market, Offer, Outcome, Policy};
 use game_production_model::{Amount, Good, PersonSnapshot};
 use rayon::prelude::*;
+pub type Together<'a> = dyn Fn(u64, u64) -> bool + Sync + 'a;
 struct Accepted {
     market: DecisionDraft,
     cargo: GoodsCargo,
@@ -57,7 +58,7 @@ fn prepare_acceptance(
     goods: &[Good],
     busy: &[u64],
     tick: u64,
-    opinions: Option<&game_opinions::Opinions>,
+    (opinions, together): (Option<&game_opinions::Opinions>, Option<&Together<'_>>),
 ) -> Result<Option<Accepted>, String> {
     if market.policies.is_empty() || market.offers.is_empty() {
         return Ok(None);
@@ -82,6 +83,9 @@ fn prepare_acceptance(
         .offers
         .par_iter()
         .map(|offer| -> Result<_, String> {
+            if together.is_some_and(|check| !check(offer.proposer, offer.recipient)) {
+                return Ok(None);
+            }
             let Ok(index) = policies.binary_search_by_key(&offer.recipient, |policy| policy.person)
             else {
                 return Ok(None);
@@ -236,10 +240,28 @@ pub fn selected_offers(
     tick: u64,
     opinions: Option<&game_opinions::Opinions>,
 ) -> Result<Vec<game_market::Event>, String> {
-    Ok(
-        prepare_acceptance(market, cargo, people, goods, busy, tick, opinions)?
-            .map_or_else(Vec::new, |accepted| accepted.market.events().to_vec()),
-    )
+    selected_offers_together(market, cargo, people, goods, busy, tick, (opinions, None))
+}
+
+pub fn selected_offers_together(
+    market: &Market,
+    cargo: &GoodsCargo,
+    people: &[PersonSnapshot],
+    goods: &[Good],
+    busy: &[u64],
+    tick: u64,
+    (opinions, together): (Option<&game_opinions::Opinions>, Option<&Together<'_>>),
+) -> Result<Vec<game_market::Event>, String> {
+    Ok(prepare_acceptance(
+        market,
+        cargo,
+        people,
+        goods,
+        busy,
+        tick,
+        (opinions, together),
+    )?
+    .map_or_else(Vec::new, |accepted| accepted.market.events().to_vec()))
 }
 /// Stage accepted offers and new proposals from independent available people.
 pub fn prepare(
@@ -261,7 +283,7 @@ pub fn prepare_with_opinions(
     tick: u64,
     opinions: Option<&game_opinions::Opinions>,
 ) -> Result<Option<Draft>, String> {
-    let accepted = prepare_acceptance(market, cargo, people, goods, busy, tick, opinions)?;
+    let accepted = prepare_acceptance(market, cargo, people, goods, busy, tick, (opinions, None))?;
     let mut occupied = busy.to_vec();
     if let Some(accepted) = &accepted {
         occupied.extend_from_slice(&accepted.actors);

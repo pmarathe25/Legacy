@@ -9,6 +9,7 @@ game-lot-projection = { path = "../game-lot-projection" }
 game-lot-runtime = { path = "../game-lot-runtime" }
 game-lots = { path = "../game-lots" }
 game-market = { path = "../game-market" }
+game-market-auto = { path = "../game-market-auto" }
 game-market-proposals = { path = "../game-market-proposals" }
 game-opinions = { path = "../game-opinions" }
 game-production-model = { path = "../game-production-model" }

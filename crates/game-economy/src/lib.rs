@@ -4461,6 +4461,23 @@ impl Economy {
             player_transfer,
             provision_busy.as_deref().unwrap_or(&busy)
         );
+        let walking = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref());
+        let endpoint =
+            |person, region| match walking.expect("walking enabled").location(person, region) {
+                LocalLocation::At {
+                    endpoint: LocalEndpoint::Stock,
+                    ..
+                } => Some(None),
+                LocalLocation::At {
+                    endpoint: LocalEndpoint::Store { id },
+                    ..
+                } => Some(Some(id)),
+                LocalLocation::Walking { .. } => None,
+            };
+        let together = |a, b| self.local_people_together(a, b);
         let exchange = game_economy_exchange::Context {
             market: self.market.as_ref(),
             view: &view,
@@ -4468,6 +4485,8 @@ impl Economy {
             people: &people,
             goods: self.physical.goods(),
             opinions: self.opinions.as_ref(),
+            endpoint: walking.map(|_| &endpoint as &game_economy_exchange::EndpointLookup<'_>),
+            together: walking.map(|_| &together as &game_economy_exchange::Together<'_>),
         };
         let trade = exchange.trade(&mut busy, action_base)?;
         action_base = action_base

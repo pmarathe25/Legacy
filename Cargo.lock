@@ -395,6 +395,7 @@ dependencies = [
  "game-lot-runtime",
  "game-lots",
  "game-market",
+ "game-market-auto",
  "game-market-proposals",
  "game-opinions",
  "game-production-model",

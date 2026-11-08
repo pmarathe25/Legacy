@@ -104,6 +104,7 @@ pub struct Context<'a> {
     pub goods: &'a [Good],
     pub busy: &'a [u64],
     pub opinions: Option<&'a Opinions>,
+    pub together: Option<&'a game_market_auto::Together<'a>>,
 }
 impl Context<'_> {
     /// `action_base` reserves a caller-selected, nonzero range for these choices.
@@ -116,19 +117,20 @@ impl Context<'_> {
             goods,
             busy,
             opinions,
+            together,
         } = *self;
         if action_base == 0 {
             return Err("invalid trade action base".into());
         }
         let cargo = cargo(view, capacity)?;
-        let mut selected = game_market_auto::selected_offers(
+        let mut selected = game_market_auto::selected_offers_together(
             market,
             &cargo,
             people,
             goods,
             busy,
             view.boundary,
-            opinions,
+            (opinions, together),
         )?;
         selected.par_sort_unstable_by_key(|event| event.offer);
         let mut offers: Vec<_> = market.offers.par_iter().collect();

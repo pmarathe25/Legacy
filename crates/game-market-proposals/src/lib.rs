@@ -4,6 +4,7 @@ use game_market::{Market, Offer, Policy};
 use game_production_model::{Amount, PersonSnapshot};
 use rayon::prelude::*;
 use std::cmp::Reverse;
+pub type EndpointLookup<'a> = dyn Fn(u64, u64) -> Option<Option<u64>> + Sync + 'a;
 pub struct Draft {
     offers: Vec<Offer>,
     next_id: u64,
@@ -113,6 +114,17 @@ pub fn prepare(
     busy: &[u64],
     tick: u64,
 ) -> Result<Option<Draft>, String> {
+    prepare_at_endpoints(market, cargo, people, busy, tick, None)
+}
+
+pub fn prepare_at_endpoints(
+    market: &Market,
+    cargo: &GoodsCargo,
+    people: &[PersonSnapshot],
+    busy: &[u64],
+    tick: u64,
+    endpoint: Option<&EndpointLookup<'_>>,
+) -> Result<Option<Draft>, String> {
     if !market
         .policies
         .par_iter()
@@ -140,6 +152,7 @@ pub fn prepare(
         .par_iter()
         .filter_map(|&(person, region, health, _)| {
             let region = region?;
+            let site = endpoint.map_or(Some(None), |lookup| lookup(person, region))?;
             (health > 0
                 && busy.binary_search(&person).is_err()
                 && involved.binary_search(&person).is_err()
@@ -148,7 +161,7 @@ pub fn prepare(
                         .binary_search_by_key(&person, |p| p.person)
                         .ok()
                         .is_some_and(|i| policies[i].request_help)))
-            .then_some((region, person))
+            .then_some((region, site, person))
         })
         .collect();
     local.par_sort_unstable();
@@ -159,10 +172,10 @@ pub fn prepare(
             .par_iter()
             .filter(|row| {
                 holdings
-                    .binary_search_by_key(&row.1, |holding| holding.person)
+                    .binary_search_by_key(&row.2, |holding| holding.person)
                     .is_err()
                     && policies
-                        .binary_search_by_key(&row.1, |policy| policy.person)
+                        .binary_search_by_key(&row.2, |policy| policy.person)
                         .ok()
                         .is_some_and(|index| policies[index].request_help)
             })
@@ -172,27 +185,28 @@ pub fn prepare(
             .par_iter()
             .filter(|row| {
                 holdings
-                    .binary_search_by_key(&row.1, |holding| holding.person)
+                    .binary_search_by_key(&row.2, |holding| holding.person)
                     .is_ok()
             })
             .copied()
             .collect();
         askers
-            .par_chunk_by(|a, b| a.0 == b.0)
+            .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
             .flat_map(|group| {
-                let start = holders.partition_point(|row| row.0 < group[0].0);
-                let end = holders.partition_point(|row| row.0 <= group[0].0);
+                let start =
+                    holders.partition_point(|row| (row.0, row.1) < (group[0].0, group[0].1));
+                let end = holders.partition_point(|row| (row.0, row.1) <= (group[0].0, group[0].1));
                 group
                     .par_iter()
                     .zip(holders[start..end].par_iter())
                     .filter_map(|(a, b)| {
                         let policy = policies
-                            .binary_search_by_key(&a.1, |policy| policy.person)
+                            .binary_search_by_key(&a.2, |policy| policy.person)
                             .ok()
                             .map(|index| policies[index])?;
                         policy
                             .request_help
-                            .then(|| ask(a.1, b.1, policy, &holdings, tick))
+                            .then(|| ask(a.2, b.2, policy, &holdings, tick))
                             .flatten()
                     })
             })
@@ -207,14 +221,14 @@ pub fn prepare(
     reserved.par_sort_unstable();
     let remaining: Vec<_> = local
         .into_par_iter()
-        .filter(|row| reserved.binary_search(&row.1).is_err())
+        .filter(|row| reserved.binary_search(&row.2).is_err())
         .collect();
     let mut offers: Vec<_> = remaining
-        .par_chunk_by(|a, b| a.0 == b.0)
+        .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
         .flat_map(|group| {
             group.par_chunks_exact(2).filter_map(|pair| {
-                let a = pair[0].1;
-                let b = pair[1].1;
+                let a = pair[0].2;
+                let b = pair[1].2;
                 let policy_a = policies
                     .binary_search_by_key(&a, |policy| policy.person)
                     .ok()

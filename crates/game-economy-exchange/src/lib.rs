@@ -3,6 +3,8 @@ use game_lot_projection::market;
 use game_lot_runtime::Events;
 use game_lots::{Transaction, View};
 use game_market::Market;
+pub use game_market_auto::Together;
+pub use game_market_proposals::EndpointLookup;
 use game_opinions::Opinions;
 use game_production_model::{Good, PersonSnapshot};
 use rayon::prelude::*;
@@ -19,6 +21,8 @@ pub struct Context<'a> {
     pub people: &'a [PersonSnapshot],
     pub goods: &'a [Good],
     pub opinions: Option<&'a Opinions>,
+    pub endpoint: Option<&'a game_market_proposals::EndpointLookup<'a>>,
+    pub together: Option<&'a game_market_auto::Together<'a>>,
 }
 impl Context<'_> {
     pub fn trade(
@@ -37,6 +41,7 @@ impl Context<'_> {
             goods: self.goods,
             busy,
             opinions: self.opinions,
+            together: self.together,
         }
         .plan(action_base)?;
         reserve(busy, plan.actors());
@@ -50,8 +55,14 @@ impl Context<'_> {
             return Ok(None);
         };
         let cargo = game_lot_projection::cargo(self.view, self.capacity)?;
-        let plan =
-            game_market_proposals::prepare(market, &cargo, self.people, busy, self.view.boundary)?;
+        let plan = game_market_proposals::prepare_at_endpoints(
+            market,
+            &cargo,
+            self.people,
+            busy,
+            self.view.boundary,
+            self.endpoint,
+        )?;
         if let Some(plan) = &plan {
             reserve(busy, plan.actors.iter().copied());
         }

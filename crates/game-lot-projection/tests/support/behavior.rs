@@ -200,9 +200,15 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
         goods: &goods,
         busy: &[],
         opinions: None,
+        together: None,
     };
     let plan = context.plan(100).unwrap();
     assert_eq!(plan.actions().len(), 1);
+    let distant = market::Context {
+        together: Some(&|_, _| false),
+        ..context
+    };
+    assert!(distant.plan(100).unwrap().actions().is_empty());
     let rival = Transaction {
         id: 200,
         movements: vec![Movement {

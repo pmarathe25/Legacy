@@ -24804,6 +24804,155 @@ fn concentrated_pressure_benchmark() {
 }
 
 #[test]
+fn market_proposals_and_trades_require_a_shared_endpoint() {
+    use game_market::{Market, Policy, Value};
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.dynamics = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.people[0].controlled = true;
+    initial.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 4,
+        target: 3,
+        trust: 0,
+        fear: 5,
+        obligation: 0,
+        affinity: 0,
+    }];
+    initial.market = Some(Market {
+        next_id: 1,
+        policies: vec![
+            Policy {
+                person: 3,
+                enabled: true,
+                propose: false,
+                request_help: true,
+                min_gain: 1,
+                help_value: 0,
+                values: vec![Value { good: 1, value: 4 }],
+                influences: vec![],
+            },
+            Policy {
+                person: 4,
+                enabled: true,
+                propose: false,
+                request_help: false,
+                min_gain: 0,
+                help_value: 0,
+                values: vec![Value { good: 1, value: 4 }],
+                influences: vec![],
+            },
+        ],
+        offers: vec![],
+        events: vec![],
+    });
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        }),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut away = initial.clone();
+                away.local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions
+                    .push(LocalPosition {
+                        person: 4,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    });
+                let mut separated = Economy::compile(away).unwrap();
+                separated.advance().unwrap();
+                assert!(separated.snapshot().market.unwrap().offers.is_empty());
+                let mut together = Economy::compile(initial.clone()).unwrap();
+                together.advance().unwrap();
+                let mut offer = together.snapshot();
+                assert_eq!(offer.market.as_ref().unwrap().offers.len(), 1);
+                offer
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions
+                    .push(LocalPosition {
+                        person: 4,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    });
+                let mut separated = Economy::compile(offer).unwrap();
+                separated.advance().unwrap();
+                let mut saved = separated.snapshot();
+                assert_eq!(saved.market.as_ref().unwrap().offers.len(), 1);
+                saved
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions
+                    .clear();
+                let mut reunited = Economy::compile(saved).unwrap();
+                reunited.advance().unwrap();
+                let result = reunited.snapshot();
+                assert!(result.market.as_ref().unwrap().offers.is_empty());
+                assert_eq!(
+                    result
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(3))
+                        .unwrap()
+                        .used,
+                    1
+                );
+                result
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn autonomous_request_can_be_fulfilled_from_fear_using_actual_goods() {
     use game_market::{Market, Policy, Value};
     let mut initial = fixture();
