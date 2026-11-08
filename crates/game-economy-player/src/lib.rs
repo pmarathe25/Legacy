@@ -1145,6 +1145,15 @@ impl<'a> Player<'a> {
         self.world
             .write_food(self.current()?, script, region, life, claimed_food)
     }
+    pub fn text_choice(&self) -> Result<Option<(u32, u64, String)>, String> {
+        self.world.text_choice(self.current()?)
+    }
+    pub fn write_text(&mut self, script: u32, template: u64) -> Result<Option<u64>, String> {
+        self.world.write_text(self.current()?, script, template)
+    }
+    pub fn known_page_text(&self, item: u64) -> Result<Option<String>, String> {
+        self.world.known_page_text(self.current()?, item)
+    }
     pub fn give_page(&mut self, recipient: u64, item: u64) -> Result<bool, String> {
         if !self.view()?.nearby.contains(&recipient) {
             return Err("person is not present".into());

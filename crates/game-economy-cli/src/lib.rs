@@ -152,6 +152,10 @@ struct WritingConfig {
     study: Vec<game_economy::WritingStudy>,
     #[serde(default)]
     practice: Vec<game_economy::WritingPractice>,
+    #[serde(default)]
+    text_templates: Vec<game_economy::WritingTextTemplate>,
+    #[serde(default)]
+    text_authors: Vec<game_economy::WritingTextAuthor>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -908,6 +912,8 @@ pub fn scenario_with_options(
                 authors: config.authors.into(),
                 study: config.study.into(),
                 practice: config.practice.into(),
+                text_templates: config.text_templates.into(),
+                text_authors: config.text_authors.into(),
             })
         })
         .transpose()?;

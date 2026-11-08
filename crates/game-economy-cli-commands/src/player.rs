@@ -49,6 +49,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             println!("tell-route PERSON SOURCE DEST remembered|open|closed remembered|TICKS");
             println!("assist-work LEAD RECIPE respect|disregard");
             println!("take-over-work JOB respect|disregard");
+            println!("text-choice | write-text SCRIPT TEMPLATE | page-text ITEM");
         }
         ["view"] => {
             let view = player.view()?;
@@ -805,6 +806,18 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 player.take_over_work(job.parse().map_err(|_| "invalid job")?, disregard)?
             );
         }
+        ["text-choice"] => println!("text-choice={:?}", player.text_choice()?),
+        ["write-text", script, template] => println!(
+            "page={:?}",
+            player.write_text(
+                script.parse().map_err(|_| "invalid script")?,
+                template.parse().map_err(|_| "invalid template")?
+            )?
+        ),
+        ["page-text", item] => println!(
+            "text={:?}",
+            player.known_page_text(item.parse().map_err(|_| "invalid item")?)?
+        ),
         ["feed-animal", animal, good, quantity] => println!(
             "food-used={}",
             player.feed_animal(

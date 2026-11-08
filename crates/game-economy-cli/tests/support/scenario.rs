@@ -2,6 +2,43 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn authored_text_is_written_transferred_and_read_without_automatic_agreement() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-written-text.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    world.set_work_choice(2, false).unwrap();
+    let mut player = game_economy_player::Player::new(&mut world);
+    assert_eq!(player.text_choice().unwrap().unwrap().1, 1);
+    let item = player.write_text(1, 1).unwrap().unwrap();
+    assert_eq!(
+        player.known_page_text(item).unwrap().as_deref(),
+        Some("Please meet me tomorrow.")
+    );
+    assert!(player.give_page(2, item).unwrap());
+    assert!(world.known_page_text(2, item).is_err());
+    world.advance().unwrap();
+    assert_eq!(
+        world.known_page_text(2, item).unwrap().as_deref(),
+        Some("Please meet me tomorrow.")
+    );
+    let state = world.snapshot();
+    assert!(
+        state
+            .writing
+            .unwrap()
+            .pages
+            .iter()
+            .find(|p| p.item == item)
+            .unwrap()
+            .claim
+            .is_none()
+    );
+}
+
+#[test]
 fn player_observes_and_takes_over_authored_local_work() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let world = scenario(
@@ -7269,7 +7306,14 @@ fn written_claims_consume_materials_move_physically_and_require_reading() {
                         .quantity,
                     original_ink - 1
                 );
-                assert_eq!(after.writing.as_ref().unwrap().pages[0].claim.food, 99);
+                assert_eq!(
+                    after.writing.as_ref().unwrap().pages[0]
+                        .claim
+                        .as_ref()
+                        .unwrap()
+                        .food,
+                    99
+                );
                 let mut self_reader = game_economy::Economy::compile(after.clone()).unwrap();
                 assert!(Player::new(&mut self_reader).read_page(id).unwrap());
                 let self_read = self_reader.snapshot();
@@ -7691,8 +7735,8 @@ fn autonomous_authors_write_private_memories_with_real_materials() {
                 if has_ink {
                     let page = writing.pages.iter().find(|page| page.author == 2).unwrap();
                     assert_ne!(manual, page.item);
-                    assert_eq!(page.claim.food, record.food + 12);
-                    assert_eq!(page.claim.witness, record.witness);
+                    assert_eq!(page.claim.as_ref().unwrap().food, record.food + 12);
+                    assert_eq!(page.claim.as_ref().unwrap().witness, record.witness);
                     assert_eq!(
                         world
                             .known_food(2)
@@ -8166,7 +8210,7 @@ fn autonomous_written_claims_can_be_physically_shared_and_read() {
                     .find(|page| page.author == 2)
                     .unwrap();
                 let item = page.item;
-                assert_eq!(page.claim.food, memory.food + 12);
+                assert_eq!(page.claim.as_ref().unwrap().food, memory.food + 12);
                 assert!(Player::new(&mut world).held_pages().unwrap().is_empty());
                 world.advance().unwrap();
                 assert_eq!(Player::new(&mut world).held_pages().unwrap(), vec![item]);
@@ -8347,6 +8391,8 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
                 });
                 *holder = game_lots::Container::new(holder.place, holder.capacity, lots).unwrap();
                 state.writing = Some(game_economy::Writing {
+                    text_templates: Default::default(),
+                    text_authors: Default::default(),
                     practice: Default::default(),
                     study: Default::default(),
                     authors: Default::default(),

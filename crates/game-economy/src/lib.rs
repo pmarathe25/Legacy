@@ -170,7 +170,8 @@ pub use state::{Agreements, Immortal, Person, Rules, State};
 use std::collections::HashSet;
 pub use writing::{
     Author as WritingAuthor, Literacy, Page as WrittenPage, Practice as WritingPractice,
-    Study as WritingStudy, Writing,
+    Study as WritingStudy, TextAuthor as WritingTextAuthor, TextTemplate as WritingTextTemplate,
+    Writing,
 };
 pub struct Economy {
     physical: Runtime,
@@ -1337,6 +1338,52 @@ impl Economy {
             .cloned()
             .collect())
     }
+    /// Text this person has written or actually read, while its page exists.
+    pub fn known_page_text(&self, person: u64, item: u64) -> Result<Option<String>, String> {
+        let owner = self.writing.as_ref().ok_or("writing is disabled")?;
+        let page = owner.page(item).ok_or("unknown written page")?;
+        if page.author != person && owner.reads.binary_search(&(person, item)).is_err() {
+            return Err("person has not read this page".into());
+        }
+        Ok(page.text.clone())
+    }
+    /// Only the person's own configured choice is available for writing.
+    pub fn text_choice(&self, person: u64) -> Result<Option<(u32, u64, String)>, String> {
+        let owner = self.writing.as_ref().ok_or("writing is disabled")?;
+        Ok(owner
+            .text_authors
+            .binary_search_by_key(&person, |a| a.person)
+            .ok()
+            .and_then(|i| {
+                let author = &owner.text_authors[i];
+                owner
+                    .text_templates
+                    .binary_search_by_key(&author.template, |t| t.id)
+                    .ok()
+                    .map(|j| {
+                        (
+                            author.script,
+                            author.template,
+                            owner.text_templates[j].text.clone(),
+                        )
+                    })
+            }))
+    }
+    /// Change only this person's autonomous willingness to write their chosen text.
+    pub fn set_text_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
+        let owner = self.writing.as_mut().ok_or("writing is disabled")?;
+        let index = owner
+            .text_authors
+            .binary_search_by_key(&person, |a| a.person)
+            .map_err(|_| "unknown text author")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        std::sync::Arc::make_mut(&mut owner.text_authors)[index].enabled = enabled;
+        self.epoch = epoch;
+        Ok(())
+    }
     /// A person's own literacy and configured writing-practice progress.
     pub fn writing_progress(
         &self,
@@ -1383,6 +1430,28 @@ impl Economy {
                 region,
                 life,
                 claimed_food,
+            }),
+        )?;
+        let written = draft.written_item;
+        self.commit(draft)?;
+        Ok(written)
+    }
+    /// Write a personally configured text on a physical page.
+    pub fn write_text(
+        &mut self,
+        person: u64,
+        script: u32,
+        template: u64,
+    ) -> Result<Option<u64>, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::WriteText {
+                person,
+                script,
+                template,
             }),
         )?;
         let written = draft.written_item;
@@ -2845,6 +2914,7 @@ impl Economy {
                                 | game_economy_interaction::PhysicalChoice::Escape { .. }
                                 | game_economy_interaction::PhysicalChoice::ReadPage { .. }
                                 | game_economy_interaction::PhysicalChoice::WriteFood { .. }
+                                | game_economy_interaction::PhysicalChoice::WriteText { .. }
                                 | game_economy_interaction::PhysicalChoice::PracticeWriting { .. }
                         ) || matches!(
                             row,
@@ -3469,7 +3539,7 @@ impl Economy {
         if !auto_page_reads.is_empty() {
             game_economy_work::reserve(&mut busy, auto_page_reads.iter().map(|row| row.0));
         }
-        let auto_authors: Vec<_> = self
+        let mut auto_authors: Vec<_> = self
             .writing
             .as_ref()
             .zip(self.knowledge.as_ref())
@@ -3507,12 +3577,48 @@ impl Economy {
                         claim.food = (i128::from(claim.food) + i128::from(author.food_delta))
                             .clamp(0, i128::from(u32::MAX))
                             as u32;
-                        Some((author.person, author.script, claim))
+                        Some((author.person, author.script, Some(claim), None))
                     })
                     .collect()
             });
         if !auto_authors.is_empty() {
             game_economy_work::reserve(&mut busy, auto_authors.iter().map(|row| row.0));
+        }
+        let text_authors: Vec<_> = self.writing.as_ref().map_or_else(Vec::new, |owner| {
+            owner
+                .text_authors
+                .par_iter()
+                .filter_map(|author| {
+                    let person = &self.people
+                        [writing::ordered_index(&self.people, author.person, |row| row.id)?];
+                    if !author.enabled
+                        || author.completed
+                        || author.retry_at > tick
+                        || person.controlled
+                        || person.health == 0
+                        || person.region.is_none()
+                        || busy.binary_search(&person.id).is_ok()
+                        || !owner.can_write(person.id, author.script)
+                    {
+                        return None;
+                    }
+                    let template = &owner.text_templates[owner
+                        .text_templates
+                        .binary_search_by_key(&author.template, |t| t.id)
+                        .ok()?];
+                    Some((person.id, author.script, None, Some(template.text.clone())))
+                })
+                .collect()
+        });
+        if !text_authors.is_empty() {
+            game_economy_work::reserve(&mut busy, text_authors.iter().map(|row| row.0));
+            auto_authors.par_extend(text_authors);
+            if auto_authors
+                .par_windows(2)
+                .any(|pair| pair[0].0 > pair[1].0)
+            {
+                auto_authors.par_sort_unstable_by_key(|row| row.0);
+            }
         }
         let auto_practice: Vec<_> = self.writing.as_ref().map_or_else(Vec::new, |owner| {
             owner
@@ -5524,6 +5630,7 @@ impl Economy {
         let mut writing_output = Vec::new();
         if let Some(
             choice @ (game_economy_interaction::PhysicalChoice::WriteFood { .. }
+            | game_economy_interaction::PhysicalChoice::WriteText { .. }
             | game_economy_interaction::PhysicalChoice::PracticeWriting { .. }
             | game_economy_interaction::PhysicalChoice::ReadPage { .. }
             | game_economy_interaction::PhysicalChoice::GivePage { .. }),
@@ -5633,7 +5740,8 @@ impl Economy {
                         author: person,
                         script,
                         written_at: tick,
-                        claim,
+                        claim: Some(claim),
+                        text: None,
                     };
                     writing_output.push(game_lot_runtime::WritingPage {
                         action,
@@ -5644,6 +5752,56 @@ impl Economy {
                         ink_quantity: owner.ink_quantity,
                         page: owner.page,
                         item: page.item,
+                    });
+                    page_to_write = Some(page);
+                }
+                game_economy_interaction::PhysicalChoice::WriteText {
+                    script, template, ..
+                } => {
+                    if !owner.can_write(person, script)
+                        || owner
+                            .text_authors
+                            .binary_search_by_key(&person, |a| a.person)
+                            .ok()
+                            .is_none_or(|i| {
+                                owner.text_authors[i].script != script
+                                    || owner.text_authors[i].template != template
+                            })
+                    {
+                        return Err("person has no matching text choice or writing skill".into());
+                    }
+                    let text = owner
+                        .text_templates
+                        .binary_search_by_key(&template, |t| t.id)
+                        .ok()
+                        .map(|i| owner.text_templates[i].text.clone())
+                        .ok_or("unknown text template")?;
+                    let item = self
+                        .physical
+                        .next_unused_item(
+                            owner
+                                .next_item
+                                .max(self.tool_wear.as_ref().map_or(1, |wear| wear.next_item)),
+                        )
+                        .ok_or("item identity overflow")?;
+                    item.checked_add(1).ok_or("item identity overflow")?;
+                    let page = WrittenPage {
+                        item,
+                        author: person,
+                        script,
+                        written_at: tick,
+                        claim: None,
+                        text: Some(text),
+                    };
+                    writing_output.push(game_lot_runtime::WritingPage {
+                        action,
+                        writer: person,
+                        paper: owner.paper,
+                        paper_quantity: owner.paper_quantity,
+                        ink: owner.ink,
+                        ink_quantity: owner.ink_quantity,
+                        page: owner.page,
+                        item,
                     });
                     page_to_write = Some(page);
                 }
@@ -5736,7 +5894,7 @@ impl Economy {
                 .into_par_iter()
                 .zip(items.into_par_iter())
                 .enumerate()
-                .map(|(index, ((person, script, claim), item))| {
+                .map(|(index, ((person, script, claim, text), item))| {
                     (
                         game_lot_runtime::WritingPage {
                             action: first_action + index as u64,
@@ -5754,6 +5912,7 @@ impl Economy {
                             script,
                             written_at: tick,
                             claim,
+                            text,
                         },
                     )
                 })
@@ -6566,6 +6725,13 @@ impl Economy {
             .map(|page| page.item);
         if page_action_accepted && let Some(page) = page_to_write {
             let owner = writing.as_mut().expect("validated writing owner");
+            if page.text.is_some()
+                && let Ok(index) = owner
+                    .text_authors
+                    .binary_search_by_key(&page.author, |a| a.person)
+            {
+                std::sync::Arc::make_mut(&mut owner.text_authors)[index].completed = true;
+            }
             owner.next_item = page.item + 1;
             owner.add_page(page);
         }
@@ -6582,23 +6748,43 @@ impl Economy {
                     (page, accepted)
                 })
                 .collect();
-            let accepted: Vec<_> = outcomes
+            let statuses: Vec<_> = outcomes
                 .par_iter()
-                .filter(|row| row.1)
-                .map(|row| row.0.clone())
+                .map(|(page, accepted)| (page.author, page.claim.is_some(), *accepted))
+                .collect();
+            let accepted: Vec<_> = outcomes
+                .into_par_iter()
+                .filter_map(|(page, accepted)| accepted.then_some(page))
                 .collect();
             let owner = writing.as_mut().expect("authors require writing");
-            std::sync::Arc::make_mut(&mut owner.authors)
-                .par_iter_mut()
-                .for_each(|author| {
-                    if let Ok(i) = outcomes.binary_search_by_key(&author.person, |row| row.0.author)
-                    {
-                        author.completed = outcomes[i].1;
-                        if !author.completed {
-                            author.retry_at = tick.saturating_add(8);
+            if !owner.authors.is_empty() && statuses.par_iter().any(|row| row.1) {
+                std::sync::Arc::make_mut(&mut owner.authors)
+                    .par_iter_mut()
+                    .for_each(|author| {
+                        if let Ok(i) = statuses.binary_search_by_key(&author.person, |row| row.0)
+                            && statuses[i].1
+                        {
+                            author.completed = statuses[i].2;
+                            if !author.completed {
+                                author.retry_at = tick.saturating_add(8);
+                            }
                         }
-                    }
-                });
+                    });
+            }
+            if !owner.text_authors.is_empty() && statuses.par_iter().any(|row| !row.1) {
+                std::sync::Arc::make_mut(&mut owner.text_authors)
+                    .par_iter_mut()
+                    .for_each(|author| {
+                        if let Ok(i) = statuses.binary_search_by_key(&author.person, |row| row.0)
+                            && !statuses[i].1
+                        {
+                            author.completed = statuses[i].2;
+                            if !author.completed {
+                                author.retry_at = tick.saturating_add(8);
+                            }
+                        }
+                    });
+            }
             if !accepted.is_empty() {
                 owner.next_item = owner
                     .next_item
@@ -7121,7 +7307,7 @@ impl Economy {
                     {
                         return None;
                     }
-                    let mut statement = page.claim.clone();
+                    let mut statement = page.claim.clone()?;
                     statement.learned_from = if page.author == person {
                         statement.learned_from.filter(|&source| source != person)
                     } else {
@@ -7140,13 +7326,13 @@ impl Economy {
             && let (Some(page), Some(owner)) = (page_to_read, &mut knowledge)
         {
             let person = player_transfer.expect("read action").person();
-            if self
-                .opinions
-                .as_ref()
-                .and_then(Opinions::report_filter)
-                .is_none_or(|filter| filter.accepts(person, page.author))
+            if let Some(mut statement) = page.claim
+                && self
+                    .opinions
+                    .as_ref()
+                    .and_then(Opinions::report_filter)
+                    .is_none_or(|filter| filter.accepts(person, page.author))
             {
-                let mut statement = page.claim;
                 statement.learned_from = if page.author == person {
                     statement.learned_from.filter(|&source| source != person)
                 } else {

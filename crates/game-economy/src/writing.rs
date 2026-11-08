@@ -1,4 +1,4 @@
-//! Personal written food claims attached to identified physical pages.
+//! Personal records attached to identified physical pages.
 use game_economy_knowledge::Record;
 use game_lot_runtime::Snapshot;
 use rayon::prelude::*;
@@ -36,6 +36,33 @@ pub struct Writing {
     pub study: Arc<Vec<Study>>,
     #[serde(default)]
     pub practice: Arc<Vec<Practice>>,
+    /// Data-defined text a person may choose to write.
+    #[serde(default)]
+    pub text_templates: Arc<Vec<TextTemplate>>,
+    #[serde(default)]
+    pub text_authors: Arc<Vec<TextAuthor>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextTemplate {
+    pub id: u64,
+    pub text: String,
+}
+
+/// A personal, revocable choice to write one configured text.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TextAuthor {
+    pub person: u64,
+    pub script: u32,
+    pub template: u64,
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default)]
+    pub completed: bool,
+    #[serde(default)]
+    pub retry_at: u64,
 }
 
 /// A person's chosen amount of physical practice toward writing a known script.
@@ -102,7 +129,10 @@ pub struct Page {
     pub author: u64,
     pub script: u32,
     pub written_at: u64,
-    pub claim: Record,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub claim: Option<Record>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
 }
 
 impl Writing {
@@ -119,6 +149,8 @@ impl Writing {
         Arc::make_mut(&mut self.authors).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.study).par_sort_unstable_by_key(|row| (row.person, row.script));
         Arc::make_mut(&mut self.practice).par_sort_unstable_by_key(|row| row.person);
+        Arc::make_mut(&mut self.text_templates).par_sort_unstable_by_key(|row| row.id);
+        Arc::make_mut(&mut self.text_authors).par_sort_unstable_by_key(|row| row.person);
         let tick = physical.custody.tick;
         if self.paper == self.ink
             || self.paper == self.page
@@ -180,13 +212,37 @@ impl Writing {
                     || !people.contains(&row.author)
                     || row.script == 0
                     || row.written_at > tick
-                    || row.claim.observed_at > row.written_at
-                    || !regions.contains(&row.claim.region)
-                    || !people.contains(&row.claim.witness)
+                    || row.claim.is_some() == row.text.is_some()
                     || row
-                        .claim
-                        .learned_from
-                        .is_some_and(|id| !people.contains(&id))
+                        .text
+                        .as_ref()
+                        .is_some_and(|text| text.is_empty() || text.len() > 4096)
+                    || row.claim.as_ref().is_some_and(|claim| {
+                        claim.observed_at > row.written_at
+                            || !regions.contains(&claim.region)
+                            || !people.contains(&claim.witness)
+                            || claim.learned_from.is_some_and(|id| !people.contains(&id))
+                    })
+            })
+            || self
+                .text_templates
+                .par_windows(2)
+                .any(|p| p[0].id == p[1].id)
+            || self
+                .text_templates
+                .par_iter()
+                .any(|t| t.id == 0 || t.text.is_empty() || t.text.len() > 4096)
+            || self
+                .text_authors
+                .par_windows(2)
+                .any(|p| p[0].person == p[1].person)
+            || self.text_authors.par_iter().any(|a| {
+                !people.contains(&a.person)
+                    || a.script == 0
+                    || self
+                        .text_templates
+                        .binary_search_by_key(&a.template, |t| t.id)
+                        .is_err()
             })
         {
             return Err("invalid written records".into());

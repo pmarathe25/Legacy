@@ -638,6 +638,277 @@ fn independent_authors(count: u64) -> State {
     state
 }
 
+fn independent_text_authors(count: u64) -> State {
+    let mut state = independent_authors(count);
+    let writing = state.writing.as_mut().unwrap();
+    writing.authors = vec![].into();
+    writing.text_templates = vec![WritingTextTemplate {
+        id: 1,
+        text: "Please meet me tomorrow.".into(),
+    }]
+    .into();
+    writing.text_authors = (1..=count)
+        .map(|person| WritingTextAuthor {
+            person,
+            script: 1,
+            template: 1,
+            enabled: true,
+            completed: false,
+            retry_at: 0,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    state
+}
+
+#[test]
+fn autonomous_texts_are_physical_and_deterministic() {
+    let initial = independent_text_authors(2048);
+    let run =
+        |threads| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(threads)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    let writing = state.writing.as_ref().unwrap();
+                    assert_eq!(writing.pages.len(), 2048);
+                    assert!(writing.text_authors.iter().all(|a| a.completed));
+                    assert!(writing.pages.iter().all(|p| p.claim.is_none()
+                        && p.text.as_deref() == Some("Please meet me tomorrow.")));
+                    let mut invalid = state.clone();
+                    std::sync::Arc::make_mut(&mut invalid.writing.as_mut().unwrap().pages)[0]
+                        .text = Some(String::new());
+                    assert!(Economy::compile(invalid).is_err());
+                    assert!(
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .filter(|c| matches!(c.place, Place::Person(_)))
+                            .all(|c| c.lots.len() == 1 && c.lots[0].good == 3)
+                    );
+                    let restored = Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(state, restored.snapshot());
+                    state
+                })
+        };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn text_authors_can_change_their_mind_before_writing() {
+    let mut world = Economy::compile(independent_text_authors(1)).unwrap();
+    world.set_text_choice(1, false).unwrap();
+    world.advance().unwrap();
+    assert!(world.snapshot().writing.unwrap().pages.is_empty());
+    world.set_text_choice(1, true).unwrap();
+    world.advance().unwrap();
+    assert_eq!(world.snapshot().writing.unwrap().pages.len(), 1);
+}
+
+#[test]
+fn autonomous_text_writer_retries_after_real_material_failure() {
+    let mut initial = independent_text_authors(1);
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    let original = holder.clone();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        holder
+            .lots
+            .iter()
+            .filter(|lot| lot.good != 2)
+            .cloned()
+            .collect(),
+    )
+    .unwrap();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let mut state = world.snapshot();
+    assert!(state.writing.as_ref().unwrap().pages.is_empty());
+    assert_eq!(state.writing.as_ref().unwrap().text_authors[0].retry_at, 9);
+    *state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap() = original;
+    let mut world = Economy::compile(state).unwrap();
+    for _ in 0..7 {
+        world.advance().unwrap();
+    }
+    assert!(world.snapshot().writing.unwrap().pages.is_empty());
+    world.advance().unwrap();
+    assert_eq!(world.snapshot().writing.unwrap().pages.len(), 1);
+}
+
+#[test]
+fn food_and_text_authors_publish_independent_outcomes_together() {
+    let mut initial = independent_text_authors(4);
+    let writing = initial.writing.as_mut().unwrap();
+    writing.text_authors = writing
+        .text_authors
+        .iter()
+        .filter(|a| a.person % 2 == 0)
+        .cloned()
+        .collect::<Vec<_>>()
+        .into();
+    writing.authors = [1, 3]
+        .into_iter()
+        .map(|person| WritingAuthor {
+            person,
+            script: 1,
+            region: 2,
+            food_delta: 0,
+            completed: false,
+            retry_at: 0,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let writing = state.writing.unwrap();
+    assert!(writing.authors.iter().all(|a| a.completed));
+    assert!(writing.text_authors.iter().all(|a| a.completed));
+    assert_eq!(
+        writing.pages.iter().map(|p| p.author).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4]
+    );
+    assert!(
+        writing
+            .pages
+            .iter()
+            .all(|p| p.claim.is_some() == (p.author % 2 == 1))
+    );
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_text_authors_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let initial = independent_text_authors(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut fingerprint = None;
+            for _ in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                samples.push(start.elapsed().as_secs_f64());
+                let state = world.snapshot();
+                assert_eq!(state.writing.as_ref().unwrap().pages.len(), count as usize);
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint {
+                    assert_eq!(actual, expected);
+                }
+                fingerprint = Some(actual);
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "authors={count} workers={workers} elapsed_median={:.6} fingerprint={:016x}",
+                samples[1],
+                fingerprint.unwrap()
+            );
+        });
+}
+
+#[test]
+fn text_is_visible_only_after_reading_and_does_not_create_food_knowledge() {
+    let mut initial = independent_text_authors(2);
+    initial.people[0].controlled = true;
+    let writing = initial.writing.as_mut().unwrap();
+    writing.text_authors = vec![WritingTextAuthor {
+        person: 1,
+        script: 1,
+        template: 1,
+        enabled: false,
+        completed: false,
+        retry_at: 0,
+    }]
+    .into();
+    writing.literacy_mut()[1].read = true;
+    let mut world = Economy::compile(initial).unwrap();
+    let original = world.snapshot();
+    let mut missing_ink = original.clone();
+    let holder = missing_ink
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    let lots = holder
+        .lots
+        .iter()
+        .filter(|lot| lot.good != 2)
+        .cloned()
+        .collect();
+    *holder = Container::new(holder.place, holder.capacity, lots).unwrap();
+    let mut missing_ink = Economy::compile(missing_ink).unwrap();
+    assert_eq!(missing_ink.write_text(1, 1, 1).unwrap(), None);
+    assert!(missing_ink.snapshot().writing.unwrap().pages.is_empty());
+    assert_eq!(missing_ink.tick(), 1);
+    assert!(world.write_text(1, 1, 99).is_err());
+    assert_eq!(world.snapshot(), original);
+    let item = world.write_text(1, 1, 1).unwrap().unwrap();
+    assert!(world.known_page_text(2, item).is_err());
+    assert!(world.give_page(1, 2, item).unwrap());
+    let mut state = world.snapshot();
+    state.people[0].controlled = false;
+    state.people[1].controlled = true;
+    let mut world = Economy::compile(state).unwrap();
+    assert!(world.known_page_text(2, item).is_err());
+    let before = world
+        .known_food(2)
+        .unwrap()
+        .into_iter()
+        .find(|r| r.region == 2);
+    assert!(world.read_page(2, item).unwrap());
+    assert_eq!(
+        world.known_page_text(2, item).unwrap().as_deref(),
+        Some("Please meet me tomorrow.")
+    );
+    assert_eq!(
+        world
+            .known_food(2)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.region == 2),
+        before
+    );
+}
+
 #[test]
 fn independent_autonomous_authors_match_across_worker_counts() {
     let initial = independent_authors(2048);
@@ -653,7 +924,12 @@ fn independent_autonomous_authors_match_across_worker_counts() {
                 let writing = state.writing.as_ref().unwrap();
                 assert_eq!(writing.pages.len(), 2048);
                 assert!(writing.authors.iter().all(|row| row.completed));
-                assert!(writing.pages.iter().all(|row| row.claim.food == 21));
+                assert!(
+                    writing
+                        .pages
+                        .iter()
+                        .all(|row| row.claim.as_ref().unwrap().food == 21)
+                );
                 state
             })
     };
@@ -844,6 +1120,8 @@ fn independent_readers(count: u64) -> State {
             .collect(),
     });
     state.writing = Some(Writing {
+        text_templates: Default::default(),
+        text_authors: Default::default(),
         practice: Default::default(),
         study: Default::default(),
         authors: Default::default(),
@@ -869,13 +1147,14 @@ fn independent_readers(count: u64) -> State {
                 author: 1,
                 script: 1,
                 written_at: 0,
-                claim: game_economy_knowledge::Record {
+                claim: Some(game_economy_knowledge::Record {
                     region: 2,
                     food: 99,
                     observed_at: 0,
                     witness: 1,
                     learned_from: None,
-                },
+                }),
+                text: None,
             })
             .collect::<Vec<_>>()
             .into(),
@@ -33278,6 +33557,8 @@ fn a_written_claim_can_guide_travel_and_receive_subjective_discrepancy_reactions
         ],
     });
     initial.writing = Some(Writing {
+        text_templates: Default::default(),
+        text_authors: Default::default(),
         paper: 1,
         ink: 2,
         page: 3,
@@ -49251,6 +49532,8 @@ fn writing_advances_tool_identity_cursor_and_round_trips_with_no_tool_production
         }],
     });
     initial.writing = Some(Writing {
+        text_templates: Default::default(),
+        text_authors: Default::default(),
         paper: 1,
         ink: 2,
         page: 3,
