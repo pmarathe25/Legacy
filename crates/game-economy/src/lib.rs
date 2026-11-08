@@ -3726,20 +3726,64 @@ impl Economy {
             }
             _ => None,
         };
+        let mut early_goal_work = None;
+        let mut early_goal_needs = None;
         let walking_next = if let Some((owner, walking)) = self
             .local_transport
             .as_ref()
             .and_then(|owner| owner.walking.as_ref().map(|walking| (owner, walking)))
         {
+            let (visit_blocked, goal_walks) = if (!walking.positions.is_empty()
+                || !walking.preferences.is_empty())
+                && owner
+                    .goal_fetchers
+                    .par_iter()
+                    .any(|preference| preference.enabled)
+                && let (Some(goals), Some(base)) = (&self.goals, &self.autowork)
+            {
+                let planned = goals.policies(base, tick.saturating_sub(1));
+                let underage = self
+                    .family
+                    .as_ref()
+                    .map_or_else(Vec::new, game_economy_work::underage);
+                let choices = local_walking::goal_walk(local_walking::GoalWalkContext {
+                    owner,
+                    walking,
+                    people: &self.people,
+                    view: &view,
+                    recipes: self.physical.recipes(),
+                    planned: &planned,
+                    base,
+                    busy: &busy,
+                    underage: &underage,
+                    max_hunger: self.rules.max_work_hunger,
+                });
+                early_goal_work = Some(planned);
+                early_goal_needs = Some(choices.needs);
+                (choices.blocked, choices.requests)
+            } else {
+                (Vec::new(), Vec::new())
+            };
             let mut requests = game_economy_local_transport::walking::personal_requests(
                 owner,
                 walking,
                 &self.people,
                 &view,
-                &busy,
+                (&busy, &visit_blocked),
                 self.opinions.as_ref(),
                 self.rules.max_work_hunger,
             );
+            if !goal_walks.is_empty() {
+                let pending: Vec<_> = goal_walks
+                    .into_par_iter()
+                    .filter(|goal| {
+                        requests
+                            .binary_search_by_key(&goal.person, |request| request.person)
+                            .is_err()
+                    })
+                    .collect();
+                requests.par_extend(pending);
+            }
             requests.extend(manual_walk);
             if !requests.is_empty() {
                 game_economy_work::reserve(&mut busy, requests.iter().map(|r| r.person));
@@ -5576,27 +5620,32 @@ impl Economy {
             .is_some_and(|owner| owner.goal_fetchers.par_iter().any(|p| p.enabled));
         let mut goal_fetch_needs = Vec::new();
         if !self.work_tools.is_empty() || goal_building || goal_fetching {
-            goal_work = self
-                .goals
-                .as_ref()
-                .zip(self.autowork.as_ref())
-                .map(|(goals, auto)| goals.policies(auto, tick.saturating_sub(1)));
+            goal_work = early_goal_work.take().or_else(|| {
+                self.goals
+                    .as_ref()
+                    .zip(self.autowork.as_ref())
+                    .map(|(goals, auto)| goals.policies(auto, tick.saturating_sub(1)))
+            });
             if goal_fetching && let (Some(planned), Some(auto)) = (&goal_work, &self.autowork) {
-                let explicit: HashSet<_> = auto
-                    .policies
-                    .par_iter()
-                    .map(|policy| policy.person)
-                    .collect();
-                goal_fetch_needs = planned
-                    .policies
-                    .par_iter()
-                    .filter(|policy| policy.enabled && !explicit.contains(&policy.person))
-                    .map(|policy| game_economy_local_transport::goal::Need {
-                        person: policy.person,
-                        recipe: policy.recipe,
-                    })
-                    .collect();
-                goal_fetch_needs.par_sort_unstable_by_key(|need| need.person);
+                if let Some(needs) = early_goal_needs.take() {
+                    goal_fetch_needs = needs;
+                } else {
+                    let explicit: HashSet<_> = auto
+                        .policies
+                        .par_iter()
+                        .map(|policy| policy.person)
+                        .collect();
+                    goal_fetch_needs = planned
+                        .policies
+                        .par_iter()
+                        .filter(|policy| policy.enabled && !explicit.contains(&policy.person))
+                        .map(|policy| game_economy_local_transport::goal::Need {
+                            person: policy.person,
+                            recipe: policy.recipe,
+                        })
+                        .collect();
+                    goal_fetch_needs.par_sort_unstable_by_key(|need| need.person);
+                }
             }
             if self.goals.as_ref().is_some_and(|g| g.plan_inputs)
                 && let (Some(planned), Some(base)) = (&mut goal_work, &self.autowork)

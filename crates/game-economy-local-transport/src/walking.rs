@@ -189,6 +189,16 @@ impl Walking {
             .map(|i| &self.routes[i])
     }
 
+    /// Check whether an autonomous choice can advance toward this endpoint.
+    pub fn can_advance(&self, person: u64, region: u64, destination: Endpoint) -> bool {
+        match self.location(person, region) {
+            Location::At { endpoint, .. } => {
+                endpoint != destination && self.route(region, endpoint, destination).is_some()
+            }
+            Location::Walking { to, .. } => to == destination,
+        }
+    }
+
     /// People without an explicit position are at their region's stock node.
     pub fn location(&self, person: u64, region: u64) -> Location {
         self.positions
@@ -381,7 +391,7 @@ pub fn personal_requests(
     walking: &Walking,
     people: &[Person],
     view: &View,
-    busy: &[u64],
+    (busy, visit_blocked): (&[u64], &[u64]),
     opinions: Option<&Opinions>,
     max_hunger: u32,
 ) -> Vec<Request> {
@@ -459,6 +469,7 @@ pub fn personal_requests(
                 || person.health == 0
                 || person.region != Some(preference.region)
                 || busy.binary_search(&person.id).is_ok()
+                || visit_blocked.binary_search(&person.id).is_ok()
                 || requests
                     .binary_search_by_key(&person.id, |request| request.person)
                     .is_ok()

@@ -6973,6 +6973,112 @@ fn goal_fetch_at_a_store_does_not_depend_on_remote_stock() {
 }
 
 #[test]
+fn a_person_can_visit_fetch_return_and_complete_a_work_goal() {
+    use game_goals::Goal;
+    let mut initial = local_walking_fixture();
+    let transport = initial.local_transport.as_mut().unwrap();
+    transport.policies.clear();
+    transport.goal_fetchers = vec![GoalFetchPreference {
+        person: 2,
+        enabled: true,
+        max_quantity: 1,
+    }];
+    transport.walking.as_mut().unwrap().preferences = vec![LocalWalkPreference {
+        person: 2,
+        region: 1,
+        destination: LocalEndpoint::Store { id: 1 },
+        willing: true,
+        pressured_by: None,
+        pressure_threshold: None,
+    }]
+    .into();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: vec![],
+        requests: None,
+    });
+    initial.goals = Some(Goals {
+        retry_interval: 3,
+        plan_inputs: false,
+        people: vec![Goal {
+            person: 2,
+            recipe: 1,
+            priority: 1,
+            target: 1,
+            progress: 0,
+            next_review: 0,
+            enabled: true,
+            recognize_help: false,
+        }],
+        events: vec![],
+    });
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Inventory(1))
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: Some(20),
+        }],
+    )
+    .unwrap();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, stock.capacity, vec![]).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                world.advance().unwrap();
+                let picked = world.snapshot();
+                assert!(
+                    picked
+                        .local_transport
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .any(|event| event.person == 2 && event.moved)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&picked).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for world in [&mut world, &mut restored] {
+                    for _ in 0..5 {
+                        world.advance().unwrap();
+                    }
+                    assert_eq!(
+                        world.snapshot().goals.as_ref().unwrap().people[0].progress,
+                        1
+                    );
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn goal_fetching_finds_inputs_for_a_real_production_chain() {
     use game_goals::Goal;
     let mut initial = local_store_fixture();
@@ -7483,10 +7589,22 @@ fn concentrated_goal_fetch_benchmark() {
         concentrated_goal_fetching(count)
     };
     let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    let returning = std::env::var_os("LEGACY_GOAL_RETURN").is_some();
+    assert!(!returning || at_store);
     if at_store {
         assert!(std::env::var_os("LEGACY_CHAIN").is_none());
         initial.local_transport.as_mut().unwrap().walking = Some(LocalWalking {
-            routes: vec![].into(),
+            routes: if returning {
+                vec![LocalWalkRoute {
+                    region: 1,
+                    from: LocalEndpoint::Store { id: 1 },
+                    to: LocalEndpoint::Stock,
+                    ticks: 2,
+                }]
+            } else {
+                vec![]
+            }
+            .into(),
             preferences: vec![].into(),
             positions: (2..=count)
                 .map(|person| LocalPosition {
@@ -7509,11 +7627,16 @@ fn concentrated_goal_fetch_benchmark() {
             let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
+                if returning { world.advance().unwrap(); }
                 let start = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = start.elapsed().as_secs_f64();
                 let state = world.snapshot();
-                assert_eq!(state.local_transport.as_ref().unwrap().events.iter().filter(|event| event.moved).count(), count as usize / 8);
+                if returning {
+                    assert_eq!(state.local_transport.as_ref().unwrap().walking.as_ref().unwrap().events.iter().filter(|event| event.outcome == LocalWalkOutcome::Progressed).count(), count as usize / 8);
+                } else {
+                    assert_eq!(state.local_transport.as_ref().unwrap().events.iter().filter(|event| event.moved).count(), count as usize / 8);
+                }
                 let mut hash = std::collections::hash_map::DefaultHasher::new();
                 serde_json::to_vec(&state).unwrap().hash(&mut hash);
                 let actual = hash.finish();
@@ -7525,7 +7648,7 @@ fn concentrated_goal_fetch_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} at_store={at_store} goal_fetch_seconds={:.6} fingerprint={:016x}",
+                "workers={workers} people={count} at_store={at_store} returning={returning} goal_fetch_seconds={:.6} fingerprint={:016x}",
                 samples[1], fingerprint.unwrap()
             );
         });
