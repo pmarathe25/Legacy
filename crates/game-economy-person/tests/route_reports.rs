@@ -47,6 +47,41 @@ fn batched_route_reports_keep_newest_evidence_and_a_bounded_personal_history() {
 }
 
 #[test]
+fn independent_replacements_keep_newer_evidence_and_deterministic_ties() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut travel = Travel {
+                    observations: vec![
+                        report(1, 1, 2, false),
+                        report(2, 1, 1, false),
+                        report(3, 1, 1, false),
+                    ],
+                    ..Travel::default()
+                };
+                travel.receive_reports(&[
+                    report(1, 1, 1, true),
+                    report(2, 1, 1, true),
+                    report(3, 1, 2, true),
+                ]);
+                assert_eq!(
+                    travel.observations,
+                    vec![
+                        report(1, 1, 2, false),
+                        report(2, 1, 1, true),
+                        report(3, 1, 2, true)
+                    ]
+                );
+                travel
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 #[ignore]
 fn route_report_batch_benchmark() {
     use std::hash::{Hash, Hasher};

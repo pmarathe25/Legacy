@@ -44,6 +44,8 @@ In `content/scenarios/economy-route-closure.toml`, `go 2` reports a blocked depa
 
 In `content/scenarios/economy-route-testimony.toml`, `tell-route 2 1 2 remembered remembered` relays the ruler's report during a meeting. `tell-route 2 1 2 open 1` instead claims the road is open and takes one tick. The result reports contact; the listener's own reception preference governs whether they believe the statement. Route testimony currently uses the existing `food-report-reception` setting.
 
+In `content/scenarios/economy-autonomous-route-testimony.toml`, person 2 independently tells person 3 that a closed road is open. Person 3 can later act on the report and encounter the actual closure.
+
 In `content/scenarios/economy-autonomous-site-attack.toml`, person 2 has an individual preference to strike the workshop while fighting. Use `attack 2` and `step` to observe their independent choice.
 
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.

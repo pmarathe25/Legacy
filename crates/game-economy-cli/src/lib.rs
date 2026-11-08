@@ -3,7 +3,8 @@ mod population;
 use game_autowork::{Autowork, Policy};
 use game_economy::{
     Agreements, Agriculture, CropPhase, DependentCare, Dream, Dreams, Economy, Families,
-    FarmPolicy, Field, Goals, Person, Route, RouteClosure, RouteObservation, Rules, State, Travel,
+    FarmPolicy, Field, Goals, Person, Route, RouteClosure, RouteObservation, RouteSharing, Rules,
+    State, Travel,
 };
 use game_economy_agriculture::content as crop_content;
 use game_lot_content::Catalog;
@@ -36,6 +37,8 @@ struct Scenario {
     personal_route_planning: bool,
     #[serde(default)]
     route_observations: Vec<RouteObservation>,
+    #[serde(default)]
+    route_sharing: Vec<RouteSharing>,
     #[serde(default)]
     family: Option<Families>,
     #[serde(default)]
@@ -1455,6 +1458,7 @@ pub fn scenario_with_options(
             observations: scenario.route_observations,
             observation_limit: 8,
             personal_routing: scenario.personal_route_planning,
+            sharing: scenario.route_sharing,
             routes: scenario.routes,
             journeys: vec![],
         }),

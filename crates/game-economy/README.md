@@ -140,7 +140,9 @@ Authored directed route closures block new departures during their scheduled int
 
 When `personal_route_planning` is enabled in content, autonomous food seekers select paths only from their own bounded route reports and estimated durations. An unknown path is unavailable, and an old closed report can be rechecked after the food seeker's review delay. A physical attempt updates that person's report without broadcasting it or replacing their travel-time estimate. Hauling, guardian and expedition planning still use the shared route graph; every departure is subject to physical closures.
 
-An individual can share a remembered route report through a real meeting, including an intentionally altered claim about access or duration. The listener's own report-reception preference determines whether it is accepted; the speaker sees contact rather than that private decision. Reports retain the stated observation time and their immediate source. A newer report for the same route takes precedence. Autonomous route testimony is not yet generated during ordinary encounters.
+An individual can share a remembered route report through a real meeting, including an intentionally altered claim about access or duration. People with individual `route_sharing` preferences can do so autonomously during encounters, willingly or under their own fear of or felt obligation toward the listener. The listener's own report-reception preference determines whether it is accepted; the speaker sees contact rather than that private decision. Reports retain the stated observation time and their immediate source. A newer report for the same route takes precedence.
+
+The ignored `autonomous_route_sharing_benchmark` measures a full boundary of encounters and personal route reports. `LEGACY_PEOPLE` sets population and `LEGACY_WORKERS` sets concurrency.
 
 Individual hauling preferences can move real lots between regions. A carrier can change their mind between pickup, departure, and delivery; fear or obligation may motivate an otherwise unwilling carrier. Routes, claims, carrying capacity, destination capacity, and expiry all remain physical constraints.
 

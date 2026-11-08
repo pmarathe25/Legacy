@@ -60,6 +60,27 @@ pub struct DepartureOutcome {
     pub person: u64,
     pub departed: bool,
 }
+
+/// One individual's choice to share or alter a particular route report.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RouteSharing {
+    pub person: u64,
+    pub source: u64,
+    pub destination: u64,
+    #[serde(default)]
+    pub target: Option<u64>,
+    #[serde(default)]
+    pub willing: bool,
+    #[serde(default)]
+    pub fear_at_least: Option<u64>,
+    #[serde(default)]
+    pub obligation_at_least: Option<u64>,
+    #[serde(default)]
+    pub claimed_open: Option<bool>,
+    #[serde(default)]
+    pub claimed_ticks: Option<u64>,
+}
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Travel {
@@ -75,6 +96,8 @@ pub struct Travel {
     /// Food-search path selection uses only the individual's own route reports.
     #[serde(default)]
     pub personal_routing: bool,
+    #[serde(default)]
+    pub sharing: Vec<RouteSharing>,
 }
 fn default_observation_limit() -> usize {
     8
@@ -88,6 +111,7 @@ impl Default for Travel {
             observations: Vec::new(),
             observation_limit: default_observation_limit(),
             personal_routing: false,
+            sharing: Vec::new(),
         }
     }
 }
@@ -209,6 +233,7 @@ impl Clone for Travel {
             observations: self.observations.par_iter().cloned().collect(),
             observation_limit: self.observation_limit,
             personal_routing: self.personal_routing,
+            sharing: self.sharing.par_iter().cloned().collect(),
         }
     }
 }
@@ -270,11 +295,35 @@ impl Travel {
             .map(|o| (o.person, o.source, o.destination))
             .collect();
         observations.par_sort_unstable();
+        let mut speakers: Vec<_> = self
+            .sharing
+            .par_iter()
+            .map(|policy| policy.person)
+            .collect();
+        speakers.par_sort_unstable();
         if routes
             .par_windows(2)
             .any(|r| (r[0].source, r[0].destination) == (r[1].source, r[1].destination))
             || journeys.par_windows(2).any(|r| r[0] == r[1])
             || observations.par_windows(2).any(|pair| pair[0] == pair[1])
+            || speakers.par_windows(2).any(|pair| pair[0] == pair[1])
+            || self.sharing.par_iter().any(|policy| {
+                people
+                    .binary_search_by_key(&policy.person, |person| person.id)
+                    .is_err()
+                    || policy.target.is_some_and(|id| {
+                        id == policy.person
+                            || people
+                                .binary_search_by_key(&id, |person| person.id)
+                                .is_err()
+                    })
+                    || policy.claimed_ticks == Some(0)
+                    || routes
+                        .binary_search_by_key(&(policy.source, policy.destination), |route| {
+                            (route.source, route.destination)
+                        })
+                        .is_err()
+            })
             || observations
                 .par_chunk_by(|a, b| a.0 == b.0)
                 .any(|group| group.len() > self.observation_limit)
@@ -509,6 +558,32 @@ impl Travel {
             self.observations = incoming.par_iter().cloned().collect();
             return;
         }
+        // If each recipient already has exactly this route, replacements are
+        // independent and need no regrouping or retention arbitration.
+        if self.observations.len() == incoming.len()
+            && self
+                .observations
+                .par_windows(2)
+                .all(|pair| pair[0].person < pair[1].person)
+            && self
+                .observations
+                .par_iter()
+                .zip(incoming.par_iter())
+                .all(|(old, new)| {
+                    (old.person, old.source, old.destination)
+                        == (new.person, new.source, new.destination)
+                })
+        {
+            self.observations
+                .par_iter_mut()
+                .zip(incoming.par_iter())
+                .for_each(|(old, new)| {
+                    if new.observed_at >= old.observed_at {
+                        *old = new.clone();
+                    }
+                });
+            return;
+        }
         let mut observations = std::mem::take(&mut self.observations);
         observations.par_extend(incoming.par_iter().cloned());
         // For an equal timestamp, a newly received result supersedes the
@@ -589,6 +664,7 @@ impl Travel {
             observations: self.observations.par_iter().cloned().collect(),
             observation_limit: self.observation_limit,
             personal_routing: self.personal_routing,
+            sharing: self.sharing.par_iter().cloned().collect(),
         }
     }
     /// Stop travelers who died in a later lifecycle phase of this boundary.

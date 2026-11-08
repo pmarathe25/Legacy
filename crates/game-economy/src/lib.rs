@@ -39,7 +39,8 @@ pub use game_economy_local_transport::{
 };
 use game_economy_person as person;
 pub use game_economy_person::travel::{
-    Closure as RouteClosure, Colocation, Departure, Journey, Route, RouteObservation, Travel,
+    Closure as RouteClosure, Colocation, Departure, Journey, Route, RouteObservation, RouteSharing,
+    Travel,
 };
 pub use game_economy_promises::{Decision as PromiseDecision, Proposal as PromiseProposal};
 pub use game_economy_skills::Skills;
@@ -111,6 +112,7 @@ mod hauling;
 mod hunting;
 mod medical;
 mod mission_deliveries;
+mod route_sharing;
 mod social_preferences;
 mod structure_collapse;
 pub use food_search::{FoodSearch, Preference as FoodSearchPreference};
@@ -6522,6 +6524,19 @@ impl Economy {
             .travel
             .as_ref()
             .map(|travel| travel.advance(&mut person.people));
+        if let (Some(opening), Some(current), Some(social)) = (
+            self.travel.as_ref(),
+            travel.as_mut(),
+            dynamics.as_ref().and_then(|owner| owner.social.as_ref()),
+        ) {
+            let reports = route_sharing::prepare(
+                opening,
+                &self.people,
+                self.opinions.as_ref(),
+                &social.events,
+            );
+            current.receive_reports(&reports);
+        }
         let mut food_search = self.food_search.clone();
         let possible_departures = self.travel.is_some()
             && (expedition

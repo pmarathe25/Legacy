@@ -1,0 +1,177 @@
+# A person may independently mislead a listener about a road.
+seed = 7
+tick_millis = 3600000
+stock_capacity = 1000
+food_relief_divisor = 20
+personal_route_planning = true
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = {}
+[[regions]]
+id = 2
+stock = { bread = 20 }
+[[regions]]
+id = 3
+stock = {}
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = false
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = false
+seek_meals = true
+
+[[routes]]
+source = 1
+destination = 2
+ticks = 2
+[[routes]]
+source = 1
+destination = 3
+ticks = 2
+[[routes]]
+source = 3
+destination = 2
+ticks = 2
+
+[[route_closures]]
+source = 1
+destination = 2
+start = 0
+end = 10
+
+[[route_observations]]
+person = 2
+source = 1
+destination = 2
+open = false
+observed_at = 0
+estimated_ticks = 2
+witness = 2
+[[route_observations]]
+person = 2
+source = 1
+destination = 3
+open = true
+observed_at = 0
+estimated_ticks = 2
+witness = 2
+[[route_observations]]
+person = 2
+source = 3
+destination = 2
+open = true
+observed_at = 0
+estimated_ticks = 2
+witness = 2
+[knowledge]
+max_records = 4
+[[knowledge.minds]]
+person = 2
+[[knowledge.minds.records]]
+region = 2
+food = 20
+observed_at = 0
+witness = 2
+[[knowledge.minds]]
+person = 3
+[[knowledge.minds.records]]
+region = 2
+food = 20
+observed_at = 0
+witness = 3
+
+[food_search]
+min_hunger = 5
+min_report_food = 1
+max_report_age = 20
+retry_ticks = 3
+people = [{ person = 2, enabled = true }, { person = 3, enabled = true }]
+
+[family]
+next_id = 4
+[family.rules]
+adult_age = 12
+min_work_age = 12
+fertile_until = 13
+gestation = 3
+birth_spacing = 8
+lifespan_min = 50
+lifespan_max = 70
+conception_one_in = 1
+minimum_health = 50
+maximum_hunger = 15
+newborn_health = 100
+mutation_per_million = 10000
+mutation_step = 10
+enroll_births = false
+[[family.members]]
+id = 1
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+[[family.members]]
+id = 2
+age = 18
+[family.members.genome]
+sex = "Male"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+[[family.members]]
+id = 3
+age = 18
+[family.members.genome]
+sex = "Female"
+alleles = [[1000,1000], [200,800], [300,700], [400,600]]
+
+[campaign.lineage]
+current = 1
+started = 0
+
+[[route_sharing]]
+person = 2
+target = 3
+source = 1
+destination = 2
+willing = true
+claimed_open = true
+claimed_ticks = 1
+
+[dynamics.social.rules]
+interval = 1
+min_health = 1
+max_hunger = 100
+familiarity_gain = 1
+familiarity_max = 10
+
+[[dynamics.social.participants]]
+person = 2
+willing = true
+[[dynamics.social.participants]]
+person = 3
+willing = true
