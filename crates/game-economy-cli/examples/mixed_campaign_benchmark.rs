@@ -118,7 +118,7 @@ fn main() {
                 initial.physical.custody.containers.push(Container::new(Place::Inventory(store.id), people, vec![]).unwrap());
             }
             initial.physical.custody.containers.sort_unstable_by_key(|container| container.place);
-            let preferences = initial.people.iter().filter(|person| !person.controlled && person.id.is_multiple_of(4)).filter_map(|person| {
+            let preferences = initial.people.iter().filter(|person| !person.controlled && (person.id.is_multiple_of(4) || (market_workload && person.id % 4 == 1))).filter_map(|person| {
                 let region = person.region?;
                 Some(LocalWalkPreference { meal_hunger: None, person: person.id, region, destination: LocalEndpoint::Store { id: region }, willing: true, pressured_by: None, pressure_threshold: None })
             }).collect::<Vec<_>>();
