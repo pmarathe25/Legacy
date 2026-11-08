@@ -13979,6 +13979,37 @@ fn hauling_requests_require_a_nearby_carrier_at_the_same_endpoint() {
     for separated in [false, true] {
         assert_eq!(run(1, separated), run(4, separated));
     }
+    let store_run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                state
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions = [1, 2]
+                    .into_iter()
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect();
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                assert_eq!(world.hauling_requests().len(), 1);
+                world.snapshot()
+            })
+    };
+    assert_eq!(store_run(1), store_run(4));
     let mut separated = initial;
     separated.people[0].controlled = true;
     separated

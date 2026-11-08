@@ -5521,9 +5521,28 @@ impl Economy {
                 .filter(|r| r.expires_at >= tick)
                 .cloned()
                 .collect();
+            let local_hauling_busy = (!hauling.asking.is_empty() && !local_nonstock.is_empty())
+                .then(|| {
+                    let mut rows = local_walking::carrying_busy(
+                        &busy,
+                        &local_nonstock,
+                        &local_prior_busy,
+                        walking_next.as_ref(),
+                        &pickup.actors,
+                    );
+                    game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, asked_actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, giving_plan.actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, medical_plan.actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, handling_plan.actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, restraint_plan.actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, product_plan.actors.iter().copied());
+                    game_economy_work::reserve(&mut rows, hunting_plan.actors.iter().copied());
+                    rows
+                });
             let askers = hauling.ask(
                 &self.people,
-                &busy,
+                local_hauling_busy.as_deref().unwrap_or(&busy),
                 &locations,
                 tick,
                 self.local_transport
@@ -5531,6 +5550,9 @@ impl Economy {
                     .and_then(|owner| owner.walking.as_ref()),
             )?;
             if !askers.is_empty() {
+                if local_hauling_busy.is_some() {
+                    game_economy_work::reserve(&mut local_prior_busy, askers.iter().copied());
+                }
                 busy.par_extend(askers.into_par_iter());
                 busy.par_sort_unstable();
                 busy = busy
