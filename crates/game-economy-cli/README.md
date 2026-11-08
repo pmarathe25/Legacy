@@ -241,3 +241,5 @@ Use `taking-watch ACTOR on|off` to set personal attention, `taking-report RECIPI
 `work-outcome-feelings missing|received|partial FEAR OBLIGATION` sets the current person's signed fear and obligation changes for those experiences. For a partial response, `default` reuses that person's missing value; a zero value explicitly suppresses it.
 
 Try `cargo run -p game-economy-cli -- content/scenarios/economy-tool-wear.toml`, then `tool-condition`, `step 1`, and `tool-condition` to see a willing person use carried timber to repair an identified tool before starting a job. Tool wear and personal repair choices are opt-in scenario data; the same item keeps its damage when physically transferred.
+
+Try `cargo run -p game-economy-cli -- content/scenarios/economy-irrigation.toml`; use `step 3`, `irrigation`, `fields`, and `stock 1` to inspect individual watering attempts and the finite regional water supply. Field growth sees the moisture committed at the beginning of each boundary.

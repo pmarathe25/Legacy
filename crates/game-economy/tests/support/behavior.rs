@@ -211,6 +211,7 @@ fn fixture() -> State {
         family: None,
         care: None,
         agriculture: None,
+        irrigation: None,
         dynamics: None,
         missions: None,
         campaign: None,
@@ -47885,4 +47886,400 @@ fn broken_or_unidentified_tools_cannot_enable_work_and_unfunded_repairs_fail() {
     let wear = state.tool_wear.unwrap();
     assert_eq!(wear.conditions[0].damage, 2);
     assert!(!wear.events[0].accepted);
+}
+
+fn irrigation_fixture() -> State {
+    let mut state = fixture();
+    state.agreements = None;
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    state.agriculture = Some(Agriculture {
+        inherit_births: false,
+        crops: vec![Crop {
+            id: 1,
+            seed: 2,
+            seed_quantity: 1,
+            output: 1,
+            output_quantity: 1,
+            growth_ticks: 3,
+        }],
+        fields: (1..=3)
+            .map(|id| Field {
+                id,
+                region: 1,
+                crop: 1,
+                phase: CropPhase::Growing,
+                remaining: 3,
+            })
+            .collect(),
+        policies: vec![],
+        max_hunger: 10,
+    });
+    state.irrigation = Some(crate::Irrigation {
+        water: 2,
+        capacity: 2,
+        minimum_growth: 1,
+        evaporation: 1,
+        moisture: (1..=3)
+            .map(|field| crate::FieldMoisture { field, amount: 0 })
+            .collect(),
+        choices: (1..=3)
+            .map(|person| crate::WaterChoice {
+                person,
+                field: person,
+                quantity: 1,
+                willing: true,
+                pressured_by: None,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims: false,
+            })
+            .collect(),
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn irrigation_competes_for_real_water_and_growth_uses_committed_moisture() {
+    let initial = irrigation_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let first = world.snapshot();
+                let irrigation = first.irrigation.as_ref().unwrap();
+                assert_eq!(irrigation.events.iter().filter(|e| e.accepted).count(), 2);
+                assert_eq!(irrigation.moisture.iter().map(|m| m.amount).sum::<u64>(), 2);
+                assert!(
+                    first
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .fields
+                        .iter()
+                        .all(|f| f.remaining == 3)
+                );
+                assert_eq!(
+                    first
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let second = world.snapshot();
+                assert_eq!(second, restored.snapshot());
+                for (field, moisture) in second
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .fields
+                    .iter()
+                    .zip(&irrigation.moisture)
+                {
+                    assert_eq!(field.remaining, if moisture.amount > 0 { 2 } else { 3 });
+                }
+                assert!(
+                    second
+                        .irrigation
+                        .as_ref()
+                        .unwrap()
+                        .moisture
+                        .iter()
+                        .all(|m| m.amount == 0)
+                );
+                assert!(
+                    second
+                        .irrigation
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| !event.accepted)
+                );
+                second
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn irrigation_boundary_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20000);
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let empty = std::env::var_os("LEGACY_EMPTY_RESERVOIR").is_some();
+    let mut state = concentrated(count);
+    state.nutrition = None;
+    state.autowork = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    let water = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *water = Container::new(
+        water.place,
+        water.capacity,
+        if empty {
+            vec![]
+        } else {
+            vec![Lot {
+                good: 2,
+                quantity: count / 2,
+                item: None,
+                expires_at: None,
+            }]
+        },
+    )
+    .unwrap();
+    state.agriculture = Some(Agriculture {
+        inherit_births: false,
+        crops: vec![Crop {
+            id: 1,
+            seed: 2,
+            seed_quantity: 1,
+            output: 1,
+            output_quantity: 1,
+            growth_ticks: 10,
+        }],
+        fields: (1..=count)
+            .map(|id| Field {
+                id,
+                region: 1,
+                crop: 1,
+                phase: CropPhase::Growing,
+                remaining: 10,
+            })
+            .collect(),
+        policies: vec![],
+        max_hunger: 10,
+    });
+    state.irrigation = Some(crate::Irrigation {
+        water: 2,
+        capacity: 2,
+        minimum_growth: 1,
+        evaporation: 1,
+        moisture: (1..=count)
+            .map(|field| crate::FieldMoisture { field, amount: 0 })
+            .collect(),
+        choices: (1..=count)
+            .map(|person| crate::WaterChoice {
+                person,
+                field: person,
+                quantity: 1,
+                willing: true,
+                pressured_by: None,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims: false,
+            })
+            .collect(),
+        events: vec![],
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut fingerprint = None;
+            for _ in 0..4 {
+                let mut world = Economy::compile(state.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                samples.push(start.elapsed().as_secs_f64());
+                let actual = world.snapshot();
+                assert_eq!(
+                    actual
+                        .irrigation
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .filter(|e| e.accepted)
+                        .count(),
+                    if empty { 0 } else { count as usize / 2 }
+                );
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&actual).unwrap().hash(&mut hash);
+                let hash = hash.finish();
+                if let Some(expected) = fingerprint {
+                    assert_eq!(expected, hash);
+                }
+                fingerprint = Some(hash);
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "workers={workers} fields={count} empty={empty} elapsed_median={:.6} fingerprint={:016x}",
+                samples[1],
+                fingerprint.unwrap()
+            );
+        });
+}
+
+#[test]
+fn watering_attempts_cause_fatigue_even_when_water_is_unavailable() {
+    let mut state = irrigation_fixture();
+    state.fatigue = Some(Fatigue {
+        rules: fatigue_rules(),
+        people: vec![],
+    });
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    let snapshot = world.snapshot();
+    let irrigation = snapshot.irrigation.unwrap();
+    assert_eq!(
+        irrigation
+            .events
+            .iter()
+            .filter(|event| event.accepted)
+            .count(),
+        2
+    );
+    let fatigue = snapshot.fatigue.unwrap();
+    for event in irrigation.events {
+        assert_eq!(
+            fatigue
+                .people
+                .iter()
+                .find(|person| person.id == event.person)
+                .unwrap()
+                .fatigue,
+            2
+        );
+    }
+}
+
+#[test]
+fn tool_repair_attempts_cause_fatigue_when_material_is_present_or_absent() {
+    for supplied in [false, true] {
+        let mut state = fixture();
+        state.agreements = None;
+        state.autowork = None;
+        state.nutrition = None;
+        for person in &mut state.people {
+            person.seek_meals = false;
+            person.hunger = 0;
+        }
+        let holder = state
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap();
+        let mut lots = vec![Lot {
+            good: 3,
+            quantity: 1,
+            item: Some(1001),
+            expires_at: None,
+        }];
+        if supplied {
+            lots.push(Lot {
+                good: 2,
+                quantity: 1,
+                item: None,
+                expires_at: None,
+            });
+        }
+        *holder = Container::new(holder.place, holder.capacity, lots).unwrap();
+        state.tool_wear = Some(crate::ToolWear {
+            rules: vec![crate::ToolWearRule {
+                good: 3,
+                durability: 2,
+                wear: 1,
+                repair_good: 2,
+                repair_quantity: 1,
+            }],
+            conditions: vec![crate::ToolCondition {
+                item: 1001,
+                good: 3,
+                damage: 1,
+            }],
+            repairs: vec![crate::ToolRepairChoice {
+                person: 1,
+                item: 1001,
+                willing: true,
+            }],
+            events: vec![],
+        });
+        state.fatigue = Some(Fatigue {
+            rules: fatigue_rules(),
+            people: vec![],
+        });
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        let state = world.snapshot();
+        assert_eq!(state.tool_wear.unwrap().events[0].accepted, supplied);
+        assert_eq!(
+            state
+                .fatigue
+                .unwrap()
+                .people
+                .iter()
+                .find(|person| person.id == 1)
+                .unwrap()
+                .fatigue,
+            2
+        );
+    }
+}
+
+#[test]
+fn watering_can_follow_personally_felt_fear_without_willingness_or_assumed_obligation() {
+    let mut state = irrigation_fixture();
+    let choices = &mut state.irrigation.as_mut().unwrap().choices;
+    choices[0].willing = false;
+    choices[0].pressured_by = Some(4);
+    choices[0].fear_at_least = Some(3);
+    choices[1].willing = false;
+    choices[1].pressured_by = Some(4);
+    choices[1].obligation_at_least = Some(3);
+    choices[2].willing = false;
+    state.opinions.as_mut().unwrap().records = vec![Opinion {
+        observer: 1,
+        target: 4,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    }];
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    let events = world.snapshot().irrigation.unwrap().events;
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].person, 1);
+    assert!(events[0].accepted);
 }

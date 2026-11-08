@@ -1,5 +1,6 @@
 //! Parallel cultivation over real seed and dated harvest custody.
 pub mod content;
+pub mod irrigation;
 use game_economy_person::Person;
 use game_lot_content::Catalog;
 use game_lot_runtime::Events;
@@ -543,6 +544,22 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    /// Growth uses committed opening moisture; watering takes effect next boundary.
+    pub fn gate_dry_growth(&mut self, owner: &Agriculture, irrigation: &irrigation::Irrigation) {
+        let mut opening: Vec<_> = owner.fields.par_iter().collect();
+        if opening.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+            opening.par_sort_unstable_by_key(|field| field.id);
+        }
+        self.fields.par_iter_mut().for_each(|field| {
+            if irrigation.dry(field.id)
+                && let Ok(index) = opening.binary_search_by_key(&field.id, |row| row.id)
+                && opening[index].phase == Phase::Growing
+            {
+                field.phase = opening[index].phase;
+                field.remaining = opening[index].remaining;
+            }
+        });
+    }
     pub fn publish(self, owner: &Agriculture, events: &Events) -> Result<Agriculture, String> {
         self.plant
             .into_par_iter()

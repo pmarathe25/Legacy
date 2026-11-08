@@ -53,6 +53,8 @@ pub struct State {
     #[serde(default)]
     pub agriculture: Option<game_economy_agriculture::Agriculture>,
     #[serde(default)]
+    pub irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
+    #[serde(default)]
     pub dynamics: Option<game_economy_dynamics::Dynamics>,
     #[serde(default)]
     pub missions: Option<game_economy_expeditions::Missions>,

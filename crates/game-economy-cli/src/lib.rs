@@ -76,6 +76,8 @@ struct Scenario {
     #[serde(default)]
     cultivation: Option<Cultivation>,
     #[serde(default)]
+    irrigation: Option<IrrigationConfig>,
+    #[serde(default)]
     dynamics: Option<game_economy::Dynamics>,
     #[serde(default)]
     remedies: Vec<game_economy_dynamics::treatment::Remedy>,
@@ -571,6 +573,17 @@ struct Cultivation {
     inherit_births: bool,
     fields: Vec<CultivatedField>,
     policies: Vec<FarmPolicy>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct IrrigationConfig {
+    water: String,
+    capacity: u64,
+    minimum_growth: u64,
+    evaporation: u64,
+    moisture: Vec<game_economy::FieldMoisture>,
+    #[serde(default)]
+    choices: Vec<game_economy::WaterChoice>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1447,6 +1460,26 @@ pub fn scenario_with_options(
             })
         })
         .transpose()?;
+    let irrigation = scenario
+        .irrigation
+        .map(|config| {
+            let mut moisture = config.moisture;
+            moisture.sort_unstable_by_key(|row| row.field);
+            let mut choices = config.choices;
+            choices.sort_unstable_by_key(|row| row.person);
+            Ok::<_, String>(game_economy::Irrigation {
+                water: *goods
+                    .get(config.water.as_str())
+                    .ok_or_else(|| format!("unknown water good {}", config.water))?,
+                capacity: config.capacity,
+                minimum_growth: config.minimum_growth,
+                evaporation: config.evaporation,
+                moisture,
+                choices,
+                events: vec![],
+            })
+        })
+        .transpose()?;
     let mut custody = catalog.fresh_world(&production.inventories, 0)?;
     let local_transport = scenario
         .local_transport
@@ -1630,6 +1663,7 @@ pub fn scenario_with_options(
         family: scenario.family,
         care: scenario.care,
         agriculture,
+        irrigation,
         dynamics,
         missions: scenario.missions,
         campaign: scenario.campaign,

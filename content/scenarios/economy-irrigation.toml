@@ -1,0 +1,55 @@
+# Independent waterers draw from one finite regional fresh-water stock.
+seed = 7
+tick_millis = 900000
+stock_capacity = 1000
+food_relief_divisor = 20
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+[[regions]]
+id = 1
+stock = { grain-seed = 20, fresh-water = 2 }
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+[[people]]
+id = 3
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+[cultivation]
+max_hunger = 20
+policies = [{ person = 1, willing = true }]
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "grain"
+[[cultivation.fields]]
+id = 2
+region = 1
+crop = "grain"
+[irrigation]
+water = "fresh-water"
+capacity = 2
+minimum_growth = 1
+evaporation = 1
+moisture = [{ field = 1, amount = 0 }, { field = 2, amount = 0 }]
+choices = [{ person = 2, field = 1, quantity = 1, willing = true }, { person = 3, field = 2, quantity = 1, willing = true }]

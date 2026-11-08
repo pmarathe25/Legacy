@@ -148,6 +148,9 @@ mod state;
 mod teaching;
 mod writing;
 use game_autowork::Autowork;
+pub use game_economy_agriculture::irrigation::{
+    Choice as WaterChoice, Event as WaterEvent, Irrigation, Moisture as FieldMoisture,
+};
 pub use game_economy_agriculture::{
     Agriculture, Crop, Field, Phase as CropPhase, Policy as FarmPolicy,
 };
@@ -189,6 +192,7 @@ pub struct Economy {
     family: Option<Families>,
     care: Option<DependentCare>,
     agriculture: Option<Agriculture>,
+    irrigation: Option<Irrigation>,
     dynamics: Option<Dynamics>,
     missions: Option<Missions>,
     campaign: Option<Campaign>,
@@ -246,6 +250,7 @@ pub struct Draft {
     family: Option<Families>,
     care: Option<DependentCare>,
     agriculture: Option<Agriculture>,
+    irrigation: Option<Irrigation>,
     dynamics: Option<Dynamics>,
     missions: Option<Missions>,
     campaign: Option<Campaign>,
@@ -2440,6 +2445,17 @@ impl Economy {
         if let Some(wear) = &state.tool_wear {
             wear.validate(&physical, &goods, &ids, physical.tick())?;
         }
+        if let Some(irrigation) = &state.irrigation {
+            irrigation.validate(
+                state
+                    .agriculture
+                    .as_ref()
+                    .ok_or("irrigation requires agriculture")?,
+                &ids,
+                &goods,
+                physical.tick(),
+            )?;
+        }
         if let Some(auto) = &state.autowork {
             let production =
                 game_lot_projection::production(&physical, &view, state.rules.max_work_hunger);
@@ -2488,6 +2504,7 @@ impl Economy {
             family: state.family,
             care: state.care,
             agriculture: state.agriculture,
+            irrigation: state.irrigation,
             dynamics: state.dynamics,
             missions: state.missions,
             campaign: state.campaign,
@@ -2540,6 +2557,7 @@ impl Economy {
             family: self.family.clone(),
             care: self.care.clone(),
             agriculture: self.agriculture.clone(),
+            irrigation: self.irrigation.clone(),
             dynamics: self.dynamics.clone(),
             missions: self.missions.clone(),
             campaign: self.campaign.clone(),
@@ -4721,9 +4739,40 @@ impl Economy {
             claims,
             player_transfer
         );
+        if let (Some(plan), Some(owner), Some(irrigation)) =
+            (&mut farming, &self.agriculture, &self.irrigation)
+        {
+            plan.gate_dry_growth(owner, irrigation);
+        }
         action_base = action_base
             .checked_add(farming.as_ref().map_or(0, |p| p.changes.len() as u64))
             .ok_or("action count overflow")?;
+        let irrigation_plan = self
+            .irrigation
+            .as_ref()
+            .zip(self.agriculture.as_ref())
+            .map(|(irrigation, agriculture)| {
+                irrigation.prepare(
+                    game_economy_agriculture::irrigation::Context {
+                        agriculture,
+                        people: &self.people,
+                        busy: &busy,
+                        claims: claims.as_ref(),
+                        opinions: self.opinions.as_ref(),
+                        view: &view,
+                        max_hunger: self.rules.max_work_hunger,
+                    },
+                    action_base,
+                )
+            })
+            .transpose()?;
+        if let Some(plan) = &irrigation_plan {
+            action_base = action_base
+                .checked_add(plan.len() as u64)
+                .ok_or("action count overflow")?;
+            game_economy_work::reserve(&mut busy, plan.actors());
+            claim_uses.par_extend(plan.uses());
+        }
         let manual_gather = match player_transfer {
             Some(game_economy_interaction::PhysicalChoice::Gather { person, node }) => {
                 Some((person, node))
@@ -5609,6 +5658,9 @@ impl Economy {
         #[cfg(feature = "profile")]
         let mut work_phase = game_diagnostics::span("economy.work.collect_actions");
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
+        if let Some(plan) = &irrigation_plan {
+            actions.par_extend(plan.actions().cloned());
+        }
         let taking_actions = taking_plan
             .as_mut()
             .map_or_else(Vec::new, |plan| plan.take_actions());
@@ -5656,6 +5708,9 @@ impl Economy {
             actions.extend_from_slice(&plan.actions);
         }
         let mut compact = game_economy_agriculture::append_planting(&mut farming, &mut actions);
+        if let Some(plan) = &irrigation_plan {
+            compact.par_extend(plan.actions().map(|action| action.id));
+        }
         // Animal care needs the acceptance receipt, not copies of consumed lot cohorts.
         compact.par_extend(animal_care_plan.actions.par_iter().map(|action| action.id));
         if let Some(plan) = &repair_plan {
@@ -5920,7 +5975,8 @@ impl Economy {
             } else {
                 Vec::new()
             };
-        let shared_people: Vec<_> = shared_events.par_iter().map(|event| event.person).collect();
+        let mut shared_people: Vec<_> =
+            shared_events.par_iter().map(|event| event.person).collect();
         let tool_uses: Vec<(u64, u64)> = if let Some(owner) = &self.tool_wear {
             rates
                 .par_iter()
@@ -6222,6 +6278,12 @@ impl Economy {
             {
                 owner.record_reads(&[(player_transfer.expect("read action").person(), page.item)]);
             }
+        }
+        if self.fatigue.is_some() {
+            if let Some(plan) = &irrigation_plan {
+                shared_people.extend(plan.actors());
+            }
+            shared_people.extend(tool_repairs.iter().map(|row| row.0));
         }
         let fatigue = game_economy_fatigue::prepare_world!(
             self,
@@ -7871,6 +7933,11 @@ impl Economy {
         drop(profile_phase);
         let mut shared_work = self.shared_work.clone();
         let mut tool_wear = self.tool_wear.clone();
+        let irrigation = self
+            .irrigation
+            .as_ref()
+            .zip(irrigation_plan)
+            .map(|(owner, plan)| owner.advance(plan, physical.events(), tick));
         if let Some(owner) = &mut tool_wear {
             owner.advance(
                 &tool_uses,
@@ -7912,6 +7979,7 @@ impl Economy {
             family,
             care: next_care,
             agriculture,
+            irrigation,
             dynamics,
             missions,
             campaign,
@@ -7984,6 +8052,7 @@ impl Economy {
         self.autowork = draft.autowork;
         self.shared_work = draft.shared_work;
         self.tool_wear = draft.tool_wear;
+        self.irrigation = draft.irrigation;
         self.work_sites = draft.work_sites;
         self.construction = draft.construction;
         self.confinement = draft.confinement;
