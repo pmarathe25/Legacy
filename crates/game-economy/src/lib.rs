@@ -309,6 +309,18 @@ impl Draft {
     }
 }
 impl Economy {
+    fn local_person_at_stock(&self, id: u64) -> bool {
+        self.local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref())
+            .is_none_or(|walking| {
+                self.people
+                    .binary_search_by_key(&id, |person| person.id)
+                    .ok()
+                    .and_then(|index| self.people[index].region)
+                    .is_some_and(|region| walking.present(id, region, LocalEndpoint::Stock))
+            })
+    }
     fn local_people_together(&self, a: u64, b: u64) -> bool {
         self.local_transport
             .as_ref()
@@ -7979,13 +7991,15 @@ impl Economy {
             return Err("injury recovery deadline overflow".into());
         }
         let mut combat = self.combat.as_ref().map(|combat| {
-            combat.prepare(
+            combat.prepare_with_site_access(
                 &people,
                 &self.people,
                 tick,
                 self.seed,
                 &view,
-                self.opinions.as_ref(),
+                (self.opinions.as_ref(), &|person| {
+                    self.local_person_at_stock(person)
+                }),
             )
         });
         let social_enabled = self.dynamics.as_ref().is_some_and(|d| d.social.is_some());

@@ -50949,6 +50949,137 @@ fn an_individual_can_choose_or_feel_pressured_to_attack_a_site() {
 }
 
 #[test]
+fn tactical_site_attacks_require_the_sites_local_endpoint() {
+    use game_economy_combat::{
+        Order, Point,
+        structure::{Preference, Target},
+    };
+    let mut initial = maintenance_fixture();
+    initial.autowork = None;
+    let mut combat = combat_rules();
+    combat.structures = vec![Target {
+        site: 1,
+        region: 1,
+        position: Point { x: 0, y: 1 },
+        collapses_at_limit: false,
+        barrier: None,
+    }];
+    combat.structure_preferences = vec![Preference {
+        person: 3,
+        site: 1,
+        willing: true,
+        pressure_from: None,
+        fear_at_least: None,
+        obligation_at_least: None,
+    }];
+    initial.combat = Some(combat);
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        }),
+    });
+    let run = |workers, at_store: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if at_store {
+                    state
+                        .local_transport
+                        .as_mut()
+                        .unwrap()
+                        .walking
+                        .as_mut()
+                        .unwrap()
+                        .positions = [1, 3]
+                        .into_iter()
+                        .map(|person| LocalPosition {
+                            person,
+                            location: LocalLocation::At {
+                                region: 1,
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                            },
+                        })
+                        .collect();
+                }
+                let mut world = Economy::compile(state).unwrap();
+                let fight = world.attack(3, 1).unwrap();
+                if at_store {
+                    let before = world.snapshot();
+                    assert!(
+                        world
+                            .combat_order(1, fight, Order::AttackSite { site: 1 })
+                            .is_err()
+                    );
+                    assert_eq!(before, world.snapshot());
+                    let mut old_order = before;
+                    old_order.combat.as_mut().unwrap().conflict.encounters[0]
+                        .fighters
+                        .iter_mut()
+                        .find(|fighter| fighter.person == 1)
+                        .unwrap()
+                        .order = Order::AttackSite { site: 1 };
+                    let mut restored = Economy::compile(old_order).unwrap();
+                    restored.advance().unwrap();
+                    assert!(
+                        restored
+                            .snapshot()
+                            .combat
+                            .unwrap()
+                            .structure_events
+                            .is_empty()
+                    );
+                }
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(
+                    !state.combat.as_ref().unwrap().structure_events.is_empty(),
+                    !at_store
+                );
+                assert_eq!(
+                    state
+                        .construction
+                        .as_ref()
+                        .unwrap()
+                        .maintenance
+                        .as_ref()
+                        .unwrap()
+                        .conditions[0]
+                        .wear,
+                    u64::from(!at_store)
+                );
+                state
+            })
+    };
+    for at_store in [false, true] {
+        assert_eq!(run(1, at_store), run(4, at_store));
+    }
+}
+
+#[test]
 fn removing_a_tactical_site_clears_orders_without_stale_references() {
     use game_economy_combat::{Order, Point, structure::Target};
     let mut initial = maintenance_fixture();
@@ -51282,12 +51413,57 @@ fn tactical_site_damage_benchmark() {
     let autonomous = std::env::var_os("LEGACY_AUTONOMOUS").is_some();
     let collapse = std::env::var_os("LEGACY_COLLAPSE").is_some();
     let barrier = std::env::var_os("LEGACY_BARRIER").is_some();
+    let local_access = std::env::var_os("LEGACY_LOCAL_SITE_ACCESS").is_some();
+    let remote_site = std::env::var_os("LEGACY_SITE_REMOTE").is_some();
     assert!(!barrier || (hot && collapse));
+    assert!(!remote_site || (local_access && !collapse && !autonomous));
     let mut initial = if hot {
         concentrated_combat(count + 1)
     } else {
         independent_combats(count)
     };
+    if local_access {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_unstable_by_key(|row| row.place);
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![LocalStore {
+                id: 1,
+                region: 1,
+                name: "store".into(),
+            }],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                positions: if remote_site {
+                    initial
+                        .people
+                        .iter()
+                        .map(|person| LocalPosition {
+                            person: person.id,
+                            location: LocalLocation::At {
+                                region: 1,
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                            },
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                },
+                events: vec![],
+            }),
+        });
+    }
     let sites = if hot { 1 } else { count };
     initial.work_sites = Some(WorkSites {
         next_id: sites + 1,
@@ -51352,7 +51528,7 @@ fn tactical_site_damage_benchmark() {
             world.advance().unwrap();
             samples.push(start.elapsed().as_secs_f64());
             let state = world.snapshot();
-            assert_eq!(state.combat.as_ref().unwrap().structure_events.len(), count as usize);
+            assert_eq!(state.combat.as_ref().unwrap().structure_events.len(), if remote_site { 0 } else { count as usize });
             assert!(state.combat.as_ref().unwrap().conflict.events.is_empty());
             if collapse {
                 assert!(state.work_sites.as_ref().unwrap().sites.is_empty());
@@ -51363,7 +51539,7 @@ fn tactical_site_damage_benchmark() {
                 }
                 assert!(state.combat.as_ref().unwrap().structure_events.iter().all(|event| event.collapsed));
             } else {
-                assert!(state.construction.as_ref().unwrap().maintenance.as_ref().unwrap().conditions.iter().all(|c| c.wear == 1));
+                assert!(state.construction.as_ref().unwrap().maintenance.as_ref().unwrap().conditions.iter().all(|c| c.wear == u64::from(!remote_site)));
             }
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             serde_json::to_vec(&state).unwrap().hash(&mut hash);
@@ -51373,7 +51549,7 @@ fn tactical_site_damage_benchmark() {
         }
         samples.remove(0);
         samples.sort_by(f64::total_cmp);
-        eprintln!("workers={workers} strikes={count} sites={sites} hot={hot} autonomous={autonomous} collapse={collapse} barrier={barrier} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
+        eprintln!("workers={workers} strikes={count} sites={sites} hot={hot} autonomous={autonomous} collapse={collapse} barrier={barrier} local_access={local_access} remote_site={remote_site} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
     });
 }
 

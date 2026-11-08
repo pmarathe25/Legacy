@@ -71,6 +71,8 @@ The ignored `autonomous_wound_care_benchmark` measures a full boundary of indepe
 
 The ignored `tactical_site_damage_benchmark` measures a full boundary of attacks on maintainable work sites. `LEGACY_ENCOUNTERS` controls strike count, `LEGACY_HOT=1` directs all strikes at one site, `LEGACY_AUTONOMOUS=1` makes individual fighters choose the site attack, and `LEGACY_COLLAPSE=1` enables collapse. With both hot contention and collapse enabled, `LEGACY_BARRIER=1` adds a site-owned tactical barrier. `LEGACY_WORKERS` controls concurrency.
 
+Regional work sites occupy the stock endpoint when local walking is enabled. Tactical site attacks check that location, including orders restored from a save. Add `LEGACY_LOCAL_SITE_ACCESS=1` to the existing site-damage benchmark, and `LEGACY_SITE_REMOTE=1` to place all fighters at a different store. On a Ryzen 5 7600, 5,000 reachable attacks measured 5.8 and 2.8 ms with one and six workers; remote attacks measured 6.7 and 3.3 ms and caused no site damage. Each pair had matching fingerprints.
+
 The ignored `route_closure_batch_benchmark` attempts a mixed batch of open and closed routes and advances a boundary. `LEGACY_PEOPLE` controls the number of travelers, `LEGACY_DISTRIBUTED=1` gives them independent routes, and `LEGACY_WORKERS` controls concurrency.
 
 The ignored `personal_route_planning_benchmark` measures a full boundary of food seekers planning from individual route reports. `LEGACY_PEOPLE` sets the population, `LEGACY_MULTIHOP=1` exercises multi-leg paths, and `LEGACY_WORKERS` sets concurrency.

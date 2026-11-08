@@ -423,6 +423,19 @@ impl Runtime {
         view: &View,
         opinions: Option<&Opinions>,
     ) -> Draft {
+        self.prepare_with_site_access(people, personal, tick, seed, view, (opinions, &|_| true))
+    }
+
+    /// Stage combat while respecting the host's physical reach to work sites.
+    pub fn prepare_with_site_access(
+        &self,
+        people: &[PersonSnapshot],
+        personal: &[Person],
+        tick: u64,
+        seed: u64,
+        view: &View,
+        (opinions, site_access): (Option<&Opinions>, &(dyn Fn(u64) -> bool + Sync)),
+    ) -> Draft {
         let fear_index = opinions
             .filter(|_| {
                 self.state
@@ -492,13 +505,14 @@ impl Runtime {
             })
             .collect();
         retreating.par_sort_unstable();
-        let autonomous = structure::choose(self, personal, opinions, &retreating);
+        let autonomous = structure::choose(self, personal, opinions, &retreating, site_access);
         let mut structural_actors: Vec<_> = autonomous
             .par_iter()
             .map(|intent| intent.attacker)
             .collect();
         structural_actors.par_sort_unstable();
-        let structure_events = structure::strikes(self, people, &retreating, &autonomous, tick);
+        let structure_events =
+            structure::strikes(self, people, &retreating, &autonomous, tick, site_access);
         let mut pursuers: Vec<_> = self
             .state
             .reactions

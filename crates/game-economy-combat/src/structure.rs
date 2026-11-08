@@ -131,6 +131,7 @@ pub(crate) fn choose(
     people: &[Person],
     opinions: Option<&Opinions>,
     retreating: &[u64],
+    site_access: &(dyn Fn(u64) -> bool + Sync),
 ) -> Vec<Intent> {
     if runtime.structure_candidates.is_empty() {
         return Vec::new();
@@ -148,7 +149,7 @@ pub(crate) fn choose(
         .par_iter()
         .filter_map(|candidate| {
             let intent = candidate.intent;
-            if retreating.binary_search(&intent.attacker).is_ok() {
+            if retreating.binary_search(&intent.attacker).is_ok() || !site_access(intent.attacker) {
                 return None;
             }
             if !runtime.index.can_attack_point(
@@ -306,6 +307,7 @@ pub(crate) fn strikes(
     retreating: &[u64],
     autonomous: &[Intent],
     tick: u64,
+    site_access: &(dyn Fn(u64) -> bool + Sync),
 ) -> Vec<Event> {
     if runtime.structure_orders.is_empty() && autonomous.is_empty() {
         return Vec::new();
@@ -315,7 +317,7 @@ pub(crate) fn strikes(
         .par_iter()
         .chain(autonomous.par_iter())
         .filter_map(|intent| {
-            if retreating.binary_search(&intent.attacker).is_ok() {
+            if retreating.binary_search(&intent.attacker).is_ok() || !site_access(intent.attacker) {
                 return None;
             }
             let person = people[person_index(people, intent.attacker)?];

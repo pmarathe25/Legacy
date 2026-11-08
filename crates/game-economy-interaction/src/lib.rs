@@ -498,6 +498,11 @@ macro_rules! combat_methods {
             encounter: u64,
             order: game_economy_combat::Order,
         ) -> Result<(), String> {
+            if matches!(order, game_economy_combat::Order::AttackSite { .. })
+                && !self.local_person_at_stock(actor)
+            {
+                return Err("attacking a work site requires being at its local endpoint".into());
+            }
             if self.campaign.as_ref().is_some_and(|c| {
                 c.lineage.current == Some(actor)
                     && c.lineage.controlled_person(self.tick()) != Some(actor)
