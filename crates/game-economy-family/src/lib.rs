@@ -451,10 +451,16 @@ macro_rules! work_rates {
 #[macro_export]
 macro_rules! stage_combat {
     ($world:expr, $people:expr, $person:expr, $tick:expr, $view:expr) => {{
-        let combat = $world
-            .combat
-            .as_ref()
-            .map(|combat| combat.prepare(&$people, &$world.people, $tick, $world.seed, &$view));
+        let combat = $world.combat.as_ref().map(|combat| {
+            combat.prepare(
+                &$people,
+                &$world.people,
+                $tick,
+                $world.seed,
+                &$view,
+                $world.opinions.as_ref(),
+            )
+        });
         if let Some(combat) = &combat {
             combat.apply(&mut $person.people);
         }

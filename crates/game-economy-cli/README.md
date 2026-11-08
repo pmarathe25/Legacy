@@ -22,6 +22,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-maintenance.toml` has a workshop that wears out after one completed batch. Local `view` shows its wear, limit, repair good, and quantity; `repair-site 1` spends a boundary and consumes the required carried timber if the physical transaction succeeds. A worn-out site does not admit new jobs, but existing work may finish. Repairs require an idle site and exclude competing demolition and new work during the attempt.
 
+In `content/scenarios/economy-fear-retreat.toml`, use `attack 3` and advance the combat. The other fighter can gain personal fear from an actual strike and choose to retreat in a later round; another person's fear or a fighter without that inclination does not compel retreat.
+
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
 
 `content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.

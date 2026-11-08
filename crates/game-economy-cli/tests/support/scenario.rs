@@ -4838,6 +4838,7 @@ fn distrust_can_initiate_tactical_conflict_with_a_controlled_person() {
                     person: 1,
                     response: Response::Fight,
                     retreat_at_or_below: None,
+                    retreat_fear_at_least: None,
                     pursue: false,
                 });
                 let mut world = game_economy::Economy::compile(state).unwrap();
@@ -6422,6 +6423,70 @@ fn authored_workshop_wears_and_player_repairs_with_carried_timber() {
                     0
                 );
                 world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn authored_fighter_can_retreat_after_feeling_fear_from_a_real_strike() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-fear-retreat.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                game_economy_player::Player::new(&mut world)
+                    .attack(3)
+                    .unwrap();
+                world.advance().unwrap();
+                let after_strike = world.snapshot();
+                assert_eq!(
+                    after_strike
+                        .people
+                        .iter()
+                        .find(|p| p.id == 1)
+                        .unwrap()
+                        .health,
+                    99
+                );
+                assert_eq!(
+                    after_strike
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .find(|o| o.observer == 3 && o.target == 1)
+                        .unwrap()
+                        .fear,
+                    1
+                );
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&after_strike).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.people.iter().find(|p| p.id == 1).unwrap().health, 99);
+                assert!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .encounters
+                        .is_empty()
+                );
+                state
             })
     };
     assert_eq!(run(1), run(4));

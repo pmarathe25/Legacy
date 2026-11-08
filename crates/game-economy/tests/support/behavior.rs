@@ -23289,6 +23289,7 @@ fn combat_rules() -> Combat {
             person: 2,
             response: Response::Fight,
             retreat_at_or_below: None,
+            retreat_fear_at_least: None,
             pursue: true,
         }],
         protection: vec![],
@@ -25368,6 +25369,7 @@ fn concentrated_pursuit(count: u64) -> State {
             person,
             response: Response::Fight,
             retreat_at_or_below: None,
+            retreat_fear_at_least: None,
             pursue: true,
         })
         .collect();
@@ -41675,4 +41677,199 @@ fn repair_can_follow_personal_fear_without_creating_an_obligation() {
             .obligation,
         0
     );
+}
+
+#[test]
+fn personally_felt_fear_can_motivate_retreat_after_an_actual_strike() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.opinions.as_mut().unwrap().rules.fear_per_damage = 1;
+    let mut combat = combat_rules();
+    combat.reactions[0].retreat_fear_at_least = Some(5);
+    initial.combat = Some(combat);
+    let run = |workers, fears_opponent: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if !fears_opponent {
+                    state.combat.as_mut().unwrap().reactions[0].retreat_fear_at_least = None;
+                }
+                let mut world = Economy::compile(state).unwrap();
+                world.attack(1, 2).unwrap();
+                world.advance().unwrap();
+                let struck = world.snapshot();
+                assert_eq!(struck.people[0].health, 90);
+                assert_eq!(
+                    struck
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .find(|o| o.observer == 2 && o.target == 1)
+                        .unwrap()
+                        .fear,
+                    10
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&struck).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                assert_eq!(state.people[0].health, if fears_opponent { 90 } else { 80 });
+                assert_eq!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .encounters
+                        .is_empty(),
+                    fears_opponent
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn fearing_someone_else_does_not_cause_retreat_from_the_chosen_opponent() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    let mut combat = combat_rules();
+    combat.reactions[0].retreat_fear_at_least = Some(5);
+    initial.combat = Some(combat);
+    initial.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 2,
+        target: 4,
+        trust: 0,
+        fear: 100,
+        obligation: 0,
+        affinity: 0,
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world.attack(1, 2).unwrap();
+    world.advance().unwrap();
+    assert_eq!(world.snapshot().people[0].health, 90);
+    assert!(
+        !world
+            .snapshot()
+            .combat
+            .unwrap()
+            .conflict
+            .encounters
+            .is_empty()
+    );
+}
+
+fn fearful_independent_combats(count: u64) -> State {
+    use game_economy_combat::{Reaction, Response};
+    let mut state = independent_combats(count);
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records = (0..count)
+        .map(|i| Opinion {
+            observer: 2 * i + 2,
+            target: 2 * i + 1,
+            trust: 0,
+            fear: 1,
+            obligation: 0,
+            affinity: 0,
+        })
+        .collect();
+    state.opinions = Some(opinions);
+    state.combat.as_mut().unwrap().reactions = (0..count)
+        .map(|i| Reaction {
+            person: 2 * i + 2,
+            response: Response::Fight,
+            retreat_at_or_below: None,
+            retreat_fear_at_least: Some(1),
+            pursue: false,
+        })
+        .collect();
+    state
+}
+
+#[test]
+fn personal_fear_in_many_independent_fights_is_deterministic() {
+    let initial = fearful_independent_combats(1024);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .conflict
+                        .encounters
+                        .is_empty()
+                );
+                assert!(state.combat.as_ref().unwrap().conflict.events.is_empty());
+                Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "personal fear in independent encounters performance measurement"]
+fn fearful_independent_combat_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_ENCOUNTERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let initial = fearful_independent_combats(count);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut times = Vec::new();
+        let mut fingerprint = 0;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            times.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            assert!(state.combat.as_ref().unwrap().conflict.encounters.is_empty());
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if fingerprint != 0 { assert_eq!(actual, fingerprint); }
+            fingerprint = actual;
+        }
+        times.remove(0);
+        times.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} encounters={count} people={} ticks=1 elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={fingerprint:016x}", count * 2, times[0], times[1], times[2]);
+    });
 }

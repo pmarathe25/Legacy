@@ -5153,10 +5153,16 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.dynamics");
         }
-        let mut combat = self
-            .combat
-            .as_ref()
-            .map(|combat| combat.prepare(&people, &self.people, tick, self.seed, &view));
+        let mut combat = self.combat.as_ref().map(|combat| {
+            combat.prepare(
+                &people,
+                &self.people,
+                tick,
+                self.seed,
+                &view,
+                self.opinions.as_ref(),
+            )
+        });
         let social_enabled = self.dynamics.as_ref().is_some_and(|d| d.social.is_some());
         let mut occupied_held = Vec::new();
         if social_enabled && !available_held.is_empty() {

@@ -29,6 +29,9 @@ pub struct Reaction {
     /// An autonomous fighter can decide to retreat as their health falls.
     #[serde(default)]
     pub retreat_at_or_below: Option<u32>,
+    /// This person's fear of their own chosen opponent can independently motivate retreat.
+    #[serde(default)]
+    pub retreat_fear_at_least: Option<u64>,
     /// This individual may move toward their chosen opponent when out of reach.
     #[serde(default)]
     pub pursue: bool,
@@ -286,20 +289,63 @@ impl Runtime {
         tick: u64,
         seed: u64,
         view: &View,
+        opinions: Option<&Opinions>,
     ) -> Draft {
+        let fear_index = opinions
+            .filter(|_| {
+                self.state
+                    .reactions
+                    .par_iter()
+                    .any(|r| r.retreat_fear_at_least.is_some())
+            })
+            .map(Opinions::index);
+        let mut chosen_opponents: Vec<_> = if fear_index.is_some() {
+            self.state
+                .conflict
+                .encounters
+                .par_iter()
+                .flat_map_iter(|fight| fight.fighters.iter())
+                .filter_map(|fighter| match fighter.order {
+                    Order::Attack { target } => Some((fighter.person, target)),
+                    _ => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if chosen_opponents.par_windows(2).any(|w| w[0].0 > w[1].0) {
+            chosen_opponents.par_sort_unstable_by_key(|row| row.0);
+        }
         let mut retreating: Vec<_> = self
             .state
             .reactions
             .par_iter()
             .filter_map(|reaction| {
-                let threshold = reaction.retreat_at_or_below?;
+                if reaction.retreat_at_or_below.is_none()
+                    && (reaction.retreat_fear_at_least.is_none() || fear_index.is_none())
+                {
+                    return None;
+                }
                 let i = personal
                     .binary_search_by_key(&reaction.person, |p| p.id)
                     .ok()?;
                 let person = &personal[i];
+                let health_reason = reaction
+                    .retreat_at_or_below
+                    .is_some_and(|threshold| person.health <= threshold);
+                let fear_reason = reaction.retreat_fear_at_least.is_some_and(|threshold| {
+                    chosen_opponents
+                        .binary_search_by_key(&person.id, |row| row.0)
+                        .ok()
+                        .is_some_and(|i| {
+                            fear_index.as_ref().is_some_and(|index| {
+                                index.fear(person.id, chosen_opponents[i].1) >= threshold
+                            })
+                        })
+                });
                 (!person.controlled
                     && person.health > 0
-                    && person.health <= threshold
+                    && (health_reason || fear_reason)
                     && self.actors.binary_search(&person.id).is_ok())
                 .then_some(person.id)
             })
