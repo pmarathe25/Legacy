@@ -48444,3 +48444,109 @@ fn autonomous_worker_repairs_broken_tool_without_abandoning_active_work() {
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn controlled_person_can_repair_carried_tool_without_losing_job() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.nutrition = None;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    initial.physical.recipes[0].ticks = 4;
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![
+            Lot {
+                good: 2,
+                quantity: 1,
+                item: None,
+                expires_at: None,
+            },
+            Lot {
+                good: 3,
+                quantity: 1,
+                item: Some(777),
+                expires_at: None,
+            },
+        ],
+    )
+    .unwrap();
+    initial.tool_wear = Some(crate::ToolWear {
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 1,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![crate::ToolCondition {
+            item: 777,
+            good: 3,
+            damage: 0,
+        }],
+        repairs: vec![],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.start_work(1, 1, 1).unwrap().started.len(), 1);
+                world.continue_work(1).unwrap();
+                let broken = world.snapshot();
+                let job = broken.physical.work[0].job.id;
+                assert_eq!(broken.physical.work[0].job.remaining, 3);
+                assert!(world.repair_tool(1, 999).is_err());
+                assert_eq!(world.snapshot(), broken);
+                assert!(world.repair_tool(2, 777).is_err());
+                assert_eq!(world.snapshot(), broken);
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&broken).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.repair_tool(1, 777).unwrap());
+                assert!(restored.repair_tool(1, 777).unwrap());
+                let repaired = world.snapshot();
+                assert_eq!(repaired, restored.snapshot());
+                assert_eq!(repaired.physical.work[0].job.id, job);
+                assert_eq!(repaired.physical.work[0].job.remaining, 3);
+                assert_eq!(repaired.tool_wear.as_ref().unwrap().conditions[0].damage, 0);
+                world.continue_work(1).unwrap();
+                let before_failure = world.snapshot();
+                assert_eq!(before_failure.physical.work[0].job.remaining, 2);
+                assert!(!world.repair_tool(1, 777).unwrap());
+                let after_failure = world.snapshot();
+                assert_eq!(after_failure.physical.work[0].job.remaining, 2);
+                assert_eq!(
+                    after_failure.tool_wear.as_ref().unwrap().conditions[0].damage,
+                    1
+                );
+                assert_eq!(
+                    after_failure.physical.custody.tick,
+                    before_failure.physical.custody.tick + 1
+                );
+                after_failure
+            })
+    };
+    assert_eq!(run(1), run(4));
+}

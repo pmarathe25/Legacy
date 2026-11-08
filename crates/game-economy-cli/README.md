@@ -245,3 +245,5 @@ Try `cargo run -p game-economy-cli -- content/scenarios/economy-tool-wear.toml`,
 Try `cargo run -p game-economy-cli -- content/scenarios/economy-irrigation.toml`; use `step 3`, `irrigation`, `fields`, and `stock 1` to inspect individual watering attempts and the finite regional water supply. Field growth sees the moisture committed at the beginning of each boundary.
 
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-active-tool-repair.toml` and use `step 1` and `tool-condition` repeatedly to follow a worker who repairs a broken tool while retaining the current job.
+
+Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-tool-repair.toml`; `view` lists the condition and identity of carried tools, and `repair-tool 1001` attempts repair using the ruler's carried material. Repair consumes a boundary and may fail if the material is unavailable.

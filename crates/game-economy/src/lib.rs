@@ -500,6 +500,23 @@ impl Economy {
                     .any(|e| e.person == person && e.site == site && e.repaired)
             }))
     }
+    /// Attempt to repair an identified tool carried by the controlled person.
+    pub fn repair_tool(&mut self, person: u64, item: u64) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::RepairTool { person, item }),
+        )?;
+        self.commit(draft)?;
+        Ok(self.tool_wear.as_ref().is_some_and(|owner| {
+            owner
+                .events
+                .iter()
+                .any(|event| event.person == person && event.item == item && event.accepted)
+        }))
+    }
     /// Recover actual material from local debris into this person's custody.
     pub fn salvage_site(
         &mut self,
@@ -5773,6 +5790,25 @@ impl Economy {
             compact.par_extend(plan.actions.par_iter().map(|action| action.id));
         }
         actions.append(&mut animal_care_plan.actions);
+        let manual_tool_repair = match player_transfer {
+            Some(game_economy_interaction::PhysicalChoice::RepairTool { person, item }) => {
+                if resting.binary_search(&person).is_ok()
+                    || held.binary_search(&person).is_ok()
+                    || self.family.as_ref().is_some_and(|family| {
+                        family.members.iter().any(|member| {
+                            member.id == person && member.age < family.rules.min_work_age
+                        })
+                    })
+                {
+                    return Err("person cannot repair a tool now".into());
+                }
+                if self.tool_wear.is_none() {
+                    return Err("tool wear is disabled".into());
+                }
+                Some((person, item))
+            }
+            _ => None,
+        };
         let tool_repairs = if let Some(owner) = &self.tool_wear {
             let last = actions
                 .par_iter()
@@ -5782,14 +5818,30 @@ impl Economy {
                 .max()
                 .unwrap_or(0);
             let base = last.checked_add(1).ok_or("action count overflow")?;
-            let plan = owner.prepare_repairs(
+            let manual = manual_tool_repair
+                .map(|(person, item)| {
+                    owner.prepare_manual_repair(
+                        &self.physical,
+                        &self.people,
+                        person,
+                        item,
+                        self.rules.max_work_hunger,
+                        base,
+                    )
+                })
+                .transpose()?;
+            let automatic_base = base
+                .checked_add(u64::from(manual.is_some()))
+                .ok_or("action count overflow")?;
+            let mut plan = owner.prepare_repairs(
                 &self.physical,
                 &self.people,
                 &busy,
                 &paused_tool_workers,
                 self.rules.max_work_hunger,
-                base,
+                automatic_base,
             )?;
+            plan.extend(manual);
             game_economy_work::reserve(&mut busy, plan.iter().map(|row| row.0));
             let mut repairing: Vec<_> = plan.par_iter().map(|row| row.0).collect();
             if repairing.par_windows(2).any(|pair| pair[0] > pair[1]) {

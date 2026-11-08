@@ -236,6 +236,58 @@ impl ToolWear {
             })
             .collect())
     }
+    /// Prepare a controlled person's repair using the same physical material rules.
+    pub fn prepare_manual_repair(
+        &self,
+        physical: &Runtime,
+        people: &[Person],
+        person: u64,
+        item: u64,
+        max_hunger: u32,
+        action: u64,
+    ) -> Result<(u64, u64, Transaction), String> {
+        let actor = people
+            .binary_search_by_key(&person, |p| p.id)
+            .ok()
+            .map(|i| &people[i])
+            .ok_or("unknown person")?;
+        if !actor.controlled
+            || actor.health == 0
+            || actor.region.is_none()
+            || actor.hunger > max_hunger
+        {
+            return Err("person cannot repair a tool now".into());
+        }
+        if physical.item_place(item) != Some(Place::Person(person)) {
+            return Err("person does not carry that tool".into());
+        }
+        let condition = self
+            .conditions
+            .binary_search_by_key(&item, |c| c.item)
+            .ok()
+            .map(|i| &self.conditions[i])
+            .ok_or("unknown tool condition")?;
+        if condition.damage == 0 {
+            return Err("tool does not need repair".into());
+        }
+        let rule = self.rule(condition.good).ok_or("unknown tool rule")?;
+        Ok((
+            person,
+            item,
+            Transaction {
+                id: action,
+                movements: vec![Movement {
+                    id: 1,
+                    from: Place::Person(person),
+                    to: None,
+                    good: rule.repair_good,
+                    quantity: rule.repair_quantity,
+                    item: None,
+                }],
+                creations: vec![],
+            },
+        ))
+    }
     /// Both repairs and wear use opening-boundary custody; transfers take effect
     /// afterwards, so condition stays with the same physical identity.
     pub fn advance(

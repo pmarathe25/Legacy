@@ -69,6 +69,13 @@ pub struct BodyView {
     pub person: u64,
     pub possessions: Vec<Lot>,
 }
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolView {
+    pub item: u64,
+    pub good: u32,
+    pub damage: u64,
+    pub durability: u64,
+}
 /// Explicit search spectating combines guardian judgment with their actual body.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GuardianView {
@@ -120,6 +127,8 @@ pub struct View {
     /// Observable local animals, without their genetics or hidden pregnancy.
     pub animals: Vec<AnimalView>,
     pub possessions: Vec<Lot>,
+    /// Condition of identified tools carried by the controlled person.
+    pub tools: Vec<ToolView>,
     pub local_stock: Vec<Lot>,
     /// The ruler's own assertions, including assertions made in other regions.
     pub claims: Vec<ClaimView>,
@@ -661,6 +670,30 @@ impl<'a> Player<'a> {
                 .cloned()
                 .collect()
         });
+        let tools = state.tool_wear.map_or_else(Vec::new, |owner| {
+            possessions
+                .iter()
+                .filter_map(|lot| {
+                    let item = lot.item?;
+                    let condition = owner
+                        .conditions
+                        .binary_search_by_key(&item, |row| row.item)
+                        .ok()
+                        .map(|i| &owner.conditions[i])?;
+                    let rule = owner
+                        .rules
+                        .binary_search_by_key(&condition.good, |row| row.good)
+                        .ok()
+                        .map(|i| &owner.rules[i])?;
+                    Some(ToolView {
+                        item,
+                        good: condition.good,
+                        damage: condition.damage,
+                        durability: rule.durability,
+                    })
+                })
+                .collect()
+        });
         Ok(View {
             tick: self.world.tick(),
             held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
@@ -671,6 +704,7 @@ impl<'a> Player<'a> {
             bodies,
             animals,
             possessions,
+            tools,
             local_stock,
             food_reports,
             route_observations,
@@ -901,6 +935,10 @@ impl<'a> Player<'a> {
     /// Recover locally visible debris into the ruler's actual possessions.
     pub fn repair_site(&mut self, site: u64) -> Result<bool, String> {
         self.world.repair_site(self.current()?, site)
+    }
+    /// Repair an identified tool carried by the current person.
+    pub fn repair_tool(&mut self, item: u64) -> Result<bool, String> {
+        self.world.repair_tool(self.current()?, item)
     }
     pub fn salvage_site(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
         self.world

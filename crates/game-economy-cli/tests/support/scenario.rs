@@ -8366,3 +8366,29 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn player_sees_only_carried_tool_conditions_and_can_repair_one() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-player-tool-repair.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let before = world.snapshot();
+    {
+        let mut player = game_economy_player::Player::new(&mut world);
+        let view = player.view().unwrap();
+        assert_eq!(view.tools.len(), 1);
+        assert_eq!(view.tools[0].item, 1001);
+        assert_eq!(view.tools[0].damage, 2);
+        assert!(player.repair_tool(1002).is_err());
+    }
+    assert_eq!(world.snapshot(), before);
+    let mut player = game_economy_player::Player::new(&mut world);
+    assert!(player.repair_tool(1001).unwrap());
+    let view = player.view().unwrap();
+    assert_eq!(view.tools.len(), 1);
+    assert_eq!(view.tools[0].item, 1001);
+    assert_eq!(view.tools[0].damage, 0);
+}
