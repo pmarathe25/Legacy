@@ -479,17 +479,39 @@ impl Travel {
             })
             .collect();
         let (mut next, next_people) = self.publish_departures(people, accepted);
-        let mut observations: Vec<_> = self
-            .observations
+        let incoming: Vec<_> = results
             .par_iter()
-            .cloned()
-            .chain(
-                results
-                    .par_iter()
-                    .map(|(_, observation)| observation.clone()),
-            )
+            .map(|(_, observation)| observation.clone())
             .collect();
-        // For an equal timestamp, a newly witnessed result supersedes the
+        next.receive_reports(&incoming);
+        Ok((
+            next,
+            next_people,
+            results
+                .into_par_iter()
+                .map(|(outcome, _)| outcome)
+                .collect(),
+        ))
+    }
+    /// Merge validated personal reports in parallel, retaining bounded history.
+    pub fn receive_reports(&mut self, incoming: &[RouteObservation]) {
+        if incoming.is_empty() {
+            return;
+        }
+        // Independent recipients with no prior reports need neither conflict
+        // arbitration nor retention sorting.
+        if self.observations.is_empty()
+            && self.observation_limit > 0
+            && incoming
+                .par_windows(2)
+                .all(|pair| pair[0].person < pair[1].person)
+        {
+            self.observations = incoming.par_iter().cloned().collect();
+            return;
+        }
+        let mut observations = std::mem::take(&mut self.observations);
+        observations.par_extend(incoming.par_iter().cloned());
+        // For an equal timestamp, a newly received result supersedes the
         // previous report. Stable sorting preserves that publication order.
         if observations.par_windows(2).any(|pair| {
             (
@@ -515,20 +537,12 @@ impl Travel {
         observations.par_sort_unstable_by_key(|o| {
             (o.person, Reverse(o.observed_at), o.source, o.destination)
         });
-        next.observations = observations
+        self.observations = observations
             .par_chunk_by(|a, b| a.person == b.person)
             .flat_map_iter(|group| group.iter().take(self.observation_limit).cloned())
             .collect();
-        next.observations
+        self.observations
             .par_sort_unstable_by_key(|o| (o.person, o.source, o.destination));
-        Ok((
-            next,
-            next_people,
-            results
-                .into_par_iter()
-                .map(|(outcome, _)| outcome)
-                .collect(),
-        ))
     }
     /// Arrival occurs after this interval's personal and physical decisions.
     pub fn advance(&self, people: &mut [Person]) -> Self {

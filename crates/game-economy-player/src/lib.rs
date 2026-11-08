@@ -992,6 +992,27 @@ impl<'a> Player<'a> {
         self.world
             .share_invoked_food(self.current()?, target, life, region, claimed_food)
     }
+    /// Tell a nearby person a remembered or deliberately altered route report.
+    pub fn share_route_report(
+        &mut self,
+        target: u64,
+        source: u64,
+        destination: u64,
+        claimed_open: Option<bool>,
+        claimed_ticks: Option<u64>,
+    ) -> Result<bool, String> {
+        if !self.view()?.nearby.contains(&target) {
+            return Err("person is not present".into());
+        }
+        self.world.share_route_report(
+            self.current()?,
+            target,
+            source,
+            destination,
+            claimed_open,
+            claimed_ticks,
+        )
+    }
     pub fn held_pages(&self) -> Result<Vec<u64>, String> {
         Ok(self
             .world

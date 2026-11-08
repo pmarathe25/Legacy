@@ -23783,6 +23783,164 @@ fn food_search_workload(count: u64) -> State {
 }
 
 #[test]
+fn a_route_lie_requires_contact_and_is_filtered_by_the_listeners_own_reception() {
+    use game_social::{Participant, Rules as SocialRules, Social};
+    let mut initial = food_search_workload(4);
+    initial.people[0].controlled = true;
+    initial.opinions = fixture().opinions;
+    for policy in &mut initial.food_search.as_mut().unwrap().people {
+        policy.enabled = false;
+    }
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        treatment: vec![],
+        claims: None,
+        disease: None,
+        social: Some(Social {
+            rules: SocialRules {
+                interval: 1,
+                min_health: 1,
+                max_hunger: 100,
+                familiarity_gain: 1,
+                familiarity_max: 10,
+                relationship_retention: None,
+            },
+            participants: vec![
+                Participant {
+                    person: 1,
+                    willing: true,
+                },
+                Participant {
+                    person: 2,
+                    willing: true,
+                },
+            ],
+            pressures: vec![],
+            relationships: vec![],
+            events: vec![],
+            needs: None,
+        }),
+    });
+    let travel = initial.travel.as_mut().unwrap();
+    travel.personal_routing = true;
+    travel.closures.push(RouteClosure {
+        source: 1,
+        destination: 2,
+        start: 0,
+        end: 3,
+    });
+    travel.observations.push(RouteObservation {
+        person: 1,
+        source: 1,
+        destination: 2,
+        open: false,
+        observed_at: 0,
+        estimated_ticks: Some(2),
+        witness: Some(1),
+        learned_from: None,
+    });
+    let run = |workers, accepts| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world
+                    .set_food_report_reception(
+                        2,
+                        Some(if accepts {
+                            ReportReception::Always
+                        } else {
+                            ReportReception::Never
+                        }),
+                    )
+                    .unwrap();
+                let before = world.snapshot();
+                assert!(
+                    world
+                        .share_route_report(1, 2, 1, 2, Some(true), Some(0))
+                        .is_err()
+                );
+                assert_eq!(before, world.snapshot());
+                assert!(
+                    world
+                        .share_route_report(1, 2, 1, 2, Some(true), Some(9))
+                        .unwrap()
+                );
+                let shared = world.snapshot();
+                let records = &shared.travel.as_ref().unwrap().observations;
+                assert!(
+                    records
+                        .iter()
+                        .any(|r| r.person == 1 && !r.open && r.estimated_ticks == Some(2))
+                );
+                let received = records.iter().find(|r| r.person == 2);
+                assert_eq!(received.is_some(), accepts);
+                if let Some(report) = received {
+                    assert!(report.open);
+                    assert_eq!(report.estimated_ticks, Some(9));
+                    assert_eq!(report.learned_from, Some(1));
+                    assert_eq!(report.witness, None);
+                }
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&shared).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.set_food_search_choice(2, true).unwrap();
+                restored.set_food_search_choice(2, true).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let experienced = state
+                    .travel
+                    .as_ref()
+                    .unwrap()
+                    .observations
+                    .iter()
+                    .find(|r| r.person == 2);
+                if accepts {
+                    assert!(experienced.is_some_and(|r| !r.open
+                        && r.observed_at == 2
+                        && r.estimated_ticks == Some(9)));
+                } else {
+                    assert!(experienced.is_none());
+                }
+                state
+            })
+    };
+    for accepts in [false, true] {
+        assert_eq!(run(1, accepts), run(4, accepts));
+    }
+    let mut no_contact = initial;
+    no_contact
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants[1]
+        .willing = false;
+    let mut world = Economy::compile(no_contact).unwrap();
+    assert!(
+        !world
+            .share_route_report(1, 2, 1, 2, Some(true), None)
+            .unwrap()
+    );
+    assert!(
+        !world
+            .snapshot()
+            .travel
+            .unwrap()
+            .observations
+            .iter()
+            .any(|r| r.person == 2)
+    );
+}
+
+#[test]
 fn personal_route_reports_select_different_paths_without_revealing_unknown_routes() {
     let mut initial = food_search_workload(4);
     initial

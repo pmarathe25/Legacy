@@ -46,6 +46,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             println!(
                 "writing | pages | write-food SCRIPT REGION current|LIFE remembered|FOOD | give-page PERSON ITEM | read-page ITEM | practice-writing SCRIPT"
             );
+            println!("tell-route PERSON SOURCE DEST remembered|open|closed remembered|TICKS");
         }
         ["view"] => {
             let view = player.view()?;
@@ -218,6 +219,29 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                     target.parse().map_err(|_| "invalid person")?,
                     region.parse().map_err(|_| "invalid region")?,
                     claimed_food
+                )?
+            );
+        }
+        ["tell-route", target, source, destination, status, ticks] => {
+            let claimed_open = match *status {
+                "remembered" => None,
+                "open" => Some(true),
+                "closed" => Some(false),
+                _ => return Err("invalid route claim".into()),
+            };
+            let claimed_ticks = if *ticks == "remembered" {
+                None
+            } else {
+                Some(ticks.parse().map_err(|_| "invalid route estimate")?)
+            };
+            println!(
+                "met={}",
+                player.share_route_report(
+                    target.parse().map_err(|_| "invalid person")?,
+                    source.parse().map_err(|_| "invalid region")?,
+                    destination.parse().map_err(|_| "invalid region")?,
+                    claimed_open,
+                    claimed_ticks
                 )?
             );
         }

@@ -2494,6 +2494,78 @@ impl Economy {
     pub fn tick(&self) -> u64 {
         self.physical.tick()
     }
+    /// Attempt a real meeting and share a route report. Overrides are the
+    /// speaker's claims and need not match their own report or the road.
+    /// Contact does not reveal whether the listener accepted the report.
+    pub fn share_route_report(
+        &mut self,
+        actor: u64,
+        target: u64,
+        source: u64,
+        destination: u64,
+        claimed_open: Option<bool>,
+        claimed_ticks: Option<u64>,
+    ) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        if claimed_ticks == Some(0) {
+            return Err("route estimate must be positive".into());
+        }
+        let mut report = self
+            .travel
+            .as_ref()
+            .ok_or("travel is disabled")?
+            .observations
+            .iter()
+            .find(|report| {
+                report.person == actor
+                    && report.source == source
+                    && report.destination == destination
+            })
+            .cloned()
+            .ok_or("speaker has no report of that route")?;
+        if claimed_open.is_some_and(|value| value != report.open)
+            || claimed_ticks.is_some_and(|value| Some(value) != report.estimated_ticks)
+        {
+            report.witness = None;
+        }
+        if let Some(value) = claimed_open {
+            report.open = value;
+        }
+        if let Some(value) = claimed_ticks {
+            report.estimated_ticks = Some(value);
+        }
+        report.person = target;
+        report.learned_from = Some(actor);
+        let accepted = self
+            .opinions
+            .as_ref()
+            .and_then(Opinions::report_filter)
+            .is_none_or(|filter| filter.accepts(target, actor));
+        let mut draft = self.prepare_interaction(
+            Some(game_economy_interaction::Request { actor, target }),
+            None,
+            None,
+            None,
+        )?;
+        let contact = draft
+            .dynamics
+            .as_ref()
+            .and_then(|d| d.social.as_ref())
+            .is_some_and(|social| {
+                social
+                    .events
+                    .iter()
+                    .any(|event| event.a == actor.min(target) && event.b == actor.max(target))
+            });
+        if contact
+            && accepted
+            && let Some(travel) = &mut draft.travel
+        {
+            travel.receive_reports(&[report]);
+        }
+        self.commit(draft)?;
+        Ok(contact)
+    }
     /// Attempt a real meeting and state one actively invoked past-life food memory.
     /// The optional quantity is the speaker's chosen claim, which may be false.
     /// The result reports contact, not the listener's private reception or belief.
