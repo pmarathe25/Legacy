@@ -550,11 +550,41 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        #[cfg(feature = "profile")]
+        let mut profile_phase = game_diagnostics::span("giving.prepare.setup");
+        let last_person = self.people.last().map(|p| p.id);
         let find = |id| {
-            self.people
-                .binary_search_by_key(&id, |p| p.id)
-                .ok()
+            let suffix = last_person
+                .and_then(|last| last.checked_sub(id))
+                .and_then(|distance| usize::try_from(distance).ok())
+                .and_then(|distance| distance.checked_add(1))
+                .and_then(|distance| self.people.len().checked_sub(distance))
+                .filter(|&index| self.people[index].id == id);
+            suffix
+                .or_else(|| self.people.binary_search_by_key(&id, |p| p.id).ok())
                 .map(|i| &self.people[i])
+        };
+        let person_end = self
+            .view
+            .containers
+            .partition_point(|row| row.place < Place::Site(0));
+        let last_holder =
+            person_end
+                .checked_sub(1)
+                .and_then(|index| match self.view.containers[index].place {
+                    Place::Person(id) => Some(id),
+                    _ => None,
+                });
+        let holder = |id| {
+            let suffix = last_holder
+                .and_then(|last| last.checked_sub(id))
+                .and_then(|distance| usize::try_from(distance).ok())
+                .and_then(|distance| distance.checked_add(1))
+                .and_then(|distance| person_end.checked_sub(distance))
+                .filter(|&index| self.view.containers[index].place == Place::Person(id));
+            suffix
+                .map(|index| &self.view.containers[index])
+                .or_else(|| self.view.container(Place::Person(id)))
         };
         let opinions = self.opinions.map(Opinions::index);
         let food_goods: HashSet<_> = self
@@ -572,13 +602,31 @@ impl Context<'_> {
             .collect();
         learners.par_sort_unstable();
         let policies = self.owner.map_or(&[][..], |o| o.policies.as_slice());
-        let requests: HashSet<_> = self
+        let mut requests: Vec<_> = self
             .owner
             .map_or(&[][..], |o| o.requests.as_slice())
             .par_iter()
             .filter(|r| r.expires_at >= self.tick)
             .map(|r| (r.requester, r.target))
             .collect();
+        if requests.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            requests.par_sort_unstable();
+        }
+        let last_requester = requests.last().map(|row| row.0);
+        let requested = |requester, target| {
+            let direct = last_requester
+                .and_then(|last| last.checked_sub(requester))
+                .and_then(|distance| usize::try_from(distance).ok())
+                .and_then(|distance| distance.checked_add(1))
+                .and_then(|distance| requests.len().checked_sub(distance))
+                .is_some_and(|index| requests[index] == (requester, target));
+            direct || requests.binary_search(&(requester, target)).is_ok()
+        };
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("giving.prepare.policies");
+        }
         let mut chosen: Vec<_> = policies
             .par_iter()
             .filter_map(|policy| {
@@ -593,8 +641,8 @@ impl Context<'_> {
                             fear.saturating_add(obligation) >= threshold
                         })
                     });
-                let from = self.view.container(Place::Person(sender.id))?;
-                let to = self.view.container(Place::Person(recipient.id))?;
+                let from = holder(sender.id)?;
+                let to = holder(recipient.id)?;
                 (!sender.controlled
                     && sender.health > 0
                     && recipient.health > 0
@@ -608,13 +656,18 @@ impl Context<'_> {
                     && (policy.willing || pressured || learners.binary_search(&sender.id).is_ok())
                     && (!policy.requires_request
                         || (food_goods.contains(&policy.good)
-                            && requests.contains(&(recipient.id, sender.id))))
+                            && requested(recipient.id, sender.id)))
                     && from.quantity(policy.good) >= policy.quantity
                     && to.quantity(policy.good) < policy.quantity
                     && to.capacity.saturating_sub(to.used) >= policy.quantity)
                     .then_some((sender.id, recipient.id, policy.good, policy.quantity))
             })
             .collect();
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("giving.prepare.responses");
+        }
         let mut responses: Vec<_> = self
             .owner
             .map_or(&[][..], |o| o.responses.as_slice())
@@ -635,8 +688,8 @@ impl Context<'_> {
                     .map(|i| responses[i])?;
                 let sender = find(policy.person)?;
                 let recipient = find(request.requester)?;
-                let from = self.view.container(Place::Person(sender.id))?;
-                let to = self.view.container(Place::Person(recipient.id))?;
+                let from = holder(sender.id)?;
+                let to = holder(recipient.id)?;
                 let trust = opinions
                     .as_ref()
                     .map_or(0, |index| index.trust(sender.id, recipient.id));
@@ -696,6 +749,11 @@ impl Context<'_> {
                 .par_chunk_by(|a, b| a.0 == b.0)
                 .map(|group| (group[0].0, group[0].3, group[0].4, group[0].5)),
         );
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("giving.prepare.other_choices");
+        }
         let mut practice_minds: Vec<_> = self
             .owner
             .and_then(|o| o.practices.as_ref())
@@ -727,8 +785,8 @@ impl Context<'_> {
                         .map(|i| practice_minds[i])?;
                     let sender = find(mind.person)?;
                     let recipient = find(request.requester)?;
-                    let from = self.view.container(Place::Person(sender.id))?;
-                    let to = self.view.container(Place::Person(recipient.id))?;
+                    let from = holder(sender.id)?;
+                    let to = holder(recipient.id)?;
                     let pressured = mind.pressure_threshold.is_some_and(|threshold| {
                         opinions.as_ref().is_some_and(|index| {
                             let (fear, obligation) = index.feelings(sender.id, recipient.id);
@@ -799,8 +857,8 @@ impl Context<'_> {
                     let remaining = proposal.quantity.checked_sub(entry.delivered)?;
                     let sender = find(person.person)?;
                     let recipient = find(proposal.worker)?;
-                    let from = self.view.container(Place::Person(sender.id))?;
-                    let to = self.view.container(Place::Person(recipient.id))?;
+                    let from = holder(sender.id)?;
+                    let to = holder(recipient.id)?;
                     let memory = memories
                         .binary_search_by_key(
                             &(sender.id, recipient.id, proposal.recipe),
@@ -873,8 +931,8 @@ impl Context<'_> {
                     .binary_search_by_key(&sender.id, |p| p.person)
                     .ok()
                     .map(|i| responses[i])?;
-                let from = self.view.container(Place::Person(sender.id))?;
-                let to = self.view.container(Place::Person(recipient.id))?;
+                let from = holder(sender.id)?;
+                let to = holder(recipient.id)?;
                 let trust = opinions
                     .as_ref()
                     .map_or(0, |index| index.trust(sender.id, recipient.id));
@@ -916,6 +974,11 @@ impl Context<'_> {
                 );
             }
             chosen.push((sender, recipient, good, quantity));
+        }
+        #[cfg(feature = "profile")]
+        {
+            drop(profile_phase);
+            profile_phase = game_diagnostics::span("giving.prepare.materialize");
         }
         chosen.par_sort_unstable();
         base.checked_add(chosen.len() as u64)
@@ -975,6 +1038,8 @@ impl Context<'_> {
         {
             work_gifts.push((base + index as u64, sender, entry.request, quantity));
         }
+        #[cfg(feature = "profile")]
+        drop(profile_phase);
         Ok(Plan {
             actors,
             actions,

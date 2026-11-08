@@ -30299,6 +30299,72 @@ fn actual_food_help_can_motivate_a_revocable_promise_without_creating_debt() {
 }
 
 #[test]
+fn giving_resolves_gapped_person_and_custody_ids() {
+    let mut initial = concentrated(6);
+    initial.people.retain(|person| person.id != 2);
+    initial
+        .physical
+        .custody
+        .containers
+        .retain(|container| container.place != Place::Person(2));
+    initial.autowork = None;
+    initial.nutrition = None;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        acquaintance_asking: vec![],
+        policies: [(1, 4), (3, 6)]
+            .into_iter()
+            .map(|(person, recipient)| GivingPolicy {
+                person,
+                recipient,
+                good: 1,
+                quantity: 1,
+                recipient_hunger_at_least: 0,
+                willing: true,
+                requires_request: false,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+        responses: vec![],
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                for person in [4, 6] {
+                    assert_eq!(
+                        state
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|c| c.place == Place::Person(person))
+                            .unwrap()
+                            .used,
+                        1
+                    );
+                }
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn many_people_can_independently_offer_promises_after_real_help() {
     let initial = help_promise_workload(4096);
     let run = |workers| {
@@ -30348,6 +30414,7 @@ fn many_people_can_independently_offer_promises_after_real_help() {
     assert_eq!(expected, run(6));
     let mut unordered = initial.clone();
     unordered.giving.as_mut().unwrap().learning.reverse();
+    unordered.giving.as_mut().unwrap().requests.reverse();
     let mut world = Economy::compile(unordered).unwrap();
     world.advance().unwrap();
     world.advance().unwrap();
@@ -30477,6 +30544,12 @@ fn help_promise_benchmark() {
         }
         samples.sort_by(f64::total_cmp);
         println!("workers={workers} pairs={count} people={} ticks=2 offers={count} elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={:016x}", count * 2, samples[0], samples[1], samples[2], expected.unwrap());
+        #[cfg(feature = "profile")]
+        if std::env::var_os("LEGACY_PROFILE").is_some() {
+            for (name, measurement) in game_diagnostics::snapshot() {
+                println!("{name}: {:.3} ms/call", measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0);
+            }
+        }
     });
 }
 

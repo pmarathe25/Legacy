@@ -3078,6 +3078,8 @@ impl Economy {
         if !underage.is_empty() {
             game_economy_work::reserve(&mut busy, underage);
         }
+        #[cfg(feature = "profile")]
+        let help_memory_phase = game_diagnostics::span("economy.promises.help_memories");
         let help_memories: Vec<_> = if self
             .agreements
             .as_ref()
@@ -3098,6 +3100,10 @@ impl Economy {
         } else {
             Vec::new()
         };
+        #[cfg(feature = "profile")]
+        drop(help_memory_phase);
+        #[cfg(feature = "profile")]
+        let promise_offer_phase = game_diagnostics::span("economy.promises.offer_plan");
         let promise_offers =
             game_economy_promises::offers::prepare(game_economy_promises::offers::Context {
                 owner: self.agreements.as_ref(),
@@ -3113,6 +3119,8 @@ impl Economy {
                 max_hunger: self.rules.max_work_hunger,
                 tick,
             })?;
+        #[cfg(feature = "profile")]
+        drop(promise_offer_phase);
         if !promise_offers.proposals().is_empty() {
             busy.par_extend(promise_offers.proposals().par_iter().map(|p| p.debtor));
             if busy.par_windows(2).any(|rows| rows[0] > rows[1]) {
@@ -3127,6 +3135,8 @@ impl Economy {
         }
         let mut reserved_can_give = Vec::new();
         let mut asked_actors = Vec::new();
+        #[cfg(feature = "profile")]
+        let giving_requests_phase = game_diagnostics::span("economy.giving.requests");
         let mut next_giving = self.giving.as_ref().map(Giving::clone_without_practices);
         if let Some(giving) = &mut next_giving {
             let mut treated: Vec<_> = if available_held.is_empty() {
@@ -3205,6 +3215,8 @@ impl Economy {
             }
             game_economy_work::reserve(&mut busy, askers);
         }
+        #[cfg(feature = "profile")]
+        drop(giving_requests_phase);
         if let Some(game_economy_interaction::PhysicalChoice::AskFood {
             person,
             target,
@@ -3255,6 +3267,8 @@ impl Economy {
         }
         let giving_busy = (!reserved_can_give.is_empty())
             .then(|| game_economy_work::exclude_sorted(&busy, &reserved_can_give));
+        #[cfg(feature = "profile")]
+        let giving_plan_phase = game_diagnostics::span("economy.giving.plan");
         let mut giving_plan = giving::Context {
             owner: self.giving.as_ref(),
             missions: self.missions.as_ref(),
@@ -3274,9 +3288,13 @@ impl Economy {
             locations: &locations,
         }
         .prepare(action_base)?;
+        #[cfg(feature = "profile")]
+        drop(giving_plan_phase);
         action_base = action_base
             .checked_add(giving_plan.actions.len() as u64)
             .ok_or("action count overflow")?;
+        #[cfg(feature = "profile")]
+        let giving_reserve_phase = game_diagnostics::span("economy.giving.reserve");
         if !giving_plan.actors.is_empty() {
             busy.par_extend(giving_plan.actors.par_iter().copied());
             busy.par_sort_unstable();
@@ -3285,6 +3303,8 @@ impl Economy {
                 .map(|group| group[0])
                 .collect();
         }
+        #[cfg(feature = "profile")]
+        drop(giving_reserve_phase);
         let free_underage = if idle_underage.is_empty()
             || (asked_actors.is_empty() && giving_plan.actors.is_empty())
         {
@@ -4782,7 +4802,11 @@ impl Economy {
         let given =
             manual_give.map(|(person, _, _, _)| giving_plan.delivered(person, physical.events()));
         if let Some(giving) = &mut next_giving {
+            #[cfg(feature = "profile")]
+            let sharing_phase = game_diagnostics::span("economy.giving.remember_sharing");
             giving_plan.learn_sharing(giving, physical.events(), self.physical.goods(), tick);
+            #[cfg(feature = "profile")]
+            drop(sharing_phase);
             giving_plan.clear_fulfilled_requests(giving, physical.events(), self.physical.goods());
         }
         let gathered = manual_gather.map(|(person, _)| {
