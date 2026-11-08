@@ -113,7 +113,7 @@ impl Disease {
         if self.cases.iter().any(|case| {
             !people.contains(&case.person)
                 || !strains.contains(&case.strain)
-                || !cases.insert(case.person)
+                || !cases.insert((case.person, case.strain))
                 || case.infected_at > now
                 || case
                     .source
@@ -154,47 +154,44 @@ impl Disease {
             return;
         }
         let now = tick - 1;
-        let index = previous
-            .cases
+        let mut cases: Vec<_> = previous.cases.par_iter().collect();
+        if cases
             .par_windows(2)
-            .any(|pair| pair[0].person > pair[1].person)
-            .then(|| {
-                let mut rows: Vec<_> = previous.cases.par_iter().collect();
-                rows.par_sort_unstable_by_key(|case| case.person);
-                rows
-            });
+            .any(|pair| (pair[0].person, pair[0].strain) > (pair[1].person, pair[1].strain))
+        {
+            cases.par_sort_unstable_by_key(|case| (case.person, case.strain));
+        }
         let infections: Vec<_> = births
             .par_iter()
-            .filter_map(|&(child, mother)| {
-                let case = if let Some(cases) = &index {
-                    cases
-                        .binary_search_by_key(&mother, |case| case.person)
-                        .ok()
-                        .map(|i| cases[i])
-                } else {
-                    previous
-                        .cases
-                        .binary_search_by_key(&mother, |case| case.person)
-                        .ok()
-                        .map(|i| &previous.cases[i])
-                }?;
-                let strain = previous
-                    .strains
+            .flat_map_iter(|&(child, mother)| {
+                let begin = cases.partition_point(|case| case.person < mother);
+                let end = cases.partition_point(|case| case.person <= mother);
+                cases[begin..end]
                     .iter()
-                    .find(|strain| strain.id == case.strain)?;
-                let age = now.checked_sub(case.infected_at)?;
-                if !strain.contagious(age)
-                    || game_genetics::random(seed ^ 0x6269727468 ^ mother, child, tick) % 1_000_000
-                        >= u64::from(strain.birth_transmission_per_million)
-                {
-                    return None;
-                }
-                Some(Case {
-                    person: child,
-                    strain: strain.id,
-                    infected_at: tick,
-                    source: Some(mother),
-                })
+                    .filter_map(move |case| {
+                        let strain = previous
+                            .strains
+                            .iter()
+                            .find(|strain| strain.id == case.strain)?;
+                        let age = now.checked_sub(case.infected_at)?;
+                        if !strain.contagious(age)
+                            || game_genetics::random(
+                                seed ^ 0x6269727468 ^ mother ^ u64::from(strain.id),
+                                child,
+                                tick,
+                            ) % 1_000_000
+                                >= u64::from(strain.birth_transmission_per_million)
+                        {
+                            return None;
+                        }
+                        Some(Case {
+                            person: child,
+                            strain: strain.id,
+                            infected_at: tick,
+                            source: Some(mother),
+                        })
+                    })
+                    .collect::<Vec<_>>()
             })
             .collect();
         if infections.is_empty() {
@@ -212,9 +209,10 @@ impl Disease {
         if self
             .cases
             .par_windows(2)
-            .any(|pair| pair[0].person > pair[1].person)
+            .any(|pair| (pair[0].person, pair[0].strain) > (pair[1].person, pair[1].strain))
         {
-            self.cases.par_sort_unstable_by_key(|case| case.person);
+            self.cases
+                .par_sort_unstable_by_key(|case| (case.person, case.strain));
         }
         self.events.par_sort_unstable_by_key(|event| {
             (
@@ -273,15 +271,14 @@ impl Disease {
         let mut cases: Vec<_> = self.cases.par_iter().collect();
         if cases
             .par_windows(2)
-            .any(|pair| pair[0].person > pair[1].person)
+            .any(|pair| (pair[0].person, pair[0].strain) > (pair[1].person, pair[1].strain))
         {
-            cases.par_sort_unstable_by_key(|case| case.person);
+            cases.par_sort_unstable_by_key(|case| (case.person, case.strain));
         }
-        let find_case = |id| {
-            cases
-                .binary_search_by_key(&id, |case| case.person)
-                .ok()
-                .map(|i| cases[i])
+        let person_cases = |id| {
+            let start = cases.partition_point(|case| case.person < id);
+            let end = cases.partition_point(|case| case.person <= id);
+            &cases[start..end]
         };
         let dense = people.first().zip(people.last()).and_then(|(first, last)| {
             (last.id.checked_sub(first.id) == Some((people.len() - 1) as u64)).then_some(first.id)
@@ -302,7 +299,7 @@ impl Disease {
         let find_strain = |id| self.strains.iter().find(|strain| strain.id == id);
         if cases
             .par_windows(2)
-            .any(|pair| pair[0].person == pair[1].person)
+            .any(|pair| (pair[0].person, pair[0].strain) == (pair[1].person, pair[1].strain))
             || cases.par_iter().any(|case| {
                 case.infected_at > now
                     || find_person(case.person).is_none()
@@ -339,10 +336,14 @@ impl Disease {
         {
             return Err("invalid combat exposure");
         }
-        let active = |id: u64| -> Option<(&Case, &Strain)> {
-            let case = find_case(id)?;
-            let strain = find_strain(case.strain)?;
-            (now - case.infected_at < strain.end()?).then_some((case, strain))
+        let active = |id: u64, strain: u32| {
+            person_cases(id)
+                .binary_search_by_key(&strain, |case| case.strain)
+                .ok()
+                .and_then(|index| {
+                    let case = person_cases(id)[index];
+                    (now - case.infected_at < find_strain(strain)?.end()?).then_some(case)
+                })
         };
         let ordinary_can_transmit = !cases.is_empty()
             && self
@@ -368,42 +369,48 @@ impl Disease {
             .par_iter()
             .map(|encounter| (encounter.a, encounter.b, false))
             .chain(transmissible_combat.par_iter().map(|&(a, b)| (a, b, true)))
-            .filter_map(|(a, b, combat)| {
-                let try_infection = |source: u64, target: u64| {
-                    let (case, strain) = active(source)?;
-                    let probability = if combat {
-                        strain.combat_transmission_per_million
-                    } else {
-                        strain.transmission_per_million
-                    };
-                    let route_seed = if combat { seed ^ 0x636f6d626174 } else { seed };
-                    if !strain.contagious(now - case.infected_at)
-                        || active(target).is_some()
-                        || find_person(source)?.health == 0
-                        || find_person(target)?.health == 0
-                        || game_genetics::random(route_seed ^ source, target, next) % 1_000_000
-                            >= u64::from(probability)
-                    {
-                        return None;
-                    }
-                    Some(Case {
-                        person: target,
-                        strain: strain.id,
-                        infected_at: next,
-                        source: Some(source),
+            .flat_map_iter(|(a, b, combat)| {
+                [(a, b), (b, a)]
+                    .into_iter()
+                    .flat_map(move |(source, target)| {
+                        person_cases(source).iter().filter_map(move |case| {
+                            let strain = find_strain(case.strain)?;
+                            let probability = if combat {
+                                strain.combat_transmission_per_million
+                            } else {
+                                strain.transmission_per_million
+                            };
+                            let route_seed = if combat { seed ^ 0x636f6d626174 } else { seed };
+                            if !strain.contagious(now - case.infected_at)
+                                || active(target, strain.id).is_some()
+                                || find_person(source)?.health == 0
+                                || find_person(target)?.health == 0
+                                || game_genetics::random(
+                                    route_seed ^ source ^ u64::from(strain.id),
+                                    target,
+                                    next,
+                                ) % 1_000_000
+                                    >= u64::from(probability)
+                            {
+                                return None;
+                            }
+                            let case = Case {
+                                person: target,
+                                strain: strain.id,
+                                infected_at: next,
+                                source: Some(source),
+                            };
+                            let priority = game_genetics::random(
+                                seed ^ case.person,
+                                source,
+                                next ^ u64::from(case.strain),
+                            );
+                            Some((case.person, case.strain, priority, source, case))
+                        })
                     })
-                };
-                let case = try_infection(a, b).or_else(|| try_infection(b, a))?;
-                let source = case.source.expect("transmission has a source");
-                let priority = game_genetics::random(
-                    seed ^ case.person,
-                    source,
-                    next ^ u64::from(case.strain),
-                );
-                Some((case.person, priority, source, case.strain, case))
             })
             .collect();
-        let key = |row: &(u64, u64, u64, u32, Case)| (row.0, row.1, row.2, row.3);
+        let key = |row: &(u64, u32, u64, u64, Case)| (row.0, row.1, row.2, row.3);
         if candidates
             .par_windows(2)
             .any(|pair| key(&pair[0]) > key(&pair[1]))
@@ -411,20 +418,25 @@ impl Disease {
             candidates.par_sort_unstable_by_key(key);
         }
         let infection: Vec<_> = candidates
-            .par_chunk_by(|a, b| a.0 == b.0)
+            .par_chunk_by(|a, b| (a.0, a.1) == (b.0, b.1))
             .map(|group| group[0].4.clone())
             .collect();
         let damage = cases
-            .par_iter()
-            .filter_map(|case| {
-                let strain = find_strain(case.strain)?;
-                (find_person(case.person)?.health > 0
-                    && strain.contagious(now - case.infected_at)
-                    && strain.damage_per_tick > 0)
-                    .then_some(Damage {
-                        person: case.person,
-                        amount: strain.damage_per_tick,
-                    })
+            .par_chunk_by(|a, b| a.person == b.person)
+            .filter_map(|group| {
+                let person = group[0].person;
+                if find_person(person)?.health == 0 {
+                    return None;
+                }
+                let amount = group.iter().fold(0u32, |total, case| {
+                    let strain = find_strain(case.strain).expect("validated strain");
+                    if strain.contagious(now - case.infected_at) {
+                        total.saturating_add(strain.damage_per_tick)
+                    } else {
+                        total
+                    }
+                });
+                (amount > 0).then_some(Damage { person, amount })
             })
             .collect();
         let mut events: Vec<_> = cases
@@ -480,9 +492,9 @@ impl Disease {
         retained.par_extend(infection);
         if retained
             .par_windows(2)
-            .any(|pair| pair[0].person > pair[1].person)
+            .any(|pair| (pair[0].person, pair[0].strain) > (pair[1].person, pair[1].strain))
         {
-            retained.par_sort_unstable_by_key(|case| case.person);
+            retained.par_sort_unstable_by_key(|case| (case.person, case.strain));
         }
         Ok(Draft {
             state: Self {
@@ -798,7 +810,7 @@ mod tests {
         assert_eq!(loaded.strains[0].combat_transmission_per_million, 0);
     }
     #[test]
-    fn simultaneous_infections_choose_one_source_deterministically() {
+    fn simultaneous_different_strains_can_infect_the_same_person() {
         let people: Vec<_> = (1..=3).map(|id| Person { id, health: 100 }).collect();
         let mut state = state();
         state.strains[0].incubation = 0;
@@ -823,17 +835,253 @@ mod tests {
         assert_eq!(first, second);
         assert_eq!(
             first.cases.iter().filter(|case| case.person == 3).count(),
-            1
+            2
         );
-        assert!(matches!(
+        assert!(
             first
                 .cases
                 .iter()
-                .find(|case| case.person == 3)
+                .any(|case| case.person == 3 && case.strain == 1 && case.source == Some(1))
+        );
+        assert!(
+            first
+                .cases
+                .iter()
+                .any(|case| case.person == 3 && case.strain == 2 && case.source == Some(2))
+        );
+    }
+
+    #[test]
+    fn reciprocal_strains_spread_independently_and_damage_adds() {
+        let mut disease = state();
+        disease.strains[0].incubation = 0;
+        disease.strains[0].damage_per_tick = u32::MAX - 2;
+        let mut second = disease.strains[0].clone();
+        second.id = 2;
+        second.damage_per_tick = 9;
+        disease.strains.push(second);
+        disease.cases.push(Case {
+            person: 2,
+            strain: 2,
+            infected_at: 0,
+            source: None,
+        });
+        let people = [Person { id: 1, health: 100 }, Person { id: 2, health: 100 }];
+        let first = disease.prepare(&people, &[pair(1, 1, 2)], 7, 0).unwrap();
+        assert_eq!(
+            first
+                .state
+                .cases
+                .iter()
+                .map(|case| (case.person, case.strain))
+                .collect::<Vec<_>>(),
+            [(1, 1), (1, 2), (2, 1), (2, 2)]
+        );
+        assert_eq!(
+            first.damage,
+            [
+                Damage {
+                    person: 1,
+                    amount: u32::MAX - 2
+                },
+                Damage {
+                    person: 2,
+                    amount: 9
+                }
+            ]
+        );
+        let next = first.state.prepare(&people, &[], 7, 1).unwrap();
+        assert_eq!(
+            next.damage,
+            [
+                Damage {
+                    person: 1,
+                    amount: u32::MAX
+                },
+                Damage {
+                    person: 2,
+                    amount: u32::MAX
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn births_can_acquire_multiple_contagious_maternal_strains() {
+        let mut previous = state();
+        previous.strains[0].incubation = 0;
+        previous.strains[0].birth_transmission_per_million = 1_000_000;
+        let mut other = previous.strains[0].clone();
+        other.id = 2;
+        previous.strains.push(other);
+        previous.cases.push(Case {
+            person: 1,
+            strain: 2,
+            infected_at: 0,
+            source: None,
+        });
+        let mut next = previous.clone();
+        next.admit_births_validated(&previous, &[(2, 1)], 7, 1);
+        assert_eq!(
+            next.cases
+                .iter()
+                .filter(|case| case.person == 2)
+                .map(|case| case.strain)
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert!(
+            next.cases
+                .iter()
+                .filter(|case| case.person == 2)
+                .all(|case| case.infected_at == 1 && case.source == Some(1))
+        );
+    }
+
+    #[test]
+    fn competing_sources_for_one_strain_are_deterministic() {
+        let mut disease = state();
+        disease.strains[0].incubation = 0;
+        disease.cases.push(Case {
+            person: 2,
+            strain: 1,
+            infected_at: 0,
+            source: None,
+        });
+        let people: Vec<_> = (1..=3).map(|id| Person { id, health: 100 }).collect();
+        let run = |workers, events: Vec<_>| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
                 .unwrap()
-                .source,
-            Some(1 | 2)
-        ));
+                .install(|| disease.prepare(&people, &events, 42, 0).unwrap().state)
+        };
+        let a = run(1, vec![pair(1, 1, 3), pair(1, 2, 3)]);
+        let b = run(4, vec![pair(1, 2, 3), pair(1, 1, 3)]);
+        assert_eq!(a, b);
+        assert_eq!(
+            a.cases
+                .iter()
+                .filter(|case| case.person == 3 && case.strain == 1)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn immunity_blocks_only_the_matching_strain() {
+        let mut disease = state();
+        disease.strains[0].incubation = 0;
+        disease.strains[0].infectious_ticks = 1;
+        disease.strains[0].immunity_ticks = 2;
+        let mut second = disease.strains[0].clone();
+        second.id = 2;
+        disease.strains.push(second);
+        disease.cases = vec![
+            Case {
+                person: 1,
+                strain: 1,
+                infected_at: 2,
+                source: None,
+            },
+            Case {
+                person: 1,
+                strain: 2,
+                infected_at: 2,
+                source: None,
+            },
+            Case {
+                person: 2,
+                strain: 1,
+                infected_at: 0,
+                source: None,
+            },
+        ];
+        let people = [Person { id: 1, health: 100 }, Person { id: 2, health: 100 }];
+        let next = disease
+            .prepare(&people, &[pair(3, 1, 2)], 7, 2)
+            .unwrap()
+            .state;
+        assert_eq!(
+            next.cases
+                .iter()
+                .filter(|case| case.person == 2 && case.strain == 1)
+                .count(),
+            1
+        );
+        assert!(
+            next.cases
+                .iter()
+                .any(|case| case.person == 2 && case.strain == 2 && case.infected_at == 3)
+        );
+    }
+
+    #[test]
+    #[ignore = "performance measurement"]
+    fn coinfection_exposure_benchmark() {
+        let count = std::env::var("LEGACY_PEOPLE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100_000u64);
+        let workers = std::env::var("LEGACY_WORKERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let concentrated = std::env::var_os("LEGACY_CONCENTRATED").is_some();
+        let people: Vec<_> = (1..=count).map(|id| Person { id, health: 100 }).collect();
+        let sources = if concentrated { count - 1 } else { count / 2 };
+        let contacts: Vec<_> = (1..=sources)
+            .map(|id| pair(1, id, if concentrated { count } else { id + sources }))
+            .collect();
+        let mut disease = state();
+        disease.strains[0].incubation = 0;
+        let mut other = disease.strains[0].clone();
+        other.id = 2;
+        disease.strains.push(other);
+        disease.cases = (1..=sources)
+            .flat_map(|person| {
+                [1, 2].map(|strain| Case {
+                    person,
+                    strain,
+                    infected_at: 0,
+                    source: None,
+                })
+            })
+            .collect();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut samples = Vec::new();
+                for round in 0..4 {
+                    let start = std::time::Instant::now();
+                    let draft = disease.prepare_validated(&people, &contacts, 7, 0).unwrap();
+                    let elapsed = start.elapsed().as_secs_f64();
+                    let infected = draft
+                        .state
+                        .events
+                        .iter()
+                        .filter(|event| event.kind == EventKind::Infected)
+                        .count();
+                    assert_eq!(
+                        infected,
+                        if concentrated {
+                            2
+                        } else {
+                            sources as usize * 2
+                        }
+                    );
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "people={count} workers={workers} concentrated={concentrated} seconds={:.6}",
+                    samples[1]
+                );
+            });
     }
     #[test]
     #[ignore = "performance measurement"]

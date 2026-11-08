@@ -116,7 +116,45 @@ pub fn validate(
 pub struct Plan {
     pub actions: Vec<Transaction>,
     pub actors: Vec<u64>,
-    effective: Vec<bool>,
+    targets: Vec<(u64, u32, u32, u64)>,
+}
+
+/// Capture the exact opening episodes a selected medicine can affect.
+pub fn targets(disease: &Disease, choices: &[(u64, u32)], now: u64) -> Vec<(u64, u32, u32, u64)> {
+    if choices.is_empty() {
+        return Vec::new();
+    }
+    let mut choices = choices.to_vec();
+    choices.par_sort_unstable();
+    let choices = &choices;
+    disease
+        .cases
+        .par_iter()
+        .flat_map_iter(|case| {
+            let active = disease
+                .strains
+                .iter()
+                .find(|strain| strain.id == case.strain)
+                .and_then(|strain| {
+                    now.checked_sub(case.infected_at).map(|age| {
+                        age < strain.incubation + strain.infectious_ticks + strain.immunity_ticks
+                    })
+                })
+                .unwrap_or(false);
+            disease
+                .treatments
+                .iter()
+                .filter(move |remedy| {
+                    active
+                        && remedy.strain == case.strain
+                        && choices
+                            .binary_search(&(case.person, remedy.medicine))
+                            .is_ok()
+                })
+                .map(move |remedy| (case.person, remedy.medicine, case.strain, case.infected_at))
+                .collect::<Vec<_>>()
+        })
+        .collect()
 }
 #[derive(Clone, Copy)]
 pub struct Choice {
@@ -140,7 +178,7 @@ pub fn prepare(
         return Ok(Plan {
             actions: vec![],
             actors: vec![],
-            effective: vec![],
+            targets: vec![],
         });
     };
     if let Some(id) = manual {
@@ -157,8 +195,6 @@ pub fn prepare(
             return Err("person cannot use this treatment".into());
         }
     }
-    let mut cases: Vec<_> = disease.cases.par_iter().collect();
-    cases.par_sort_unstable_by_key(|case| case.person);
     let chosen: Vec<_> = policies
         .par_iter()
         .filter_map(|policy| {
@@ -166,31 +202,6 @@ pub fn prepare(
                 .binary_search_by_key(&policy.person, |p| p.id)
                 .ok()
                 .map(|i| &people[i])?;
-            let effective = cases
-                .binary_search_by_key(&policy.person, |c| c.person)
-                .ok()
-                .map(|i| cases[i])
-                .is_some_and(|case| {
-                    let Some(strain) = disease
-                        .strains
-                        .iter()
-                        .find(|strain| strain.id == case.strain)
-                    else {
-                        return false;
-                    };
-                    let Some(age) = view
-                        .boundary
-                        .checked_sub(1)
-                        .and_then(|now| now.checked_sub(case.infected_at))
-                    else {
-                        return false;
-                    };
-                    age < strain.incubation + strain.infectious_ticks + strain.immunity_ticks
-                        && disease
-                            .treatments
-                            .iter()
-                            .any(|t| t.strain == case.strain && t.medicine == policy.medicine)
-                });
             let explicit = manual == Some(person.id);
             if (!policy.willing && !explicit)
                 || (person.controlled && !explicit)
@@ -209,7 +220,7 @@ pub fn prepare(
             {
                 return None;
             }
-            Some((policy, effective))
+            Some(policy)
         })
         .collect();
     base.checked_add(chosen.len() as u64)
@@ -217,7 +228,7 @@ pub fn prepare(
     let actions = chosen
         .par_iter()
         .enumerate()
-        .map(|(i, &(p, _))| {
+        .map(|(i, &p)| {
             let id = base + i as u64;
             Transaction {
                 id,
@@ -233,10 +244,11 @@ pub fn prepare(
             }
         })
         .collect();
+    let selected: Vec<_> = chosen.par_iter().map(|p| (p.person, p.medicine)).collect();
     Ok(Plan {
         actions,
-        actors: chosen.par_iter().map(|(p, _)| p.person).collect(),
-        effective: chosen.par_iter().map(|(_, effective)| *effective).collect(),
+        actors: chosen.par_iter().map(|p| p.person).collect(),
+        targets: targets(disease, &selected, view.boundary.saturating_sub(1)),
     })
 }
 #[macro_export]
@@ -264,28 +276,34 @@ macro_rules! prepare_treatment {
     }};
 }
 pub fn apply(disease: Option<&mut Disease>, plan: &Plan, events: &Events) {
-    let mut treated: Vec<_> = plan
+    if plan.targets.is_empty() {
+        return;
+    }
+    let mut accepted: Vec<_> = plan
         .actions
         .par_iter()
         .zip(plan.actors.par_iter())
-        .zip(plan.effective.par_iter())
-        .filter_map(|((action, &person), &effective)| {
-            if !effective {
-                return None;
-            }
+        .filter_map(|(action, &person)| {
             events
                 .physical_actions
                 .binary_search_by_key(&action.id, |row| row.id)
                 .ok()
                 .filter(|&index| events.physical_actions[index].accepted)
-                .map(|_| person)
+                .map(|_| (person, action.movements[0].good))
         })
         .collect();
+    accepted.par_sort_unstable();
+    let mut treated: Vec<_> = plan
+        .targets
+        .par_iter()
+        .filter(|row| accepted.binary_search(&(row.0, row.1)).is_ok())
+        .map(|row| (row.0, row.2, row.3))
+        .collect();
     treated.par_sort_unstable();
-    apply_people(disease, &treated, events.tick);
+    apply_episodes(disease, &treated, events.tick);
 }
-/// Record courses that consumed medicine through the physical owner.
-pub fn apply_people(disease: Option<&mut Disease>, treated: &[u64], tick: u64) {
+/// Record only the opening episodes affected by actual consumed medicine.
+pub fn apply_episodes(disease: Option<&mut Disease>, treated: &[(u64, u32, u64)], tick: u64) {
     if treated.is_empty() {
         return;
     }
@@ -295,7 +313,11 @@ pub fn apply_people(disease: Option<&mut Disease>, treated: &[u64], tick: u64) {
     let mut emitted: Vec<_> = disease
         .cases
         .par_iter()
-        .filter(|case| treated.binary_search(&case.person).is_ok())
+        .filter(|case| {
+            treated
+                .binary_search(&(case.person, case.strain, case.infected_at))
+                .is_ok()
+        })
         .map(|case| Event {
             tick,
             person: case.person,
@@ -306,7 +328,11 @@ pub fn apply_people(disease: Option<&mut Disease>, treated: &[u64], tick: u64) {
         .collect();
     disease.cases = std::mem::take(&mut disease.cases)
         .into_par_iter()
-        .filter(|case| treated.binary_search(&case.person).is_err())
+        .filter(|case| {
+            treated
+                .binary_search(&(case.person, case.strain, case.infected_at))
+                .is_err()
+        })
         .collect();
     disease.events.append(&mut emitted);
     disease.events.par_sort_unstable_by_key(|event| {
@@ -327,6 +353,105 @@ pub fn apply_people(disease: Option<&mut Disease>, treated: &[u64], tick: u64) {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "performance measurement"]
+    fn independent_multistrain_treatment_benchmark() {
+        let count = std::env::var("LEGACY_PEOPLE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(100_000u64);
+        let workers = std::env::var("LEGACY_WORKERS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(1);
+        let mut disease = Disease {
+            strains: (1..=2)
+                .map(|id| game_disease::Strain {
+                    id,
+                    name: format!("strain-{id}"),
+                    incubation: 0,
+                    infectious_ticks: 10,
+                    immunity_ticks: 0,
+                    damage_per_tick: 0,
+                    transmission_per_million: 0,
+                    combat_transmission_per_million: 0,
+                    birth_transmission_per_million: 0,
+                })
+                .collect(),
+            treatments: vec![game_disease::Treatment {
+                strain: 1,
+                medicine: 1,
+            }],
+            cases: (1..=count)
+                .flat_map(|person| {
+                    [1, 2].map(|strain| game_disease::Case {
+                        person,
+                        strain,
+                        infected_at: 0,
+                        source: None,
+                    })
+                })
+                .collect(),
+            events: vec![],
+        };
+        let choices: Vec<_> = (1..=count).map(|person| (person, 1)).collect();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let start = std::time::Instant::now();
+                let mut episodes: Vec<_> = targets(&disease, &choices, 0)
+                    .into_par_iter()
+                    .map(|row| (row.0, row.2, row.3))
+                    .collect();
+                episodes.par_sort_unstable();
+                apply_episodes(Some(&mut disease), &episodes, 1);
+                let elapsed = start.elapsed().as_secs_f64();
+                assert_eq!(disease.cases.len(), count as usize);
+                assert!(disease.cases.iter().all(|case| case.strain == 2));
+                println!("patients={count} workers={workers} seconds={elapsed:.6}");
+            });
+    }
+    #[test]
+    fn treatment_removes_only_the_selected_opening_episode() {
+        let mut disease = Disease {
+            strains: vec![],
+            treatments: vec![],
+            events: vec![],
+            cases: vec![
+                game_disease::Case {
+                    person: 1,
+                    strain: 1,
+                    infected_at: 2,
+                    source: None,
+                },
+                game_disease::Case {
+                    person: 1,
+                    strain: 2,
+                    infected_at: 3,
+                    source: None,
+                },
+                game_disease::Case {
+                    person: 2,
+                    strain: 1,
+                    infected_at: 5,
+                    source: None,
+                },
+            ],
+        };
+        apply_episodes(Some(&mut disease), &[(1, 1, 2), (2, 1, 0)], 5);
+        assert_eq!(
+            disease
+                .cases
+                .iter()
+                .map(|case| (case.person, case.strain, case.infected_at))
+                .collect::<Vec<_>>(),
+            [(1, 2, 3), (2, 1, 5)]
+        );
+        assert_eq!(disease.events.len(), 1);
+        assert_eq!((disease.events[0].person, disease.events[0].strain), (1, 1));
+    }
+    #[test]
     fn ineffective_course_cannot_clear_an_infection_acquired_at_the_same_boundary() {
         let mut disease = Disease {
             strains: vec![],
@@ -346,7 +471,7 @@ mod tests {
                 creations: vec![],
             }],
             actors: vec![1],
-            effective: vec![false],
+            targets: vec![],
         };
         let events = Events {
             tick: 1,

@@ -425,10 +425,20 @@ impl Dynamics {
                     });
                 let meetings = filtered.as_deref().unwrap_or(meetings);
                 let combined: Option<Vec<_>> = (!exposure.is_empty()).then(|| {
-                    meetings
+                    let mut contacts: Vec<_> = meetings
                         .par_iter()
                         .chain(exposure.par_iter())
                         .cloned()
+                        .collect();
+                    if contacts
+                        .par_windows(2)
+                        .any(|pair| (pair[0].a, pair[0].b) > (pair[1].a, pair[1].b))
+                    {
+                        contacts.par_sort_unstable_by_key(|event| (event.a, event.b));
+                    }
+                    contacts
+                        .par_chunk_by(|a, b| (a.a, a.b) == (b.a, b.b))
+                        .map(|group| group[0].clone())
                         .collect()
                 });
                 disease.prepare_validated_with_combat(

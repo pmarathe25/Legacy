@@ -5238,6 +5238,86 @@ fn player_can_treat_a_nearby_person_with_carried_medicine() {
 }
 
 #[test]
+fn medicine_clears_only_its_matching_strain_for_self_and_others() {
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, other| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = scenario(
+                    &root.join("content/scenarios/economy-campaign.toml"),
+                    &root.join("content"),
+                )
+                .unwrap()
+                .snapshot();
+                let disease = state.dynamics.as_mut().unwrap().disease.as_mut().unwrap();
+                disease.strains[0].infectious_ticks = 100;
+                disease.strains[0].transmission_per_million = 0;
+                let mut second = disease.strains[0].clone();
+                second.id = 2;
+                disease.strains.push(second);
+                let patient = if other { 2 } else { 1 };
+                for strain in [1, 2] {
+                    disease.cases.push(game_disease::Case {
+                        person: patient,
+                        strain,
+                        infected_at: 0,
+                        source: None,
+                    });
+                }
+                let medicine = state
+                    .physical
+                    .goods
+                    .iter()
+                    .find(|good| good.name == "medicine")
+                    .unwrap()
+                    .id;
+                let mut world = game_economy::Economy::compile(state).unwrap();
+                assert!(
+                    Player::new(&mut world)
+                        .transfer_stock(medicine, 1, true)
+                        .unwrap()
+                );
+                if other {
+                    assert!(
+                        Player::new(&mut world)
+                            .treat_other(patient, medicine, 1)
+                            .unwrap()
+                    );
+                } else {
+                    assert!(Player::new(&mut world).treat().unwrap());
+                }
+                let saved = world.snapshot();
+                let disease = saved.dynamics.as_ref().unwrap().disease.as_ref().unwrap();
+                assert!(
+                    !disease
+                        .cases
+                        .iter()
+                        .any(|case| case.person == patient && case.strain == 1)
+                );
+                assert!(
+                    disease
+                        .cases
+                        .iter()
+                        .any(|case| case.person == patient && case.strain == 2)
+                );
+                let restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(saved, restored.snapshot());
+                saved
+            })
+    };
+    for other in [false, true] {
+        assert_eq!(run(1, other), run(4, other));
+    }
+}
+
+#[test]
 fn player_can_cultivate_a_visible_field() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

@@ -7,7 +7,7 @@ use game_opinions::Opinions;
 use game_production_model::Good;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,12 +107,12 @@ struct Choice {
     patient: u64,
     medicine: u32,
     quantity: u64,
-    effective: bool,
 }
 pub struct Plan {
     pub actors: Vec<u64>,
     pub actions: Vec<Transaction>,
     records: Vec<(u64, Choice)>,
+    targets: Vec<(u64, u32, u32, u64)>,
 }
 pub struct Context<'a> {
     pub owner: Option<&'a Medical>,
@@ -144,25 +144,9 @@ impl Context<'_> {
                 actors: Vec::new(),
                 actions: Vec::new(),
                 records: Vec::new(),
+                targets: Vec::new(),
             });
         }
-        let cases: HashMap<_, _> = self
-            .disease
-            .map_or(&[][..], |d| d.cases.as_slice())
-            .par_iter()
-            .map(|c| (c.person, c.strain))
-            .collect();
-        let remedies: HashSet<_> = self
-            .disease
-            .into_iter()
-            .flat_map(|d| &d.treatments)
-            .map(|t| (t.strain, t.medicine))
-            .collect();
-        let effective = |patient, medicine| {
-            cases
-                .get(&patient)
-                .is_some_and(|strain| remedies.contains(&(*strain, medicine)))
-        };
         let find = |id| {
             self.people
                 .binary_search_by_key(&id, |p| p.id)
@@ -214,7 +198,6 @@ impl Context<'_> {
                     patient: patient.id,
                     medicine: p.medicine,
                     quantity: p.quantity,
-                    effective: effective(patient.id, p.medicine),
                 })
             })
             .collect();
@@ -293,7 +276,6 @@ impl Context<'_> {
                             patient: patient_id,
                             medicine: preference.medicine,
                             quantity: preference.quantity,
-                            effective: effective(patient_id, preference.medicine),
                         },
                     ))
                 })
@@ -337,7 +319,6 @@ impl Context<'_> {
                 patient,
                 medicine,
                 quantity,
-                effective: effective(patient, medicine),
             });
         }
         if choices
@@ -398,10 +379,22 @@ impl Context<'_> {
             .collect();
         actors.par_sort_unstable();
         actors.dedup();
+        let selected: Vec<_> = chosen
+            .par_iter()
+            .map(|choice| (choice.patient, choice.medicine))
+            .collect();
+        let targets = self.disease.map_or_else(Vec::new, |disease| {
+            game_economy_dynamics::treatment::targets(
+                disease,
+                &selected,
+                self.tick.saturating_sub(1),
+            )
+        });
         Ok(Plan {
             actors,
             actions,
             records,
+            targets,
         })
     }
 }
@@ -436,11 +429,17 @@ impl Plan {
         let mut patients: Vec<_> = self
             .accepted(events)
             .into_par_iter()
-            .filter(|c| c.effective)
-            .map(|c| c.patient)
+            .map(|c| (c.patient, c.medicine))
             .collect();
         patients.par_sort_unstable();
-        game_economy_dynamics::treatment::apply_people(disease, &patients, events.tick);
+        let mut episodes: Vec<_> = self
+            .targets
+            .par_iter()
+            .filter(|row| patients.binary_search(&(row.0, row.1)).is_ok())
+            .map(|row| (row.0, row.2, row.3))
+            .collect();
+        episodes.par_sort_unstable();
+        game_economy_dynamics::treatment::apply_episodes(disease, &episodes, events.tick);
     }
     pub fn attempted(&self, actor: u64, patient: u64, events: &Events) -> bool {
         self.records.iter().any(|(id, choice)| {
