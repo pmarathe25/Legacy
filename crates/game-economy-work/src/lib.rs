@@ -240,6 +240,7 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub offers: Option<&'a OfferIndex>,
     pub practice_requests: &'a [PracticeRequest],
+    pub endpoint: Option<&'a asking::EndpointLookup<'a>>,
     pub claims: Option<&'a game_economy_claims::Index<'a>>,
     pub goals: Option<&'a Goals>,
     pub preplanned_goals: Option<&'a Autowork>,
@@ -329,14 +330,14 @@ impl Context<'_> {
             .requests
             .as_ref()
             .map(|owner| {
-                asking::prepare_with_practices(
+                asking::prepare_at_endpoints(
                     owner,
                     self.goals,
                     self.people,
                     &ask_busy,
                     self.offers,
                     self.practice_requests,
-                    self.tick,
+                    (self.tick, self.endpoint),
                 )
             })
             .transpose()

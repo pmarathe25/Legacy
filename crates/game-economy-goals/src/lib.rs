@@ -39,6 +39,22 @@ macro_rules! prepare_work {
             drop(work_prepare_phase);
             work_prepare_phase = game_diagnostics::span("economy.work.context");
         }
+        let walking = $world
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref());
+        let endpoint =
+            |person, region| match walking.expect("walking enabled").location(person, region) {
+                game_economy_local_transport::walking::Location::At {
+                    endpoint: game_economy_local_transport::Endpoint::Stock,
+                    ..
+                } => Some(None),
+                game_economy_local_transport::walking::Location::At {
+                    endpoint: game_economy_local_transport::Endpoint::Store { id },
+                    ..
+                } => Some(Some(id)),
+                game_economy_local_transport::walking::Location::Walking { .. } => None,
+            };
         let result = $world
             .autowork
             .as_ref()
@@ -52,6 +68,8 @@ macro_rules! prepare_work {
                     opinions: $world.opinions.as_ref(),
                     offers: $offers.as_ref(),
                     practice_requests: &$practice_requests,
+                    endpoint: walking
+                        .map(|_| &endpoint as &(dyn Fn(u64, u64) -> Option<Option<u64>> + Sync)),
                     claims: $claims.as_ref(),
                     goals: $world.goals.as_ref(),
                     preplanned_goals: $preplanned.as_ref(),
@@ -318,6 +336,9 @@ macro_rules! request_method {
             recipe: u32,
             lifetime: u64,
         ) -> Result<u64, String> {
+            if !self.local_people_together(requester, worker) {
+                return Err("work requests require people at the same local endpoint".into());
+            }
             if self.campaign.as_ref().is_some_and(|c| {
                 c.lineage.current == Some(requester)
                     && c.lineage.controlled_person(self.tick()) != Some(requester)

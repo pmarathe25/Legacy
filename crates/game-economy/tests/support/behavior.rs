@@ -20785,6 +20785,35 @@ fn confinement_with_local_store() -> State {
 }
 
 #[test]
+fn controlled_work_request_cannot_reach_a_person_at_another_endpoint() {
+    let mut initial = confinement_with_local_store();
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .push(LocalPosition {
+            person: 1,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        });
+    let mut world = Economy::compile(initial).unwrap();
+    let before = world.snapshot();
+    assert!(
+        world
+            .ask_work(1, 2, 1, 5)
+            .unwrap_err()
+            .contains("same local endpoint")
+    );
+    assert_eq!(world.snapshot(), before);
+}
+
+#[test]
 fn cell_actions_require_the_regional_site_endpoint() {
     let mut initial = confinement_with_local_store();
     initial

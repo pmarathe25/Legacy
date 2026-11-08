@@ -5,6 +5,9 @@ use game_work_requests::{OfferIndex, Request, Requests};
 use rayon::prelude::*;
 use std::cmp::Reverse;
 
+/// Returns the local store, regional stock, or no location while in transit.
+pub type EndpointLookup<'a> = dyn Fn(u64, u64) -> Option<Option<u64>> + Sync + 'a;
+
 pub struct Draft {
     pub requests: Vec<Request>,
     pub actors: Vec<u64>,
@@ -47,6 +50,20 @@ pub fn prepare_with_practices(
     practices: &[PracticeRequest],
     tick: u64,
 ) -> Result<Option<Draft>, &'static str> {
+    prepare_at_endpoints(owner, goals, people, busy, offers, practices, (tick, None))
+}
+
+/// Select people at the same endpoint; transit has no endpoint.
+pub fn prepare_at_endpoints(
+    owner: &Requests,
+    goals: Option<&Goals>,
+    people: &[PersonSnapshot],
+    busy: &[u64],
+    offers: Option<&OfferIndex>,
+    practices: &[PracticeRequest],
+    timing_and_endpoint: (u64, Option<&EndpointLookup<'_>>),
+) -> Result<Option<Draft>, &'static str> {
+    let (tick, endpoint) = timing_and_endpoint;
     let Some(goals) = goals.filter(|_| !owner.askers.is_empty() || !practices.is_empty()) else {
         return Ok(None);
     };
@@ -78,9 +95,9 @@ pub fn prepare_with_practices(
     let mut local: Vec<_> = people
         .par_iter()
         .filter_map(|person| {
-            (person.2 > 0)
-                .then_some(person.1.map(|region| (region, person.0)))
-                .flatten()
+            let region = person.1?;
+            let site = endpoint.map_or(Some(None), |lookup| lookup(person.0, region))?;
+            (person.2 > 0).then_some((region, site, person.0))
         })
         .collect();
     local.par_sort_unstable();
@@ -118,13 +135,16 @@ pub fn prepare_with_practices(
             let actor = person_index(people, practice.requester).map(|i| people[i])?;
             let worker = person_index(people, practice.worker).map(|i| people[i])?;
             let region = actor.1?;
-            (actor.2 > 0 && worker.2 > 0 && worker.1 == Some(region)).then_some(Candidate {
-                requester: practice.requester,
-                worker: practice.worker,
-                region,
-                recipe: practice.recipe,
-                expires: practice.expires,
-            })
+            let site = endpoint.map_or(Some(None), |lookup| lookup(actor.0, region))?;
+            let worker_site = endpoint.map_or(Some(None), |lookup| lookup(worker.0, region))?;
+            (actor.2 > 0 && worker.2 > 0 && worker.1 == Some(region) && site == worker_site)
+                .then_some(Candidate {
+                    requester: practice.requester,
+                    worker: practice.worker,
+                    region,
+                    recipe: practice.recipe,
+                    expires: practice.expires,
+                })
         })
         .collect();
     preferred.par_sort_unstable_by_key(|row| (row.requester, row.worker, row.recipe, row.expires));
@@ -165,11 +185,15 @@ pub fn prepare_with_practices(
             let Some(region) = person_index(people, asker.person).and_then(|i| people[i].1) else {
                 return Ok(None);
             };
-            let Ok(index) = local.binary_search(&(region, asker.person)) else {
+            let Some(site) = endpoint.map_or(Some(None), |lookup| lookup(asker.person, region))
+            else {
                 return Ok(None);
             };
-            let start = local.partition_point(|row| row.0 < region);
-            let end = local.partition_point(|row| row.0 <= region);
+            let Ok(index) = local.binary_search(&(region, site, asker.person)) else {
+                return Ok(None);
+            };
+            let start = local.partition_point(|row| (row.0, row.1) < (region, site));
+            let end = local.partition_point(|row| (row.0, row.1) <= (region, site));
             if end - start < 2 {
                 return Ok(None);
             }
@@ -181,7 +205,7 @@ pub fn prepare_with_practices(
                 .iter()
                 .find(|row| {
                     row.successes > row.failures
-                        && local.binary_search(&(region, row.worker)).is_ok()
+                        && local.binary_search(&(region, site, row.worker)).is_ok()
                 })
                 .map(|row| row.worker);
             let eligible = |worker| {
@@ -202,7 +226,7 @@ pub fn prepare_with_practices(
                         .iter()
                         .find(|row| {
                             offers.is_some_and(|index| index.has_offer(row.worker, asker.person))
-                                && local.binary_search(&(region, row.worker)).is_ok()
+                                && local.binary_search(&(region, site, row.worker)).is_ok()
                                 && eligible(row.worker)
                         })
                         .map(|row| row.worker)
@@ -216,7 +240,7 @@ pub fn prepare_with_practices(
                     (1..=(owner.memory_limit + 5).min(end - start - 1))
                         .map(|step| {
                             let offset = (index - start + step) % (end - start);
-                            local[start + offset].1
+                            local[start + offset].2
                         })
                         .find(|&worker| eligible(worker))
                 });
@@ -378,6 +402,61 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        let nearby = [
+            (1, Some(4), 10, 0),
+            (2, Some(4), 10, 0),
+            (3, Some(4), 10, 0),
+        ];
+        let endpoint = |person, _region| match person {
+            2 => Some(Some(8)),
+            _ => Some(None),
+        };
+        assert!(
+            prepare_at_endpoints(
+                &owner,
+                Some(&goals),
+                &nearby,
+                &[],
+                None,
+                &[terms],
+                (1, Some(&endpoint))
+            )
+            .unwrap()
+            .is_none()
+        );
+        owner.askers.push(game_work_requests::Asker {
+            person: 1,
+            interval: 1,
+            lifetime: 5,
+            retry_after_offer: false,
+        });
+        let local = prepare_at_endpoints(
+            &owner,
+            Some(&goals),
+            &nearby,
+            &[],
+            None,
+            &[],
+            (1, Some(&endpoint)),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(local.requests[0].worker, 3);
+        let walking = |person, _region| if person == 1 { None } else { Some(None) };
+        assert!(
+            prepare_at_endpoints(
+                &owner,
+                Some(&goals),
+                &nearby,
+                &[],
+                None,
+                &[],
+                (1, Some(&walking))
+            )
+            .unwrap()
+            .is_none()
+        );
+        owner.askers.clear();
         publish(&mut owner, draft);
         assert!(
             prepare_with_practices(&owner, Some(&goals), &people, &[], None, &[terms], 2)
