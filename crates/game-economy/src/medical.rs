@@ -299,16 +299,17 @@ impl Context<'_> {
         if let Some((actor, patient, medicine, quantity)) = self.manual {
             let a = find(actor).ok_or("unknown caregiver")?;
             let p = find(patient).ok_or("unknown patient")?;
+            let self_wound = actor == patient && self.injury_medicine == Some(medicine);
             if (self.disease.is_none() && self.injury_medicine != Some(medicine))
                 || !a.controlled
                 || a.health == 0
                 || p.health == 0
-                || actor == patient
+                || (actor == patient && !self_wound)
                 || self
                     .locations
                     .region((a.id, a.region), (p.id, p.region))
                     .is_none()
-                || !available(p)
+                || (!self_wound && !available(p))
                 || !self.communication.can_touch(actor, patient)
                 || quantity == 0
                 || !self.goods.iter().any(|g| g.id == medicine)
@@ -353,7 +354,10 @@ impl Context<'_> {
         let chosen: Vec<_> = choices
             .into_par_iter()
             .enumerate()
-            .filter_map(|(i, c)| (votes[i].load(Ordering::Relaxed) == 2).then_some(c))
+            .filter_map(|(i, c)| {
+                let required = if c.actor == c.patient { 1 } else { 2 };
+                (votes[i].load(Ordering::Relaxed) == required).then_some(c)
+            })
             .collect();
         base.checked_add(chosen.len() as u64)
             .ok_or("medical action overflow")?;
@@ -432,6 +436,7 @@ impl Plan {
     pub fn contacts(&self, events: &Events) -> Vec<(u64, u64)> {
         self.accepted(events)
             .into_par_iter()
+            .filter(|c| c.actor != c.patient)
             .map(|c| (c.actor, c.patient))
             .collect()
     }
@@ -466,6 +471,7 @@ impl Plan {
     pub fn help(&self, events: &Events) -> Vec<(u64, u64)> {
         self.accepted(events)
             .into_par_iter()
+            .filter(|choice| choice.actor != choice.patient)
             .map(|choice| (choice.patient, choice.actor))
             .collect()
     }

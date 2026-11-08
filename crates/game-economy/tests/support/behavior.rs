@@ -24540,6 +24540,105 @@ fn wound_treatment_requires_real_medicine_and_no_disease() {
 }
 
 #[test]
+fn a_person_can_treat_their_own_wound_with_carried_medicine() {
+    use game_economy_combat::injury::Case;
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork = None;
+    initial.dynamics = None;
+    initial.people[0].controlled = true;
+    initial.people[0].seek_meals = false;
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![Case {
+        person: 1,
+        attacker: 2,
+        sustained_at: 0,
+        heals_at: 8,
+    }]));
+    initial.combat = Some(combat);
+    let run = |workers, medicine| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter_mut()
+                    .find(|c| c.place == Place::Person(1))
+                    .unwrap();
+                *holder = Container::new(
+                    Place::Person(1),
+                    10,
+                    if medicine {
+                        vec![Lot {
+                            item: None,
+                            good: 2,
+                            quantity: 1,
+                            expires_at: None,
+                        }]
+                    } else {
+                        vec![]
+                    },
+                )
+                .unwrap();
+                let mut world = Economy::compile(state).unwrap();
+                let stale = world.prepare().unwrap();
+                assert_eq!(world.treat_wound(1, 2, 1).unwrap(), medicine);
+                let state = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), state);
+                assert_eq!(
+                    state
+                        .combat
+                        .as_ref()
+                        .unwrap()
+                        .injuries
+                        .as_ref()
+                        .unwrap()
+                        .cases
+                        .is_empty(),
+                    medicine
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                assert!(
+                    state
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .all(|record| record.observer != record.target)
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                state
+            })
+    };
+    for medicine in [false, true] {
+        assert_eq!(run(1, medicine), run(4, medicine));
+    }
+}
+
+#[test]
 fn fighting_and_immobilizing_wounds_prevent_manual_departure() {
     use game_economy_combat::injury::Case;
     let mut initial = food_search_workload(4);

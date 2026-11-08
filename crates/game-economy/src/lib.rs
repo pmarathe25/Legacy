@@ -2028,6 +2028,15 @@ impl Economy {
         self.commit(draft)?;
         Ok(treated)
     }
+    /// Attempt to treat one's own wound using carried medicine.
+    pub fn treat_wound(
+        &mut self,
+        person: u64,
+        medicine: u32,
+        quantity: u64,
+    ) -> Result<bool, String> {
+        self.treat_other(person, person, medicine, quantity)
+    }
     game_economy_read::read_method!();
     game_economy_promises::promise_methods!();
     game_economy_agriculture::cultivation_methods!();

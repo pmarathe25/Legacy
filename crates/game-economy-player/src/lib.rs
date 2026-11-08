@@ -1918,6 +1918,9 @@ impl<'a> Player<'a> {
         self.world
             .treat_other(self.current()?, patient, medicine, quantity)
     }
+    pub fn treat_wound(&mut self, medicine: u32, quantity: u64) -> Result<bool, String> {
+        self.world.treat_wound(self.current()?, medicine, quantity)
+    }
     pub fn continue_work(&mut self) -> Result<bool, String> {
         let actor = self.current()?;
         let job = self.view()?.job.ok_or("person has no active work")?.id;
