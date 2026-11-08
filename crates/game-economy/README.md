@@ -52,6 +52,8 @@ People may attempt to take goods from another living person's custody. The targe
 
 The ignored `taking_world_benchmark` measures the complete boundary for `LEGACY_ATTEMPTS` attempts and twice as many people. Set `LEGACY_SHARED` for one target, `LEGACY_RECOVERY` to make targets incapacitated and enable personal recovery, and `LEGACY_WORKERS` to vary concurrency; add `--features profile` and `LEGACY_PROFILE` for phase timings. The benchmark is an isolated synthetic boundary rather than a complete campaign.
 
+With local walking enabled, physical taking requires the actor and target at the same endpoint, and a witness must be there to observe it. `LEGACY_LOCAL_TAKING=1` exercises those checks in the existing benchmark. On a Ryzen 5 7600 with 50,000 attempts among 100,000 people, one and six workers measured 63.6 and 28.1 ms for independent targets and 32.5 and 13.7 ms for one contested target; each pair had matching fingerprints.
+
 The ignored `independent_combat_benchmark` stages many separate two-person
 encounters in the same world and reports import and three-boundary times
 separately. Set `LEGACY_ENCOUNTERS` and `LEGACY_WORKERS` to vary the workload.

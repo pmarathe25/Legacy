@@ -31030,6 +31030,123 @@ fn taking_from_a_living_person_uses_real_custody_and_can_be_unnoticed() {
 }
 
 #[test]
+fn taking_and_witnesses_require_the_same_local_endpoint() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[0].controlled = true;
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .push(LocalPosition {
+            person: 4,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        });
+    initial.taking = Some(Taking {
+        witnesses: [2, 3]
+            .into_iter()
+            .map(|person| TakingWitness {
+                person,
+                actor: 1,
+                target: Some(4),
+                notices: true,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into(),
+        ..Default::default()
+    });
+    let mut separated = initial.clone();
+    separated
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions
+        .retain(|position| position.person != 4);
+    let mut remote = Economy::compile(separated).unwrap();
+    let before = remote.snapshot();
+    assert!(remote.take_possessions(1, 4, 1, 1, false).is_err());
+    assert_eq!(remote.snapshot(), before);
+    let mut autonomous = before;
+    autonomous.people[0].controlled = false;
+    autonomous.taking.as_mut().unwrap().policies = vec![TakingPolicy {
+        person: 1,
+        target: 4,
+        good: 1,
+        quantity: 1,
+        willing: true,
+        interval: 1,
+        recover_incapacitated: false,
+        assessment_at_least: None,
+        assessment_at_most: None,
+        escalate: false,
+        pressured_by: None,
+        pressure_threshold: None,
+        affinity_at_least: None,
+        affinity_at_most: None,
+    }]
+    .into();
+    let mut autonomous = Economy::compile(autonomous).unwrap();
+    autonomous.advance().unwrap();
+    assert!(autonomous.snapshot().taking.unwrap().events.is_empty());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(
+                    world.take_possessions(1, 4, 1, 1, false).unwrap(),
+                    TakingOutcome::Transferred
+                );
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .taking
+                        .as_ref()
+                        .unwrap()
+                        .witnesses
+                        .iter()
+                        .find(|w| w.person == 2)
+                        .unwrap()
+                        .last_seen
+                        .is_some()
+                );
+                assert!(
+                    state
+                        .taking
+                        .as_ref()
+                        .unwrap()
+                        .witnesses
+                        .iter()
+                        .find(|w| w.person == 3)
+                        .unwrap()
+                        .last_seen
+                        .is_none()
+                );
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(state, restored.snapshot());
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn a_person_may_enjoy_or_dislike_the_same_observed_taking() {
     use game_opinions::{AffinityRules, SubjectiveReaction};
     let mut initial = hunting_fixture();
@@ -31984,6 +32101,7 @@ fn controlled_gift_and_many_independent_takings_share_one_boundary() {
 #[test]
 #[ignore = "manual complete-world taking benchmark"]
 fn taking_world_benchmark() {
+    use std::hash::{Hash, Hasher};
     let count = std::env::var("LEGACY_ATTEMPTS")
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -31994,7 +32112,45 @@ fn taking_world_benchmark() {
         .unwrap_or(1);
     let shared = std::env::var_os("LEGACY_SHARED").is_some();
     let recovery = std::env::var_os("LEGACY_RECOVERY").is_some();
+    let local = std::env::var_os("LEGACY_LOCAL_TAKING").is_some();
     let mut initial = taking_workload(count, shared);
+    if local {
+        assert!(!recovery);
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_unstable_by_key(|row| row.place);
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![LocalStore {
+                id: 1,
+                region: 1,
+                name: "local".into(),
+            }],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                positions: (1..=count * 2)
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect(),
+                events: vec![],
+            }),
+        });
+    }
     if recovery {
         for person in initial.people.iter_mut().take(count as usize) {
             person.health = 0;
@@ -32009,6 +32165,7 @@ fn taking_world_benchmark() {
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let now = std::time::Instant::now();
@@ -32022,15 +32179,20 @@ fn taking_world_benchmark() {
                         .iter()
                         .all(|event| event.outcome == TakingOutcome::Transferred)
                 );
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} attempts={count} people={} shared={shared} recovery={recovery} elapsed={:.6}",
+                "workers={workers} attempts={count} people={} shared={shared} recovery={recovery} local={local} elapsed={:.6} fingerprint={:016x}",
                 count * 2,
-                samples[1]
+                samples[1], fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]
             for (name, measurement) in game_diagnostics::snapshot() {
