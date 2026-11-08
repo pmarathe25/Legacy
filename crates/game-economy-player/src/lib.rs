@@ -90,6 +90,8 @@ pub struct AnimalView {
     pub held_by: Option<u64>,
     /// This person's own feeling, when they have a configured animal mind.
     pub affinity: Option<i32>,
+    /// Visible product good, current growth and time needed for a full yield.
+    pub product: Option<(u32, u64, u64)>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClaimView {
@@ -545,6 +547,7 @@ impl<'a> Player<'a> {
                         held_by: self.world.animal_handler(animal.id),
                         affinity: current
                             .and_then(|person| self.world.animal_affinity(person, animal.id)),
+                        product: self.world.animal_product_status(animal.id, animal.species),
                     })
                     .collect()
             });
@@ -1395,6 +1398,26 @@ impl<'a> Player<'a> {
             return Err("animal is not locally visible".into());
         }
         self.world.hunt_animal(self.current()?, animal)
+    }
+    pub fn set_animal_product_choice(&mut self, willing: bool) -> Result<(), String> {
+        self.world
+            .set_animal_product_choice(self.current()?, willing)
+    }
+    pub fn collect_animal_product(
+        &mut self,
+        animal: u64,
+        force_if_held: bool,
+    ) -> Result<game_economy::AnimalProductOutcome, String> {
+        if !self
+            .view()?
+            .animals
+            .iter()
+            .any(|a| a.id == animal && a.health > 0)
+        {
+            return Err("animal is not present".into());
+        }
+        self.world
+            .collect_animal_product(self.current()?, animal, force_if_held)
     }
     pub fn handle_animal(&mut self, animal: u64) -> Result<bool, String> {
         if !self

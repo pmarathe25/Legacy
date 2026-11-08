@@ -220,6 +220,7 @@ fn fixture() -> State {
         gathering: None,
         fauna: None,
         animal_care: None,
+        animal_products: None,
         animal_handling: None,
         animal_restraints: None,
         animal_feelings: None,
@@ -41872,4 +41873,432 @@ fn fearful_independent_combat_benchmark() {
         times.sort_by(f64::total_cmp);
         eprintln!("workers={workers} encounters={count} people={} ticks=1 elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={fingerprint:016x}", count * 2, times[0], times[1], times[2]);
     });
+}
+
+fn animal_products_fixture() -> State {
+    let mut state = handling_fixture();
+    state.people[0].controlled = true;
+    state.fauna.as_mut().unwrap().animals[0].pregnancy = None;
+    state.animal_products = Some(AnimalProducts {
+        rules: vec![AnimalProductRule {
+            species: 1,
+            good: 2,
+            quantity: 2,
+            grow_ticks: 1,
+            min_age: 1,
+            min_health: 1,
+            max_hunger: 8,
+        }],
+        progress: vec![AnimalProductProgress {
+            animal: 1,
+            growth: 1,
+        }],
+        policies: vec![],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn a_holder_can_choose_forced_collection_without_turning_refusal_into_consent() {
+    let mut initial = animal_products_fixture();
+    let animal = &mut initial.fauna.as_mut().unwrap().animals[0];
+    animal.handling_response.as_mut().unwrap().on_refuse = -2;
+    initial.animal_restraints = Some(AnimalRestraints {
+        holds: vec![AnimalHold {
+            animal: 1,
+            handler: 1,
+            integrity: 4,
+        }]
+        .into(),
+        ..Default::default()
+    });
+    let run = |workers, held: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = initial.clone();
+                if !held {
+                    state
+                        .animal_restraints
+                        .as_mut()
+                        .unwrap()
+                        .holds_mut()
+                        .clear();
+                }
+                let mut world = Economy::compile(state).unwrap();
+                let stale = world.prepare().unwrap();
+                let outcome = world.collect_animal_product(1, 1, true).unwrap();
+                assert_eq!(
+                    outcome,
+                    if held {
+                        AnimalProductOutcome::Collected
+                    } else {
+                        AnimalProductOutcome::Refused
+                    }
+                );
+                let state = world.snapshot();
+                assert!(world.commit(stale).is_err());
+                assert_eq!(world.snapshot(), state);
+                let event = &state.animal_products.as_ref().unwrap().events[0];
+                assert_eq!(event.forced, held);
+                assert_eq!(
+                    state.animal_products.as_ref().unwrap().progress[0].growth,
+                    if held { 0 } else { 1 }
+                );
+                let animal = &state.fauna.as_ref().unwrap().animals[0];
+                assert!(animal.health > 0);
+                assert_eq!(
+                    animal
+                        .opinions
+                        .iter()
+                        .find(|o| o.person == 1)
+                        .unwrap()
+                        .affinity,
+                    -2
+                );
+                state
+            })
+    };
+    assert_eq!(run(1, true), run(4, true));
+    assert_eq!(run(1, false), run(4, false));
+}
+
+#[test]
+fn competing_collectors_reserve_one_animal_against_a_hunt() {
+    let mut initial = animal_products_fixture();
+    initial.people[0].controlled = false;
+    initial.fauna.as_mut().unwrap().animals[0]
+        .handling_response
+        .as_mut()
+        .unwrap()
+        .willing = true;
+    initial.animal_products.as_mut().unwrap().policies = [1, 2]
+        .into_iter()
+        .map(|person| AnimalProductPolicy {
+            person,
+            animal: 1,
+            willing: true,
+            force_if_held: false,
+            pressured_by: None,
+            pressure_threshold: None,
+        })
+        .collect();
+    let mut hunting = hunting_fixture().hunting.unwrap();
+    hunting.policies.retain(|p| p.person == 4);
+    hunting.policies[0].willing = true;
+    hunting.policies[0].pressured_by = None;
+    hunting.policies[0].pressure_threshold = None;
+    initial.hunting = Some(hunting);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.animal_products.as_ref().unwrap().events;
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].outcome, AnimalProductOutcome::Collected);
+                assert!(
+                    state
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .any(|a| a.id == 1 && a.health > 0)
+                );
+                let quantities: u64 = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .filter(|c| matches!(c.place, Place::Person(1 | 2)))
+                    .flat_map(|c| &c.lots)
+                    .filter(|lot| lot.good == 2)
+                    .map(|lot| lot.quantity)
+                    .sum();
+                assert_eq!(quantities, 2);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+fn animal_products_workload(count: u64, concentrated_target: bool) -> State {
+    let mut state = concentrated(count);
+    state.autowork = None;
+    state.nutrition = None;
+    for person in &mut state.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+    }
+    let source = handling_fixture().fauna.unwrap();
+    let animal_count = if concentrated_target { 1 } else { count };
+    let mut template = source.animals[0].clone();
+    template.genome.sex = game_genetics::Sex::Male;
+    template.pregnancy = None;
+    template.handling_response.as_mut().unwrap().willing = true;
+    template.hunger = 0;
+    state.fauna = Some(Fauna {
+        species: source.species,
+        animals: (1..=animal_count)
+            .map(|id| {
+                let mut animal = template.clone();
+                animal.id = id;
+                animal
+            })
+            .collect(),
+        next_id: animal_count + 1,
+        last_tick: 0,
+    });
+    state.animal_products = Some(AnimalProducts {
+        rules: vec![AnimalProductRule {
+            species: 1,
+            good: 2,
+            quantity: 1,
+            grow_ticks: 1,
+            min_age: 1,
+            min_health: 1,
+            max_hunger: 8,
+        }],
+        progress: (1..=animal_count)
+            .map(|animal| AnimalProductProgress { animal, growth: 1 })
+            .collect(),
+        policies: (1..=count)
+            .map(|person| AnimalProductPolicy {
+                person,
+                animal: if concentrated_target { 1 } else { person },
+                willing: true,
+                force_if_held: false,
+                pressured_by: None,
+                pressure_threshold: None,
+            })
+            .collect(),
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn distributed_and_contested_animal_products_are_deterministic() {
+    for concentrated_target in [false, true] {
+        let initial = animal_products_workload(4096, concentrated_target);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut world = Economy::compile(initial.clone()).unwrap();
+                    world.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(
+                        state
+                            .animal_products
+                            .as_ref()
+                            .unwrap()
+                            .events
+                            .iter()
+                            .filter(|e| e.outcome == AnimalProductOutcome::Collected)
+                            .count(),
+                        if concentrated_target { 1 } else { 4096 }
+                    );
+                    Economy::compile(
+                        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                    )
+                    .unwrap();
+                    state
+                })
+        };
+        assert_eq!(run(1), run(4));
+    }
+}
+
+#[test]
+#[ignore = "animal product collection performance measurement"]
+fn animal_products_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let concentrated_target = std::env::var_os("LEGACY_CONCENTRATED").is_some();
+    let initial = animal_products_workload(count, concentrated_target);
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut times = Vec::new();
+        let mut fingerprint = 0;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let start = std::time::Instant::now();
+            world.advance().unwrap();
+            times.push(start.elapsed().as_secs_f64());
+            let state = world.snapshot();
+            assert_eq!(state.animal_products.as_ref().unwrap().events.iter().filter(|e| e.outcome == AnimalProductOutcome::Collected).count(), if concentrated_target { 1 } else { count as usize });
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if fingerprint != 0 { assert_eq!(actual, fingerprint); }
+            fingerprint = actual;
+        }
+        times.remove(0); times.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} people={count} concentrated={concentrated_target} ticks=1 elapsed_min={:.6} elapsed_median={:.6} elapsed_max={:.6} state_fingerprint={fingerprint:016x}", times[0], times[1], times[2]);
+    });
+}
+
+#[test]
+fn animal_product_growth_pauses_for_youth_and_poor_health() {
+    let mut initial = animal_products_fixture();
+    initial.animal_products.as_mut().unwrap().progress.clear();
+    let rule = &mut initial.animal_products.as_mut().unwrap().rules[0];
+    rule.grow_ticks = 2;
+    rule.min_age = 3;
+    rule.min_health = 5;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world
+            .snapshot()
+            .animal_products
+            .as_ref()
+            .unwrap()
+            .progress
+            .iter()
+            .find(|p| p.animal == 1)
+            .unwrap()
+            .growth,
+        0
+    );
+    world.advance().unwrap();
+    let mut state = world.snapshot();
+    assert_eq!(
+        state
+            .animal_products
+            .as_ref()
+            .unwrap()
+            .progress
+            .iter()
+            .find(|p| p.animal == 1)
+            .unwrap()
+            .growth,
+        1
+    );
+    state.fauna.as_mut().unwrap().animals[0].health = 4;
+    let mut sick = Economy::compile(state).unwrap();
+    sick.advance().unwrap();
+    assert_eq!(
+        sick.snapshot()
+            .animal_products
+            .as_ref()
+            .unwrap()
+            .progress
+            .iter()
+            .find(|p| p.animal == 1)
+            .unwrap()
+            .growth,
+        1
+    );
+}
+
+#[test]
+fn animal_product_reactions_match_compact_and_complete_fauna_paths() {
+    let mut initial = animal_products_fixture();
+    initial.fauna.as_mut().unwrap().animals[0]
+        .handling_response
+        .as_mut()
+        .unwrap()
+        .willing = true;
+    let mut unordered = initial.clone();
+    unordered.fauna.as_mut().unwrap().animals.reverse();
+    let run = |state| {
+        let mut world = Economy::compile(state).unwrap();
+        assert_eq!(
+            world.collect_animal_product(1, 1, false).unwrap(),
+            AnimalProductOutcome::Collected
+        );
+        world.snapshot()
+    };
+    assert_eq!(run(initial), run(unordered));
+}
+
+#[test]
+fn personally_felt_pressure_can_motivate_unwilling_animal_product_collection() {
+    let mut initial = animal_products_fixture();
+    initial.fauna.as_mut().unwrap().animals[0]
+        .handling_response
+        .as_mut()
+        .unwrap()
+        .willing = true;
+    initial
+        .animal_products
+        .as_mut()
+        .unwrap()
+        .policies
+        .push(AnimalProductPolicy {
+            person: 2,
+            animal: 1,
+            willing: false,
+            force_if_held: false,
+            pressured_by: Some(1),
+            pressure_threshold: Some(3),
+        });
+    initial.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    });
+    let run = |pressure: bool| {
+        let mut state = initial.clone();
+        if !pressure {
+            state
+                .opinions
+                .as_mut()
+                .unwrap()
+                .records
+                .retain(|o| o.observer != 2);
+        }
+        let mut world = Economy::compile(state).unwrap();
+        world.set_animal_product_choice(2, false).unwrap();
+        world.advance().unwrap();
+        let state = world.snapshot();
+        assert_eq!(
+            state
+                .animal_products
+                .as_ref()
+                .unwrap()
+                .events
+                .iter()
+                .any(|e| e.person == 2 && e.outcome == AnimalProductOutcome::Collected),
+            pressure
+        );
+        if pressure {
+            assert_eq!(
+                state
+                    .opinions
+                    .as_ref()
+                    .unwrap()
+                    .records
+                    .iter()
+                    .find(|o| o.observer == 2 && o.target == 1)
+                    .unwrap()
+                    .obligation,
+                0
+            );
+        }
+    };
+    run(true);
+    run(false);
 }

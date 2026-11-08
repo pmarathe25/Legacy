@@ -76,6 +76,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                 Growth {
                     harvest: &[output(1, Some(5))],
                     animal_yield: &[],
+                    animal_products: &[],
                     compact_consumption: &[]
                 },
                 1
@@ -92,6 +93,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
             Growth {
                 harvest: &[output(1, None), output(2, None)],
                 animal_yield: &[],
+                animal_products: &[],
                 compact_consumption: &[],
             },
             1,
@@ -152,6 +154,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                 Growth {
                     harvest: &[],
                     animal_yield: &[yield_, invalid],
+                    animal_products: &[],
                     compact_consumption: &[]
                 },
                 7
@@ -168,6 +171,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
             Growth {
                 harvest: &[],
                 animal_yield: &[yield_],
+                animal_products: &[],
                 compact_consumption: &[],
             },
             7,
@@ -206,6 +210,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
             Growth {
                 harvest: &[],
                 animal_yield: &[next],
+                animal_products: &[],
                 compact_consumption: &[],
             },
             7,
@@ -775,6 +780,7 @@ fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_action
                         Growth {
                             harvest: &[],
                             animal_yield: &[],
+                            animal_products: &[],
                             compact_consumption: &compact,
                         },
                         19,
@@ -1731,5 +1737,114 @@ fn a_worker_can_leave_in_a_detached_generation_even_if_return_is_blocked() {
             )
             .unwrap(),
         vec![(2, true)]
+    );
+}
+
+#[test]
+fn renewable_products_and_hunts_use_distinct_atomic_animal_claims() {
+    use game_lot_content::{AnimalProduct, AnimalYield};
+    let mut snapshot = runtime().snapshot();
+    snapshot
+        .custody
+        .containers
+        .push(Container::new(Place::Person(1), 3, vec![]).unwrap());
+    snapshot
+        .custody
+        .containers
+        .push(Container::new(Place::Person(2), 3, vec![]).unwrap());
+    let mut world = Runtime::compile(snapshot).unwrap();
+    let hunt = AnimalYield {
+        action: 10,
+        animal: 3,
+        hunter: 1,
+        good: 1,
+        quantity: 1,
+    };
+    let product = AnimalProduct {
+        action: 11,
+        animal: 4,
+        collector: 2,
+        good: 1,
+        quantity: 1,
+    };
+    let before = world.snapshot();
+    for invalid in [
+        AnimalProduct {
+            animal: 3,
+            ..product
+        },
+        AnimalProduct {
+            collector: 1,
+            ..product
+        },
+        AnimalProduct {
+            action: 10,
+            ..product
+        },
+    ] {
+        assert!(
+            world
+                .prepare_with_growth(
+                    &[],
+                    &[],
+                    &[],
+                    &[],
+                    Growth {
+                        harvest: &[],
+                        animal_yield: &[hunt],
+                        animal_products: &[invalid],
+                        compact_consumption: &[]
+                    },
+                    7
+                )
+                .is_err()
+        );
+        assert_eq!(world.snapshot(), before);
+    }
+    let draft = world
+        .prepare_with_growth(
+            &[],
+            &[],
+            &[],
+            &[],
+            Growth {
+                harvest: &[],
+                animal_yield: &[hunt],
+                animal_products: &[product],
+                compact_consumption: &[],
+            },
+            7,
+        )
+        .unwrap();
+    assert_eq!(
+        draft
+            .events()
+            .physical_actions
+            .iter()
+            .filter(|e| e.accepted && (e.id == 10 || e.id == 11))
+            .count(),
+        2
+    );
+    world.commit_advance(draft).unwrap();
+    let after = world.snapshot();
+    assert_eq!(
+        after
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(1))
+            .unwrap()
+            .used,
+        1
+    );
+    assert_eq!(
+        after
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
     );
 }

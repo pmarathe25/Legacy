@@ -27,3 +27,9 @@ id = 9205
 name = "Timber barrier frame"
 mass = 40
 tags = ["crafted", "barrier-resistance:300"]
+
+[data.objects.raw-wool]
+id = 9206
+name = "Raw wool"
+mass = 1
+tags = ["animal", "fiber", "raw"]

@@ -6491,3 +6491,176 @@ fn authored_fighter_can_retreat_after_feeling_fear_from_a_real_strike() {
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn authored_fleece_regrows_and_collection_keeps_the_animal_alive() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-fleece.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                let view = game_economy_player::Player::new(&mut world).view().unwrap();
+                let wool = view
+                    .animals
+                    .iter()
+                    .find(|a| a.id == 1)
+                    .unwrap()
+                    .product
+                    .unwrap();
+                assert_eq!((wool.1, wool.2), (3, 3));
+                assert_eq!(
+                    game_economy_player::Player::new(&mut world)
+                        .collect_animal_product(1, false)
+                        .unwrap(),
+                    game_economy::AnimalProductOutcome::Collected
+                );
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .fauna
+                        .as_ref()
+                        .unwrap()
+                        .animals
+                        .iter()
+                        .any(|a| a.id == 1 && a.health > 0)
+                );
+                assert_eq!(
+                    state
+                        .animal_products
+                        .as_ref()
+                        .unwrap()
+                        .progress
+                        .iter()
+                        .find(|p| p.animal == 1)
+                        .unwrap()
+                        .growth,
+                    0
+                );
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|c| c.place == game_lots::Place::Person(1))
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .filter(|lot| lot.good == wool.0)
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    2
+                );
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .animal_products
+                        .as_ref()
+                        .unwrap()
+                        .progress
+                        .iter()
+                        .find(|p| p.animal == 1)
+                        .unwrap()
+                        .growth,
+                    3
+                );
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn animal_product_refusal_and_capacity_failure_preserve_fleece() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let initial = scenario(
+        &root.join("content/scenarios/economy-fleece.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    for refusal in [true, false] {
+        let mut state = initial.clone();
+        state.animal_products.as_mut().unwrap().rules[0].grow_ticks = 1;
+        if refusal {
+            state.fauna.as_mut().unwrap().animals[0]
+                .handling_response
+                .as_mut()
+                .unwrap()
+                .willing = false;
+        } else {
+            let holder = state
+                .physical
+                .custody
+                .containers
+                .iter_mut()
+                .find(|c| c.place == game_lots::Place::Person(1))
+                .unwrap();
+            let good = holder.lots[0].good;
+            *holder = game_lots::Container::new(
+                holder.place,
+                holder.capacity,
+                vec![game_lots::Lot {
+                    good,
+                    quantity: holder.capacity,
+                    expires_at: None,
+                }],
+            )
+            .unwrap();
+        }
+        let mut world = game_economy::Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        let outcome = game_economy_player::Player::new(&mut world)
+            .collect_animal_product(1, false)
+            .unwrap();
+        assert_eq!(
+            outcome,
+            if refusal {
+                game_economy::AnimalProductOutcome::Refused
+            } else {
+                game_economy::AnimalProductOutcome::NoCapacity
+            }
+        );
+        let state = world.snapshot();
+        assert_eq!(
+            state
+                .animal_products
+                .as_ref()
+                .unwrap()
+                .progress
+                .iter()
+                .find(|p| p.animal == 1)
+                .unwrap()
+                .growth,
+            1
+        );
+        assert!(
+            state
+                .fauna
+                .as_ref()
+                .unwrap()
+                .animals
+                .iter()
+                .any(|a| a.id == 1 && a.health > 0)
+        );
+    }
+}

@@ -13,6 +13,8 @@ pub struct Growth<'a> {
     pub harvest: &'a [Transaction],
     /// Domain-validated animal yield; every accepted creation is tied to a staged animal death.
     pub animal_yield: &'a [AnimalYield],
+    /// Renewable products, distinct from death-linked hunting yields.
+    pub animal_products: &'a [AnimalProduct],
     pub compact_consumption: &'a [u64],
 }
 /// A domain-validated yield tied to one prey and one hunter.
@@ -23,6 +25,32 @@ pub struct AnimalYield {
     pub hunter: u64,
     pub good: u32,
     pub quantity: u64,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AnimalProduct {
+    pub action: u64,
+    pub animal: u64,
+    pub collector: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
+/// Produce freshly dated goods only for distinct animal and collector claims.
+pub fn prepare_animal_products(
+    catalog: &Catalog,
+    products: &[AnimalProduct],
+    tick: u64,
+) -> Result<Vec<Transaction>, String> {
+    let mapped: Vec<_> = products
+        .par_iter()
+        .map(|p| AnimalYield {
+            action: p.action,
+            animal: p.animal,
+            hunter: p.collector,
+            good: p.good,
+            quantity: p.quantity,
+        })
+        .collect();
+    prepare_animal_yield(catalog, &mapped, tick)
 }
 pub fn combine_growth(
     external: &[Transaction],

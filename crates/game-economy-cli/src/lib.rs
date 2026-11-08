@@ -91,6 +91,8 @@ struct Scenario {
     #[serde(default)]
     animal_care: Option<game_economy::AnimalCareConfig>,
     #[serde(default)]
+    animal_products: Option<game_economy::AnimalProductsConfig>,
+    #[serde(default)]
     animal_handling: Option<game_economy::AnimalHandling>,
     #[serde(default)]
     animal_restraints: Option<game_economy::AnimalRestraints>,
@@ -1181,6 +1183,10 @@ pub fn scenario_with_options(
         .animal_care
         .map(|config| config.build(|name| goods.get(name).copied()))
         .transpose()?;
+    let animal_products = scenario
+        .animal_products
+        .map(|config| config.build(|name| goods.get(name).copied()))
+        .transpose()?;
     let hunting = scenario
         .hunting
         .map(|config| config.build(|name| goods.get(name).copied()))
@@ -1408,6 +1414,7 @@ pub fn scenario_with_options(
         gathering,
         fauna,
         animal_care,
+        animal_products,
         animal_handling: scenario.animal_handling,
         animal_restraints: scenario.animal_restraints,
         animal_feelings: scenario.animal_feelings,

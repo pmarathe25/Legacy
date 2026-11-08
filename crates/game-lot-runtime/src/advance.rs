@@ -388,8 +388,28 @@ impl Runtime {
         game_lot_work::validate_actions(&self.catalog, external)?;
         let next_tick = self.store.tick().checked_add(1).ok_or("tick overflow")?;
         game_lot_content::validate_growth(&self.catalog, growth.harvest, next_tick)?;
-        let animal_yield =
+        let mut animal_yield =
             game_lot_content::prepare_animal_yield(&self.catalog, growth.animal_yield, next_tick)?;
+        if !growth.animal_products.is_empty() {
+            let animals: std::collections::HashSet<_> =
+                growth.animal_yield.par_iter().map(|y| y.animal).collect();
+            let hunters: std::collections::HashSet<_> =
+                growth.animal_yield.par_iter().map(|y| y.hunter).collect();
+            let actions: std::collections::HashSet<_> =
+                growth.animal_yield.par_iter().map(|y| y.action).collect();
+            if growth.animal_products.par_iter().any(|p| {
+                animals.contains(&p.animal)
+                    || hunters.contains(&p.collector)
+                    || actions.contains(&p.action)
+            }) {
+                return Err("animal product conflicts with hunting yield".into());
+            }
+            animal_yield.extend(game_lot_content::prepare_animal_products(
+                &self.catalog,
+                growth.animal_products,
+                next_tick,
+            )?);
+        }
         let direct_external = external;
         let combined = game_lot_content::combine_growth(external, growth.harvest, &animal_yield);
         let external = combined.as_deref().unwrap_or(external);
