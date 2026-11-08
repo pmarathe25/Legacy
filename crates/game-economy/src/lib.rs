@@ -4172,11 +4172,24 @@ impl Economy {
         action_base = action_base
             .checked_add(promises.action_count() as u64)
             .ok_or("action count overflow")?;
+        let local_treatment_busy =
+            (has_personal_treatment && !local_nonstock.is_empty()).then(|| {
+                let mut rows = local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    &[],
+                );
+                game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+                rows
+            });
+        let treatment_base = local_treatment_busy.as_deref().unwrap_or(&busy);
         let treatment_busy = (has_personal_treatment && !available_held.is_empty())
-            .then(|| game_economy_work::exclude_sorted(&busy, &available_held));
+            .then(|| game_economy_work::exclude_sorted(treatment_base, &available_held));
         let treatment = game_economy_dynamics::prepare_treatment!(
             self,
-            treatment_busy.as_deref().unwrap_or(&busy),
+            treatment_busy.as_deref().unwrap_or(treatment_base),
             view,
             action_base,
             player_transfer
@@ -4408,8 +4421,28 @@ impl Economy {
                 expires_at,
             });
         }
+        let local_giving_busy = (self.giving.is_some() && !local_nonstock.is_empty()).then(|| {
+            let mut rows = local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                &[],
+            );
+            game_economy_work::reserve(
+                &mut rows,
+                pickup
+                    .actors
+                    .iter()
+                    .copied()
+                    .chain(treatment.actors.iter().copied())
+                    .chain(asked_actors.iter().copied()),
+            );
+            rows
+        });
+        let giving_base = local_giving_busy.as_deref().unwrap_or(&busy);
         let giving_busy = (!reserved_can_give.is_empty())
-            .then(|| game_economy_work::exclude_sorted(&busy, &reserved_can_give));
+            .then(|| game_economy_work::exclude_sorted(giving_base, &reserved_can_give));
         #[cfg(feature = "profile")]
         let giving_plan_phase = game_diagnostics::span("economy.giving.plan");
         let mut giving_plan = giving::Context {
@@ -4423,7 +4456,7 @@ impl Economy {
                 .and_then(|auto| auto.requests.as_ref()),
             goods: self.physical.goods(),
             view: &view,
-            busy: giving_busy.as_deref().unwrap_or(&busy),
+            busy: giving_busy.as_deref().unwrap_or(giving_base),
             communication: &communication,
             manual: manual_give,
             tick,
@@ -5150,6 +5183,8 @@ impl Economy {
                 game_economy_work::reserve(&mut excluded, game_economy_work::underage(family));
             }
             game_economy_work::reserve(&mut excluded, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut excluded, treatment.actors.iter().copied());
+            game_economy_work::reserve(&mut excluded, giving_plan.actors.iter().copied());
             game_economy_work::reserve(&mut excluded, medical_plan.actors.iter().copied());
             excluded
         });
@@ -7301,6 +7336,8 @@ impl Economy {
                     .map_or(&[][..], |plan| plan.actors.as_slice()),
             );
             game_economy_work::reserve(&mut rows, pickup.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
+            game_economy_work::reserve(&mut rows, giving_plan.actors.iter().copied());
             game_economy_work::reserve(&mut rows, expedition_acquisition.actors.iter().copied());
             game_economy_work::reserve(&mut rows, tool_repairs.iter().map(|row| row.0));
             if let Some(plan) = &goal_fetch_plan {

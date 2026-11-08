@@ -5559,6 +5559,148 @@ fn a_person_can_treat_their_wound_at_a_store() {
 }
 
 #[test]
+fn a_person_can_take_carried_medicine_at_a_store() {
+    use game_disease::Treatment;
+    use game_economy_dynamics::TreatmentPolicy;
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.people[0].health = 80;
+    let mut dynamics = infection_from(1);
+    dynamics.social = initial.dynamics.take().unwrap().social;
+    dynamics
+        .disease
+        .as_mut()
+        .unwrap()
+        .treatments
+        .push(Treatment {
+            strain: 1,
+            medicine: 2,
+        });
+    dynamics.treatment.push(TreatmentPolicy {
+        person: 1,
+        medicine: 2,
+        quantity: 1,
+        willing: true,
+        health_at_most: None,
+    });
+    initial.dynamics = Some(dynamics);
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let dynamics = state.dynamics.as_ref().unwrap();
+                assert!(dynamics.disease.as_ref().unwrap().cases.is_empty());
+                assert!(
+                    dynamics
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.a != 1 && event.b != 1)
+                );
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(1))
+                    .unwrap();
+                assert!(holder.lots.iter().all(|lot| lot.good != 2));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn people_at_a_store_can_choose_to_give_carried_goods() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial.giving = Some(Giving {
+        practices: None,
+        inherit_births: false,
+        policies: std::sync::Arc::new(vec![GivingPolicy {
+            person: 1,
+            recipient: 2,
+            good: 1,
+            quantity: 1,
+            recipient_hunger_at_least: 0,
+            willing: true,
+            requires_request: false,
+            pressured_by: None,
+            pressure_threshold: None,
+        }]),
+        responses: std::sync::Arc::new(vec![]),
+        learning: vec![],
+        asking: vec![],
+        requests: vec![],
+        acquaintance_asking: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let holder = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|row| row.place == Place::Person(2))
+                    .unwrap();
+                assert!(
+                    holder
+                        .lots
+                        .iter()
+                        .any(|lot| lot.good == 1 && lot.quantity == 1)
+                );
+                assert!(
+                    state
+                        .dynamics
+                        .as_ref()
+                        .unwrap()
+                        .social
+                        .as_ref()
+                        .unwrap()
+                        .events
+                        .iter()
+                        .all(|event| event.a != 1 && event.b != 1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn local_carrying_walks_before_each_physical_transfer_and_can_pause() {
     let initial = local_walking_fixture();
     let run = |threads| {
@@ -21946,6 +22088,7 @@ fn concentrated_pressure_resolves_disjoint_encounters_deterministically() {
 #[test]
 #[ignore]
 fn concentrated_disease_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -21954,28 +22097,83 @@ fn concentrated_disease_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = disease_workload(count);
+    let mut initial = disease_workload(count);
+    let self_treatment = std::env::var_os("LEGACY_SELF_TREATMENT").is_some();
+    let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    if self_treatment {
+        use game_economy_dynamics::TreatmentPolicy;
+        let dynamics = initial.dynamics.as_mut().unwrap();
+        dynamics.social = None;
+        dynamics
+            .disease
+            .as_mut()
+            .unwrap()
+            .treatments
+            .push(game_disease::Treatment {
+                strain: 1,
+                medicine: 2,
+            });
+        dynamics.treatment = (1..=count)
+            .map(|person| TreatmentPolicy {
+                person,
+                medicine: 2,
+                quantity: 1,
+                willing: true,
+                health_at_most: None,
+            })
+            .collect();
+        for person in &mut initial.people {
+            person.health = 80;
+        }
+        for holder in &mut initial.physical.custody.containers {
+            if matches!(holder.place, Place::Person(_)) {
+                *holder = Container::new(
+                    holder.place,
+                    holder.capacity,
+                    vec![Lot {
+                        item: None,
+                        good: 2,
+                        quantity: 1,
+                        expires_at: None,
+                    }],
+                )
+                .unwrap();
+            }
+        }
+    }
+    if at_store {
+        assert!(self_treatment);
+        benchmark_people_at_store(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
+                let mut treated = 0;
                 for _ in 0..3 {
-                    world.advance().unwrap();
+                    treated += world.advance().unwrap().physical_actions.iter().filter(|action| action.accepted).count();
                 }
                 let elapsed = started.elapsed().as_secs_f64();
+                if self_treatment { assert_eq!(treated, count as usize); }
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&world.snapshot()).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=3 elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} at_store={at_store} self_treatment={self_treatment} ticks=3 elapsed={:.6} fingerprint={:016x}",
+                samples[1], fingerprint.unwrap()
             );
         });
 }
@@ -25084,6 +25282,7 @@ fn concentrated_food_requests_benchmark() {
 #[test]
 #[ignore]
 fn concentrated_giving_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -25102,18 +25301,30 @@ fn concentrated_giving_benchmark() {
     if disease {
         initial.dynamics = Some(infection_from(1));
     }
+    let at_store = std::env::var_os("LEGACY_AT_STORE").is_some();
+    if at_store {
+        assert!(!confined);
+        benchmark_people_at_store(&mut initial);
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 let events = world.advance().unwrap();
                 let elapsed = started.elapsed().as_secs_f64();
                 assert_eq!(events.physical_actions.iter().filter(|action| action.accepted).count(), count as usize / 2);
+                let state = world.snapshot();
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint { assert_eq!(actual, expected); }
+                fingerprint = Some(actual);
                 if disease {
                     assert_eq!(
                         world
@@ -25133,8 +25344,8 @@ fn concentrated_giving_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} disease={disease} confined={confined} ticks=1 elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} disease={disease} confined={confined} at_store={at_store} ticks=1 elapsed={:.6} fingerprint={:016x}",
+                samples[1], fingerprint.unwrap()
             );
         });
 }
