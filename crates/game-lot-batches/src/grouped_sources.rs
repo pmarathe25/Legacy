@@ -167,6 +167,7 @@ pub fn prepare(
                         let lot = lots[lot_index];
                         let quantity = remaining.min(lot.quantity - lot_used);
                         arena.push(Lot {
+                            item: lot.item,
                             good,
                             quantity,
                             expires_at: lot.expires_at,

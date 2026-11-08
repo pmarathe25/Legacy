@@ -181,6 +181,7 @@ impl Catalog {
             })
             .transpose()?;
         Ok(Lot {
+            item: None,
             good,
             quantity,
             expires_at,

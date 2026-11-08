@@ -16,6 +16,7 @@ fn runtime() -> Runtime {
                 vec![]
             } else {
                 vec![Lot {
+                    item: None,
                     good,
                     quantity,
                     expires_at: None,
@@ -59,6 +60,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
             id,
             to: Place::Stock { region: 1, good: 2 },
             lot: Lot {
+                item: None,
                 good: 2,
                 quantity: 7,
                 expires_at,
@@ -273,6 +275,7 @@ fn worker_can_abandon_even_when_reserved_material_cannot_yet_fit() {
         Place::Stock { region: 1, good: 1 },
         4,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: 4,
             expires_at: None,
@@ -309,6 +312,7 @@ fn concentrated(count: u64) -> (Snapshot, Vec<Start>) {
         Place::Stock { region: 1, good: 1 },
         count * 2,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: count,
             expires_at: None,
@@ -429,6 +433,7 @@ fn loading_rejects_orphan_or_excess_job_custody() {
         Place::JobInput(1),
         10,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: 3,
             expires_at: None,
@@ -451,6 +456,7 @@ fn expiry_interrupts_a_real_job_and_frees_the_worker() {
         Place::Stock { region: 1, good: 1 },
         10,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: 2,
             expires_at: Some(2),
@@ -507,6 +513,7 @@ fn blocked_finished_food_spoils_without_being_recreated() {
         Place::Stock { region: 1, good: 2 },
         1,
         vec![Lot {
+            item: None,
             good: 2,
             quantity: 1,
             expires_at: None,
@@ -641,6 +648,7 @@ fn external_taking_remains_physical_and_cannot_create_goods() {
             id: 2,
             to: Place::Stock { region: 1, good: 1 },
             lot: Lot {
+                item: None,
                 good: 1,
                 quantity: 1,
                 expires_at: None,
@@ -830,11 +838,13 @@ fn flat_transfers_match_general_runtime_and_rollback() {
                 10,
                 vec![
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 2,
                         expires_at: Some(1),
                     },
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 3,
                         expires_at: Some(3),
@@ -1005,16 +1015,19 @@ fn shared_source_flat_runtime_matches_general_arbitration() {
             400,
             vec![
                 Lot {
+                    item: None,
                     good: 1,
                     quantity: 80,
                     expires_at: Some(1),
                 },
                 Lot {
+                    item: None,
                     good: 1,
                     quantity: 120,
                     expires_at: Some(3),
                 },
                 Lot {
+                    item: None,
                     good: 1,
                     quantity: 50,
                     expires_at: None,
@@ -1101,11 +1114,13 @@ fn shared_destination_flat_runtime_matches_general_arbitration() {
                 10,
                 vec![
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 1,
                         expires_at: Some(1),
                     },
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: if id % 9 == 0 { 1 } else { 3 },
                         expires_at: Some(3 + id % 2),
@@ -1120,6 +1135,7 @@ fn shared_destination_flat_runtime_matches_general_arbitration() {
             destination,
             130,
             vec![Lot {
+                item: None,
                 good: 1,
                 quantity: 20,
                 expires_at: Some(1),
@@ -1208,16 +1224,19 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
                 150,
                 vec![
                     Lot {
+                        item: None,
                         good,
                         quantity: 15,
                         expires_at: Some(1),
                     },
                     Lot {
+                        item: None,
                         good,
                         quantity: 40,
                         expires_at: Some(3),
                     },
                     Lot {
+                        item: None,
                         good,
                         quantity: 30,
                         expires_at: None,
@@ -1233,6 +1252,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
             if id % 7 == 0 { 1 } else { 6 },
             if id % 13 == 0 {
                 vec![Lot {
+                    item: None,
                     good: 1,
                     quantity: 1,
                     expires_at: Some(1),
@@ -1248,6 +1268,7 @@ fn grouped_sources_match_general_runtime_with_expiry_and_capacity() {
             Place::Person(9999),
             10,
             vec![Lot {
+                item: None,
                 good: 2,
                 quantity: 2,
                 expires_at: Some(1),
@@ -1329,11 +1350,13 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
                 10,
                 vec![
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 1,
                         expires_at: Some(2),
                     },
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 2,
                         expires_at: Some(4),
@@ -1368,11 +1391,13 @@ fn packed_receipts_outlive_the_runtime_and_can_be_owned() {
             receipt.movement.lots,
             &[
                 Lot {
+                    item: None,
                     good: 1,
                     quantity: 1,
                     expires_at: Some(2)
                 },
                 Lot {
+                    item: None,
                     good: 1,
                     quantity: 1,
                     expires_at: Some(4)
@@ -1701,6 +1726,7 @@ fn a_worker_can_leave_in_a_detached_generation_even_if_return_is_blocked() {
         Place::Stock { region: 1, good: 1 },
         4,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: 4,
             expires_at: None,

@@ -182,6 +182,9 @@ pub fn prepare(
             if creation.id == 0
                 || !creation.to.accepts(creation.lot.good)
                 || creation.lot.quantity == 0
+                || creation.lot.item.is_some_and(|id| {
+                    id == 0 || creation.lot.quantity != 1 || creation.lot.expires_at.is_some()
+                })
                 || creation.lot.expires_at.is_some_and(|at| at <= next)
             {
                 return Err("invalid created lot".to_string());
@@ -407,6 +410,7 @@ pub fn prepare(
                     let quantity = remaining.min(lot.quantity);
                     if quantity != 0 {
                         parts.push(Lot {
+                            item: lot.item,
                             good: lot.good,
                             quantity,
                             expires_at: lot.expires_at,
@@ -469,6 +473,7 @@ pub fn prepare(
                         let right = end.min(lot_prefix[index] + u128::from(lot.quantity));
                         if right > left {
                             parts.push(Lot {
+                                item: lot.item,
                                 good: lot.good,
                                 quantity: (right - left) as u64,
                                 expires_at: lot.expires_at,
@@ -611,6 +616,7 @@ pub fn prepare(
                     Vec::new()
                 } else {
                     vec![Lot {
+                        item: lot.item,
                         good: lot.good,
                         quantity,
                         expires_at: lot.expires_at,
@@ -646,6 +652,7 @@ pub fn prepare(
                     remaining -= consumed;
                     if consumed < lot.quantity {
                         lots.push(Lot {
+                            item: lot.item,
                             good: lot.good,
                             quantity: lot.quantity - consumed,
                             expires_at: lot.expires_at,
@@ -702,6 +709,7 @@ pub fn prepare(
                                 .min(u128::from(lot.quantity))
                                 as u64;
                             (consumed < lot.quantity).then(|| Lot {
+                                item: lot.item,
                                 good: lot.good,
                                 quantity: lot.quantity - consumed,
                                 expires_at: lot.expires_at,
@@ -715,6 +723,7 @@ pub fn prepare(
             let merged: Vec<_> = lots
                 .par_chunk_by(|a, b| key(a) == key(b))
                 .map(|group| Lot {
+                    item: group[0].item,
                     good: group[0].good,
                     expires_at: group[0].expires_at,
                     quantity: group

@@ -47,14 +47,18 @@ impl Place {
 pub struct Lot {
     pub good: u32,
     pub quantity: u64,
+    /// Stable identity of a unique, nonperishable physical item.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<u64>,
     /// An expiry at or before a boundary is unusable at that boundary.
     pub expires_at: Option<u64>,
 }
-pub fn key(lot: &Lot) -> (u32, bool, u64) {
+pub fn key(lot: &Lot) -> (u32, bool, u64, Option<u64>) {
     (
         lot.good,
         lot.expires_at.is_none(),
         lot.expires_at.unwrap_or(0),
+        lot.item,
     )
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -90,10 +94,13 @@ impl Container {
             || self.capacity == 0
             || self.used > self.capacity
             || matches!(self.place, Place::Stock { good: 0, .. })
-            || self
-                .lots
-                .iter()
-                .any(|lot| !self.place.accepts(lot.good) || lot.quantity == 0)
+            || self.lots.iter().any(|lot| {
+                !self.place.accepts(lot.good)
+                    || lot.quantity == 0
+                    || lot
+                        .item
+                        .is_some_and(|id| id == 0 || lot.quantity != 1 || lot.expires_at.is_some())
+            })
             || self
                 .lots
                 .windows(2)

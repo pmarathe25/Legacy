@@ -49,6 +49,7 @@ fn physical_job_reserves_then_produces_and_delivers_without_refreshing_output() 
                 vec![]
             } else {
                 vec![Lot {
+                    item: None,
                     good,
                     quantity,
                     expires_at: None,
@@ -159,6 +160,7 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
                 Place::Stock { region: 1, good: 1 },
                 1,
                 vec![Lot {
+                    item: None,
                     good: 1,
                     quantity: 1,
                     expires_at: None,
@@ -169,6 +171,7 @@ fn blocked_waiting_output_spoils_in_its_job_and_cannot_be_recreated_by_delivery(
                 Place::Stock { region: 1, good: 2 },
                 1,
                 vec![Lot {
+                    item: None,
                     good: 2,
                     quantity: 1,
                     expires_at: None,
@@ -264,11 +267,13 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
                 10,
                 vec![
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 2,
                         expires_at: Some(2),
                     },
                     Lot {
+                        item: None,
                         good: 1,
                         quantity: 3,
                         expires_at: Some(8),
@@ -306,6 +311,7 @@ fn interruption_returns_surviving_input_without_refreshing_it() {
     assert_eq!(
         store.container(source).unwrap().lots,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: 3,
             expires_at: Some(8)
@@ -327,11 +333,13 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
                 10,
                 vec![
                     Lot {
+                        item: None,
                         good: 2,
                         quantity: 1,
                         expires_at: Some(2),
                     },
                     Lot {
+                        item: None,
                         good: 2,
                         quantity: 2,
                         expires_at: Some(5),
@@ -366,6 +374,7 @@ fn delivery_moves_only_unexpired_output_and_reports_the_loss() {
     assert_eq!(
         store.container(stock).unwrap().lots,
         vec![Lot {
+            item: None,
             good: 2,
             quantity: 2,
             expires_at: Some(5)
@@ -397,11 +406,13 @@ fn missing_or_expiring_inputs_interrupt_work_and_do_not_make_output() {
         5,
         vec![
             Lot {
+                item: None,
                 good: 1,
                 quantity: 1,
                 expires_at: Some(2),
             },
             Lot {
+                item: None,
                 good: 1,
                 quantity: 1,
                 expires_at: Some(4),

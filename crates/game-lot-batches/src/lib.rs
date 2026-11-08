@@ -16,6 +16,24 @@ pub fn prepare_flat_transfers(
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
+    if state
+        .containers
+        .par_iter()
+        .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
+    {
+        return Ok(None);
+    }
+    prepare_flat_transfers_fungible(state, instance, transfers, advance)
+}
+
+/// Caller has validated that all identified items are nonexpiring and neither
+/// endpoint of any transfer contains one.
+pub fn prepare_flat_transfers_fungible(
+    state: &State,
+    instance: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
     independent_transfer::prepare_flat(state, instance, transfers, advance)
 }
 
@@ -27,10 +45,61 @@ pub fn prepare_partitioned_flat(
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
+    if state
+        .containers
+        .par_iter()
+        .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
+    {
+        return Ok(None);
+    }
+    prepare_partitioned_flat_fungible(state, instance, seed, transfers, advance)
+}
+
+/// Caller has validated that all identified items are nonexpiring and neither
+/// endpoint of any transfer contains one.
+pub fn prepare_partitioned_flat_fungible(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transfers: &[SimpleTransfer],
+    advance: bool,
+) -> Result<Option<Draft>, String> {
     partitioned::prepare(state, instance, seed, transfers, advance)
 }
 
 pub fn prepare(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transactions: &[Transaction],
+    advance: bool,
+    additions: Vec<Container>,
+    compact: &[u64],
+) -> Result<(Draft, Vec<Container>), String> {
+    let identified = state
+        .containers
+        .par_iter()
+        .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
+        || transactions
+            .par_iter()
+            .any(|t| t.creations.iter().any(|c| c.lot.item.is_some()));
+    if identified {
+        return Err("identified items require the custody store".into());
+    }
+    prepare_fungible_validated(
+        state,
+        instance,
+        seed,
+        transactions,
+        advance,
+        additions,
+        compact,
+    )
+}
+
+/// Caller has validated that existing identified items are nonexpiring, no
+/// transaction touches their containers, and no creation has an identity.
+pub fn prepare_fungible_validated(
     state: &State,
     instance: u64,
     seed: u64,
@@ -54,6 +123,37 @@ pub fn prepare(
 /// Run the general arbiter without partitioning, for differential checks and
 /// workloads that need a reference implementation.
 pub fn prepare_unpartitioned(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transactions: &[Transaction],
+    advance: bool,
+    additions: Vec<Container>,
+    compact: &[u64],
+) -> Result<(Draft, Vec<Container>), String> {
+    if state
+        .containers
+        .par_iter()
+        .any(|c| c.lots.iter().any(|lot| lot.item.is_some()))
+        || transactions
+            .par_iter()
+            .any(|t| t.creations.iter().any(|c| c.lot.item.is_some()))
+    {
+        return Err("identified items require the custody store".into());
+    }
+    prepare_unpartitioned_validated(
+        state,
+        instance,
+        seed,
+        transactions,
+        advance,
+        additions,
+        compact,
+    )
+}
+
+/// The custody owner has validated and will track all item identities.
+pub fn prepare_unpartitioned_validated(
     state: &State,
     instance: u64,
     seed: u64,

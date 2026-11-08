@@ -299,6 +299,7 @@ fn prepare_rows(
                     if lot.good == row.movement.good && lot.expires_at.is_none_or(|at| at > next) {
                         let quantity = remaining.min(lot.quantity);
                         let part = Lot {
+                            item: lot.item,
                             good: lot.good,
                             quantity,
                             expires_at: lot.expires_at,

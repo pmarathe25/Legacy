@@ -1250,6 +1250,7 @@ fn playable_project_waits_for_missing_material_then_resumes() {
                     store.place,
                     store.capacity,
                     vec![game_lots::Lot {
+                        item: None,
                         good: timber,
                         quantity: 4,
                         expires_at: None,
@@ -4251,6 +4252,7 @@ fn player_can_take_from_an_incapacitated_guardian_who_later_recovers() {
         holder.place,
         holder.capacity,
         vec![Lot {
+            item: None,
             good: bread,
             quantity: 1,
             expires_at: None,
@@ -4516,6 +4518,7 @@ fn ruler_view_excludes_remote_people_stock_and_other_minds() {
         stock.place,
         stock.capacity,
         vec![Lot {
+            item: None,
             good,
             quantity: 7,
             expires_at: None,
@@ -5313,6 +5316,7 @@ fn player_observes_and_recovers_local_deceased_possessions() {
         Place::Person(2),
         holder.capacity,
         vec![Lot {
+            item: None,
             good,
             quantity: 1,
             expires_at: None,
@@ -6636,6 +6640,7 @@ fn animal_product_refusal_and_capacity_failure_preserve_fleece() {
                 holder.place,
                 holder.capacity,
                 vec![game_lots::Lot {
+                    item: None,
                     good,
                     quantity: holder.capacity,
                     expires_at: None,

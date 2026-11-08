@@ -26,6 +26,7 @@ fn runtime(expiry: u64) -> Runtime {
                     Place::Person(1),
                     4,
                     vec![Lot {
+                        item: None,
                         good: 1,
                         quantity: 2,
                         expires_at: Some(expiry),
@@ -90,6 +91,7 @@ fn duplicate_meals_and_effect_tick_overflow_are_rejected() {
         Place::Person(1),
         4,
         vec![Lot {
+            item: None,
             good: 1,
             quantity: 2,
             expires_at: None,
@@ -116,6 +118,7 @@ fn many_dated_meals_produce_the_same_personal_effects_on_one_and_four_workers() 
                         Place::Person(person),
                         2,
                         vec![Lot {
+                            item: None,
                             good: 1,
                             quantity: 2,
                             expires_at: Some(if person % 2 == 0 { 1 } else { 3 }),

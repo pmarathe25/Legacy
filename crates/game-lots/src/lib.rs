@@ -23,6 +23,8 @@ fn instance() -> Result<u64, String> {
 pub struct Store {
     state: State,
     instance: u64,
+    items: Vec<(u64, Place)>,
+    item_places: Vec<Place>,
 }
 /// Tentative new custody is removed automatically unless its boundary commits.
 pub struct Stage<'a> {
@@ -69,8 +71,14 @@ pub struct Draft {
     inner: game_lot_planning::Draft,
     additions: Vec<Container>,
     retire: Vec<Place>,
+    item_updates: Vec<(u64, Option<Place>)>,
 }
 impl Draft {
+    /// Staged item custody updates; `None` means the item was consumed.
+    /// This remains available even when ordinary movement receipts are drained.
+    pub fn item_updates(&self) -> &[(u64, Option<Place>)] {
+        &self.item_updates
+    }
     pub fn outcomes(&self) -> Vec<Outcome> {
         self.inner
             .outcomes
@@ -117,8 +125,28 @@ impl Store {
         {
             return Err("invalid lot state".into());
         }
+        let mut items: Vec<_> = state
+            .containers
+            .par_iter()
+            .flat_map_iter(|container| {
+                container
+                    .lots
+                    .iter()
+                    .filter_map(|lot| lot.item.map(|id| (id, container.place)))
+            })
+            .collect();
+        items.par_sort_unstable_by_key(|row| row.0);
+        if items.par_windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err("duplicate physical item".into());
+        }
         let instance = instance()?;
-        Ok(Self { state, instance })
+        let item_places = item_places(&items);
+        Ok(Self {
+            state,
+            instance,
+            items,
+            item_places,
+        })
     }
     /// Stage new empty custody with the same commit/rollback boundary as actions.
     pub fn stage(&mut self, containers: Vec<Container>) -> Result<Stage<'_>, String> {
@@ -227,24 +255,150 @@ impl Store {
     pub fn export(&self) -> State {
         self.state.clone()
     }
+    /// Current physical custody of an identified item, if it exists.
+    pub fn item_place(&self, id: u64) -> Option<Place> {
+        self.items
+            .binary_search_by_key(&id, |row| row.0)
+            .ok()
+            .map(|i| self.items[i].1)
+    }
+    fn touches_item(&self, movement: &Movement) -> bool {
+        self.item_places.binary_search(&movement.from).is_ok()
+            || movement
+                .to
+                .is_some_and(|place| self.item_places.binary_search(&place).is_ok())
+    }
+    fn item_draft(
+        &self,
+        inner: game_lot_planning::Draft,
+        additions: Vec<Container>,
+        check_items: bool,
+    ) -> Result<Draft, String> {
+        let mut item_updates = Vec::new();
+        if check_items {
+            let mut containers: Vec<_> = self
+                .state
+                .containers
+                .par_iter()
+                .chain(additions.par_iter())
+                .collect();
+            if !additions.is_empty() {
+                containers.par_sort_unstable_by_key(|row| row.place);
+            }
+            let changes: Vec<_> = match &inner.changes {
+                game_lot_planning::Changes::Empty => Vec::new(),
+                game_lot_planning::Changes::Flat(rows) => rows.par_iter().collect(),
+                game_lot_planning::Changes::Runs(runs) => {
+                    runs.par_iter().flat_map_iter(|run| run.iter()).collect()
+                }
+            };
+            if changes.par_iter().any(|(index, row)| {
+                containers
+                    .get(*index)
+                    .is_none_or(|old| old.place != row.place)
+            }) {
+                return Err("invalid item custody change".into());
+            }
+            let mut removed: Vec<_> = changes
+                .par_iter()
+                .flat_map_iter(|(index, _)| {
+                    containers[*index].lots.iter().filter_map(|lot| lot.item)
+                })
+                .collect();
+            let mut added: Vec<_> = changes
+                .par_iter()
+                .flat_map_iter(|(_, row)| {
+                    row.lots
+                        .iter()
+                        .filter_map(|lot| lot.item.map(|id| (id, row.place)))
+                })
+                .collect();
+            rayon::join(
+                || removed.par_sort_unstable(),
+                || added.par_sort_unstable_by_key(|row| row.0),
+            );
+            if added.par_windows(2).any(|pair| pair[0].0 == pair[1].0)
+                || added.par_iter().any(|(id, _)| {
+                    self.items.binary_search_by_key(id, |row| row.0).is_ok()
+                        && removed.binary_search(id).is_err()
+                })
+            {
+                return Err("duplicate physical item".into());
+            }
+            item_updates = removed
+                .par_iter()
+                .filter_map(|&id| {
+                    let next = added
+                        .binary_search_by_key(&id, |row| row.0)
+                        .ok()
+                        .map(|i| added[i].1);
+                    let previous = self
+                        .items
+                        .binary_search_by_key(&id, |row| row.0)
+                        .ok()
+                        .map(|i| self.items[i].1);
+                    (next != previous).then_some((id, next))
+                })
+                .chain(
+                    added
+                        .par_iter()
+                        .filter(|(id, _)| removed.binary_search(id).is_err())
+                        .map(|&(id, place)| (id, Some(place))),
+                )
+                .collect();
+            item_updates.par_sort_unstable_by_key(|row| row.0);
+        }
+        Ok(Draft {
+            inner,
+            additions,
+            retire: Vec::new(),
+            item_updates,
+        })
+    }
+    fn check_creations(&self, transactions: &[Transaction]) -> Result<bool, String> {
+        let mut ids: Vec<_> = transactions
+            .par_iter()
+            .flat_map_iter(|row| &row.creations)
+            .filter_map(|creation| creation.lot.item.map(|id| (id, &creation.lot)))
+            .collect();
+        if ids.par_iter().any(|(id, lot)| {
+            *id == 0
+                || lot.quantity != 1
+                || lot.expires_at.is_some()
+                || self.items.binary_search_by_key(id, |row| row.0).is_ok()
+        }) {
+            return Err("invalid physical item creation".into());
+        }
+        ids.par_sort_unstable_by_key(|(id, _)| *id);
+        if ids.par_windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err("duplicate physical item creation".into());
+        }
+        Ok(!ids.is_empty()
+            || (!self.item_places.is_empty()
+                && transactions.par_iter().any(|row| {
+                    row.movements
+                        .iter()
+                        .any(|movement| self.touches_item(movement))
+                        || row
+                            .creations
+                            .iter()
+                            .any(|creation| self.item_places.binary_search(&creation.to).is_ok())
+                })))
+    }
     pub fn prepare(&self, seed: u64, moves: &[Movement]) -> Result<Draft, String> {
-        game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, true).map(
-            |inner| Draft {
-                inner,
-                additions: Vec::new(),
-                retire: Vec::new(),
-            },
-        )
+        let inner =
+            game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, true)?;
+        let touches = !self.item_places.is_empty()
+            && moves.par_iter().any(|movement| self.touches_item(movement));
+        self.item_draft(inner, Vec::new(), touches)
     }
     /// Stage immediate actions without advancing simulation time or refreshing goods.
     pub fn prepare_now(&self, seed: u64, moves: &[Movement]) -> Result<Draft, String> {
-        game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, false).map(
-            |inner| Draft {
-                inner,
-                additions: Vec::new(),
-                retire: Vec::new(),
-            },
-        )
+        let inner =
+            game_lot_planning::prepare(&self.state, self.instance, seed, moves, &[], None, false)?;
+        let touches = !self.item_places.is_empty()
+            && moves.par_iter().any(|movement| self.touches_item(movement));
+        self.item_draft(inner, Vec::new(), touches)
     }
     /// Stage all legs of each physical action together. Contention is resolved
     /// conservatively: a failed leg rejects the entire action for this boundary.
@@ -281,7 +435,13 @@ impl Store {
         compact: &[u64],
         advance: bool,
     ) -> Result<Draft, String> {
-        let (inner, additions) = game_lot_batches::prepare(
+        let check_items = self.check_creations(transactions)?;
+        let prepare = if check_items {
+            game_lot_batches::prepare_unpartitioned_validated
+        } else {
+            game_lot_batches::prepare_fungible_validated
+        };
+        let (inner, additions) = prepare(
             &self.state,
             self.instance,
             seed,
@@ -290,11 +450,7 @@ impl Store {
             containers,
             compact,
         )?;
-        Ok(Draft {
-            inner,
-            additions,
-            retire: Vec::new(),
-        })
+        self.item_draft(inner, additions, check_items)
     }
     fn prepare_batch(
         &self,
@@ -303,7 +459,13 @@ impl Store {
         advance: bool,
         additions: Vec<Container>,
     ) -> Result<Draft, String> {
-        let (inner, additions) = game_lot_batches::prepare(
+        let check_items = self.check_creations(transactions)?;
+        let prepare = if check_items {
+            game_lot_batches::prepare_unpartitioned_validated
+        } else {
+            game_lot_batches::prepare_fungible_validated
+        };
+        let (inner, additions) = prepare(
             &self.state,
             self.instance,
             seed,
@@ -312,11 +474,7 @@ impl Store {
             additions,
             &[],
         )?;
-        Ok(Draft {
-            inner,
-            additions,
-            retire: Vec::new(),
-        })
+        self.item_draft(inner, additions, check_items)
     }
     /// Attempt a disjoint flat transfer batch. A caller must use the general
     /// arbiter when this returns `None`, including for contested endpoints.
@@ -325,7 +483,14 @@ impl Store {
         transfers: &[SimpleTransfer],
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        Ok(game_lot_batches::prepare_flat_transfers(
+        if !self.item_places.is_empty()
+            && transfers
+                .par_iter()
+                .any(|row| self.touches_item(&row.movement))
+        {
+            return Ok(None);
+        }
+        Ok(game_lot_batches::prepare_flat_transfers_fungible(
             &self.state,
             self.instance,
             transfers,
@@ -335,6 +500,7 @@ impl Store {
             inner,
             additions: Vec::new(),
             retire: Vec::new(),
+            item_updates: Vec::new(),
         }))
     }
     /// Attempt a flat batch with exclusive and contested transfer partitions.
@@ -345,7 +511,14 @@ impl Store {
         transfers: &[SimpleTransfer],
         advance: bool,
     ) -> Result<Option<Draft>, String> {
-        Ok(game_lot_batches::prepare_partitioned_flat(
+        if !self.item_places.is_empty()
+            && transfers
+                .par_iter()
+                .any(|row| self.touches_item(&row.movement))
+        {
+            return Ok(None);
+        }
+        Ok(game_lot_batches::prepare_partitioned_flat_fungible(
             &self.state,
             self.instance,
             seed,
@@ -356,6 +529,7 @@ impl Store {
             inner,
             additions: Vec::new(),
             retire: Vec::new(),
+            item_updates: Vec::new(),
         }))
     }
     /// Check this owner before publishing any part of a composed generation.
@@ -431,6 +605,7 @@ impl Store {
             inner: draft,
             mut additions,
             retire,
+            item_updates,
         } = draft;
         let revision = self
             .state
@@ -462,8 +637,76 @@ impl Store {
         }
         self.state.tick = draft.next_tick;
         self.state.revision = revision;
+        if !item_updates.is_empty() {
+            self.items = merge_item_updates(&self.items, &item_updates);
+            self.item_places = item_places(&self.items);
+        }
         Ok((draft.outcomes.into_owned(), draft.spoiled))
     }
+}
+
+fn item_places(items: &[(u64, Place)]) -> Vec<Place> {
+    let mut places: Vec<_> = items.par_iter().map(|row| row.1).collect();
+    places.par_sort_unstable();
+    places
+        .par_chunk_by(|a, b| a == b)
+        .map(|group| group[0])
+        .collect()
+}
+
+fn merge_item_updates(
+    items: &[(u64, Place)],
+    updates: &[(u64, Option<Place>)],
+) -> Vec<(u64, Place)> {
+    if items.is_empty() {
+        return updates
+            .par_iter()
+            .filter_map(|&(id, place)| place.map(|place| (id, place)))
+            .collect();
+    }
+    const CHUNK: usize = 2048;
+    items
+        .par_chunks(CHUNK)
+        .enumerate()
+        .flat_map_iter(|(index, chunk)| {
+            let start = if index == 0 {
+                0
+            } else {
+                updates.partition_point(|row| row.0 < chunk[0].0)
+            };
+            let next = (index + 1) * CHUNK;
+            let end = if next >= items.len() {
+                updates.len()
+            } else {
+                updates.partition_point(|row| row.0 < items[next].0)
+            };
+            let mut output = Vec::with_capacity(chunk.len() + end - start);
+            let mut cursor = start;
+            for &(id, place) in chunk {
+                while cursor < end && updates[cursor].0 < id {
+                    if let Some(place) = updates[cursor].1 {
+                        output.push((updates[cursor].0, place));
+                    }
+                    cursor += 1;
+                }
+                if cursor < end && updates[cursor].0 == id {
+                    if let Some(place) = updates[cursor].1 {
+                        output.push((id, place));
+                    }
+                    cursor += 1;
+                } else {
+                    output.push((id, place));
+                }
+            }
+            while cursor < end {
+                if let Some(place) = updates[cursor].1 {
+                    output.push((updates[cursor].0, place));
+                }
+                cursor += 1;
+            }
+            output
+        })
+        .collect()
 }
 
 fn publish_runs(containers: &mut [Container], runs: &mut [Vec<(usize, Container)>], base: usize) {

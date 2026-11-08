@@ -27,6 +27,7 @@ fn after(container: &Container, tick: u64, good: u32, mut debit: u64) -> Contain
             };
             debit -= consumed;
             (consumed < lot.quantity).then(|| Lot {
+                item: lot.item,
                 good: lot.good,
                 quantity: lot.quantity - consumed,
                 expires_at: lot.expires_at,

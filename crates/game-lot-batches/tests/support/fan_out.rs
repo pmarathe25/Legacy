@@ -8,6 +8,7 @@ fn fixture() -> (State, Vec<Transaction>) {
             source,
             128,
             vec![Lot {
+                item: None,
                 good: 1,
                 quantity: 64,
                 expires_at: None,

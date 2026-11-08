@@ -30,6 +30,10 @@ impl AdvanceDraft {
     pub fn events(&self) -> &Events {
         &self.events
     }
+    /// Staged identified-item custody changes, independent of receipt retention.
+    pub fn item_updates(&self) -> &[(u64, Option<Place>)] {
+        self.custody.item_updates()
+    }
 }
 impl Runtime {
     /// Interrupt active work in a detached generation after its worker dies.

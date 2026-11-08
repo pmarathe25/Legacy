@@ -2,6 +2,7 @@ use crate::{Container, Creation, Lot, Movement, Place, State, Store, Transaction
 
 fn lot(good: u32, quantity: u64, expires_at: Option<u64>) -> Lot {
     Lot {
+        item: None,
         good,
         quantity,
         expires_at,
@@ -41,6 +42,7 @@ fn unpartitioned(
         inner,
         additions,
         retire: Vec::new(),
+        item_updates: Vec::new(),
     }
 }
 fn quantity(state: &State, place: Place, good: u32, expiry: Option<u64>) -> u64 {

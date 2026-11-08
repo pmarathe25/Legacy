@@ -1,8 +1,8 @@
 # Transactional lot custody
 
-> Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
+Parallel preparation of physical lot movements and expiry. Claims are arbitrated against one boundary snapshot; accepted moves carry the exact earliest-expiring cohorts, and publication is atomic. The current economy composes this owner with its individual decisions.
 
-Parallel preparation of physical lot movements and expiry. Claims are arbitrated against one boundary snapshot; accepted moves carry the exact earliest-expiring cohorts, and publication is atomic. The owner is under development as the foundation for integrating perishable goods with the fused host; existing aggregate inventories do not yet use it.
+Lots can optionally carry a stable physical item ID. An identified lot contains exactly one nonexpiring item; IDs are unique among live custody and survive ordinary transfers. The custody owner tracks them through staged changes even when receipt details are omitted. Generic movements still select cohorts in their normal order and cannot yet request a particular item by ID. Transactions touching an identified item use the general arbiter; unrelated fungible transfers can use the specialized paths. The ignored `independent_identified_transfers_benchmark` in `tests/identified_items.rs` measures batches with `LEGACY_ITEMS` and `LEGACY_WORKERS`.
 
 `stock_view` returns only regional stock at the requested current or next boundary, using the same expiry rules and revision as a full view. Observation systems that need regional totals can avoid materializing every person's custody.
 
@@ -10,7 +10,7 @@ Parallel preparation of physical lot movements and expiry. Claims are arbitrated
 
 `cargo run --release -p game-lots --example contention -- 1 100000 source 5` times a concentrated source; use `destination` for a concentrated destination and vary the worker count.
 
-`prepare_transactions` stages a person's physical action as an all-or-nothing set of movements and output creations. An output receives its expiry when actually created, and remains in its output custody if later storage is unavailable. Claims are conservative: a rejected leg rejects its entire transaction, and capacity tentatively claimed by a rejected transaction is not reallocated until a later boundary. Callers must record the transaction outcomes and should retry according to each person's own decision; the owner does not create social agreements or enforce promises. Created lots must have a deadline strictly after the boundary. Existing scalar food is outside this owner and has no expiry.
+`prepare_transactions` stages a person's physical action as an all-or-nothing set of movements and output creations. An output receives its expiry when actually created, and remains in its output custody if later storage is unavailable. Claims are conservative: a rejected leg rejects its entire transaction, and capacity tentatively claimed by a rejected transaction is not reallocated until a later boundary. Callers must record the transaction outcomes and should retry according to each person's own decision; the owner does not create social agreements or enforce promises. Created lots with an expiry must have a deadline strictly after the boundary.
 
 `prepare_flat_transfers` accepts independently atomic single movements in a flat batch. It returns no fast-path draft when endpoints contend or the batch needs general handling; the caller must then submit normal transactions to the general arbiter. It preserves dated cohorts, boundary spoilage, atomic drafts, and the existing save format.
 
