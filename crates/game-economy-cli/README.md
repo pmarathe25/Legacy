@@ -32,6 +32,8 @@ In `content/scenarios/economy-player-reinforcement.toml`, use `step` to let two 
 
 In `content/scenarios/economy-wounds.toml`, use `attack 3` and advance until the fight ends. `view` shows local wounded people. Use `catalog` to find the healing-herbs good ID, then `treat-other 3 GOOD 1` to consume one carried herb and treat that person's wound, or `treat-wound GOOD 1` to treat your own. Wounds otherwise recover over time; the example wound pauses continuing work but does not prevent movement. `go 2` is unavailable while the player is still fighting and becomes available after the encounter ends.
 
+In `content/scenarios/economy-autonomous-wound-care.toml`, person 3 carries herbs and has an individual preference to treat their own wound. After `attack 3`, advance until the fight ends and then another boundary; their own choice can consume their herbs and clear their wound.
+
 `content/scenarios/economy-testimony.toml` starts with a person inclined to take a neighbor's bread. In player mode, advance two ticks and use `meet 2` followed by `taking-reports` to hear that neighbor's account. The neighbor deliberately reports resistance; the player's initial stance is to doubt the statement, and `taking-belief` can change that personal judgment. The actual taking, account, and judgment remain separate.
 
 `content/scenarios/economy-recovery.toml` starts with a person choosing whether to recover real bread from an incapacitated holder. The controlled observer can witness the attempt; no inheritance or transfer occurs merely because a person has died.

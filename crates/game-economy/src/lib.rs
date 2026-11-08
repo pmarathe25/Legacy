@@ -3929,6 +3929,7 @@ impl Economy {
                 .as_ref()
                 .and_then(|c| c.state.injuries.as_ref())
                 .map(|injuries| injuries.rules.medicine),
+            injuries: self.combat.as_ref().and_then(|c| c.state.injuries.as_ref()),
             social: self.dynamics.as_ref().and_then(|d| d.social.as_ref()),
             people: &self.people,
             opinions: self.opinions.as_ref(),

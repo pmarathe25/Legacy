@@ -87,7 +87,7 @@ impl Medical {
             || self.policies.par_iter().any(|p| {
                 !people.contains(&p.person)
                     || !people.contains(&p.patient)
-                    || p.person == p.patient
+                    || (p.person == p.patient && injury_medicine != Some(p.medicine))
                     || !goods.contains(&p.medicine)
                     || p.quantity == 0
                     || p.pressured_by
@@ -121,6 +121,7 @@ pub struct Context<'a> {
     pub owner: Option<&'a Medical>,
     pub disease: Option<&'a Disease>,
     pub injury_medicine: Option<u32>,
+    pub injuries: Option<&'a game_economy_combat::injury::Injuries>,
     pub social: Option<&'a game_social::Social>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
@@ -171,6 +172,18 @@ impl Context<'_> {
             .filter_map(|p| {
                 let actor = find(p.person)?;
                 let patient = find(p.patient)?;
+                let self_care = actor.id == patient.id;
+                if self_care
+                    && self.injuries.is_none_or(|injuries| {
+                        injuries.rules.medicine != p.medicine
+                            || injuries
+                                .cases
+                                .binary_search_by_key(&actor.id, |case| case.person)
+                                .is_err()
+                    })
+                {
+                    return None;
+                }
                 self.locations
                     .region((actor.id, actor.region), (patient.id, patient.region))?;
                 let pressured =
@@ -332,33 +345,41 @@ impl Context<'_> {
         {
             choices.par_sort_unstable_by_key(|c| (c.actor, c.patient));
         }
-        let votes: Vec<_> = (0..choices.len())
-            .into_par_iter()
-            .map(|_| AtomicU8::new(0))
-            .collect();
-        let mut proposals: Vec<_> = choices
-            .par_iter()
-            .enumerate()
-            .flat_map_iter(|(i, c)| {
-                let rank = game_genetics::random(self.seed ^ c.patient, c.actor, self.tick);
-                [
-                    (c.actor, rank, c.actor, c.patient, i),
-                    (c.patient, rank, c.actor, c.patient, i),
-                ]
-            })
-            .collect();
-        proposals.par_sort_unstable();
-        proposals.par_chunk_by(|a, b| a.0 == b.0).for_each(|group| {
-            votes[group[0].4].fetch_add(1, Ordering::Relaxed);
-        });
-        let chosen: Vec<_> = choices
-            .into_par_iter()
-            .enumerate()
-            .filter_map(|(i, c)| {
-                let required = if c.actor == c.patient { 1 } else { 2 };
-                (votes[i].load(Ordering::Relaxed) == required).then_some(c)
-            })
-            .collect();
+        let independent_self_care = choices.par_iter().all(|c| c.actor == c.patient)
+            && choices
+                .par_windows(2)
+                .all(|pair| pair[0].actor != pair[1].actor);
+        let chosen: Vec<_> = if independent_self_care {
+            choices
+        } else {
+            let votes: Vec<_> = (0..choices.len())
+                .into_par_iter()
+                .map(|_| AtomicU8::new(0))
+                .collect();
+            let mut proposals: Vec<_> = choices
+                .par_iter()
+                .enumerate()
+                .flat_map_iter(|(i, c)| {
+                    let rank = game_genetics::random(self.seed ^ c.patient, c.actor, self.tick);
+                    [
+                        (c.actor, rank, c.actor, c.patient, i),
+                        (c.patient, rank, c.actor, c.patient, i),
+                    ]
+                })
+                .collect();
+            proposals.par_sort_unstable();
+            proposals.par_chunk_by(|a, b| a.0 == b.0).for_each(|group| {
+                votes[group[0].4].fetch_add(1, Ordering::Relaxed);
+            });
+            choices
+                .into_par_iter()
+                .enumerate()
+                .filter_map(|(i, c)| {
+                    let required = if c.actor == c.patient { 1 } else { 2 };
+                    (votes[i].load(Ordering::Relaxed) == required).then_some(c)
+                })
+                .collect()
+        };
         base.checked_add(chosen.len() as u64)
             .ok_or("medical action overflow")?;
         let records: Vec<_> = chosen
