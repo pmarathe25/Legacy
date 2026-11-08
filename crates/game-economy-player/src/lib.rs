@@ -162,6 +162,8 @@ pub struct View {
     /// The controlled person's own selected medicine, not a diagnosis.
     pub treatment: Option<TreatmentView>,
     pub fields: Vec<game_economy::Field>,
+    /// Moisture of local fields, excluding personal watering preferences.
+    pub field_moisture: Vec<game_economy::FieldMoisture>,
     pub resource_sites: Vec<game_economy::ResourceNode>,
     pub work_sites: Vec<WorkSiteView>,
     pub debris: Vec<DebrisView>,
@@ -464,7 +466,7 @@ impl<'a> Player<'a> {
                     .map_or((0, false), |p| (p.fatigue, p.resting))
             })
         });
-        let fields = person
+        let fields: Vec<game_economy::Field> = person
             .as_ref()
             .and_then(|p| p.region)
             .and_then(|region| {
@@ -694,6 +696,16 @@ impl<'a> Player<'a> {
                 })
                 .collect()
         });
+        let field_moisture = state.irrigation.map_or_else(Vec::new, |irrigation| {
+            let mut local_fields: Vec<_> = fields.iter().map(|field| field.id).collect();
+            local_fields.sort_unstable();
+            irrigation
+                .moisture
+                .iter()
+                .filter(|moisture| local_fields.binary_search(&moisture.field).is_ok())
+                .cloned()
+                .collect()
+        });
         Ok(View {
             tick: self.world.tick(),
             held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
@@ -705,6 +717,7 @@ impl<'a> Player<'a> {
             animals,
             possessions,
             tools,
+            field_moisture,
             local_stock,
             food_reports,
             route_observations,
@@ -939,6 +952,16 @@ impl<'a> Player<'a> {
     /// Repair an identified tool carried by the current person.
     pub fn repair_tool(&mut self, item: u64) -> Result<bool, String> {
         self.world.repair_tool(self.current()?, item)
+    }
+    /// Attempt to water a local field from the actual regional supply.
+    pub fn water_field(
+        &mut self,
+        field: u64,
+        quantity: u64,
+        disregard_claims: bool,
+    ) -> Result<bool, String> {
+        self.world
+            .water_field(self.current()?, field, quantity, disregard_claims)
     }
     pub fn salvage_site(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
         self.world

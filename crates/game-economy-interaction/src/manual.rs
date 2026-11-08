@@ -29,6 +29,12 @@ pub enum PhysicalChoice {
         person: u64,
         field: u64,
     },
+    WaterField {
+        person: u64,
+        field: u64,
+        quantity: u64,
+        disregard_claims: bool,
+    },
     Build {
         person: u64,
         blueprint: u32,
@@ -173,6 +179,7 @@ impl PhysicalChoice {
             | Self::Promise { person, .. }
             | Self::Treat { person }
             | Self::Farm { person, .. }
+            | Self::WaterField { person, .. }
             | Self::Build { person, .. }
             | Self::DestroySite { person, .. }
             | Self::RepairSite { person, .. }

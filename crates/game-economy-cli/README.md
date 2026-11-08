@@ -249,3 +249,5 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-active-tool-repa
 Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-tool-repair.toml`; `view` lists the condition and identity of carried tools, and `repair-tool 1001` attempts repair using the ruler's carried material. Repair consumes a boundary and may fail if the material is unavailable.
 
 Run `cargo run -p game-economy-cli -- content/scenarios/economy-tool-production.toml`, then `step 6` and `tool-condition` to see a newly produced tool receive its own identity and undamaged condition. It is delivered as a physical item on the usual following boundary.
+
+Run `cargo run -p game-economy-cli -- --player content/scenarios/economy-player-irrigation.toml`; `view` shows local field moisture. Use `farm 1` to plant, then `water-field 1 1 respect` to attempt watering from the finite regional supply; `disregard` allows an attempt despite a claim.

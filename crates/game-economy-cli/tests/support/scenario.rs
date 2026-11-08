@@ -8392,3 +8392,25 @@ fn player_sees_only_carried_tool_conditions_and_can_repair_one() {
     assert_eq!(view.tools[0].item, 1001);
     assert_eq!(view.tools[0].damage, 0);
 }
+
+#[test]
+fn player_sees_local_moisture_and_waters_using_finite_stock() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-player-irrigation.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut player = game_economy_player::Player::new(&mut world);
+    let view = player.view().unwrap();
+    assert_eq!(view.field_moisture.len(), 1);
+    assert_eq!(view.field_moisture[0].field, 1);
+    assert_eq!(view.field_moisture[0].amount, 0);
+    assert!(player.farm(1).unwrap());
+    assert!(player.water_field(1, 1, false).unwrap());
+    let view = player.view().unwrap();
+    assert_eq!(view.field_moisture[0].amount, 1);
+    assert!(!player.water_field(1, 1, false).unwrap());
+    let view = player.view().unwrap();
+    assert_eq!(view.field_moisture[0].amount, 0);
+}

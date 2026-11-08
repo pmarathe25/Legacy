@@ -60,6 +60,15 @@ pub struct Context<'a> {
     pub opinions: Option<&'a game_opinions::Opinions>,
     pub view: &'a View,
     pub max_hunger: u32,
+    pub manual: Option<&'a Choice>,
+    pub seed: u64,
+    pub tick: u64,
+}
+fn priority(seed: u64, tick: u64, field: u64, person: u64) -> u64 {
+    let mut value = seed ^ tick.rotate_left(17) ^ field.rotate_left(31) ^ person;
+    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    value ^ (value >> 31)
 }
 impl Clone for Irrigation {
     fn clone(&self) -> Self {
@@ -138,7 +147,7 @@ impl Irrigation {
             .is_some_and(|i| self.moisture[i].amount < self.minimum_growth)
     }
     pub fn prepare(&self, context: Context<'_>, base: u64) -> Result<Plan, String> {
-        if self.choices.is_empty() {
+        if self.choices.is_empty() && context.manual.is_none() {
             return Ok(Plan { rows: Vec::new() });
         }
         let Context {
@@ -149,6 +158,9 @@ impl Irrigation {
             opinions,
             view,
             max_hunger,
+            manual,
+            seed,
+            tick,
         } = context;
         let feelings = opinions
             .filter(|_| {
@@ -161,10 +173,14 @@ impl Irrigation {
         if fields.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             fields.par_sort_unstable_by_key(|field| field.id);
         }
-        let selected: Vec<_> = self
+        let mut selected: Vec<_> = self
             .choices
             .par_iter()
+            .filter(|choice| manual.is_none_or(|selected| selected.person != choice.person))
+            .chain(manual.into_par_iter())
             .filter_map(|choice| {
+                let manually_selected =
+                    manual.is_some_and(|selected| selected.person == choice.person);
                 let person = people
                     .binary_search_by_key(&choice.person, |p| p.id)
                     .ok()
@@ -181,7 +197,10 @@ impl Irrigation {
                 let source = view.container(Place::Stock {
                     region: field.region,
                     good: self.water,
-                })?;
+                });
+                if source.is_none() && !manually_selected {
+                    return None;
+                }
                 let (fear, obligation) = choice
                     .pressured_by
                     .and_then(|target| {
@@ -197,10 +216,10 @@ impl Irrigation {
                     && !choice
                         .obligation_at_least
                         .is_some_and(|threshold| obligation >= threshold))
-                    || person.controlled
+                    || (person.controlled && !manually_selected)
                     || person.health == 0
                     || person.hunger > max_hunger
-                    || busy.binary_search(&person.id).is_ok()
+                    || (!manually_selected && busy.binary_search(&person.id).is_ok())
                     || person.region != Some(field.region)
                     || field.phase != Phase::Growing
                     || (!choice.disregard_claims
@@ -213,15 +232,45 @@ impl Irrigation {
                 let quantity = choice
                     .quantity
                     .min(self.capacity.saturating_sub(moisture.amount));
-                (quantity > 0).then_some((
+                if quantity == 0 && !manually_selected {
+                    return None;
+                }
+                Some((
                     person.id,
                     field.id,
                     field.region,
-                    quantity,
-                    source.quantity(self.water) > 0,
+                    if quantity == 0 {
+                        choice.quantity
+                    } else {
+                        quantity
+                    },
+                    quantity > 0 && source.is_some_and(|stock| stock.quantity(self.water) > 0),
                 ))
             })
             .collect();
+        // A manual choice and an autonomous choice may target the same field.
+        // Both people spend the attempt; deterministic physical arbitration
+        // admits only one so moisture cannot exceed the opening capacity.
+        if let Some(manual) = manual {
+            let contenders: Vec<_> = selected
+                .par_iter()
+                .enumerate()
+                .filter(|(_, row)| row.1 == manual.field)
+                .map(|(i, _)| i)
+                .collect();
+            if contenders.len() == 2 {
+                let a = contenders[0];
+                let b = contenders[1];
+                let rank = |i: usize| {
+                    (
+                        priority(seed, tick, manual.field, selected[i].0),
+                        selected[i].0,
+                    )
+                };
+                let loser = if rank(a) <= rank(b) { b } else { a };
+                selected[loser].4 = false;
+            }
+        }
         base.checked_add(selected.len() as u64)
             .ok_or("action count overflow")?;
         let rows: Vec<_> = selected
@@ -328,8 +377,8 @@ impl Plan {
         self.rows.iter().map(|row| row.0)
     }
     pub fn actions(&self) -> impl ParallelIterator<Item = &Transaction> {
-        // An empty opening stock cannot satisfy any request in this boundary.
-        // Keep the attempted event and actor reservation without staging a doomed transfer.
+        // Keep failed field-contention and empty-stock attempts without staging
+        // transfers that cannot succeed.
         self.rows.par_iter().filter(|row| row.5).map(|row| &row.3)
     }
     pub fn uses(&self) -> impl ParallelIterator<Item = Use> + '_ {

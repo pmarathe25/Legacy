@@ -517,6 +517,34 @@ impl Economy {
                 .any(|event| event.person == person && event.item == item && event.accepted)
         }))
     }
+    /// Water a local growing field from actual regional water stock.
+    pub fn water_field(
+        &mut self,
+        person: u64,
+        field: u64,
+        quantity: u64,
+        disregard_claims: bool,
+    ) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::WaterField {
+                person,
+                field,
+                quantity,
+                disregard_claims,
+            }),
+        )?;
+        self.commit(draft)?;
+        Ok(self.irrigation.as_ref().is_some_and(|owner| {
+            owner
+                .events
+                .iter()
+                .any(|event| event.person == person && event.field == field && event.accepted)
+        }))
+    }
     /// Recover actual material from local debris into this person's custody.
     pub fn salvage_site(
         &mut self,
@@ -4781,6 +4809,58 @@ impl Economy {
         action_base = action_base
             .checked_add(farming.as_ref().map_or(0, |p| p.changes.len() as u64))
             .ok_or("action count overflow")?;
+        let manual_water = match player_transfer {
+            Some(game_economy_interaction::PhysicalChoice::WaterField {
+                person,
+                field,
+                quantity,
+                disregard_claims,
+            }) => {
+                let actor = self
+                    .people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .map(|i| &self.people[i])
+                    .ok_or("unknown person")?;
+                let irrigation = self.irrigation.as_ref().ok_or("irrigation is disabled")?;
+                let agriculture = self.agriculture.as_ref().ok_or("cultivation is disabled")?;
+                if !actor.controlled
+                    || actor.health == 0
+                    || actor.region.is_none()
+                    || actor.hunger > self.rules.max_work_hunger
+                    || quantity == 0
+                    || resting.binary_search(&person).is_ok()
+                    || held.binary_search(&person).is_ok()
+                    || self.family.as_ref().is_some_and(|family| {
+                        family.members.iter().any(|member| {
+                            member.id == person && member.age < family.rules.min_work_age
+                        })
+                    })
+                    || irrigation
+                        .moisture
+                        .binary_search_by_key(&field, |row| row.field)
+                        .is_err()
+                    || !agriculture.fields.iter().any(|row| {
+                        row.id == field
+                            && Some(row.region) == actor.region
+                            && row.phase == CropPhase::Growing
+                    })
+                {
+                    return Err("person cannot water that field now".into());
+                }
+                Some(WaterChoice {
+                    person,
+                    field,
+                    quantity,
+                    willing: true,
+                    pressured_by: None,
+                    fear_at_least: None,
+                    obligation_at_least: None,
+                    disregard_claims,
+                })
+            }
+            _ => None,
+        };
         let irrigation_plan = self
             .irrigation
             .as_ref()
@@ -4795,6 +4875,9 @@ impl Economy {
                         opinions: self.opinions.as_ref(),
                         view: &view,
                         max_hunger: self.rules.max_work_hunger,
+                        manual: manual_water.as_ref(),
+                        seed: self.seed,
+                        tick,
                     },
                     action_base,
                 )
