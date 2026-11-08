@@ -8,7 +8,7 @@ use rayon::prelude::*;
 
 pub struct Access<'a> {
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
-    pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
+    pub opening: Option<&'a crate::OpeningLocator<'a>>,
     pub missions: Option<&'a Missions>,
     pub inquiry_meetings: &'a [(u64, u64)],
     pub people: &'a [Person],

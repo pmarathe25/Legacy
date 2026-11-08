@@ -4158,6 +4158,23 @@ impl Economy {
             .map(|row| row.target);
         let interaction_busy =
             meeting_target.map(|target| game_economy_work::exclude_sorted(&busy, &[target]));
+        if let Some(meeting) = request
+            && let (Ok(a), Ok(b)) = (
+                self.people
+                    .binary_search_by_key(&meeting.actor, |person| person.id),
+                self.people
+                    .binary_search_by_key(&meeting.target, |person| person.id),
+            )
+            && !local_walking::people_together(
+                self.local_transport
+                    .as_ref()
+                    .and_then(|owner| owner.walking.as_ref()),
+                &self.people[a],
+                &self.people[b],
+            )
+        {
+            return Err("meeting requires people at the same local endpoint".into());
+        }
         let interaction = game_economy_interaction::prepare(
             request,
             self.dynamics.as_ref().and_then(|d| d.social.as_ref()),
@@ -7996,6 +8013,37 @@ impl Economy {
         let social_partition = |person| communication.partition(person);
         let social_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
             (social_enabled && !held.is_empty()).then_some(&social_partition);
+        let social_endpoint = |id| {
+            use game_economy_local_transport::walking::Location;
+            let Some(walking) = self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref())
+            else {
+                return (0, 0);
+            };
+            let Some(position) = walking
+                .positions
+                .binary_search_by_key(&id, |row| row.person)
+                .ok()
+                .map(|index| &walking.positions[index])
+            else {
+                return (0, 0);
+            };
+            match position.location {
+                Location::At {
+                    endpoint: LocalEndpoint::Stock,
+                    ..
+                } => (0, 0),
+                Location::At {
+                    endpoint: LocalEndpoint::Store { id },
+                    ..
+                } => (1, id),
+                Location::Walking { .. } => (2, id),
+            }
+        };
+        let social_local: Option<&(dyn Fn(u64) -> (u8, u64) + Sync)> =
+            (social_enabled && !local_nonstock.is_empty()).then_some(&social_endpoint);
         let social_speak = |a, b| {
             let a = self
                 .people
@@ -8008,7 +8056,16 @@ impl Economy {
                 .ok()
                 .map(|index| &self.people[index]);
             a.zip(b).is_some_and(|(a, b)| {
-                a.region.is_some() && a.region == b.region && communication.allows(a.id, b.id)
+                a.region.is_some()
+                    && a.region == b.region
+                    && communication.allows(a.id, b.id)
+                    && local_walking::people_together(
+                        self.local_transport
+                            .as_ref()
+                            .and_then(|owner| owner.walking.as_ref()),
+                        a,
+                        b,
+                    )
             })
         };
         let social_opening = |id| {
@@ -8018,8 +8075,9 @@ impl Economy {
                 .ok()?];
             let region = person.region?;
             let (before, after) = communication.partition(id);
+            let (kind, endpoint) = social_endpoint(id);
             if before == 0 && after == 0 {
-                Some((region, false))
+                Some((region, kind, endpoint, false))
             } else if before != 0
                 && before == after
                 && communication
@@ -8029,7 +8087,7 @@ impl Economy {
                     .after
                     .is_some_and(|owner| owner.can_receive_supplies(id))
             {
-                Some((region, true))
+                Some((region, kind, endpoint, true))
             } else {
                 None
             }
@@ -8051,9 +8109,11 @@ impl Economy {
             combat,
             social_access,
             social_access.map(|_| &care_contact as &(dyn Fn(u64, u64) -> bool + Sync)),
-            social_access.map(|_| &social_speak as &(dyn Fn(u64, u64) -> bool + Sync)),
+            (social_access.is_some() || social_local.is_some())
+                .then_some(&social_speak as &(dyn Fn(u64, u64) -> bool + Sync)),
             open_conversations
-                .then_some(&social_opening as &(dyn Fn(u64) -> Option<(u64, bool)> + Sync))
+                .then_some(&social_opening as &game_economy_dynamics::OpeningLocator<'_>),
+            social_local
         );
         if let (Some(opening), Some(owner), Some(social)) = (
             self.writing.as_ref(),

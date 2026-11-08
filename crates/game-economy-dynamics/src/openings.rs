@@ -9,8 +9,8 @@ pub struct Context<'a> {
     pub occupied: &'a [u64],
     pub seed: u64,
     pub tick: u64,
-    /// Real region and whether the person is behind an open barrier.
-    pub location: &'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync),
+    /// Real region, local endpoint, and whether the person is behind an open barrier.
+    pub location: &'a crate::OpeningLocator<'a>,
 }
 
 impl Context<'_> {
@@ -49,9 +49,11 @@ impl Context<'_> {
                 if !voluntary(contact.person, isolation) {
                     return None;
                 }
-                let (region, inside) = (self.location)(contact.person)?;
+                let (region, kind, endpoint, inside) = (self.location)(contact.person)?;
                 Some((
                     region,
+                    kind,
+                    endpoint,
                     inside,
                     std::cmp::Reverse(isolation),
                     game_genetics::random(self.seed ^ region, contact.person, self.tick),
@@ -60,23 +62,23 @@ impl Context<'_> {
                 ))
             })
             .collect();
-        if !candidates.par_iter().any(|candidate| candidate.1) {
+        if !candidates.par_iter().any(|candidate| candidate.3) {
             return Vec::new();
         }
         candidates.par_sort_unstable();
         candidates
-            .par_chunk_by(|a, b| a.0 == b.0)
+            .par_chunk_by(|a, b| (a.0, a.1, a.2) == (b.0, b.1, b.2))
             .flat_map(|group| {
-                let split = group.partition_point(|row| !row.1);
+                let split = group.partition_point(|row| !row.3);
                 let pairs = split.min(group.len() - split);
                 (0..pairs).into_par_iter().map(move |i| {
                     let outside = group[i];
                     let inside = group[split + i];
                     Encounter {
                         tick: self.tick,
-                        region: outside.5,
-                        a: outside.4.min(inside.4),
-                        b: outside.4.max(inside.4),
+                        region: outside.7,
+                        a: outside.6.min(inside.6),
+                        b: outside.6.max(inside.6),
                         pressured: None,
                         also_pressured: None,
                     }

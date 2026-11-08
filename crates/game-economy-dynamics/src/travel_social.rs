@@ -6,7 +6,7 @@ use rayon::prelude::*;
 pub struct Locality {
     regions: Vec<u64>,
     routes: Vec<(u64, u64, u64)>,
-    cells: Vec<(u64, u64, u64)>,
+    cells: Vec<(u64, u64, u64, u8, u64)>,
     people: Vec<(u64, usize)>,
 }
 impl Locality {
@@ -14,9 +14,10 @@ impl Locality {
         people: &[Person],
         travel: Option<&Travel>,
         partition: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)>,
+        local: Option<&(dyn Fn(u64) -> (u8, u64) + Sync)>,
     ) -> Option<Self> {
         let journeys = travel.map_or(&[][..], |travel| travel.journeys.as_slice());
-        if journeys.is_empty() && partition.is_none() {
+        if journeys.is_empty() && partition.is_none() && local.is_none() {
             return None;
         }
         let mut regions: Vec<_> = people
@@ -32,16 +33,20 @@ impl Locality {
             .collect();
         routes.par_sort_unstable();
         routes = routes.par_chunk_by(|a, b| a == b).map(|g| g[0]).collect();
-        let cell_people: Vec<_> = partition.map_or_else(Vec::new, |partition| {
+        let cell_people: Vec<_> = if partition.is_some() || local.is_some() {
             people
                 .par_iter()
                 .filter_map(|person| {
-                    let (before, after) = partition(person.id);
-                    (before != 0 || after != 0)
-                        .then_some((person.id, (person.region?, before, after)))
+                    let (before, after) =
+                        partition.map_or((0, 0), |partition| partition(person.id));
+                    let (kind, endpoint) = local.map_or((0, 0), |local| local(person.id));
+                    (before != 0 || after != 0 || kind != 0)
+                        .then_some((person.id, (person.region?, before, after, kind, endpoint)))
                 })
                 .collect()
-        });
+        } else {
+            Vec::new()
+        };
         let mut cells: Vec<_> = cell_people.par_iter().map(|row| row.1).collect();
         if cells.par_windows(2).any(|pair| pair[0] > pair[1]) {
             cells.par_sort_unstable();

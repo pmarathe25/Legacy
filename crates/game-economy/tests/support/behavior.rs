@@ -5375,6 +5375,80 @@ fn people_at_a_store_can_choose_autonomous_encounters() {
 }
 
 #[test]
+fn local_encounters_pair_people_only_at_the_same_endpoint() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = (1..=4)
+        .map(|person| LocalPosition {
+            person,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store {
+                    id: if person <= 2 { 1 } else { 2 },
+                },
+            },
+        })
+        .collect();
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants = (1..=4)
+        .map(|person| game_social::Participant {
+            person,
+            willing: true,
+        })
+        .collect();
+    let mut controlled = initial.clone();
+    controlled.people[0].controlled = true;
+    let mut manual = Economy::compile(controlled).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.meet(1, 3).is_err());
+    assert_eq!(manual.snapshot(), before);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), 2);
+                assert!(events.iter().all(|event| event.region == 1
+                    && ((event.a, event.b) == (1, 2) || (event.a, event.b) == (3, 4))));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn a_person_can_repair_carried_tools_at_a_store() {
     let mut initial = local_social_fixture();
     initial.local_transport.as_mut().unwrap().policies.clear();
@@ -18907,6 +18981,75 @@ fn opening_social_workload(count: u64) -> State {
     initial.confinement.as_mut().unwrap().cells[0].allow_supplies = true;
     initial.dynamics.as_mut().unwrap().disease = None;
     initial
+}
+
+#[test]
+fn conversations_through_openings_respect_local_endpoints() {
+    let mut initial = opening_social_workload(4);
+    for id in [1, 2] {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(id), 10, vec![]).unwrap());
+    }
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: (1..=2)
+            .map(|id| LocalStore {
+                id,
+                region: 1,
+                name: format!("store {id}"),
+            })
+            .collect(),
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            positions: (1..=4)
+                .map(|person| LocalPosition {
+                    person,
+                    location: LocalLocation::At {
+                        region: 1,
+                        endpoint: LocalEndpoint::Store {
+                            id: if person % 2 == 1 { 1 } else { 2 },
+                        },
+                    },
+                })
+                .collect(),
+            events: vec![],
+        }),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), 2);
+                assert!(events.iter().all(|event| event.region == 1
+                    && ((event.a, event.b) == (1, 3) || (event.a, event.b) == (2, 4))));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]

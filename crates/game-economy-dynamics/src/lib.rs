@@ -147,7 +147,7 @@ macro_rules! social_choice_method {
 }
 #[macro_export]
 macro_rules! prepare_dynamics {
-    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr, $partition:expr, $contact:expr, $speak:expr, $opening:expr) => {{
+    ($world:expr, $person:expr, $busy:expr, $tick:expr, $treatment:expr, $physical:expr, $care:expr, $interaction:expr, $medical:expr, $combat:expr, $partition:expr, $contact:expr, $speak:expr, $opening:expr, $local:expr) => {{
         let exposure = $world
             .dynamics
             .as_ref()
@@ -212,6 +212,7 @@ macro_rules! prepare_dynamics {
                         tick: $tick,
                         travel: $world.travel.as_ref(),
                         partition: $partition,
+                        local: $local,
                         contact: $contact,
                         speak: $speak,
                         opening: $opening,
@@ -243,14 +244,17 @@ pub struct Dynamics {
     #[serde(default)]
     pub claims: Option<claims::Claims>,
 }
+pub type OpeningLocator<'a> = dyn Fn(u64) -> Option<(u64, u8, u64, bool)> + Sync + 'a;
+
 pub struct Clock<'a> {
     pub seed: u64,
     pub tick: u64,
     pub travel: Option<&'a game_economy_person::travel::Travel>,
     pub partition: Option<&'a (dyn Fn(u64) -> (u64, u64) + Sync)>,
+    pub local: Option<&'a (dyn Fn(u64) -> (u8, u64) + Sync)>,
     pub contact: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
-    pub opening: Option<&'a (dyn Fn(u64) -> Option<(u64, bool)> + Sync)>,
+    pub opening: Option<&'a OpeningLocator<'a>>,
     pub missions: Option<&'a game_missions::Missions>,
     pub inquiry_meetings: &'a [(u64, u64)],
 }
@@ -305,6 +309,7 @@ impl Dynamics {
             tick,
             travel,
             partition,
+            local,
             contact,
             speak,
             opening,
@@ -317,7 +322,7 @@ impl Dynamics {
         let locality = self
             .social
             .as_ref()
-            .and_then(|_| travel_social::Locality::new(old, travel, partition));
+            .and_then(|_| travel_social::Locality::new(old, travel, partition, local));
         let contacts: Vec<_> = old
             .par_iter()
             .map(|p| Contact {
@@ -564,6 +569,7 @@ mod tests {
                         tick: 1,
                         travel: None,
                         partition: None,
+                        local: None,
                         contact: None,
                         speak: None,
                         opening: None,
