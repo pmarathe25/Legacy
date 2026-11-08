@@ -55,6 +55,10 @@ pub use game_economy_taking::{
     Response as TakingResponse, Stance as TakingReportStance, Taking, Witness as TakingWitness,
 };
 pub use game_economy_work::care::DependentCare;
+pub use game_economy_work::shared::{
+    CrewRule as SharedCrewRule, Event as SharedWorkEvent, Preference as SharedWorkPreference,
+    SharedWork,
+};
 pub use game_economy_work::sites::{
     Binding as WorkSiteBinding, Facilities as WorkSites, Requirement as WorkSiteRequirement,
     Site as WorkSite,
@@ -167,6 +171,7 @@ pub struct Economy {
     agreements: Option<Agreements>,
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
+    shared_work: Option<SharedWork>,
     work_tools: Vec<WorkTool>,
     work_sites: Option<WorkSites>,
     construction: Option<Construction>,
@@ -223,6 +228,7 @@ pub struct Draft {
     agreements: Option<Agreements>,
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
+    shared_work: Option<SharedWork>,
     work_sites: Option<WorkSites>,
     construction: Option<Construction>,
     confinement: Option<Confinement>,
@@ -279,6 +285,23 @@ impl Draft {
 }
 impl Economy {
     giving_practices::methods!();
+    /// Change this person's willingness to assist; their own fear or felt
+    /// obligation may still motivate a later contribution.
+    pub fn set_shared_work_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
+        let owner = self.shared_work.as_mut().ok_or("shared work is disabled")?;
+        let preference = owner
+            .preferences
+            .iter_mut()
+            .find(|row| row.person == person)
+            .ok_or("unknown shared work preference")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        preference.willing = willing;
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Change this person's willingness to build for their own production goals.
     pub fn set_goal_building_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
@@ -2395,6 +2418,17 @@ impl Economy {
             }
             game_economy_work::validate_links(auto, physical.work())?;
         }
+        if let Some(shared) = &state.shared_work {
+            if state.work_sites.is_none() {
+                return Err("shared work requires work sites".into());
+            }
+            let recipes = physical
+                .recipes()
+                .par_iter()
+                .map(|recipe| recipe.id)
+                .collect();
+            shared.validate(&ids, &recipes, physical.tick())?;
+        }
         Ok(Self {
             physical,
             seed: state.seed,
@@ -2404,6 +2438,7 @@ impl Economy {
             agreements: state.agreements,
             opinions: state.opinions,
             autowork: state.autowork,
+            shared_work: state.shared_work,
             work_tools: state.work_tools,
             work_sites: state.work_sites,
             construction: state.construction,
@@ -2454,6 +2489,7 @@ impl Economy {
             agreements: self.agreements.clone(),
             opinions: self.opinions.clone(),
             autowork: self.autowork.clone(),
+            shared_work: self.shared_work.clone(),
             work_tools: self.work_tools.clone(),
             work_sites: self.work_sites.clone(),
             construction: self.construction.clone(),
@@ -5739,6 +5775,45 @@ impl Economy {
                     .collect(),
             )
         };
+        let base_rates = if self.shared_work.is_some() {
+            rates.clone()
+        } else {
+            Vec::new()
+        };
+        let mut shared_events =
+            if let (Some(owner), Some(sites)) = (&self.shared_work, &self.work_sites) {
+                game_economy_work::shared::Context {
+                    owner,
+                    people: &self.people,
+                    work: self.physical.work(),
+                    rates: &rates,
+                    busy: &busy,
+                    sites,
+                    unavailable_sites: &unavailable_sites,
+                    site_classes: &site_classes,
+                    claims: claims.as_ref(),
+                    skills: self.skills.as_ref(),
+                    injuries: self
+                        .combat
+                        .as_ref()
+                        .and_then(|combat| combat.state.injuries.as_ref()),
+                    family: self.family.as_ref(),
+                    tools: &self.work_tools,
+                    view: &view,
+                    opinions: self.opinions.as_ref(),
+                    max_hunger: self.rules.max_work_hunger,
+                    seed: self.seed,
+                    tick,
+                }
+                .prepare()
+            } else {
+                Vec::new()
+            };
+        let shared_people: Vec<_> = shared_events.par_iter().map(|event| event.person).collect();
+        if !shared_people.is_empty() {
+            game_economy_work::reserve(&mut busy, shared_people.iter().copied());
+            game_economy_work::shared::apply_rates(&shared_events, &mut rates);
+        }
         #[cfg(feature = "profile")]
         {
             drop(work_phase);
@@ -6002,7 +6077,8 @@ impl Economy {
                 medical_plan.caregivers(),
                 hauling_plan,
                 care,
-                fighters
+                fighters,
+                shared_people
             ),
             (resting, busy, meal_candidates, player_transfer)
         );
@@ -6499,10 +6575,21 @@ impl Economy {
                 owner.receive_report_at(person, statement, local, tick);
             }
         }
+        let shared_practice: Vec<_> = shared_events
+            .par_iter()
+            .map(|event| (event.job, event.person, event.progress))
+            .collect();
         let mut skills = game_economy_skills::advance(
             self.skills.as_ref(),
             self.physical.work(),
-            &rates,
+            game_economy_skills::WorkRates {
+                lead: if self.shared_work.is_some() {
+                    &base_rates
+                } else {
+                    &rates
+                },
+                helpers: &shared_practice,
+            },
             physical.events(),
             (
                 dynamics.as_ref().and_then(|d| d.social.as_ref()),
@@ -6877,6 +6964,20 @@ impl Economy {
         if let Some(owner) = dynamics.as_mut().and_then(|d| d.claims.as_mut()) {
             let mut uses = Vec::new();
             if !site_classes.is_empty() {
+                if let Some(sites) = &self.work_sites {
+                    uses.par_extend(shared_events.par_iter().filter_map(|event| {
+                        let index = sites
+                            .bindings
+                            .binary_search_by_key(&event.job, |binding| binding.job)
+                            .ok()?;
+                        Some(game_economy_claims::SiteUse {
+                            person: event.person,
+                            site: sites.bindings[index].site,
+                            destroyed: false,
+                            salvaged: false,
+                        })
+                    }));
+                }
                 let mut workers: Vec<_> = starts
                     .par_iter()
                     .map(|start| (start.id, start.worker))
@@ -6953,6 +7054,12 @@ impl Economy {
                             }),
                     );
                 }
+            }
+            if !shared_events.is_empty() && uses.len() > 1 {
+                uses.par_sort_unstable_by_key(|row| {
+                    (row.person, row.site, row.destroyed, row.salvaged)
+                });
+                uses.dedup_by_key(|row| (row.person, row.site, row.destroyed, row.salvaged));
             }
             let mut sites: Vec<_> = if uses.is_empty() {
                 Vec::new()
@@ -7607,6 +7714,18 @@ impl Economy {
         });
         #[cfg(feature = "profile")]
         drop(profile_phase);
+        let mut shared_work = self.shared_work.clone();
+        if let Some(owner) = &mut shared_work {
+            let mut finished = physical.events().finished.clone();
+            let mut interrupted = physical.events().interrupted.clone();
+            finished.par_sort_unstable();
+            interrupted.par_sort_unstable();
+            shared_events.par_iter_mut().for_each(|event| {
+                event.finished = finished.binary_search(&event.job).is_ok();
+                event.interrupted = interrupted.binary_search(&event.job).is_ok();
+            });
+            owner.events = shared_events;
+        }
         Ok(Draft {
             epoch: self.epoch,
             physical,
@@ -7615,6 +7734,7 @@ impl Economy {
             agreements: next_agreements,
             opinions: next_opinions,
             autowork,
+            shared_work,
             work_sites,
             construction,
             confinement: next_confinement,
@@ -7696,6 +7816,7 @@ impl Economy {
         self.agreements = draft.agreements;
         let old_opinions = std::mem::replace(&mut self.opinions, draft.opinions);
         self.autowork = draft.autowork;
+        self.shared_work = draft.shared_work;
         self.work_sites = draft.work_sites;
         self.construction = draft.construction;
         self.confinement = draft.confinement;

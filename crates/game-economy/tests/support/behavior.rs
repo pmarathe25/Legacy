@@ -186,6 +186,7 @@ fn fixture() -> State {
             }],
             requests: None,
         }),
+        shared_work: None,
         work_tools: vec![],
         work_sites: None,
         construction: None,
@@ -45028,6 +45029,431 @@ fn people_produce_a_kit_build_a_site_and_then_use_it_for_work() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+fn shared_work_fixture() -> State {
+    let mut state = maintenance_fixture();
+    state.physical.recipes[0].ticks = 5;
+    let mut skills = training_rules(1);
+    skills.rules[0].practice_each_tick = true;
+    skills.rules[0].completions_per_level = 100;
+    state.skills = Some(skills);
+    state.opinions.as_mut().unwrap().records.push(Opinion {
+        observer: 4,
+        target: 2,
+        trust: 0,
+        fear: 5,
+        obligation: 0,
+        affinity: 0,
+    });
+    state.shared_work = Some(SharedWork {
+        rules: vec![SharedCrewRule {
+            recipe: 1,
+            max_helpers: 2,
+        }],
+        preferences: vec![
+            SharedWorkPreference {
+                person: 3,
+                lead: 2,
+                recipe: 1,
+                willing: true,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims: false,
+            },
+            SharedWorkPreference {
+                person: 4,
+                lead: 2,
+                recipe: 1,
+                willing: false,
+                fear_at_least: Some(5),
+                obligation_at_least: None,
+                disregard_claims: false,
+            },
+        ],
+        events: vec![],
+    });
+    state
+}
+
+#[test]
+fn individuals_share_one_physical_job_and_learn_only_their_own_practice() {
+    let initial = shared_work_fixture();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.advance().unwrap().started.len(), 1);
+                let before = world.snapshot();
+                drop(world.prepare().unwrap());
+                assert_eq!(before, world.snapshot());
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.physical.work[0].job.remaining, 2);
+                let contributions = &state.shared_work.as_ref().unwrap().events;
+                assert_eq!(contributions.len(), 2);
+                assert!(
+                    contributions
+                        .iter()
+                        .all(|event| event.offered == 1 && event.progress == 1 && !event.finished)
+                );
+                for person in [2, 3, 4] {
+                    assert!(state.skills.as_ref().unwrap().records.iter().any(|record| {
+                        record.person == person && record.recipe == 1 && record.completions == 1
+                    }));
+                }
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                let events = world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(events.finished.len(), 1);
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let contributions = &state.shared_work.as_ref().unwrap().events;
+                assert_eq!(contributions.len(), 2);
+                assert_eq!(
+                    contributions
+                        .iter()
+                        .map(|event| event.progress)
+                        .sum::<u64>(),
+                    1
+                );
+                assert!(contributions.iter().all(|event| event.finished));
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let output = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|container| container.place == Place::Stock { region: 1, good: 3 })
+                    .unwrap();
+                assert_eq!(output.used, 2);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn shared_work_boundary_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let hot = std::env::var_os("LEGACY_HOT").is_some();
+    let shared_site = std::env::var_os("LEGACY_SHARED_SITE").is_some();
+    let crew_limit: u64 = std::env::var("LEGACY_CREW_LIMIT")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(if hot { count } else { 1 });
+    let leads = if hot { 1 } else { count };
+    let contenders = if shared_site && !hot { count } else { 0 };
+    let mut initial = concentrated(leads + count + contenders);
+    initial.nutrition = None;
+    initial.physical.recipes[0].ticks = u32::try_from(count + 10).unwrap();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+        person.willing_to_work = person.id <= leads;
+    }
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        leads * 2 + 10,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: leads + contenders,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.autowork = Some(Autowork {
+        next_id: 1,
+        policies: (1..=leads)
+            .map(|person| WorkPolicy {
+                person,
+                recipe: 1,
+                enabled: true,
+                disregard_claims: false,
+            })
+            .collect(),
+        requests: None,
+    });
+    let site_count = if hot || shared_site { 1 } else { leads };
+    initial.work_sites = Some(WorkSites {
+        next_id: site_count + 1,
+        sites: (1..=site_count)
+            .map(|id| WorkSite {
+                id,
+                region: 1,
+                kind: "workshop".into(),
+                capacity: if shared_site { leads } else { 1 },
+            })
+            .collect(),
+        requirements: vec![WorkSiteRequirement {
+            recipe: 1,
+            kind: "workshop".into(),
+            slots: 1,
+        }],
+        bindings: vec![],
+    });
+    initial.shared_work = Some(SharedWork {
+        rules: vec![SharedCrewRule {
+            recipe: 1,
+            max_helpers: crew_limit,
+        }],
+        preferences: (1..=count)
+            .map(|index| SharedWorkPreference {
+                person: leads + index,
+                lead: if hot { 1 } else { index },
+                recipe: 1,
+                willing: true,
+                fear_at_least: None,
+                obligation_at_least: None,
+                disregard_claims: false,
+            })
+            .collect(),
+        events: vec![],
+    });
+    rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut samples = Vec::new();
+        let mut fingerprint = None;
+        for _ in 0..4 {
+            let mut world = Economy::compile(initial.clone()).unwrap();
+            let starts = world.advance().unwrap();
+            assert_eq!(starts.started.len(), leads as usize);
+            if contenders > 0 {
+                let mut opening = world.snapshot();
+                for person in &mut opening.people {
+                    if person.id > leads + count { person.willing_to_work = true; }
+                }
+                opening.autowork.as_mut().unwrap().policies.extend((leads + count + 1..=leads + count + contenders).map(|person| WorkPolicy { person, recipe: 1, enabled: true, disregard_claims: false }));
+                world = Economy::compile(opening).unwrap();
+            }
+            let start = std::time::Instant::now();
+            let boundary = world.advance().unwrap();
+            samples.push(start.elapsed().as_secs_f64());
+            if contenders > 0 { assert!(boundary.started.is_empty()); }
+            let state = world.snapshot();
+            assert_eq!(state.shared_work.as_ref().unwrap().events.len(), if hot { count.min(crew_limit) as usize } else { count as usize });
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&state).unwrap().hash(&mut hash);
+            let actual = hash.finish();
+            if let Some(expected) = fingerprint { assert_eq!(expected, actual); }
+            fingerprint = Some(actual);
+        }
+        samples.remove(0);
+        samples.sort_by(f64::total_cmp);
+        eprintln!("workers={workers} helpers={count} jobs={leads} hot={hot} shared_site={shared_site} crew_limit={crew_limit} elapsed_median={:.6} fingerprint={:016x}", samples[1], fingerprint.unwrap());
+    });
+}
+
+#[test]
+fn shared_work_respects_contested_site_claims_and_publishes_witnessed_use() {
+    use game_economy_claims::Claims;
+    let mut initial = shared_work_fixture();
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims::default()),
+    });
+    initial.shared_work.as_mut().unwrap().preferences[1].disregard_claims = true;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                world.claim_site(1, 1).unwrap();
+                world.claim_site(2, 1).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state.shared_work.as_ref().unwrap().events;
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].person, 4);
+                let witnessed = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .claims
+                    .as_ref()
+                    .unwrap()
+                    .site_events;
+                assert!(
+                    witnessed
+                        .iter()
+                        .any(|event| event.person == 4 && event.claimant == 1 && event.site == 1)
+                );
+                assert!(
+                    witnessed
+                        .iter()
+                        .any(|event| event.person == 4 && event.claimant == 2 && event.site == 1)
+                );
+                assert!(!witnessed.iter().any(|event| event.person == 3));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn shared_work_exerts_helpers_and_they_can_stop_contributing() {
+    let mut initial = shared_work_fixture();
+    initial.fatigue = Some(Fatigue {
+        rules: fatigue_rules(),
+        people: vec![],
+    });
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(
+        state
+            .fatigue
+            .as_ref()
+            .unwrap()
+            .people
+            .iter()
+            .any(|person| person.id == 3 && person.fatigue == 2)
+    );
+    world.set_shared_work_choice(3, false).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(
+        !state
+            .shared_work
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.person == 3)
+    );
+}
+
+#[test]
+fn shared_work_excludes_wounded_helpers_and_reports_spoiled_inputs() {
+    let mut wounded = shared_work_fixture();
+    let mut combat = combat_rules();
+    combat.injuries = Some(injury_rules(vec![game_economy_combat::injury::Case {
+        person: 3,
+        sustained_at: 0,
+        heals_at: 4,
+        attacker: 1,
+    }]));
+    wounded.combat = Some(combat);
+    let mut world = Economy::compile(wounded).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.shared_work.as_ref().unwrap().events.len(), 1);
+    assert_eq!(state.shared_work.as_ref().unwrap().events[0].person, 4);
+
+    let mut spoiled = shared_work_fixture();
+    spoiled.physical.recipes[0].ticks = 3;
+    let stock = spoiled
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        stock.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 2,
+            expires_at: Some(2),
+        }],
+    )
+    .unwrap();
+    let mut world = Economy::compile(spoiled).unwrap();
+    assert_eq!(world.advance().unwrap().started.len(), 1);
+    let events = world.advance().unwrap();
+    assert_eq!(events.interrupted.len(), 1);
+    assert!(events.finished.is_empty());
+    let state = world.snapshot();
+    assert!(
+        state
+            .shared_work
+            .as_ref()
+            .unwrap()
+            .events
+            .iter()
+            .all(|event| event.interrupted && !event.finished)
+    );
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|c| c.place == Place::Stock { region: 1, good: 3 })
+            .unwrap()
+            .used,
+        1
+    );
+    Economy::compile(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap())
+        .unwrap();
+}
+
+#[test]
+fn shared_work_respects_crew_capacity_personal_choice_and_lead_abandonment() {
+    let mut initial = shared_work_fixture();
+    initial.shared_work.as_mut().unwrap().rules[0].max_helpers = 1;
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().shared_work.as_ref().unwrap().events.len(),
+        1
+    );
+    world.set_shared_work_choice(3, false).unwrap();
+    world.set_shared_work_choice(4, false).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert_eq!(state.shared_work.as_ref().unwrap().events.len(), 1);
+    assert_eq!(state.shared_work.as_ref().unwrap().events[0].person, 4);
+
+    let mut world = Economy::compile(shared_work_fixture()).unwrap();
+    world.advance().unwrap();
+    world.set_work_choice(2, false).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    assert!(
+        state
+            .physical
+            .work
+            .iter()
+            .all(|row| row.job.worker != 2 || row.phase != game_lot_runtime::Phase::Working)
+    );
+    assert!(state.shared_work.as_ref().unwrap().events.is_empty());
 }
 
 fn maintenance_fixture() -> State {

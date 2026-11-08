@@ -14,6 +14,7 @@ game-dependent-care = { path = "../game-dependent-care" }
 game-family-columns = { path = "../game-family-columns" }
 game-families = { path = "../game-families" }
 game-economy-person = { path = "../game-economy-person" }
+game-economy-combat = { path = "../game-economy-combat" }
 game-economy-claims = { path = "../game-economy-claims" }
 game-lots = { path = "../game-lots" }
 game-work-asking = { path = "../game-work-asking" }
@@ -24,5 +25,6 @@ game-production = { path = "../game-production" }
 game-production-model = { path = "../game-production-model" }
 game-lot-runtime = { path = "../game-lot-runtime" }
 game-opinions = { path = "../game-opinions" }
+game-skills = { path = "../game-skills" }
 rayon.workspace = true
 serde.workspace = true

@@ -66,6 +66,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             for record in view.route_observations {
                 println!("route-observation={record:?}");
             }
+            for event in view.shared_work {
+                println!("shared-work={event:?}");
+            }
             println!("local_stock={:?}", view.local_stock);
             for body in view.bodies {
                 println!("body={body:?}");

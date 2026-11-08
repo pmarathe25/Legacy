@@ -1,5 +1,6 @@
 //! Personal responses to requested work, separate from physical admission.
 pub mod care;
+pub mod shared;
 mod site_filter;
 pub use game_work_sites as sites;
 pub mod tools;

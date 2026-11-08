@@ -24,6 +24,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-maintenance.toml` has a workshop that wears out after one completed batch. Local `view` shows its wear, limit, repair good, and quantity; `repair-site 1` spends a boundary and consumes the required carried timber if the physical transaction succeeds. A worn-out site does not admit new jobs, but existing work may finish. Repairs require an idle site and exclude competing demolition and new work during the attempt.
 
+In `content/scenarios/economy-shared-work.toml`, person 3 chooses to assist person 2's workshop job. Use `step 3` and `view` to see a local shared-work receipt. The same job owns its inputs and output throughout.
+
 In `content/scenarios/economy-fear-retreat.toml`, use `attack 3` and advance the combat. The other fighter can gain personal fear from an actual strike and choose to retreat in a later round; another person's fear or a fighter without that inclination does not compel retreat.
 
 In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the combat. Person 2 can independently interrupt their work and enter the encounter on person 3's side after the current round, provided both combatants remain and a visible tactical entry is available.

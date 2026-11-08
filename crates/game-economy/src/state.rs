@@ -25,6 +25,8 @@ pub struct State {
     #[serde(default)]
     pub autowork: Option<Autowork>,
     #[serde(default)]
+    pub shared_work: Option<game_economy_work::shared::SharedWork>,
+    #[serde(default)]
     pub work_tools: Vec<game_economy_work::tools::Requirement>,
     #[serde(default)]
     pub work_sites: Option<game_economy_work::sites::Facilities>,

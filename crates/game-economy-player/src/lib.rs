@@ -131,6 +131,7 @@ pub struct View {
     /// Only route observations made by the controlled person.
     pub route_observations: Vec<game_economy::RouteObservation>,
     pub job: Option<Job>,
+    pub shared_work: Vec<game_economy::SharedWorkEvent>,
     /// Only the controlled person's own goals are visible.
     pub goals: Vec<game_economy::Goal>,
     pub warning: Option<InvocationWarning>,
@@ -650,6 +651,16 @@ impl<'a> Player<'a> {
                 })
             })
             .unwrap_or_default();
+        let shared_work = state.shared_work.map_or_else(Vec::new, |owner| {
+            owner
+                .events
+                .par_iter()
+                .filter(|event| {
+                    current == Some(event.person) || nearby.binary_search(&event.person).is_ok()
+                })
+                .cloned()
+                .collect()
+        });
         Ok(View {
             tick: self.world.tick(),
             held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
@@ -664,6 +675,7 @@ impl<'a> Player<'a> {
             food_reports,
             route_observations,
             job,
+            shared_work,
             goals: current.map_or_else(Vec::new, |id| {
                 state.goals.map_or_else(Vec::new, |owner| {
                     owner

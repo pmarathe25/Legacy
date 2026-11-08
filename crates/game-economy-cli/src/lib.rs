@@ -52,6 +52,8 @@ struct Scenario {
     #[serde(default)]
     work_requests: Option<game_autowork::requests::Requests>,
     #[serde(default)]
+    shared_work: Option<SharedWorkConfig>,
+    #[serde(default)]
     work_offer_values: Vec<WorkOfferValueConfig>,
     #[serde(default)]
     work_tools: Vec<WorkToolConfig>,
@@ -248,6 +250,34 @@ struct WorkToolConfig {
     recipe: String,
     good: String,
     quantity: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SharedWorkConfig {
+    rules: Vec<SharedCrewConfig>,
+    #[serde(default)]
+    preferences: Vec<SharedPreferenceConfig>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SharedCrewConfig {
+    recipe: String,
+    max_helpers: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SharedPreferenceConfig {
+    person: u64,
+    lead: u64,
+    recipe: String,
+    #[serde(default)]
+    willing: bool,
+    #[serde(default)]
+    fear_at_least: Option<u64>,
+    #[serde(default)]
+    obligation_at_least: Option<u64>,
+    #[serde(default)]
+    disregard_claims: bool,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -860,6 +890,45 @@ pub fn scenario_with_options(
             });
         }
     }
+    let shared_work = scenario
+        .shared_work
+        .map(|config| {
+            let lookup = |name: &str| {
+                recipes
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown shared work recipe {name}"))
+            };
+            Ok::<_, String>(game_economy::SharedWork {
+                rules: config
+                    .rules
+                    .into_iter()
+                    .map(|rule| {
+                        Ok(game_economy::SharedCrewRule {
+                            recipe: lookup(&rule.recipe)?,
+                            max_helpers: rule.max_helpers,
+                        })
+                    })
+                    .collect::<Result<_, String>>()?,
+                preferences: config
+                    .preferences
+                    .into_iter()
+                    .map(|policy| {
+                        Ok(game_economy::SharedWorkPreference {
+                            person: policy.person,
+                            lead: policy.lead,
+                            recipe: lookup(&policy.recipe)?,
+                            willing: policy.willing,
+                            fear_at_least: policy.fear_at_least,
+                            obligation_at_least: policy.obligation_at_least,
+                            disregard_claims: policy.disregard_claims,
+                        })
+                    })
+                    .collect::<Result<_, String>>()?,
+                events: vec![],
+            })
+        })
+        .transpose()?;
     let work_tools = scenario
         .work_tools
         .into_iter()
@@ -1435,6 +1504,7 @@ pub fn scenario_with_options(
             policies,
             requests: scenario.work_requests,
         }),
+        shared_work,
         work_tools,
         work_sites,
         construction,

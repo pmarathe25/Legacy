@@ -53,6 +53,7 @@ pub struct Context<'a> {
     pub hauling: &'a [u64],
     pub care: &'a [u64],
     pub fighters: &'a [u64],
+    pub helpers: &'a [u64],
     pub resting: &'a [u64],
     pub busy: &'a [u64],
     pub meals: &'a [(u64, u32)],
@@ -103,6 +104,7 @@ impl Context<'_> {
             .chain(self.hauling.par_iter().copied())
             .chain(self.care.par_iter().copied())
             .chain(self.fighters.par_iter().copied())
+            .chain(self.helpers.par_iter().copied())
             .collect();
         exertion.par_sort_unstable();
         exertion.dedup();
@@ -154,7 +156,7 @@ pub fn apply(draft: Option<&Draft>, people: &mut [Person]) {
 }
 #[macro_export]
 macro_rules! prepare_world {
-    ($world:expr, ($rates:expr, $starts:expr, $physical:expr), ($farming:expr, $gathering:expr, $medical:expr, $hauling:expr, $care:expr, $fighters:expr), ($resting:expr, $busy:expr, $meals:expr, $choice:expr)) => {{
+    ($world:expr, ($rates:expr, $starts:expr, $physical:expr), ($farming:expr, $gathering:expr, $medical:expr, $hauling:expr, $care:expr, $fighters:expr, $helpers:expr), ($resting:expr, $busy:expr, $meals:expr, $choice:expr)) => {{
         let manual = match $choice {
             Some(game_economy_interaction::PhysicalChoice::Rest { person }) => Some(person),
             _ => None,
@@ -172,6 +174,7 @@ macro_rules! prepare_world {
             hauling: $hauling.as_ref().map_or(&[][..], |p| p.actors.as_slice()),
             care: $care.as_ref().map_or(&[][..], |p| p.actors.as_slice()),
             fighters: $fighters,
+            helpers: &$helpers,
             resting: &$resting,
             busy: &$busy,
             meals: &$meals,
