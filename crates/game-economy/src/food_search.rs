@@ -145,6 +145,7 @@ pub struct Plan {
     pub departures: Vec<Departure>,
     pub targets: Vec<(u64, u64)>,
     pub abandoned: Vec<u64>,
+    pub memory_uses: Vec<(u64, game_economy_knowledge::Record)>,
 }
 
 pub struct Context<'a> {
@@ -287,7 +288,7 @@ impl Context<'_> {
                 })
             })
             .collect();
-        let targets = decisions
+        let targets: Vec<(u64, u64)> = decisions
             .par_iter()
             .filter_map(|&(person, choice)| choice.map(|(_, target)| (person, target)))
             .collect();
@@ -295,10 +296,41 @@ impl Context<'_> {
             .par_iter()
             .filter_map(|&(person, choice)| choice.is_none().then_some(person))
             .collect();
+        let memory_uses = if self.knowledge.retention.is_empty() {
+            Vec::new()
+        } else {
+            let mut continuing: Vec<_> = self
+                .owner
+                .people
+                .par_iter()
+                .filter(|row| row.target.is_some())
+                .map(|row| row.person)
+                .collect();
+            continuing.par_sort_unstable();
+            let mut uses: Vec<_> = targets
+                .par_iter()
+                .filter_map(|&(person, region)| {
+                    if !recall.tracks(person) || continuing.binary_search(&person).is_ok() {
+                        return None;
+                    }
+                    let mind = minds
+                        .binary_search_by_key(&person, |mind| mind.person)
+                        .ok()
+                        .map(|index| minds[index])?;
+                    let record = mind.records.iter().find(|record| {
+                        record.region == region && recall.remembers(person, record, self.now)
+                    })?;
+                    Some((person, record.clone()))
+                })
+                .collect();
+            uses.par_sort_unstable_by_key(|row| row.0);
+            uses
+        };
         Plan {
             departures,
             targets,
             abandoned,
+            memory_uses,
         }
     }
 }

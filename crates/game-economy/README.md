@@ -16,6 +16,8 @@ The ignored `independent_autonomous_authors_benchmark` measures one boundary in 
 
 The ignored `independent_study_benchmark` measures the learning phase for `LEGACY_PEOPLE` independent encounters, excluding fixture construction and the rest of the economy boundary. `LEGACY_WORKERS` selects concurrency.
 
+The ignored `concentrated_food_search_benchmark` measures a complete boundary of people departing toward remembered food. Set `LEGACY_RETENTION_STRIDE` to enable personal retention for every Nth person, and `LEGACY_PEOPLE` and `LEGACY_WORKERS` to control population and concurrency.
+
 Existing personal giving preferences can move written pages as physical goods; the recipient's separate reading and report-reception choices still apply. The ignored `independent_written_circulation_benchmark` measures three complete boundaries in which `LEGACY_PAIRS` authors write, hand pages to recipients, and recipients read them. `LEGACY_WORKERS` selects concurrency.
 
 Giving policies and responses are shared immutable collections across staged generations. Rust callers constructing `Giving` can convert vectors into the shared fields; callers changing them use `policies_mut()` or `responses_mut()`, which detach on write. Their serialized representation remains ordinary arrays.

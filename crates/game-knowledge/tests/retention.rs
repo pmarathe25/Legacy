@@ -122,6 +122,33 @@ fn superseded_reports_do_not_reinforce_and_invalid_batches_are_atomic() {
 }
 
 #[test]
+fn only_matching_used_evidence_is_reinforced() {
+    let claim = record();
+    let mut owner = Knowledge {
+        max_records: 4,
+        minds: vec![mind(1, vec![]), mind(2, vec![claim.clone()])],
+        retention: vec![Retention {
+            person: 2,
+            ticks: 2,
+            traces: vec![],
+        }],
+    };
+    let mut wrong = claim.clone();
+    wrong.food += 1;
+    owner.reinforce_uses(&[(2, wrong)], 1).unwrap();
+    assert!(owner.retention[0].traces.is_empty());
+    let before = owner.clone();
+    assert!(
+        owner
+            .reinforce_uses(&[(2, claim.clone()), (2, claim.clone())], 1)
+            .is_err()
+    );
+    assert_eq!(owner, before);
+    owner.reinforce_uses(&[(2, claim.clone())], 1).unwrap();
+    assert_eq!(owner.recall_at(2, 2).unwrap(), [claim]);
+}
+
+#[test]
 fn hearing_a_forgotten_report_again_restores_its_recall() {
     let mut earlier = record();
     earlier.learned_from = Some(1);

@@ -57,6 +57,11 @@ pub struct RecallIndex<'a> {
     rows: Vec<&'a Retention>,
 }
 impl RecallIndex<'_> {
+    pub fn tracks(&self, person: u64) -> bool {
+        self.rows
+            .binary_search_by_key(&person, |row| row.person)
+            .is_ok()
+    }
     pub fn remembers(&self, person: u64, record: &Record, now: u64) -> bool {
         self.rows
             .binary_search_by_key(&person, |row| row.person)
@@ -254,6 +259,47 @@ impl Knowledge {
                 .cloned()
                 .collect(),
         )
+    }
+    /// Reinforce evidence actually used by an accepted action, without changing it.
+    pub fn reinforce_uses(&mut self, uses: &[(u64, Record)], now: u64) -> Result<(), &'static str> {
+        if uses.par_windows(2).any(|pair| pair[0].0 >= pair[1].0) {
+            return Err("memory uses must have unique ordered people");
+        }
+        if uses.is_empty() || self.retention.is_empty() {
+            return Ok(());
+        }
+        let mut minds: Vec<_> = self.minds.par_iter().collect();
+        if minds
+            .par_windows(2)
+            .any(|pair| pair[0].person > pair[1].person)
+        {
+            minds.par_sort_unstable_by_key(|mind| mind.person);
+        }
+        self.retention.par_iter_mut().for_each(|policy| {
+            let Some((_, evidence)) = uses
+                .binary_search_by_key(&policy.person, |row| row.0)
+                .ok()
+                .map(|i| &uses[i])
+            else {
+                return;
+            };
+            let Some(mind) = minds
+                .binary_search_by_key(&policy.person, |mind| mind.person)
+                .ok()
+                .map(|i| minds[i])
+            else {
+                return;
+            };
+            if evidence.observed_at <= now
+                && mind
+                    .records
+                    .iter()
+                    .any(|record| same_evidence(record, evidence))
+            {
+                policy.reinforce(evidence.region, now);
+            }
+        });
+        Ok(())
     }
     /// Apply accepted reception at the actual boundary without changing the claim's age.
     pub fn receive_reports_at(

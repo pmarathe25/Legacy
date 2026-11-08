@@ -6140,6 +6140,19 @@ impl Economy {
             *current_travel = next_travel;
             person.people = next_people;
         }
+        if let (Some(plan), Some(owner)) = (search_plan.as_ref(), knowledge.as_mut())
+            && !plan.memory_uses.is_empty()
+        {
+            let mut departed: Vec<_> = search_departures.par_iter().map(|row| row.person).collect();
+            departed.par_sort_unstable();
+            let uses: Vec<_> = plan
+                .memory_uses
+                .par_iter()
+                .filter(|row| departed.binary_search(&row.0).is_ok())
+                .cloned()
+                .collect();
+            owner.reinforce_uses(&uses, tick).map_err(str::to_owned)?;
+        }
         if let (Some(plan), Some(search)) = (search_plan, food_search.as_mut()) {
             search.publish(&search_departures, &plan.targets, &plan.abandoned, tick)?;
         }

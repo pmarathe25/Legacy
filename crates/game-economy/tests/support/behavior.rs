@@ -23187,6 +23187,57 @@ fn concentrated_personal_food_search_matches_across_workers() {
 }
 
 #[test]
+fn an_actual_food_search_reinforces_its_memory_but_planning_does_not() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = food_search_workload(4);
+                initial.knowledge.as_mut().unwrap().retention = (1..=4)
+                    .map(|person| Retention {
+                        person,
+                        ticks: 2,
+                        traces: vec![],
+                    })
+                    .collect();
+                let mut world = Economy::compile(initial).unwrap();
+                let before = world.snapshot();
+                let abandoned_draft = world.prepare().unwrap();
+                drop(abandoned_draft);
+                assert_eq!(world.snapshot(), before);
+                world.advance().unwrap();
+                assert_eq!(world.snapshot().travel.as_ref().unwrap().journeys.len(), 4);
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .any(|record| record.region == 2 && record.observed_at == 0)
+                );
+                world.advance().unwrap();
+                assert!(
+                    world
+                        .known_food(1)
+                        .unwrap()
+                        .iter()
+                        .all(|record| record.region != 2)
+                );
+                let snapshot = world.snapshot();
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&snapshot).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(snapshot, restored.snapshot());
+                snapshot
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn food_search_ignores_faded_personal_reports() {
     let run = |workers, fades| {
         rayon::ThreadPoolBuilder::new()
@@ -23348,7 +23399,21 @@ fn concentrated_food_search_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = food_search_workload(count);
+    let mut initial = food_search_workload(count);
+    let retention_stride = std::env::var("LEGACY_RETENTION_STRIDE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
+    if let Some(stride) = retention_stride {
+        assert!(stride > 0);
+        initial.knowledge.as_mut().unwrap().retention = (1..=count)
+            .filter(|person| person % stride == 0)
+            .map(|person| Retention {
+                person,
+                ticks: 2,
+                traces: vec![],
+            })
+            .collect();
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -23359,13 +23424,19 @@ fn concentrated_food_search_benchmark() {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
+                let elapsed = started.elapsed().as_secs_f64();
+                let snapshot = world.snapshot();
+                assert_eq!(snapshot.travel.as_ref().unwrap().journeys.len(), count as usize);
+                if retention_stride.is_some() {
+                    assert!(snapshot.knowledge.as_ref().unwrap().retention.iter().all(|policy| policy.traces.iter().any(|trace| trace.region == 2 && trace.reinforced_at == 1)));
+                }
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 elapsed={:.6}",
+                "workers={workers} people={count} retention={retention_stride:?} ticks=1 elapsed={:.6}",
                 samples[1]
             );
         });
