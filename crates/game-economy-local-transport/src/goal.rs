@@ -164,9 +164,12 @@ impl Context<'_> {
         if recipes.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             recipes.par_sort_unstable_by_key(|recipe| recipe.id);
         }
-        let mut stock: Vec<_> = self
-            .owner
-            .stores
+        let visible_stores = if self.owner.walking.is_some() {
+            &[][..]
+        } else {
+            self.owner.stores.as_slice()
+        };
+        let mut stock: Vec<_> = visible_stores
             .par_iter()
             .flat_map_iter(|store| {
                 self.view

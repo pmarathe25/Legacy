@@ -49,6 +49,7 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             println!("tell-route PERSON SOURCE DEST remembered|open|closed remembered|TICKS");
             println!("assist-work LEAD RECIPE respect|disregard");
             println!("take-over-work JOB respect|disregard");
+            println!("walk-stock | walk-store STORE");
             println!(
                 "text-choice | write-text SCRIPT TEMPLATE | page-text ITEM | text-memories | remember-text on|off"
             );
@@ -71,6 +72,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             if let Some(journey) = view.journey {
                 println!("journey={journey:?}");
             }
+            if let Some(position) = view.local_position {
+                println!("local-position={position:?}");
+            }
             for record in view.food_reports {
                 println!("report={record:?}");
             }
@@ -80,7 +84,10 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             for event in view.shared_work {
                 println!("shared-work={event:?}");
             }
-            println!("local_stock={:?}", view.local_stock);
+            println!(
+                "local_stock_observed={} local_stock={:?}",
+                view.local_stock_observed, view.local_stock
+            );
             for body in view.bodies {
                 println!("body={body:?}");
             }
@@ -808,6 +815,11 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
                 player.take_over_work(job.parse().map_err(|_| "invalid job")?, disregard)?
             );
         }
+        ["walk-stock"] => println!("walking={:?}", player.walk_local(None)?),
+        ["walk-store", store] => println!(
+            "walking={:?}",
+            player.walk_local(Some(store.parse().map_err(|_| "invalid store")?))?
+        ),
         ["text-choice"] => println!("text-choice={:?}", player.text_choice()?),
         ["write-text", script, template] => println!(
             "page={:?}",

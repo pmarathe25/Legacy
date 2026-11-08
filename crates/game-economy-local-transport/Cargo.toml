@@ -13,3 +13,6 @@ game-opinions = { path = "../game-opinions" }
 game-production-model = { path = "../game-production-model" }
 rayon.workspace = true
 serde.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

@@ -1,5 +1,6 @@
 //! Distinct local stores and personal choices to carry goods between them.
 pub mod goal;
+pub mod walking;
 use game_economy_claims::{Index as Claims, Use};
 use game_economy_person::Person;
 use game_lot_runtime::Events;
@@ -16,7 +17,7 @@ pub struct Store {
     pub region: u64,
     pub name: String,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Endpoint {
     Stock,
@@ -69,6 +70,9 @@ pub struct LocalTransport {
     pub goal_fetchers: Vec<goal::Preference>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub events: Vec<Event>,
+    /// Optional physical travel between the regional stock and named stores.
+    #[serde(default)]
+    pub walking: Option<walking::Walking>,
 }
 impl Clone for LocalTransport {
     fn clone(&self) -> Self {
@@ -77,16 +81,30 @@ impl Clone for LocalTransport {
             policies: self.policies.par_iter().cloned().collect(),
             goal_fetchers: self.goal_fetchers.par_iter().cloned().collect(),
             events: self.events.par_iter().cloned().collect(),
+            walking: self.walking.clone(),
         }
     }
 }
 impl LocalTransport {
+    /// Clone the transport owner while a replacement walking generation is staged separately.
+    pub fn clone_without_walking(&self) -> Self {
+        Self {
+            stores: self.stores.par_iter().cloned().collect(),
+            policies: self.policies.par_iter().cloned().collect(),
+            goal_fetchers: self.goal_fetchers.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+            walking: None,
+        }
+    }
     pub fn normalize(&mut self) {
         self.stores.par_sort_unstable_by_key(|store| store.id);
         self.policies
             .par_sort_unstable_by_key(|policy| policy.person);
         self.goal_fetchers
             .par_sort_unstable_by_key(|policy| policy.person);
+        if let Some(walking) = &mut self.walking {
+            walking.normalize();
+        }
     }
     pub fn validate(
         &self,
@@ -166,6 +184,7 @@ pub struct Context<'a> {
     pub busy: &'a [u64],
     pub max_hunger: u32,
     pub manual: Option<Manual>,
+    pub walking: Option<&'a walking::Walking>,
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
@@ -219,6 +238,17 @@ impl Context<'_> {
                     }
                     let holder = self.view.container(Place::Person(person.id))?;
                     let carrying = holder.quantity(p.good);
+                    let endpoint = if carrying == 0 {
+                        p.source
+                    } else {
+                        p.destination
+                    };
+                    if self
+                        .walking
+                        .is_some_and(|walking| !walking.present(person.id, p.region, endpoint))
+                    {
+                        return None;
+                    }
                     let (from, to, quantity) = if carrying == 0 {
                         if !p.disregard_claims
                             && matches!(p.source, Endpoint::Stock)
@@ -277,6 +307,9 @@ impl Context<'_> {
                 || manual.good == 0
                 || manual.quantity == 0
                 || self.view.container(Place::Person(person.id)).is_none()
+                || self.walking.is_some_and(|walking| {
+                    !walking.present(person.id, store.region, Endpoint::Store { id: store.id })
+                })
             {
                 return Err(
                     "local carrying requires a living controlled person at the store".into(),

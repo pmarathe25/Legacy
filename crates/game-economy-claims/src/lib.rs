@@ -279,6 +279,7 @@ macro_rules! prepare_pickup {
         let stores: Vec<_> = $world
             .local_transport
             .as_ref()
+            .filter(|owner| owner.walking.is_none())
             .map_or_else(Vec::new, |owner| {
                 owner
                     .stores

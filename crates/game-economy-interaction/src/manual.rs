@@ -64,6 +64,11 @@ pub enum PhysicalChoice {
         quantity: u64,
         deposit: bool,
     },
+    /// Walk toward regional stock (`None`) or a particular named store.
+    WalkLocal {
+        person: u64,
+        store: Option<u64>,
+    },
     Gather {
         person: u64,
         node: u64,
@@ -191,6 +196,7 @@ impl PhysicalChoice {
             | Self::RepairTool { person, .. }
             | Self::SalvageSite { person, .. }
             | Self::LocalStore { person, .. }
+            | Self::WalkLocal { person, .. }
             | Self::Gather { person, .. }
             | Self::Give { person, .. }
             | Self::TakeFrom { person, .. }

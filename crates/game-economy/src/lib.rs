@@ -33,6 +33,10 @@ pub use game_economy_knowledge::{
     Knowledge, Misreport, PersonReport, RecallTrace, Reporting, Retention, SeenPerson,
 };
 pub use game_economy_local_transport::goal::Preference as GoalFetchPreference;
+pub use game_economy_local_transport::walking::{
+    Event as LocalWalkEvent, Location as LocalLocation, Outcome as LocalWalkOutcome,
+    Position as LocalPosition, Route as LocalWalkRoute, Walking as LocalWalking,
+};
 pub use game_economy_local_transport::{
     Endpoint as LocalEndpoint, Event as LocalTransportEvent, LocalTransport,
     Policy as LocalTransportPolicy, Store as LocalStore,
@@ -121,6 +125,7 @@ mod giving_inheritance;
 mod giving_practices;
 mod hauling;
 mod hunting;
+mod local_walking;
 mod medical;
 mod mission_deliveries;
 mod route_sharing;
@@ -689,6 +694,29 @@ impl Economy {
                 .iter()
                 .any(|event| event.person == person && event.moved)
         }))
+    }
+    /// Spend one boundary walking toward regional stock or a named local store.
+    pub fn walk_local(
+        &mut self,
+        person: u64,
+        store: Option<u64>,
+    ) -> Result<LocalWalkOutcome, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::WalkLocal { person, store }),
+        )?;
+        let outcome = draft
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref())
+            .and_then(|walking| walking.events.iter().find(|event| event.person == person))
+            .map(|event| event.outcome)
+            .ok_or("missing local walking outcome")?;
+        self.commit(draft)?;
+        Ok(outcome)
     }
     pub fn set_hauling_asking_choice(&mut self, person: u64, enabled: bool) -> Result<(), String> {
         if self
@@ -2427,6 +2455,23 @@ impl Economy {
         if let Some(local) = &mut state.local_transport {
             local.normalize();
             local.validate(&ids, &goods, &view, physical.tick())?;
+            if let Some(walking) = &local.walking {
+                let regions: HashSet<_> = view
+                    .containers
+                    .par_iter()
+                    .filter_map(|c| match c.place {
+                        game_lots::Place::Stock { region, .. } => Some(region),
+                        _ => None,
+                    })
+                    .collect();
+                walking.validate(&state.people, &local.stores, &regions, physical.tick())?;
+                if physical.work().par_iter().any(|work| {
+                    work.phase == game_lot_runtime::Phase::Working
+                        && !walking.present(work.job.worker, work.job.region, LocalEndpoint::Stock)
+                }) {
+                    return Err("active work requires the regional stock location".into());
+                }
+            }
         } else if view
             .containers
             .par_iter()
@@ -2934,6 +2979,36 @@ impl Economy {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
+        if let Some(walking) = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref())
+        {
+            let at_stock = |person: u64| {
+                self.people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .and_then(|i| self.people[i].region)
+                    .is_some_and(|region| walking.present(person, region, LocalEndpoint::Stock))
+            };
+            if player_work.is_some_and(|work| !at_stock(work.actor()))
+                || player_transfer.is_some_and(|choice| {
+                    matches!(
+                        choice,
+                        game_economy_interaction::PhysicalChoice::Stock(_)
+                            | game_economy_interaction::PhysicalChoice::Farm { .. }
+                            | game_economy_interaction::PhysicalChoice::WaterField { .. }
+                            | game_economy_interaction::PhysicalChoice::Build { .. }
+                            | game_economy_interaction::PhysicalChoice::DestroySite { .. }
+                            | game_economy_interaction::PhysicalChoice::RepairSite { .. }
+                            | game_economy_interaction::PhysicalChoice::SalvageSite { .. }
+                            | game_economy_interaction::PhysicalChoice::Gather { .. }
+                    ) && !at_stock(choice.person())
+                })
+            {
+                return Err("this action requires the regional stock location".into());
+            }
+        }
         if let Some(owner) = &self.confinement {
             let restricted = request
                 .is_some_and(|row| !owner.can_communicate(row.actor, row.target))
@@ -3565,6 +3640,95 @@ impl Economy {
         };
         if !held.is_empty() {
             game_economy_work::reserve(&mut busy, held.iter().copied());
+        }
+        let local_nonstock: Vec<_> = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref())
+            .map_or(&[][..], |walking| walking.positions.as_slice())
+            .par_iter()
+            .filter_map(|position| {
+                (!matches!(
+                    position.location,
+                    LocalLocation::At {
+                        endpoint: LocalEndpoint::Stock,
+                        ..
+                    }
+                ))
+                .then_some(position.person)
+            })
+            .collect();
+        let local_prior_busy = if local_nonstock.is_empty() {
+            Vec::new()
+        } else {
+            busy.par_iter().copied().collect()
+        };
+        let manual_walk = match player_transfer {
+            Some(game_economy_interaction::PhysicalChoice::WalkLocal { person, store }) => {
+                let actor = self
+                    .people
+                    .binary_search_by_key(&person, |p| p.id)
+                    .ok()
+                    .map(|i| &self.people[i])
+                    .ok_or("unknown person")?;
+                let region = actor.region.ok_or("person is not in a region")?;
+                let owner = self
+                    .local_transport
+                    .as_ref()
+                    .ok_or("local transport is disabled")?;
+                if !actor.controlled
+                    || actor.health == 0
+                    || owner.walking.is_none()
+                    || resting.binary_search(&person).is_ok()
+                    || self.physical.work().par_iter().any(|w| {
+                        w.phase == game_lot_runtime::Phase::Working && w.job.worker == person
+                    })
+                    || store.is_some_and(|id| {
+                        owner
+                            .stores
+                            .binary_search_by_key(&id, |s| s.id)
+                            .ok()
+                            .is_none_or(|i| owner.stores[i].region != region)
+                    })
+                {
+                    return Err("person cannot walk to that local endpoint now".into());
+                }
+                Some(game_economy_local_transport::walking::Request {
+                    person,
+                    region,
+                    destination: store
+                        .map_or(LocalEndpoint::Stock, |id| LocalEndpoint::Store { id }),
+                })
+            }
+            _ => None,
+        };
+        let walking_next = if let Some((owner, walking)) = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref().map(|walking| (owner, walking)))
+        {
+            let mut requests = game_economy_local_transport::walking::personal_requests(
+                owner,
+                walking,
+                &self.people,
+                &view,
+                &busy,
+                self.opinions.as_ref(),
+                self.rules.max_work_hunger,
+            );
+            requests.extend(manual_walk);
+            if !requests.is_empty() {
+                game_economy_work::reserve(&mut busy, requests.iter().map(|r| r.person));
+            }
+            Some(walking.prepare(&self.people, &requests, tick)?)
+        } else {
+            if manual_walk.is_some() {
+                return Err("local walking is disabled".into());
+            }
+            None
+        };
+        if !local_nonstock.is_empty() {
+            game_economy_work::reserve(&mut busy, local_nonstock.iter().copied());
         }
         let auto_page_reads = self.writing.as_ref().map_or_else(Vec::new, |owner| {
             owner.auto_reads(&self.people, &busy, &self.physical)
@@ -4884,6 +5048,19 @@ impl Economy {
         if manual_local.is_some() && self.local_transport.is_none() {
             return Err("local transport is disabled".into());
         }
+        let local_busy = (!local_nonstock.is_empty()).then(|| {
+            let mut excluded = local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                &[],
+            );
+            if let Some(family) = &self.family {
+                game_economy_work::reserve(&mut excluded, game_economy_work::underage(family));
+            }
+            excluded
+        });
         let local_plan = self
             .local_transport
             .as_ref()
@@ -4894,9 +5071,10 @@ impl Economy {
                     view: &view,
                     opinions: self.opinions.as_ref(),
                     claims: claims.as_ref(),
-                    busy: &busy,
+                    busy: local_busy.as_deref().unwrap_or(&busy),
                     max_hunger: self.rules.max_work_hunger,
                     manual: manual_local,
+                    walking: owner.walking.as_ref(),
                 }
                 .prepare(action_base)
             })
@@ -4915,6 +5093,7 @@ impl Economy {
             stores: self
                 .local_transport
                 .as_ref()
+                .filter(|owner| owner.walking.is_none())
                 .map_or(&[], |owner| owner.stores.as_slice()),
             opinions: self.opinions.as_ref(),
             claims: claims.as_ref(),
@@ -6612,6 +6791,30 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.physical");
         }
+        if let Some((owner, walking)) = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref().map(|walking| (owner, walking)))
+        {
+            let mut denied: Vec<_> = actions
+                .par_iter()
+                .filter(|action| {
+                    !local_walking::allows_transaction(owner, walking, &self.people, action)
+                })
+                .map(|action| action.id)
+                .collect();
+            if !denied.is_empty() {
+                denied.par_sort_unstable();
+                actions = actions
+                    .into_par_iter()
+                    .filter(|action| denied.binary_search(&action.id).is_err())
+                    .collect();
+                compact = compact
+                    .into_par_iter()
+                    .filter(|id| denied.binary_search(id).is_err())
+                    .collect();
+            }
+        }
         let flat = if taking_actions.len().saturating_add(actions.len()) >= 128
             && rates.is_empty()
             && starts.is_empty()
@@ -6891,6 +7094,12 @@ impl Economy {
             }
         }
         if self.fatigue.is_some() {
+            if let Some(walking) = &walking_next {
+                shared_people.extend(walking.events.iter().map(|event| event.person));
+                if let Some(plan) = &local_plan {
+                    shared_people.extend(plan.actors.iter().copied());
+                }
+            }
             shared_people.extend(adoptions.iter().map(|row| row.worker));
             if let Some(manual) = &manual_succession {
                 shared_people.push(manual.person);
@@ -6900,6 +7109,17 @@ impl Economy {
             }
             shared_people.extend(tool_repairs.iter().map(|row| row.0));
         }
+        let fatigue_busy = (self.fatigue.is_some() && !local_nonstock.is_empty()).then(|| {
+            local_walking::carrying_busy(
+                &busy,
+                &local_nonstock,
+                &local_prior_busy,
+                walking_next.as_ref(),
+                local_plan
+                    .as_ref()
+                    .map_or(&[][..], |plan| plan.actors.as_slice()),
+            )
+        });
         let fatigue = game_economy_fatigue::prepare_world!(
             self,
             (rates, starts, physical),
@@ -6912,7 +7132,12 @@ impl Economy {
                 fighters,
                 shared_people
             ),
-            (resting, busy, meal_candidates, player_transfer)
+            (
+                resting,
+                fatigue_busy.as_deref().unwrap_or(&busy),
+                meal_candidates,
+                player_transfer
+            )
         );
         actions.into_par_iter().for_each(drop);
         let given =
@@ -7353,7 +7578,7 @@ impl Economy {
             drop(profile_phase);
             profile_phase = game_diagnostics::span("economy.knowledge_and_skills");
         }
-        let mut knowledge = game_economy_knowledge::prepare_world!(self, dynamics);
+        let mut knowledge = game_economy_knowledge::prepare_world!(self, dynamics, local_nonstock);
         if !completed_auto_reads.is_empty()
             && let (Some(writing), Some(owner)) = (&self.writing, &mut knowledge)
         {
@@ -7476,6 +7701,19 @@ impl Economy {
         };
         if possible_departures {
             travel_blocked.par_extend(fighters.par_iter().copied());
+            if let Some(walking) = &walking_next {
+                travel_blocked.par_extend(walking.positions.par_iter().filter_map(|position| {
+                    (!matches!(
+                        position.location,
+                        LocalLocation::At {
+                            endpoint: LocalEndpoint::Stock,
+                            ..
+                        }
+                    ))
+                    .then_some(position.person)
+                }));
+                travel_blocked.par_extend(walking.events.par_iter().map(|event| event.person));
+            }
             if let Some(injuries) = self
                 .combat
                 .as_ref()
@@ -8432,7 +8670,13 @@ impl Economy {
             && let Some((before, after)) = self.knowledge.as_ref().zip(knowledge.as_ref())
         {
             opinions.learn_report_discrepancies(
-                &game_economy_knowledge::discrepancies(before, after, &self.people, self.tick()),
+                &game_economy_knowledge::discrepancies(
+                    before,
+                    after,
+                    &self.people,
+                    self.tick(),
+                    &local_nonstock,
+                ),
                 tick,
             );
         }
@@ -8513,8 +8757,58 @@ impl Economy {
                 .collect();
             owner.learn(&observations, tick);
         }
-        let mut next_local_transport = self.local_transport.clone();
+        let mut next_local_transport = self.local_transport.as_ref().map(|owner| {
+            if walking_next.is_some() {
+                owner.clone_without_walking()
+            } else {
+                owner.clone()
+            }
+        });
         if let Some(owner) = &mut next_local_transport {
+            if let Some(mut walking) = walking_next {
+                walking.positions = walking
+                    .positions
+                    .into_par_iter()
+                    .filter(|position| {
+                        let region = match position.location {
+                            LocalLocation::At { region, .. }
+                            | LocalLocation::Walking { region, .. } => region,
+                        };
+                        person
+                            .people
+                            .binary_search_by_key(&position.person, |p| p.id)
+                            .ok()
+                            .is_some_and(|i| person.people[i].region == Some(region))
+                    })
+                    .collect();
+                if !births.is_empty() {
+                    let inherited: Vec<_> = births
+                        .par_iter()
+                        .filter_map(|birth| {
+                            let region = birth.region?;
+                            let location = walking.location(birth.mother, region);
+                            (!matches!(
+                                location,
+                                LocalLocation::At {
+                                    endpoint: LocalEndpoint::Stock,
+                                    ..
+                                }
+                            ))
+                            .then_some(LocalPosition {
+                                person: birth.id,
+                                location,
+                            })
+                        })
+                        .collect();
+                    if !inherited.is_empty() {
+                        walking.positions.par_extend(inherited);
+                        walking
+                            .positions
+                            .par_sort_unstable_by_key(|position| position.person);
+                    }
+                }
+                owner.walking = Some(walking);
+            }
             owner.events =
                 local_plan.map_or_else(Vec::new, |plan| plan.publish(tick, physical.events()));
             if let Some(plan) = goal_fetch_plan {

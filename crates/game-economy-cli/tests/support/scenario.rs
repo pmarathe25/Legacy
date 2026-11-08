@@ -2,6 +2,45 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn local_walking_limits_store_observation_and_physical_pickup() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-local-walking.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    world.set_local_carrying_choice(2, false).unwrap();
+    let mut player = game_economy_player::Player::new(&mut world);
+    let view = player.view().unwrap();
+    assert!(view.local_stock_observed);
+    assert!(!view.local_stores[0].observed);
+    assert!(view.local_stores[0].lots.is_empty());
+    assert_eq!(
+        player.walk_local(Some(1)).unwrap(),
+        game_economy::LocalWalkOutcome::Progressed
+    );
+    assert!(!player.view().unwrap().local_stock_observed);
+    assert_eq!(
+        player.walk_local(Some(1)).unwrap(),
+        game_economy::LocalWalkOutcome::Arrived
+    );
+    let view = player.view().unwrap();
+    assert!(view.local_stores[0].observed);
+    assert!(!view.local_stores[1].observed);
+    let good = view.local_stores[0].lots[0].good;
+    assert!(player.move_local_store(1, good, 1, false).unwrap());
+    assert_eq!(
+        player.walk_local(None).unwrap(),
+        game_economy::LocalWalkOutcome::Progressed
+    );
+    assert_eq!(
+        player.walk_local(None).unwrap(),
+        game_economy::LocalWalkOutcome::Arrived
+    );
+    assert!(player.transfer_stock(good, 1, false).unwrap());
+}
+
+#[test]
 fn authored_text_is_written_transferred_and_read_without_automatic_agreement() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

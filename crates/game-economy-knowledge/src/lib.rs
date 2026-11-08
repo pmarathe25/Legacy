@@ -40,6 +40,11 @@ macro_rules! validate_world {
         $crate::validate($state.knowledge.as_ref(), &$ids, &$view, $physical.tick())?
     };
 }
+pub struct ObservationAccess<'a> {
+    pub now: u64,
+    pub not_at_stock: &'a [u64],
+}
+
 pub fn advance(
     owner: Option<&Knowledge>,
     people: &[Person],
@@ -47,7 +52,7 @@ pub fn advance(
     view: &View,
     social: Option<&Social>,
     opinions: Option<&Opinions>,
-    now: u64,
+    access: ObservationAccess<'_>,
 ) -> Result<Option<Knowledge>, String> {
     let Some(owner) = owner else {
         return Ok(None);
@@ -84,6 +89,7 @@ pub fn advance(
         .map(|p| {
             let local = p
                 .region
+                .filter(|_| access.not_at_stock.binary_search(&p.id).is_err())
                 .map(|region| {
                     food.binary_search_by_key(&region, |r| r.0)
                         .ok()
@@ -118,7 +124,7 @@ pub fn advance(
             &observations,
             &regions(view),
             events,
-            now,
+            access.now,
             |receiver, sender| {
                 trust
                     .as_ref()
@@ -166,6 +172,7 @@ pub fn discrepancies(
     after: &Knowledge,
     people: &[Person],
     now: u64,
+    not_at_stock: &[u64],
 ) -> Vec<(u64, u64)> {
     let recall = before.recall_index();
     let dense = people.first().zip(people.last()).and_then(|(first, last)| {
@@ -185,7 +192,7 @@ pub fn discrepancies(
                 people.binary_search_by_key(&old.person, |p| p.id).ok()
             }?;
             let person = &people[index];
-            if person.health == 0 {
+            if person.health == 0 || not_at_stock.binary_search(&person.id).is_ok() {
                 return None;
             }
             let region = person.region?;
@@ -216,7 +223,7 @@ pub fn discrepancies(
 }
 #[macro_export]
 macro_rules! prepare_world {
-    ($world:expr, $dynamics:expr) => {{
+    ($world:expr, $dynamics:expr, $not_at_stock:expr) => {{
         if $world.knowledge.is_some() {
             let view = $world.physical.stock_view($world.tick())?;
             $crate::advance(
@@ -226,7 +233,10 @@ macro_rules! prepare_world {
                 &view,
                 $dynamics.as_ref().and_then(|d| d.social.as_ref()),
                 $world.opinions.as_ref(),
-                $world.tick(),
+                $crate::ObservationAccess {
+                    now: $world.tick(),
+                    not_at_stock: &$not_at_stock,
+                },
             )?
         } else {
             None

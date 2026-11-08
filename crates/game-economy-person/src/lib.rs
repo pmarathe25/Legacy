@@ -163,6 +163,26 @@ macro_rules! departure_method {
             &mut self,
             departures: &[Departure],
         ) -> Result<Vec<$crate::travel::DepartureOutcome>, String> {
+            if let Some(walking) = self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref())
+                && departures.par_iter().any(|request| {
+                    self.people
+                        .binary_search_by_key(&request.person, |p| p.id)
+                        .ok()
+                        .and_then(|i| self.people[i].region)
+                        .is_some_and(|region| {
+                            !walking.present(
+                                request.person,
+                                region,
+                                game_economy_local_transport::Endpoint::Stock,
+                            )
+                        })
+                })
+            {
+                return Err("regional departure requires the local stock location".into());
+            }
             if departures.iter().any(|request| {
                 self.confinement
                     .as_ref()
@@ -211,6 +231,23 @@ macro_rules! departure_method {
             self.travel = Some(travel);
             self.people = people;
             self.animal_restraints = restraints;
+            if let Some(walking) = self
+                .local_transport
+                .as_mut()
+                .and_then(|owner| owner.walking.as_mut())
+            {
+                let mut departed: Vec<_> = outcomes
+                    .par_iter()
+                    .filter_map(|outcome| outcome.departed.then_some(outcome.person))
+                    .collect();
+                departed.par_sort_unstable();
+                if !departed.is_empty() {
+                    walking.positions = std::mem::take(&mut walking.positions)
+                        .into_par_iter()
+                        .filter(|position| departed.binary_search(&position.person).is_err())
+                        .collect();
+                }
+            }
             self.epoch = epoch;
             Ok(outcomes)
         }

@@ -32,6 +32,8 @@ For authored personal text, `text-choice` shows the controlled person's availabl
 
 When an enabled succession rule leaves unfinished work vacant, `view` lists local `vacant-work` entries with their job, recipe, site and expiry boundary. `take-over-work JOB respect|disregard` attempts to take one over, competing fairly with other candidates and spending a boundary even if the attempt is denied. A successful takeover preserves the site's reserved inputs; the controlled character uses `continue-work` to make further progress. See `content/scenarios/economy-work-succession.toml` for the data schema.
 
+With local walking enabled, `walk-store STORE` and `walk-stock` each spend a boundary advancing the chosen leg. `view` shows the controlled person's local position and whether each store's contents are currently observed. Picking up or depositing requires being at the relevant endpoint at the start of a later boundary. See `content/scenarios/economy-local-walking.toml`.
+
 In `content/scenarios/economy-fear-retreat.toml`, use `attack 3` and advance the combat. The other fighter can gain personal fear from an actual strike and choose to retreat in a later round; another person's fear or a fighter without that inclination does not compel retreat.
 
 In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the combat. Person 2 can independently interrupt their work and enter the encounter on person 3's side after the current round, provided both combatants remain and a visible tactical entry is available.

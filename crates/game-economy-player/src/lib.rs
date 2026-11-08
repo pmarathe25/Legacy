@@ -46,6 +46,7 @@ pub struct DebrisView {
 pub struct LocalStoreView {
     pub store: game_economy::LocalStore,
     pub capacity: u64,
+    pub observed: bool,
     pub lots: Vec<Lot>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,6 +128,7 @@ pub struct View {
     pub tick: u64,
     pub person: Option<Person>,
     pub journey: Option<game_economy::Journey>,
+    pub local_position: Option<game_economy::LocalLocation>,
     pub held: bool,
     pub nearby: Vec<u64>,
     /// Visible wounds on the ruler or local people, without private causes.
@@ -138,6 +140,7 @@ pub struct View {
     /// Condition of identified tools carried by the controlled person.
     pub tools: Vec<ToolView>,
     pub local_stock: Vec<Lot>,
+    pub local_stock_observed: bool,
     /// The ruler's own assertions, including assertions made in other regions.
     pub claims: Vec<ClaimView>,
     /// The ruler's assertions about sites, including sites since destroyed.
@@ -291,9 +294,20 @@ impl<'a> Player<'a> {
         let possessions = current
             .and_then(|id| state.physical.custody(Place::Person(id)))
             .map_or_else(Vec::new, |c| c.lots.clone());
+        let local_stock_observed = person
+            .as_ref()
+            .and_then(|p| p.region.map(|region| (p.id, region)))
+            .is_some_and(|(id, region)| {
+                state
+                    .local_transport
+                    .and_then(|owner| owner.walking.as_ref())
+                    .is_none_or(|walking| {
+                        walking.present(id, region, game_economy::LocalEndpoint::Stock)
+                    })
+            });
         let local_stock = person
             .as_ref()
-            .and_then(|p| p.region)
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
             .map_or_else(Vec::new, |region| {
                 let mut lots: Vec<_> = state
                     .physical
@@ -580,10 +594,26 @@ impl<'a> Player<'a> {
                             state
                                 .physical
                                 .custody(Place::Inventory(store.id))
-                                .map(|holder| LocalStoreView {
-                                    store: store.clone(),
-                                    capacity: holder.capacity,
-                                    lots: holder.lots.clone(),
+                                .map(|holder| {
+                                    let observed = owner.walking.as_ref().is_none_or(|walking| {
+                                        current.is_some_and(|id| {
+                                            walking.present(
+                                                id,
+                                                region,
+                                                game_economy::LocalEndpoint::Store { id: store.id },
+                                            )
+                                        })
+                                    });
+                                    LocalStoreView {
+                                        store: store.clone(),
+                                        capacity: holder.capacity,
+                                        observed,
+                                        lots: if observed {
+                                            holder.lots.clone()
+                                        } else {
+                                            Vec::new()
+                                        },
+                                    }
                                 })
                         })
                         .collect()
@@ -746,11 +776,21 @@ impl<'a> Player<'a> {
                 .cloned()
                 .collect()
         });
+        let local_position = person
+            .as_ref()
+            .and_then(|person| person.region.map(|region| (person.id, region)))
+            .and_then(|(id, region)| {
+                state
+                    .local_transport
+                    .and_then(|owner| owner.walking.as_ref())
+                    .map(|walking| walking.location(id, region))
+            });
         Ok(View {
             tick: self.world.tick(),
             held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
             person,
             journey,
+            local_position,
             nearby,
             wounded,
             bodies,
@@ -759,6 +799,7 @@ impl<'a> Player<'a> {
             tools,
             field_moisture,
             local_stock,
+            local_stock_observed,
             food_reports,
             route_observations,
             job,
@@ -1018,6 +1059,21 @@ impl<'a> Player<'a> {
     ) -> Result<bool, String> {
         self.world
             .move_local_store(self.current()?, store, good, quantity, deposit)
+    }
+    pub fn walk_local(
+        &mut self,
+        store: Option<u64>,
+    ) -> Result<game_economy::LocalWalkOutcome, String> {
+        if let Some(id) = store
+            && !self
+                .view()?
+                .local_stores
+                .iter()
+                .any(|row| row.store.id == id)
+        {
+            return Err("store is not locally visible".into());
+        }
+        self.world.walk_local(self.current()?, store)
     }
     /// Explicit guardian-search spectating does not disclose NPC knowledge.
     pub fn guardians(&self) -> Result<Vec<GuardianView>, String> {

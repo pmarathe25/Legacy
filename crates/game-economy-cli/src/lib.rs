@@ -169,6 +169,8 @@ struct LocalTransportConfig {
     policies: Vec<LocalTransportPolicyConfig>,
     #[serde(default)]
     goal_fetchers: Vec<game_economy::GoalFetchPreference>,
+    #[serde(default)]
+    walking: Option<game_economy::LocalWalking>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -1551,6 +1553,7 @@ pub fn scenario_with_options(
                 policies,
                 goal_fetchers: config.goal_fetchers,
                 events: vec![],
+                walking: config.walking,
             })
         })
         .transpose()?;
