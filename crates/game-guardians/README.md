@@ -1,4 +1,4 @@
-# Parallel guardians
+# guardians
 
 Persistent guardian bodies sense the current incarnation's local region, follow directed routes over time, recover in place without hunger or aging, and count local mentorship ticks against an authored readiness threshold. Confinement prevents departure and does not interrupt recovery. A traveling incarnation is sensed without a current local destination; guardians wait until a region is available. Guardians share a shortest-route table only when a departure is possible, and each selected leg is looked up directly.
 

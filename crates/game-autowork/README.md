@@ -1,4 +1,4 @@
-# Parallel autonomous production
+# autonomous production
 
 Opted-in people attempt their authored recipe when living, local, fed enough, and free of other work. A granted start consumes one setup interval; work progresses on later ticks. Multi-input claims use deterministic conservative per-good prefixes: rejected claims still occupy priority for the interval, so some usable stock can be deferred. IDs come from a saved monotonic allocator. Inputs are reserved from pre-tick stock and cannot use outputs produced in the same interval.
 

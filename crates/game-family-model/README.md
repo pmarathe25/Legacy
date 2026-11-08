@@ -1,4 +1,4 @@
-# Parallel family model
+# family model
 
 Data contracts for family members, pregnancy and physical life/birth rows; family behavior and validation remain with the family owner.
 

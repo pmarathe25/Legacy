@@ -1,4 +1,4 @@
-# Parallel cargo state owner
+# cargo state owner
 
 > Historical note: references below to removed experimental hosts and their fixtures describe the previous implementation. See the [current runner](../game-economy-cli/README.md) for supported scenarios and commands.
 

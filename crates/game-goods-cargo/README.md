@@ -1,4 +1,4 @@
-# Parallel goods cargo
+# goods cargo
 
 Carries nonfood goods with individual people, including during travel. Local pickup and deposit batches validate against a shared boundary snapshot and commit atomically; each participant can make at most one transfer per batch. Capacity is an aggregate item count. A deceased person's possessions remain with them; a living local person can recover them into local stock; ownership rights are not yet modeled. Food uses the separate food-cargo owner.
 

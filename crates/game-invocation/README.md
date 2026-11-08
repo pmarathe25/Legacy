@@ -1,4 +1,4 @@
-# Parallel invocation state
+# invocation state
 
 Tick-boundary invocation tracks selected archived lives, persistent burden and exposure, explicit warning revisions, bounded strain consent, and time-limited loss of player control. The owner prepares a warning before applying a new cost, and dismissal retains burden and exposure. Fixture thresholds are authored data, not canonical tuning.
 
