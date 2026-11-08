@@ -58,6 +58,8 @@ struct Scenario {
     #[serde(default)]
     work_tools: Vec<WorkToolConfig>,
     #[serde(default)]
+    tool_wear: Option<ToolWearConfig>,
+    #[serde(default)]
     work_sites: Option<WorkSitesConfig>,
     #[serde(default)]
     construction: Option<ConstructionConfig>,
@@ -250,6 +252,30 @@ struct WorkToolConfig {
     recipe: String,
     good: String,
     quantity: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolWearConfig {
+    rules: Vec<ToolWearRuleConfig>,
+    conditions: Vec<ToolConditionConfig>,
+    #[serde(default)]
+    repairs: Vec<game_economy::ToolRepairChoice>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolWearRuleConfig {
+    good: String,
+    durability: u64,
+    wear: u64,
+    repair_good: String,
+    repair_quantity: u64,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolConditionConfig {
+    item: u64,
+    good: String,
+    damage: u64,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -588,6 +614,15 @@ struct Resident {
     recipe: Option<String>,
     #[serde(default)]
     goods: BTreeMap<String, u64>,
+    #[serde(default)]
+    items: Vec<ResidentItem>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ResidentItem {
+    id: u64,
+    good: String,
 }
 
 /// Construct fresh custody only for a new scenario, never for a saved world.
@@ -944,6 +979,51 @@ pub fn scenario_with_options(
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
+    let tool_wear = scenario
+        .tool_wear
+        .map(|config| {
+            let resolve = |name: &str| {
+                goods
+                    .get(name)
+                    .copied()
+                    .ok_or_else(|| format!("unknown tool wear good {name}"))
+            };
+            let mut rules = config
+                .rules
+                .into_iter()
+                .map(|rule| {
+                    Ok(game_economy::ToolWearRule {
+                        good: resolve(&rule.good)?,
+                        durability: rule.durability,
+                        wear: rule.wear,
+                        repair_good: resolve(&rule.repair_good)?,
+                        repair_quantity: rule.repair_quantity,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            rules.sort_unstable_by_key(|rule| rule.good);
+            let mut conditions = config
+                .conditions
+                .into_iter()
+                .map(|condition| {
+                    Ok(game_economy::ToolCondition {
+                        item: condition.item,
+                        good: resolve(&condition.good)?,
+                        damage: condition.damage,
+                    })
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            conditions.sort_unstable_by_key(|condition| condition.item);
+            let mut repairs = config.repairs;
+            repairs.sort_unstable_by_key(|choice| choice.person);
+            Ok::<_, String>(game_economy::ToolWear {
+                rules,
+                conditions,
+                repairs,
+                events: vec![],
+            })
+        })
+        .transpose()?;
     let work_sites = scenario
         .work_sites
         .map(|config| {
@@ -1455,6 +1535,20 @@ pub fn scenario_with_options(
                 .ok_or_else(|| format!("unknown good {name}"))?;
             lots.push(catalog.fresh(good, quantity, 0)?);
         }
+        for item in resident.items {
+            let good = *goods
+                .get(item.good.as_str())
+                .ok_or_else(|| format!("unknown identified good {}", item.good))?;
+            if catalog.fresh(good, 1, 0)?.expires_at.is_some() {
+                return Err("identified items must not be perishable".into());
+            }
+            lots.push(game_lots::Lot {
+                good,
+                quantity: 1,
+                item: Some(item.id),
+                expires_at: None,
+            });
+        }
         custody.containers.push(Container::new(
             Place::Person(resident.id),
             scenario.rules.carrying_capacity,
@@ -1506,6 +1600,7 @@ pub fn scenario_with_options(
         }),
         shared_work,
         work_tools,
+        tool_wear,
         work_sites,
         construction,
         confinement: scenario.confinement,

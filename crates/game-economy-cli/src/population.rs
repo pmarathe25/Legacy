@@ -676,6 +676,7 @@ pub fn generate(
                     controlled: false,
                     recipe: profile.recipe.clone(),
                     goods: profile.goods.clone(),
+                    items: vec![],
                 }
             })
         })
@@ -734,6 +735,7 @@ mod tests {
             controlled: true,
             recipe: None,
             goods: BTreeMap::new(),
+            items: vec![],
         };
         assert!(generate(1, &regions, &[authored], &[profile()]).is_err());
     }

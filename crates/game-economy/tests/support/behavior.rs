@@ -188,6 +188,7 @@ fn fixture() -> State {
         }),
         shared_work: None,
         work_tools: vec![],
+        tool_wear: None,
         work_sites: None,
         construction: None,
         confinement: None,
@@ -47513,4 +47514,375 @@ fn autonomous_animal_production_benchmark() {
             }
         }
     });
+}
+
+#[test]
+fn identified_tool_wear_follows_custody_and_repairs_consume_material() {
+    let mut initial = fixture();
+    initial.agreements = None;
+    initial.autowork.as_mut().unwrap().policies.clear();
+    initial.physical.recipes[0].ticks = 4;
+    initial.people[0].controlled = true;
+    for person in &mut initial.people {
+        person.seek_meals = false;
+    }
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let holder = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            item: Some(1001),
+            good: 3,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let recipient = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(3))
+        .unwrap();
+    *recipient = Container::new(
+        recipient.place,
+        recipient.capacity,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    initial.tool_wear = Some(crate::ToolWear {
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 1,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![crate::ToolCondition {
+            item: 1001,
+            good: 3,
+            damage: 0,
+        }],
+        repairs: vec![crate::ToolRepairChoice {
+            person: 3,
+            item: 1001,
+            willing: true,
+        }],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert_eq!(world.start_work(1, 1, 1).unwrap().started.len(), 1);
+                world.continue_work(1).unwrap();
+                assert_eq!(
+                    world.snapshot().tool_wear.as_ref().unwrap().conditions[0].damage,
+                    1
+                );
+                let remaining = world.snapshot().physical.work[0].job.remaining;
+                world.continue_work(1).unwrap();
+                assert_eq!(world.snapshot().physical.work[0].job.remaining, remaining);
+                assert!(world.give(1, 3, 3, 1).unwrap());
+                let transferred = world.snapshot();
+                assert_eq!(
+                    transferred.tool_wear.as_ref().unwrap().conditions[0].damage,
+                    1
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&transferred).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let wear = state.tool_wear.as_ref().unwrap();
+                assert_eq!(wear.conditions[0].damage, 0);
+                assert!(wear.events[0].accepted);
+                let recipient = state
+                    .physical
+                    .custody
+                    .containers
+                    .iter()
+                    .find(|c| c.place == Place::Person(3))
+                    .unwrap();
+                assert_eq!(recipient.lots.len(), 1);
+                assert_eq!(recipient.lots[0].item, Some(1001));
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore]
+fn identified_tool_wear_boundary_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count: u64 = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20000);
+    let workers: usize = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(1);
+    let repair = std::env::var_os("LEGACY_TOOL_REPAIRS").is_some();
+    let mut initial = concentrated(count);
+    initial.nutrition = None;
+    initial.physical.recipes[0].ticks = 10;
+    initial.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    initial.autowork.as_mut().unwrap().policies = (1..=count)
+        .map(|person| WorkPolicy {
+            person,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        })
+        .collect();
+    let source = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *source = Container::new(
+        source.place,
+        source.capacity,
+        vec![Lot {
+            good: 2,
+            quantity: count,
+            item: None,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    for person in &mut initial.people {
+        person.seek_meals = false;
+        person.hunger = 0;
+        person.willing_to_work = true;
+    }
+    for holder in &mut initial.physical.custody.containers {
+        if let Place::Person(person) = holder.place {
+            *holder = Container::new(
+                holder.place,
+                holder.capacity,
+                if repair {
+                    vec![
+                        Lot {
+                            good: 2,
+                            quantity: 1,
+                            item: None,
+                            expires_at: None,
+                        },
+                        Lot {
+                            good: 3,
+                            quantity: 1,
+                            item: Some(person),
+                            expires_at: None,
+                        },
+                    ]
+                } else {
+                    vec![Lot {
+                        good: 3,
+                        quantity: 1,
+                        item: Some(person),
+                        expires_at: None,
+                    }]
+                },
+            )
+            .unwrap();
+        }
+    }
+    initial.tool_wear = Some(crate::ToolWear {
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 10,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: (1..=count)
+            .map(|item| crate::ToolCondition {
+                item,
+                good: 3,
+                damage: u64::from(repair),
+            })
+            .collect(),
+        repairs: if repair {
+            (1..=count)
+                .map(|person| crate::ToolRepairChoice {
+                    person,
+                    item: person,
+                    willing: true,
+                })
+                .collect()
+        } else {
+            vec![]
+        },
+        events: vec![],
+    });
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut fingerprint = None;
+            for _ in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                if !repair {
+                    let started = world.advance().unwrap();
+                    assert_eq!(started.started.len(), count as usize);
+                }
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                samples.push(start.elapsed().as_secs_f64());
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .tool_wear
+                        .as_ref()
+                        .unwrap()
+                        .conditions
+                        .iter()
+                        .all(|c| c.damage == u64::from(!repair))
+                );
+                if repair { assert_eq!(state.tool_wear.as_ref().unwrap().events.iter().filter(|event| event.accepted).count(), count as usize); }
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint {
+                    assert_eq!(expected, actual);
+                }
+                fingerprint = Some(actual);
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "workers={workers} tools={count} repair={repair} elapsed_median={:.6} fingerprint={:016x}",
+                samples[1],
+                fingerprint.unwrap()
+            );
+        });
+}
+
+#[test]
+fn broken_or_unidentified_tools_cannot_enable_work_and_unfunded_repairs_fail() {
+    let mut state = fixture();
+    state.agreements = None;
+    state.autowork.as_mut().unwrap().policies.clear();
+    state.people[0].controlled = true;
+    for person in &mut state.people {
+        person.seek_meals = false;
+    }
+    state.work_tools = vec![WorkTool {
+        recipe: 1,
+        good: 3,
+        quantity: 1,
+    }];
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            item: None,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state.tool_wear = Some(crate::ToolWear {
+        rules: vec![crate::ToolWearRule {
+            good: 3,
+            durability: 2,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![],
+        repairs: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(state.clone()).unwrap();
+    assert!(world.start_work(1, 1, 1).unwrap().started.is_empty());
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    *holder = Container::new(
+        holder.place,
+        holder.capacity,
+        vec![Lot {
+            good: 3,
+            quantity: 1,
+            item: Some(1234),
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    state
+        .tool_wear
+        .as_mut()
+        .unwrap()
+        .conditions
+        .push(crate::ToolCondition {
+            item: 1234,
+            good: 3,
+            damage: 2,
+        });
+    let mut world = Economy::compile(state.clone()).unwrap();
+    assert!(world.start_work(1, 1, 1).unwrap().started.is_empty());
+    state.people[0].controlled = false;
+    state
+        .tool_wear
+        .as_mut()
+        .unwrap()
+        .repairs
+        .push(crate::ToolRepairChoice {
+            person: 1,
+            item: 1234,
+            willing: true,
+        });
+    let mut world = Economy::compile(state).unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let wear = state.tool_wear.unwrap();
+    assert_eq!(wear.conditions[0].damage, 2);
+    assert!(!wear.events[0].accepted);
 }

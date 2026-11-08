@@ -239,3 +239,5 @@ Use `taking-watch ACTOR on|off` to set personal attention, `taking-report RECIPI
 `work-outcome WAIT MISSING_TRUST MISSING_AFFINITY RECEIVED_TRUST RECEIVED_AFFINITY PARTIAL_TRUST PARTIAL_AFFINITY` sets a worker's signed reactions to their own work expectations. Use `default` for either partial reaction to reuse the corresponding missing reaction. The shorter existing form still sets only the missing reactions.
 
 `work-outcome-feelings missing|received|partial FEAR OBLIGATION` sets the current person's signed fear and obligation changes for those experiences. For a partial response, `default` reuses that person's missing value; a zero value explicitly suppresses it.
+
+Try `cargo run -p game-economy-cli -- content/scenarios/economy-tool-wear.toml`, then `tool-condition`, `step 1`, and `tool-condition` to see a willing person use carried timber to repair an identified tool before starting a job. Tool wear and personal repair choices are opt-in scenario data; the same item keeps its damage when physically transferred.

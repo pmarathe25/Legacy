@@ -63,6 +63,10 @@ pub use game_economy_work::sites::{
     Binding as WorkSiteBinding, Facilities as WorkSites, Requirement as WorkSiteRequirement,
     Site as WorkSite,
 };
+pub use game_economy_work::tool_wear::{
+    Condition as ToolCondition, RepairChoice as ToolRepairChoice, RepairEvent as ToolRepairEvent,
+    Rule as ToolWearRule, ToolWear,
+};
 pub use game_economy_work::tools::Requirement as WorkTool;
 pub use game_fauna::{Animal, Fauna, Pregnancy as AnimalPregnancy, Species as AnimalSpecies};
 pub use game_opinions::{
@@ -173,6 +177,7 @@ pub struct Economy {
     autowork: Option<Autowork>,
     shared_work: Option<SharedWork>,
     work_tools: Vec<WorkTool>,
+    tool_wear: Option<ToolWear>,
     work_sites: Option<WorkSites>,
     construction: Option<Construction>,
     confinement: Option<Confinement>,
@@ -229,6 +234,7 @@ pub struct Draft {
     opinions: Option<Opinions>,
     autowork: Option<Autowork>,
     shared_work: Option<SharedWork>,
+    tool_wear: Option<ToolWear>,
     work_sites: Option<WorkSites>,
     construction: Option<Construction>,
     confinement: Option<Confinement>,
@@ -2431,6 +2437,9 @@ impl Economy {
             let recipes: HashSet<_> = physical.recipes().par_iter().map(|r| r.id).collect();
             game_economy_work::tools::validate(&state.work_tools, &recipes, &goods)?;
         }
+        if let Some(wear) = &state.tool_wear {
+            wear.validate(&physical, &goods, &ids, physical.tick())?;
+        }
         if let Some(auto) = &state.autowork {
             let production =
                 game_lot_projection::production(&physical, &view, state.rules.max_work_hunger);
@@ -2467,6 +2476,7 @@ impl Economy {
             autowork: state.autowork,
             shared_work: state.shared_work,
             work_tools: state.work_tools,
+            tool_wear: state.tool_wear,
             work_sites: state.work_sites,
             construction: state.construction,
             confinement: state.confinement,
@@ -2518,6 +2528,7 @@ impl Economy {
             autowork: self.autowork.clone(),
             shared_work: self.shared_work.clone(),
             work_tools: self.work_tools.clone(),
+            tool_wear: self.tool_wear.clone(),
             work_sites: self.work_sites.clone(),
             construction: self.construction.clone(),
             confinement: self.confinement.clone(),
@@ -5652,6 +5663,28 @@ impl Economy {
             compact.par_extend(plan.actions.par_iter().map(|action| action.id));
         }
         actions.append(&mut animal_care_plan.actions);
+        let tool_repairs = if let Some(owner) = &self.tool_wear {
+            let last = actions
+                .par_iter()
+                .map(|action| action.id)
+                .chain(taking_actions.par_iter().map(|action| action.action))
+                .chain(writing_output.par_iter().map(|action| action.action))
+                .max()
+                .unwrap_or(0);
+            let base = last.checked_add(1).ok_or("action count overflow")?;
+            let plan = owner.prepare_repairs(
+                &self.physical,
+                &self.people,
+                &busy,
+                self.rules.max_work_hunger,
+                base,
+            )?;
+            game_economy_work::reserve(&mut busy, plan.iter().map(|row| row.0));
+            actions.par_extend(plan.par_iter().map(|row| row.2.clone()));
+            plan
+        } else {
+            Vec::new()
+        };
         #[cfg(feature = "profile")]
         {
             drop(work_phase);
@@ -5778,11 +5811,26 @@ impl Economy {
                         .ok()
                         .is_some_and(|i| {
                             let job = &self.physical.work()[i].job;
-                            game_economy_work::tools::available(
-                                &self.work_tools,
-                                &view,
-                                job.worker,
-                                job.recipe,
+                            self.tool_wear.as_ref().map_or_else(
+                                || {
+                                    game_economy_work::tools::available(
+                                        &self.work_tools,
+                                        &view,
+                                        job.worker,
+                                        job.recipe,
+                                    )
+                                },
+                                |owner| {
+                                    owner
+                                        .select(
+                                            &self.work_tools,
+                                            &self.physical,
+                                            &view,
+                                            job.worker,
+                                            job.recipe,
+                                        )
+                                        .is_some()
+                                },
                             )
                         })
                 })
@@ -5791,11 +5839,26 @@ impl Economy {
                 starts
                     .par_iter()
                     .filter(|start| {
-                        game_economy_work::tools::available(
-                            &self.work_tools,
-                            &view,
-                            start.worker,
-                            start.recipe,
+                        self.tool_wear.as_ref().map_or_else(
+                            || {
+                                game_economy_work::tools::available(
+                                    &self.work_tools,
+                                    &view,
+                                    start.worker,
+                                    start.recipe,
+                                )
+                            },
+                            |owner| {
+                                owner
+                                    .select(
+                                        &self.work_tools,
+                                        &self.physical,
+                                        &view,
+                                        start.worker,
+                                        start.recipe,
+                                    )
+                                    .is_some()
+                            },
                         )
                     })
                     .copied()
@@ -5845,6 +5908,8 @@ impl Economy {
                         .and_then(|combat| combat.state.injuries.as_ref()),
                     family: self.family.as_ref(),
                     tools: &self.work_tools,
+                    tool_wear: self.tool_wear.as_ref(),
+                    physical: &self.physical,
                     view: &view,
                     opinions: self.opinions.as_ref(),
                     max_hunger: self.rules.max_work_hunger,
@@ -5856,6 +5921,50 @@ impl Economy {
                 Vec::new()
             };
         let shared_people: Vec<_> = shared_events.par_iter().map(|event| event.person).collect();
+        let tool_uses: Vec<(u64, u64)> = if let Some(owner) = &self.tool_wear {
+            rates
+                .par_iter()
+                .filter(|(_, rate)| *rate > 0)
+                .flat_map_iter(|(id, _)| {
+                    self.physical
+                        .work()
+                        .binary_search_by_key(id, |w| w.job.id)
+                        .ok()
+                        .map(|i| &self.physical.work()[i])
+                        .filter(|work| work.phase == game_lot_runtime::Phase::Working)
+                        .and_then(|work| {
+                            owner
+                                .select(
+                                    &self.work_tools,
+                                    &self.physical,
+                                    &view,
+                                    work.job.worker,
+                                    work.job.recipe,
+                                )
+                                .map(|items| (work.job.worker, items))
+                        })
+                        .into_iter()
+                        .flat_map(|(worker, items)| {
+                            items.into_iter().map(move |item| (worker, item))
+                        })
+                })
+                .chain(shared_events.par_iter().flat_map_iter(|event| {
+                    owner
+                        .select(
+                            &self.work_tools,
+                            &self.physical,
+                            &view,
+                            event.person,
+                            event.recipe,
+                        )
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(move |item| (event.person, item))
+                }))
+                .collect()
+        } else {
+            Vec::new()
+        };
         if !shared_people.is_empty() {
             game_economy_work::reserve(&mut busy, shared_people.iter().copied());
             game_economy_work::shared::apply_rates(&shared_events, &mut rates);
@@ -7761,6 +7870,16 @@ impl Economy {
         #[cfg(feature = "profile")]
         drop(profile_phase);
         let mut shared_work = self.shared_work.clone();
+        let mut tool_wear = self.tool_wear.clone();
+        if let Some(owner) = &mut tool_wear {
+            owner.advance(
+                &tool_uses,
+                &tool_repairs,
+                &physical.events().physical_actions,
+                physical.item_updates(),
+                tick,
+            );
+        }
         if let Some(owner) = &mut shared_work {
             let mut finished = physical.events().finished.clone();
             let mut interrupted = physical.events().interrupted.clone();
@@ -7781,6 +7900,7 @@ impl Economy {
             opinions: next_opinions,
             autowork,
             shared_work,
+            tool_wear,
             work_sites,
             construction,
             confinement: next_confinement,
@@ -7863,6 +7983,7 @@ impl Economy {
         let old_opinions = std::mem::replace(&mut self.opinions, draft.opinions);
         self.autowork = draft.autowork;
         self.shared_work = draft.shared_work;
+        self.tool_wear = draft.tool_wear;
         self.work_sites = draft.work_sites;
         self.construction = draft.construction;
         self.confinement = draft.confinement;

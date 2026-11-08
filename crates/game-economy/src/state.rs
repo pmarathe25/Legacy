@@ -29,6 +29,8 @@ pub struct State {
     #[serde(default)]
     pub work_tools: Vec<game_economy_work::tools::Requirement>,
     #[serde(default)]
+    pub tool_wear: Option<game_economy_work::tool_wear::ToolWear>,
+    #[serde(default)]
     pub work_sites: Option<game_economy_work::sites::Facilities>,
     #[serde(default)]
     pub construction: Option<game_economy_building::Construction>,

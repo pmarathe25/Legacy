@@ -123,6 +123,8 @@ pub struct Context<'a> {
     pub injuries: Option<&'a Injuries>,
     pub family: Option<&'a Families>,
     pub tools: &'a [tools::Requirement],
+    pub tool_wear: Option<&'a crate::tool_wear::ToolWear>,
+    pub physical: &'a game_lot_runtime::Runtime,
     pub view: &'a View,
     pub opinions: Option<&'a Opinions>,
     pub max_hunger: u32,
@@ -240,7 +242,19 @@ impl Context<'_> {
                 {
                     return None;
                 }
-                if !tools::available(self.tools, self.view, person.id, preference.recipe) {
+                if self.tool_wear.map_or_else(
+                    || !tools::available(self.tools, self.view, person.id, preference.recipe),
+                    |wear| {
+                        wear.select(
+                            self.tools,
+                            self.physical,
+                            self.view,
+                            person.id,
+                            preference.recipe,
+                        )
+                        .is_none()
+                    },
+                ) {
                     return None;
                 }
                 let (fear, obligation) = feelings

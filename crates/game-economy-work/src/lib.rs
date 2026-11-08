@@ -3,6 +3,7 @@ pub mod care;
 pub mod shared;
 mod site_filter;
 pub use game_work_sites as sites;
+pub mod tool_wear;
 pub mod tools;
 pub use asking::PracticeRequest;
 use game_autowork::{Autowork, Plan as WorkPlan, Policy};
