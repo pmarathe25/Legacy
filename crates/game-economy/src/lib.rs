@@ -4544,11 +4544,21 @@ impl Economy {
                         .is_some_and(|owner| !owner.can_receive_supplies(*person))
             })
             .collect();
+        let mut local_promise_busy = (self.agreements.is_some() && !local_nonstock.is_empty())
+            .then(|| {
+                local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    &pickup.actors,
+                )
+            });
         let promises = game_economy_promises::plan_world!(
             self,
             people,
             locations,
-            busy,
+            local_promise_busy.as_mut().unwrap_or(&mut busy),
             tick,
             action_base,
             player_transfer,
@@ -4560,6 +4570,7 @@ impl Economy {
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.actors());
             promise_actors.extend(promises.decisions.iter().map(|decision| decision.actor));
+            game_economy_work::reserve(&mut busy, promise_actors.iter().copied());
             game_economy_work::reserve(&mut local_prior_busy, promise_actors);
         }
         let mut local_exchange_busy =
@@ -4666,6 +4677,18 @@ impl Economy {
         drop(help_memory_phase);
         #[cfg(feature = "profile")]
         let promise_offer_phase = game_diagnostics::span("economy.promises.offer_plan");
+        let local_offer_busy =
+            (self.agreements.is_some() && !local_nonstock.is_empty()).then(|| {
+                let mut rows = local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    &pickup.actors,
+                );
+                game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
+                rows
+            });
         let promise_offers =
             game_economy_promises::offers::prepare(game_economy_promises::offers::Context {
                 owner: self.agreements.as_ref(),
@@ -4678,13 +4701,22 @@ impl Economy {
                 help_memories: &help_memories,
                 locations: &locations,
                 together: &|a, b| self.local_people_together(a, b),
-                busy: &busy,
+                busy: local_offer_busy.as_deref().unwrap_or(&busy),
                 max_hunger: self.rules.max_work_hunger,
                 tick,
             })?;
         #[cfg(feature = "profile")]
         drop(promise_offer_phase);
         if !promise_offers.proposals().is_empty() {
+            if local_offer_busy.is_some() {
+                game_economy_work::reserve(
+                    &mut local_prior_busy,
+                    promise_offers
+                        .proposals()
+                        .iter()
+                        .map(|proposal| proposal.debtor),
+                );
+            }
             busy.par_extend(promise_offers.proposals().par_iter().map(|p| p.debtor));
             if busy.par_windows(2).any(|rows| rows[0] > rows[1]) {
                 busy.par_sort_unstable();

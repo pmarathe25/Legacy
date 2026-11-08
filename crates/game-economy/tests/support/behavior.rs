@@ -30088,6 +30088,30 @@ fn promise_conversations_and_delivery_require_a_shared_endpoint() {
     };
     assert_eq!(run_offer(false), 1);
     assert_eq!(run_offer(true), 0);
+    let mut offer_store = offering.clone();
+    offer_store
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = [1, 2]
+        .into_iter()
+        .map(|person| LocalPosition {
+            person,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: LocalEndpoint::Store { id: 1 },
+            },
+        })
+        .collect();
+    let mut offer_store = Economy::compile(offer_store).unwrap();
+    offer_store.advance().unwrap();
+    assert_eq!(
+        offer_store.snapshot().agreements.unwrap().contracts.len(),
+        1
+    );
     let proposal = PromiseProposal {
         debtor: 1,
         creditor: 2,
@@ -30102,6 +30126,46 @@ fn promise_conversations_and_delivery_require_a_shared_endpoint() {
     world.set_promise_choice(2, false).unwrap();
     world.set_promise_accept_choice(2, true).unwrap();
     world.set_promise_choice(1, true).unwrap();
+    let store_run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut state = world.snapshot();
+                state
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions = [1, 2]
+                    .into_iter()
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect();
+                let mut store = Economy::compile(state).unwrap();
+                store.advance().unwrap();
+                assert_eq!(
+                    store.snapshot().agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Active
+                );
+                store.advance().unwrap();
+                let state = store.snapshot();
+                assert_eq!(
+                    state.agreements.as_ref().unwrap().contracts[0].status,
+                    Status::Fulfilled
+                );
+                state
+            })
+    };
+    assert_eq!(store_run(1), store_run(4));
     let mut distant = world.snapshot();
     distant
         .local_transport
