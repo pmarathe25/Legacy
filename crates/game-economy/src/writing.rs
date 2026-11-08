@@ -41,6 +41,10 @@ pub struct Writing {
     pub text_templates: Arc<Vec<TextTemplate>>,
     #[serde(default)]
     pub text_authors: Arc<Vec<TextAuthor>>,
+    #[serde(default)]
+    pub text_retention: Arc<Vec<crate::TextRetention>>,
+    #[serde(default)]
+    pub text_memories: Arc<Vec<crate::TextMemory>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +155,9 @@ impl Writing {
         Arc::make_mut(&mut self.practice).par_sort_unstable_by_key(|row| row.person);
         Arc::make_mut(&mut self.text_templates).par_sort_unstable_by_key(|row| row.id);
         Arc::make_mut(&mut self.text_authors).par_sort_unstable_by_key(|row| row.person);
+        Arc::make_mut(&mut self.text_retention).par_sort_unstable_by_key(|row| row.person);
+        Arc::make_mut(&mut self.text_memories)
+            .par_sort_unstable_by_key(|row| (row.person, row.item));
         let tick = physical.custody.tick;
         if self.paper == self.ink
             || self.paper == self.page
@@ -244,6 +251,38 @@ impl Writing {
                         .binary_search_by_key(&a.template, |t| t.id)
                         .is_err()
             })
+            || self
+                .text_retention
+                .par_windows(2)
+                .any(|p| p[0].person == p[1].person)
+            || self
+                .text_retention
+                .par_iter()
+                .any(|p| !people.contains(&p.person) || p.capacity == 0 || p.capacity > 1024)
+            || self
+                .text_memories
+                .par_windows(2)
+                .any(|p| (p[0].person, p[0].item) == (p[1].person, p[1].item))
+            || self.text_memories.par_iter().any(|m| {
+                !people.contains(&m.person)
+                    || m.item == 0
+                    || m.item >= self.next_item
+                    || m.text.is_empty()
+                    || m.text.len() > 4096
+                    || m.first_read_at > m.read_at
+                    || m.read_at > tick
+            })
+            || self
+                .text_memories
+                .par_chunk_by(|a, b| a.person == b.person)
+                .any(|group| {
+                    group.len() > 1024
+                        || self
+                            .text_retention
+                            .binary_search_by_key(&group[0].person, |p| p.person)
+                            .ok()
+                            .is_some_and(|index| group.len() > self.text_retention[index].capacity)
+                })
         {
             return Err("invalid written records".into());
         }

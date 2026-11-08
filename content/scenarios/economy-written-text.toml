@@ -483,3 +483,13 @@ person = 1
 script = 1
 template = 1
 enabled = false
+
+[[writing.text_retention]]
+person = 1
+capacity = 2
+enabled = true
+
+[[writing.text_retention]]
+person = 2
+capacity = 2
+enabled = true

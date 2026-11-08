@@ -910,6 +910,52 @@ fn text_is_visible_only_after_reading_and_does_not_create_food_knowledge() {
 }
 
 #[test]
+fn text_memory_obeys_individual_retention_and_capacity() {
+    let mut state = independent_text_authors(1);
+    state.people[0].controlled = true;
+    state.writing.as_mut().unwrap().literacy_mut()[0].read = true;
+    let holder = state
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|c| c.place == Place::Person(1))
+        .unwrap();
+    let mut lots = holder.lots.clone();
+    for lot in &mut lots {
+        lot.quantity = 2;
+    }
+    *holder = Container::new(holder.place, holder.capacity, lots).unwrap();
+    state.writing.as_mut().unwrap().text_retention = vec![TextRetention {
+        person: 1,
+        capacity: 1,
+        enabled: true,
+    }]
+    .into();
+    let mut world = Economy::compile(state).unwrap();
+    let first = world.write_text(1, 1, 1).unwrap().unwrap();
+    assert!(world.read_page(1, first).unwrap());
+    assert_eq!(
+        (
+            world.remembered_texts(1).unwrap()[0].first_read_at,
+            world.remembered_texts(1).unwrap()[0].read_at
+        ),
+        (1, 2)
+    );
+    world.set_text_retention(1, false).unwrap();
+    let second = world.write_text(1, 1, 1).unwrap().unwrap();
+    assert_eq!(world.remembered_texts(1).unwrap()[0].item, first);
+    world.set_text_retention(1, true).unwrap();
+    assert!(world.read_page(1, second).unwrap());
+    let memory = world.remembered_texts(1).unwrap();
+    assert_eq!(memory.len(), 1);
+    assert_eq!(memory[0].item, second);
+    let mut invalid = world.snapshot();
+    std::sync::Arc::make_mut(&mut invalid.writing.as_mut().unwrap().text_retention)[0].capacity = 0;
+    assert!(Economy::compile(invalid).is_err());
+}
+
+#[test]
 fn independent_autonomous_authors_match_across_worker_counts() {
     let initial = independent_authors(2048);
     let run = |workers| {
@@ -1120,6 +1166,8 @@ fn independent_readers(count: u64) -> State {
             .collect(),
     });
     state.writing = Some(Writing {
+        text_retention: Default::default(),
+        text_memories: Default::default(),
         text_templates: Default::default(),
         text_authors: Default::default(),
         practice: Default::default(),
@@ -1161,6 +1209,103 @@ fn independent_readers(count: u64) -> State {
         reads: vec![].into(),
     });
     state
+}
+
+fn independent_text_readers(count: u64) -> State {
+    let mut state = independent_readers(count);
+    let writing = state.writing.as_mut().unwrap();
+    for page in std::sync::Arc::make_mut(&mut writing.pages) {
+        page.claim = None;
+        page.text = Some("A message to remember.".into());
+    }
+    writing.text_retention = (1..=count)
+        .map(|person| TextRetention {
+            person,
+            capacity: 1,
+            enabled: person % 2 == 0,
+        })
+        .collect::<Vec<_>>()
+        .into();
+    state
+}
+
+#[test]
+fn text_retention_is_personal_bounded_and_deterministic() {
+    let initial = independent_text_readers(2048);
+    let run = |threads| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let writing = state.writing.as_ref().unwrap();
+                assert_eq!(writing.text_memories.len(), 1024);
+                assert!(
+                    writing
+                        .text_memories
+                        .iter()
+                        .all(|m| m.person % 2 == 0 && m.first_read_at == 1 && m.read_at == 1)
+                );
+                let restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), state);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
+#[ignore = "performance measurement"]
+fn independent_text_retention_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(20_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
+    let initial = independent_text_readers(count);
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            let mut fingerprint = None;
+            for _ in 0..4 {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let start = std::time::Instant::now();
+                world.advance().unwrap();
+                samples.push(start.elapsed().as_secs_f64());
+                let state = world.snapshot();
+                assert_eq!(
+                    state.writing.as_ref().unwrap().text_memories.len(),
+                    (count / 2) as usize
+                );
+                let mut hash = std::collections::hash_map::DefaultHasher::new();
+                serde_json::to_vec(&state).unwrap().hash(&mut hash);
+                let actual = hash.finish();
+                if let Some(expected) = fingerprint {
+                    assert_eq!(actual, expected);
+                }
+                fingerprint = Some(actual);
+            }
+            samples.remove(0);
+            samples.sort_by(f64::total_cmp);
+            eprintln!(
+                "readers={count} workers={workers} elapsed_median={:.6} fingerprint={:016x}",
+                samples[1],
+                fingerprint.unwrap()
+            );
+        });
 }
 
 #[test]
@@ -33557,6 +33702,8 @@ fn a_written_claim_can_guide_travel_and_receive_subjective_discrepancy_reactions
         ],
     });
     initial.writing = Some(Writing {
+        text_retention: Default::default(),
+        text_memories: Default::default(),
         text_templates: Default::default(),
         text_authors: Default::default(),
         paper: 1,
@@ -49532,6 +49679,8 @@ fn writing_advances_tool_identity_cursor_and_round_trips_with_no_tool_production
         }],
     });
     initial.writing = Some(Writing {
+        text_retention: Default::default(),
+        text_memories: Default::default(),
         text_templates: Default::default(),
         text_authors: Default::default(),
         paper: 1,

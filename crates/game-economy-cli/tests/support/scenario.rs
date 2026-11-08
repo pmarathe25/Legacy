@@ -24,6 +24,8 @@ fn authored_text_is_written_transferred_and_read_without_automatic_agreement() {
         world.known_page_text(2, item).unwrap().as_deref(),
         Some("Please meet me tomorrow.")
     );
+    assert_eq!(world.remembered_texts(1).unwrap().len(), 1);
+    assert_eq!(world.remembered_texts(2).unwrap().len(), 1);
     let state = world.snapshot();
     assert!(
         state
@@ -36,6 +38,71 @@ fn authored_text_is_written_transferred_and_read_without_automatic_agreement() {
             .claim
             .is_none()
     );
+}
+
+#[test]
+fn remembered_text_survives_physical_page_consumption_and_reload() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-written-text.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    world.set_work_choice(2, false).unwrap();
+    let mut player = game_economy_player::Player::new(&mut world);
+    let item = player.write_text(1, 1).unwrap().unwrap();
+    assert!(player.read_page(item).unwrap());
+    let memory = &player.remembered_texts().unwrap()[0];
+    assert_eq!((memory.first_read_at, memory.read_at), (1, 2));
+    let mut state = world.snapshot();
+    state.goals = None;
+    state.dreams = None;
+    state.skills = None;
+    let writing = state.writing.as_ref().unwrap();
+    let page_good = writing.page;
+    let paper = writing.paper;
+    let recipe = state.physical.recipes.first_mut().unwrap();
+    recipe.inputs = vec![game_production::Amount {
+        good: page_good,
+        quantity: 1,
+    }];
+    recipe.outputs = vec![game_production::Amount {
+        good: paper,
+        quantity: 1,
+    }];
+    recipe.ticks = 1;
+    let recipe_id = recipe.id;
+    let mut world = game_economy::Economy::compile(state).unwrap();
+    assert!(
+        game_economy_player::Player::new(&mut world)
+            .transfer_stock(page_good, 1, false)
+            .unwrap()
+    );
+    assert!(
+        game_economy_player::Player::new(&mut world)
+            .start_work(recipe_id, 1)
+            .unwrap()
+    );
+    for _ in 0..3 {
+        if world.snapshot().writing.as_ref().unwrap().pages.is_empty() {
+            break;
+        }
+        game_economy_player::Player::new(&mut world)
+            .continue_work()
+            .unwrap();
+    }
+    let state = world.snapshot();
+    assert!(state.writing.as_ref().unwrap().pages.is_empty());
+    let mut restored = game_economy::Economy::compile(
+        serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let player = game_economy_player::Player::new(&mut restored);
+    assert_eq!(
+        player.known_page_text(item).unwrap().as_deref(),
+        Some("Please meet me tomorrow.")
+    );
+    assert_eq!(player.remembered_texts().unwrap()[0].first_read_at, 1);
 }
 
 #[test]
@@ -8391,6 +8458,8 @@ fn invoked_memory_can_be_written_and_read_after_dismissal() {
                 });
                 *holder = game_lots::Container::new(holder.place, holder.capacity, lots).unwrap();
                 state.writing = Some(game_economy::Writing {
+                    text_retention: Default::default(),
+                    text_memories: Default::default(),
                     text_templates: Default::default(),
                     text_authors: Default::default(),
                     practice: Default::default(),

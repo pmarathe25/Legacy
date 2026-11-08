@@ -150,6 +150,7 @@ pub use recovery::Rules as RecoveryRules;
 mod state;
 mod teaching;
 mod writing;
+mod writing_memory;
 use game_autowork::Autowork;
 pub use game_economy_agriculture::irrigation::{
     Choice as WaterChoice, Event as WaterEvent, Irrigation, Moisture as FieldMoisture,
@@ -173,6 +174,7 @@ pub use writing::{
     Study as WritingStudy, TextAuthor as WritingTextAuthor, TextTemplate as WritingTextTemplate,
     Writing,
 };
+pub use writing_memory::{TextMemory, TextRetention};
 pub struct Economy {
     physical: Runtime,
     seed: u64,
@@ -1341,11 +1343,42 @@ impl Economy {
     /// Text this person has written or actually read, while its page exists.
     pub fn known_page_text(&self, person: u64, item: u64) -> Result<Option<String>, String> {
         let owner = self.writing.as_ref().ok_or("writing is disabled")?;
+        if let Ok(index) = owner
+            .text_memories
+            .binary_search_by_key(&(person, item), |m| (m.person, m.item))
+        {
+            return Ok(Some(owner.text_memories[index].text.to_string()));
+        }
         let page = owner.page(item).ok_or("unknown written page")?;
+        if self.physical.item_place(item) != Some(game_lots::Place::Person(person)) {
+            return Err("text is not currently held or remembered".into());
+        }
         if page.author != person && owner.reads.binary_search(&(person, item)).is_err() {
             return Err("person has not read this page".into());
         }
         Ok(page.text.clone())
+    }
+    /// Only this person's retained written texts.
+    pub fn remembered_texts(&self, person: u64) -> Result<Vec<TextMemory>, String> {
+        let owner = self.writing.as_ref().ok_or("writing is disabled")?;
+        let start = owner.text_memories.partition_point(|m| m.person < person);
+        let end = owner.text_memories.partition_point(|m| m.person <= person);
+        Ok(owner.text_memories[start..end].to_vec())
+    }
+    /// Change future retention without erasing what this person already remembers.
+    pub fn set_text_retention(&mut self, person: u64, enabled: bool) -> Result<(), String> {
+        let owner = self.writing.as_mut().ok_or("writing is disabled")?;
+        let index = owner
+            .text_retention
+            .binary_search_by_key(&person, |p| p.person)
+            .map_err(|_| "unknown text retention preference")?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("economic generation overflow")?;
+        std::sync::Arc::make_mut(&mut owner.text_retention)[index].enabled = enabled;
+        self.epoch = epoch;
+        Ok(())
     }
     /// Only the person's own configured choice is available for writing.
     pub fn text_choice(&self, person: u64) -> Result<Option<(u32, u64, String)>, String> {
@@ -6719,11 +6752,21 @@ impl Economy {
                     });
             }
         }
+        let remember_text = writing.as_ref().is_some_and(|owner| {
+            owner
+                .text_retention
+                .par_iter()
+                .any(|preference| preference.enabled)
+        });
+        let mut text_experiences = Vec::new();
         let written_item = page_to_write
             .as_ref()
             .filter(|_| page_action_accepted)
             .map(|page| page.item);
         if page_action_accepted && let Some(page) = page_to_write {
+            if remember_text && page.text.is_some() {
+                text_experiences.push((page.author, page.item));
+            }
             let owner = writing.as_mut().expect("validated writing owner");
             if page.text.is_some()
                 && let Ok(index) = owner
@@ -6756,6 +6799,14 @@ impl Economy {
                 .into_par_iter()
                 .filter_map(|(page, accepted)| accepted.then_some(page))
                 .collect();
+            if remember_text {
+                text_experiences.par_extend(
+                    accepted
+                        .par_iter()
+                        .filter(|page| page.text.is_some())
+                        .map(|page| (page.author, page.item)),
+                );
+            }
             let owner = writing.as_mut().expect("authors require writing");
             if !owner.authors.is_empty() && statuses.par_iter().any(|row| row.1) {
                 std::sync::Arc::make_mut(&mut owner.authors)
@@ -6827,6 +6878,16 @@ impl Economy {
                 && let Some(page) = &page_to_read
             {
                 owner.record_reads(&[(player_transfer.expect("read action").person(), page.item)]);
+            }
+            if remember_text {
+                text_experiences.par_extend(completed_auto_reads.par_iter().copied());
+                if page_read == Some(true)
+                    && let Some(page) = &page_to_read
+                {
+                    text_experiences
+                        .push((player_transfer.expect("read action").person(), page.item));
+                }
+                owner.remember_text(&text_experiences, tick);
             }
         }
         if self.fatigue.is_some() {

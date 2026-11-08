@@ -156,6 +156,10 @@ struct WritingConfig {
     text_templates: Vec<game_economy::WritingTextTemplate>,
     #[serde(default)]
     text_authors: Vec<game_economy::WritingTextAuthor>,
+    #[serde(default)]
+    text_retention: Vec<game_economy::TextRetention>,
+    #[serde(default)]
+    text_memories: Vec<game_economy::TextMemory>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -914,6 +918,8 @@ pub fn scenario_with_options(
                 practice: config.practice.into(),
                 text_templates: config.text_templates.into(),
                 text_authors: config.text_authors.into(),
+                text_retention: config.text_retention.into(),
+                text_memories: config.text_memories.into(),
             })
         })
         .transpose()?;

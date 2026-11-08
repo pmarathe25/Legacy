@@ -49,7 +49,9 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             println!("tell-route PERSON SOURCE DEST remembered|open|closed remembered|TICKS");
             println!("assist-work LEAD RECIPE respect|disregard");
             println!("take-over-work JOB respect|disregard");
-            println!("text-choice | write-text SCRIPT TEMPLATE | page-text ITEM");
+            println!(
+                "text-choice | write-text SCRIPT TEMPLATE | page-text ITEM | text-memories | remember-text on|off"
+            );
         }
         ["view"] => {
             let view = player.view()?;
@@ -818,6 +820,16 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             "text={:?}",
             player.known_page_text(item.parse().map_err(|_| "invalid item")?)?
         ),
+        ["text-memories"] => {
+            for memory in player.remembered_texts()? {
+                println!("text-memory={memory:?}");
+            }
+        }
+        ["remember-text", choice] => player.set_text_retention(match *choice {
+            "on" => true,
+            "off" => false,
+            _ => return Err("expected on or off".into()),
+        })?,
         ["feed-animal", animal, good, quantity] => println!(
             "food-used={}",
             player.feed_animal(

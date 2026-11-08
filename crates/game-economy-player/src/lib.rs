@@ -1154,6 +1154,12 @@ impl<'a> Player<'a> {
     pub fn known_page_text(&self, item: u64) -> Result<Option<String>, String> {
         self.world.known_page_text(self.current()?, item)
     }
+    pub fn remembered_texts(&self) -> Result<Vec<game_economy::TextMemory>, String> {
+        self.world.remembered_texts(self.current()?)
+    }
+    pub fn set_text_retention(&mut self, enabled: bool) -> Result<(), String> {
+        self.world.set_text_retention(self.current()?, enabled)
+    }
     pub fn give_page(&mut self, recipient: u64, item: u64) -> Result<bool, String> {
         if !self.view()?.nearby.contains(&recipient) {
             return Err("person is not present".into());
