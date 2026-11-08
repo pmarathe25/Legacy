@@ -4374,7 +4374,7 @@ impl Economy {
         // Personal reading, writing, and encounters need no stock access.
         // Preserve their actual reservations before the remaining stock and
         // site planners receive the temporary location restriction.
-        let local_prior_busy = if local_nonstock.is_empty() {
+        let mut local_prior_busy = if local_nonstock.is_empty() {
             Vec::new()
         } else {
             busy.par_iter().copied().collect()
@@ -4488,7 +4488,27 @@ impl Economy {
             endpoint: walking.map(|_| &endpoint as &game_economy_exchange::EndpointLookup<'_>),
             together: walking.map(|_| &together as &game_economy_exchange::Together<'_>),
         };
-        let trade = exchange.trade(&mut busy, action_base)?;
+        let mut local_exchange_busy =
+            (self.market.is_some() && !local_nonstock.is_empty()).then(|| {
+                local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    &pickup.actors,
+                )
+            });
+        let trade = exchange.trade(
+            local_exchange_busy.as_mut().unwrap_or(&mut busy),
+            action_base,
+        )?;
+        if local_exchange_busy.is_some()
+            && let Some(plan) = &trade
+        {
+            let actors = plan.actors();
+            game_economy_work::reserve(&mut busy, actors.iter().copied());
+            game_economy_work::reserve(&mut local_prior_busy, actors);
+        }
         action_base = action_base
             .checked_add(game_economy_exchange::actions(trade.as_ref()).len() as u64)
             .ok_or("action count overflow")?;
@@ -4534,7 +4554,31 @@ impl Economy {
             player_transfer,
             &blocked_receivers
         );
-        let proposals = exchange.proposals(&mut busy)?;
+        if !local_nonstock.is_empty() {
+            let mut promise_actors = promises
+                .delivery
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.actors());
+            promise_actors.extend(promises.decisions.iter().map(|decision| decision.actor));
+            game_economy_work::reserve(&mut local_prior_busy, promise_actors);
+        }
+        let mut local_exchange_busy =
+            (self.market.is_some() && !local_nonstock.is_empty()).then(|| {
+                local_walking::carrying_busy(
+                    &busy,
+                    &local_nonstock,
+                    &local_prior_busy,
+                    walking_next.as_ref(),
+                    &pickup.actors,
+                )
+            });
+        let proposals = exchange.proposals(local_exchange_busy.as_mut().unwrap_or(&mut busy))?;
+        if local_exchange_busy.is_some()
+            && let Some(plan) = &proposals
+        {
+            game_economy_work::reserve(&mut busy, plan.actors.iter().copied());
+            game_economy_work::reserve(&mut local_prior_busy, plan.actors.iter().copied());
+        }
         action_base = action_base
             .checked_add(promises.action_count() as u64)
             .ok_or("action count overflow")?;

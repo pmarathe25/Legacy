@@ -24881,6 +24881,41 @@ fn market_proposals_and_trades_require_a_shared_endpoint() {
             .build()
             .unwrap()
             .install(|| {
+                let mut store = initial.clone();
+                store
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions = [3, 4]
+                    .into_iter()
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect();
+                let mut store = Economy::compile(store).unwrap();
+                store.advance().unwrap();
+                assert_eq!(store.snapshot().market.as_ref().unwrap().offers.len(), 1);
+                store.advance().unwrap();
+                let state = store.snapshot();
+                assert!(state.market.as_ref().unwrap().offers.is_empty());
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(3))
+                        .unwrap()
+                        .used,
+                    1
+                );
                 let mut away = initial.clone();
                 away.local_transport
                     .as_mut()
