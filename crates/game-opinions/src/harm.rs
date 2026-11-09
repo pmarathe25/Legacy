@@ -249,6 +249,7 @@ pub enum AffinityKind {
     PressuredEncounter,
     StockUse,
     SiteUse,
+    FieldUse,
     SiteDestruction,
     SiteSalvage,
     WorkSuccess,
@@ -287,6 +288,10 @@ impl AffinityKind {
             Self::SiteUse => case
                 .and_then(|c| c.site_use)
                 .or_else(|| personal.and_then(|p| p.affinity_site_use))
+                .unwrap_or(0),
+            Self::FieldUse => case
+                .and_then(|c| c.field_use)
+                .or_else(|| personal.and_then(|p| p.affinity_field_use))
                 .unwrap_or(0),
             Self::SiteDestruction => case
                 .and_then(|c| c.site_destruction)

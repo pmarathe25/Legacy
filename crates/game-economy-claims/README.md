@@ -10,6 +10,8 @@ People can also assert conflicting claims about physical work sites. Site use an
 
 Field claims are separate personal assertions over cultivated fields, with no authoritative owner or automatic transfer of seed or harvest. A person may choose to respect or disregard competing field assertions, and may choose to assert a field after their own successful planting or harvest. A claimant's request signals permission only for the requested action; other claimants' assertions still enter the worker's decision. Up to four locally present claimants observe an actual accepted use, and an attempted action with no physical receipt produces no observation. Existing assertions are observed before new post-work assertions are added. Field assertions are treated as locally available information at the regional stock endpoint; individual memories and reports of these assertions are not yet modeled.
 
+Each observer may configure a signed `affinity_field_use` reaction, with a `field_use` override for a particular relationship. A witnessed use can increase, decrease, or leave affinity unchanged; it does not automatically create obligation or a judgment of wrongdoing.
+
 Each person's separate `assert_built_sites` preference can lead them to claim a site only after their own construction physically succeeds. Building does not automatically imply a claim; people may change this preference.
 
 When `inherit_births` and family birth enrollment are enabled, newborns may receive a parent's preferences for making or disregarding assertions. They inherit no stock or site assertions, relationships, or obligations, and may change their own choices.

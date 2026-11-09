@@ -9795,6 +9795,21 @@ impl Economy {
         if let Some(claims) = dynamics
             .as_ref()
             .and_then(|d| d.claims.as_ref())
+            .filter(|claims| !claims.field_events.is_empty())
+            && let Some(opinions) = next_opinions
+                .as_mut()
+                .filter(|owner| owner.tracks_field_affinity())
+        {
+            let witnessed: Vec<_> = claims
+                .field_events
+                .par_iter()
+                .map(|event| (event.claimant, event.person))
+                .collect();
+            opinions.learn_field_affinity(&witnessed);
+        }
+        if let Some(claims) = dynamics
+            .as_ref()
+            .and_then(|d| d.claims.as_ref())
             .filter(|c| !c.site_events.is_empty())
             && let Some(opinions) = next_opinions.as_mut()
         {

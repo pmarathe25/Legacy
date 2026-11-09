@@ -11968,6 +11968,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -38199,6 +38200,157 @@ fn field_claims_are_personal_and_follow_actual_cultivation() {
 }
 
 #[test]
+fn field_use_reactions_follow_personal_views_and_local_observation() {
+    use game_economy_claims::{Claims, FieldClaim, Preference};
+    use game_opinions::AffinityRules;
+    let mut initial = field_workload(4);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = policy.person == 2);
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            field_claims: vec![
+                FieldClaim {
+                    person: 1,
+                    field: 1,
+                },
+                FieldClaim {
+                    person: 3,
+                    field: 1,
+                },
+            ],
+            preferences: vec![Preference {
+                person: 2,
+                disregard_others: true,
+                assert_outputs: false,
+                assert_built_sites: false,
+                assert_cultivated_fields: false,
+                desperate_hunger: None,
+            }],
+            ..Default::default()
+        }),
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = vec![
+        OpinionSensitivity {
+            person: 1,
+            affinity_field_use: Some(2),
+            ..Default::default()
+        },
+        OpinionSensitivity {
+            person: 3,
+            affinity_field_use: Some(-3),
+            ..Default::default()
+        },
+    ]
+    .into();
+    initial.opinions = Some(opinions);
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let saved = serde_json::to_string(&state).unwrap();
+                assert_eq!(
+                    Economy::compile(serde_json::from_str(&saved).unwrap())
+                        .unwrap()
+                        .snapshot(),
+                    state
+                );
+                state
+            })
+    };
+    let state = run(initial.clone(), 1);
+    assert_eq!(state, run(initial.clone(), 4));
+    let opinions = state.opinions.unwrap();
+    assert_eq!(opinions.index().affinity(1, 2), 2);
+    assert_eq!(opinions.index().affinity(3, 2), -3);
+    assert_eq!(opinions.index().obligation(1, 2), 0);
+    let mut override_case = initial.clone();
+    std::sync::Arc::make_mut(&mut override_case.opinions.as_mut().unwrap().sensitivities)[0]
+        .relationship_cases
+        .push(RelationshipCase {
+            target: 2,
+            field_use: Some(-4),
+            ..Default::default()
+        });
+    assert_eq!(
+        run(override_case, 1)
+            .opinions
+            .unwrap()
+            .index()
+            .affinity(1, 2),
+        -4
+    );
+    let mut distant = initial.clone();
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 3,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let opinions = run(distant, 1).opinions.unwrap();
+    assert_eq!(opinions.index().affinity(1, 2), 2);
+    assert_eq!(opinions.index().affinity(3, 2), 0);
+    let mut failed = initial;
+    let stock = failed
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, 8, vec![]).unwrap();
+    let opinions = run(failed, 1).opinions.unwrap();
+    assert_eq!(opinions.index().affinity(1, 2), 0);
+    assert_eq!(opinions.index().affinity(3, 2), 0);
+}
+
+#[test]
 fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
     use crate::cultivation_requests::{Outcome, Preference, Request, Requests};
     use game_opinions::AffinityRules;
@@ -38565,7 +38717,7 @@ fn concentrated_field_benchmark() {
     let feelings = std::env::var_os("LEGACY_FIELD_FEELINGS").is_some();
     let failures = std::env::var_os("LEGACY_FIELD_FAILURES").is_some();
     let field_claims = std::env::var_os("LEGACY_FIELD_CLAIMS").is_some();
-    assert!(!feelings || requests);
+    assert!(!feelings || requests || field_claims);
     assert!(!failures || (feelings && !discovery && count.is_multiple_of(4)));
     assert!(!field_claims || !requests);
     assert!(!field_claims || count >= 2);
@@ -38623,11 +38775,12 @@ fn concentrated_field_benchmark() {
             help_change: 0,
             harm_change_per_damage: 0,
         });
-        opinions.sensitivities = (1..=count / 2)
+        opinions.sensitivities = (1..=if field_claims { count } else { count / 2 })
             .map(|person| OpinionSensitivity {
                 person,
-                affinity_work_success: Some(-1),
+                affinity_work_success: requests.then_some(-1),
                 affinity_work_failure: failures.then_some(1),
+                affinity_field_use: field_claims.then_some(-1),
                 ..Default::default()
             })
             .collect::<Vec<_>>()
@@ -38740,8 +38893,21 @@ fn concentrated_field_benchmark() {
                                 .len(),
                             count as usize / 2
                         );
+                        if feelings {
+                            assert_eq!(
+                                state
+                                    .opinions
+                                    .as_ref()
+                                    .unwrap()
+                                    .records
+                                    .iter()
+                                    .map(|opinion| -i64::from(opinion.affinity))
+                                    .sum::<i64>(),
+                                count as i64
+                            );
+                        }
                     }
-                    if feelings && !discovery {
+                    if feelings && requests && !discovery {
                         assert_eq!(
                             state
                                 .opinions
@@ -42802,6 +42968,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -43130,6 +43297,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -43341,6 +43509,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -43368,6 +43537,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         stock_use: None,
         stock_use_trust: None,
         site_use: None,
+        field_use: None,
         site_destruction: None,
         site_salvage: None,
         work_success: None,
@@ -43435,6 +43605,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -43535,6 +43706,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -43723,6 +43895,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
+            affinity_field_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
             affinity_work_success: None,
@@ -43981,6 +44154,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -44146,6 +44320,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -44371,6 +44546,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
+            affinity_field_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
             affinity_work_success: None,
@@ -45265,6 +45441,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
+            affinity_field_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
             affinity_work_success: Some(-3),
@@ -45288,6 +45465,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     stock_use: None,
                     stock_use_trust: None,
                     site_use: None,
+                    field_use: None,
                     site_destruction: None,
                     site_salvage: None,
                     work_success: Some(4),
@@ -45781,6 +45959,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             social_affinity_weight: None,
             affinity_stock_use: None,
             affinity_site_use: None,
+            affinity_field_use: None,
             affinity_site_destruction: None,
             affinity_site_salvage: None,
             affinity_work_success: None,
@@ -49368,6 +49547,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: Some(rate),
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -49394,6 +49574,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         stock_use: None,
         stock_use_trust: None,
         site_use: Some(6),
+        field_use: None,
         site_destruction: None,
         site_salvage: None,
         work_success: None,
@@ -49761,6 +49942,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: Some(5),
         affinity_site_salvage: None,
         affinity_work_success: None,
@@ -51024,6 +51206,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         social_affinity_weight: None,
         affinity_stock_use: None,
         affinity_site_use: None,
+        affinity_field_use: None,
         affinity_site_destruction: None,
         affinity_site_salvage: Some(rate),
         affinity_work_success: None,
@@ -51050,6 +51233,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         stock_use: None,
         stock_use_trust: None,
         site_use: None,
+        field_use: None,
         site_destruction: None,
         site_salvage: Some(7),
         work_success: None,
@@ -51892,6 +52076,7 @@ fn concentrated_site_salvage_benchmark() {
                 social_affinity_weight: None,
                 affinity_stock_use: None,
                 affinity_site_use: None,
+                affinity_field_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: Some(1),
                 affinity_work_success: None,

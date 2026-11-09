@@ -60,6 +60,9 @@ pub struct Sensitivity {
     /// Personal interpretation of another person's witnessed use of a claimed site.
     #[serde(default)]
     pub affinity_site_use: Option<i32>,
+    /// Personal interpretation of witnessed use of an asserted field.
+    #[serde(default)]
+    pub affinity_field_use: Option<i32>,
     /// Personal interpretation of another person's witnessed destruction of a claimed site.
     #[serde(default)]
     pub affinity_site_destruction: Option<i32>,
@@ -144,6 +147,8 @@ pub struct RelationshipCase {
     pub stock_use_trust: Option<i32>,
     #[serde(default)]
     pub site_use: Option<i32>,
+    #[serde(default)]
+    pub field_use: Option<i32>,
     #[serde(default)]
     pub site_destruction: Option<i32>,
     #[serde(default)]

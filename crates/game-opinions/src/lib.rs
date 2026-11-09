@@ -214,6 +214,20 @@ impl Opinions {
         harm::tracks_affinity(self, harm::AffinityKind::SiteUse)
             || harm::tracks_affinity(self, harm::AffinityKind::SiteDestruction)
     }
+    pub fn tracks_field_affinity(&self) -> bool {
+        harm::tracks_affinity(self, harm::AffinityKind::FieldUse)
+    }
+    /// Apply only observers' signed interpretations of witnessed field use.
+    pub fn learn_field_affinity(&mut self, events: &[(u64, u64)]) {
+        if events.is_empty() || !self.tracks_field_affinity() {
+            return;
+        }
+        let rows: Vec<_> = events
+            .par_iter()
+            .map(|&(observer, actor)| (observer, actor, 1))
+            .collect();
+        harm::affinity(self, &rows, harm::AffinityKind::FieldUse);
+    }
     pub fn tracks_salvage_affinity(&self) -> bool {
         harm::tracks_affinity(self, harm::AffinityKind::SiteSalvage)
     }
@@ -368,6 +382,7 @@ impl Opinions {
                 social_affinity_weight: None,
                 affinity_stock_use: None,
                 affinity_site_use: None,
+                affinity_field_use: None,
                 affinity_site_destruction: None,
                 affinity_site_salvage: None,
                 affinity_work_success: None,
