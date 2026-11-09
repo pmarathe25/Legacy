@@ -37574,6 +37574,7 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
         .for_each(|policy| policy.willing = false);
     farm.requests = Some(Requests {
         next_id: 1,
+        discoverers: vec![],
         askers: vec![
             Asker {
                 person: 1,
@@ -37828,6 +37829,146 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
     );
 }
 #[test]
+fn people_discover_local_cultivation_opportunities_and_helpers() {
+    use crate::cultivation_requests::{Discoverer, Outcome, Preference, Requests};
+    let mut initial = field_workload(128);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 1,
+        askers: vec![],
+        discoverers: (1..=64)
+            .map(|person| Discoverer {
+                person,
+                interval: 1,
+                lifetime: 3,
+            })
+            .collect(),
+        preferences: (1..=128)
+            .map(|person| Preference {
+                person,
+                help_value: 1,
+                effort: 1,
+                affinity_weight: 0,
+                trust_weight: 0,
+                fear_weight: 0,
+                obligation_weight: 0,
+            })
+            .collect(),
+        pending: vec![],
+        events: vec![],
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let requests = state
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(requests.pending.len(), 64);
+                assert!(
+                    requests
+                        .pending
+                        .iter()
+                        .all(|request| request.requester != request.worker && request.field <= 128)
+                );
+                let mut reloaded = Economy::compile(state).unwrap();
+                world.advance().unwrap();
+                reloaded.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, reloaded.snapshot());
+                let farm = state.agriculture.as_ref().unwrap();
+                let fulfilled = farm
+                    .requests
+                    .as_ref()
+                    .unwrap()
+                    .events
+                    .iter()
+                    .filter(|event| event.outcome == Outcome::Fulfilled)
+                    .count();
+                assert!(fulfilled > 0);
+                assert_eq!(
+                    fulfilled,
+                    farm.fields
+                        .iter()
+                        .filter(|field| field.phase == CropPhase::Growing)
+                        .count()
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut separate = field_workload(2);
+    separate.agriculture.as_mut().unwrap().requests = Some(Requests {
+        next_id: 1,
+        askers: vec![],
+        discoverers: vec![Discoverer {
+            person: 1,
+            interval: 1,
+            lifetime: 2,
+        }],
+        preferences: vec![],
+        pending: vec![],
+        events: vec![],
+    });
+    separate
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    separate
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    separate.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut separate = Economy::compile(separate).unwrap();
+    separate.advance().unwrap();
+    assert!(
+        separate
+            .snapshot()
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .pending
+            .is_empty()
+    );
+}
+
+#[test]
 fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
     use crate::cultivation_requests::{Asker, Outcome, Requests};
     let mut initial = field_workload(2);
@@ -37838,6 +37979,7 @@ fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
         .for_each(|policy| policy.willing = false);
     farm.requests = Some(Requests {
         next_id: 1,
+        discoverers: vec![],
         askers: vec![Asker {
             person: 1,
             worker: 2,
@@ -37905,17 +38047,29 @@ fn concentrated_field_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let mut initial = field_workload(count);
-    let requests = std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
+    let discovery = std::env::var_os("LEGACY_FIELD_DISCOVERY").is_some();
+    let requests = discovery || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
-        use crate::cultivation_requests::{Asker, Preference, Requests};
+        use crate::cultivation_requests::{Asker, Discoverer, Preference, Requests};
         let farm = initial.agriculture.as_mut().unwrap();
         farm.policies
             .iter_mut()
             .for_each(|policy| policy.willing = false);
         farm.requests = Some(Requests {
             next_id: 1,
-            askers: (1..=count / 2)
+            discoverers: if discovery {
+                (1..=count / 2)
+                    .map(|person| Discoverer {
+                        person,
+                        interval: 1,
+                        lifetime: 3,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            },
+            askers: (1..=if discovery { 0 } else { count / 2 })
                 .map(|person| Asker {
                     person,
                     worker: person + count / 2,
@@ -37924,7 +38078,7 @@ fn concentrated_field_benchmark() {
                     lifetime: 3,
                 })
                 .collect(),
-            preferences: (count / 2 + 1..=count)
+            preferences: (if discovery { 1 } else { count / 2 + 1 }..=count)
                 .map(|person| Preference {
                     person,
                     help_value: 1,
@@ -37960,25 +38114,27 @@ fn concentrated_field_benchmark() {
                 );
                 let second = world.advance().unwrap();
                 if requests {
-                    assert_eq!(
-                        second
-                            .physical_actions
-                            .iter()
-                            .filter(|row| row.accepted)
-                            .count(),
-                        count as usize / 2
-                    );
-                }
-                assert_eq!(
-                    world
-                        .advance()
-                        .unwrap()
+                    let accepted = second
                         .physical_actions
                         .iter()
                         .filter(|row| row.accepted)
-                        .count(),
-                    if requests { 0 } else { count as usize / 2 }
-                );
+                        .count();
+                    if discovery {
+                        assert!(accepted > 0 && accepted <= count as usize / 2);
+                    } else {
+                        assert_eq!(accepted, count as usize / 2);
+                    }
+                }
+                let third = world
+                    .advance()
+                    .unwrap()
+                    .physical_actions
+                    .iter()
+                    .filter(|row| row.accepted)
+                    .count();
+                if !discovery {
+                    assert_eq!(third, if requests { 0 } else { count as usize / 2 });
+                }
                 let elapsed = started.elapsed().as_secs_f64();
                 if requests && round == 3 {
                     let bytes = serde_json::to_vec(&world.snapshot()).unwrap();

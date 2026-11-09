@@ -16,6 +16,15 @@ pub struct Asker {
     pub lifetime: u64,
 }
 
+/// A personal inclination to look for a local field and a potential helper.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Discoverer {
+    pub person: u64,
+    pub interval: u64,
+    pub lifetime: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preference {
@@ -68,6 +77,8 @@ pub struct Requests {
     #[serde(default)]
     pub askers: Vec<Asker>,
     #[serde(default)]
+    pub discoverers: Vec<Discoverer>,
+    #[serde(default)]
     pub preferences: Vec<Preference>,
     #[serde(default)]
     pub pending: Vec<Request>,
@@ -78,7 +89,12 @@ pub struct Requests {
 
 impl Requests {
     pub fn validate(&self, people: &HashSet<u64>, fields: &[u64]) -> Result<(), String> {
-        let mut askers: Vec<_> = self.askers.par_iter().map(|a| a.person).collect();
+        let mut askers: Vec<_> = self
+            .askers
+            .par_iter()
+            .map(|a| a.person)
+            .chain(self.discoverers.par_iter().map(|a| a.person))
+            .collect();
         let mut preferences: Vec<_> = self.preferences.par_iter().map(|a| a.person).collect();
         let mut ids: Vec<_> = self.pending.par_iter().map(|r| r.id).collect();
         askers.par_sort_unstable();
@@ -102,6 +118,10 @@ impl Requests {
                     || a.interval == 0
                     || a.lifetime == 0
             })
+            || self
+                .discoverers
+                .par_iter()
+                .any(|a| !people.contains(&a.person) || a.interval == 0 || a.lifetime == 0)
             || self.pending.par_iter().any(|r| {
                 !people.contains(&r.requester)
                     || !people.contains(&r.worker)
@@ -351,10 +371,72 @@ pub fn prepare(
             {
                 return None;
             }
-            Some((a, f.phase))
+            Some((a.person, a.worker, a.field, f.phase, a.lifetime))
         })
         .collect();
-    proposals.par_sort_unstable_by_key(|(a, _)| a.person);
+    if !owner.discoverers.is_empty() {
+        let mut workers: Vec<_> = context
+            .people
+            .par_iter()
+            .filter_map(|worker| {
+                let region = worker.region?;
+                (worker.health > 0
+                    && context.contact_blocked.binary_search(&worker.id).is_err()
+                    && (!unavailable(worker.id) || worker.controlled))
+                    .then_some((region, worker.id))
+            })
+            .collect();
+        workers.par_sort_unstable();
+        let mut opportunities: Vec<_> = context
+            .agriculture
+            .fields
+            .par_iter()
+            .filter(|field| match field.phase {
+                Phase::Growing => false,
+                Phase::Fallow => context.season.is_none_or(|season| season.planting_allowed),
+                Phase::Ripe => context.season.is_none_or(|season| season.harvest_allowed),
+            })
+            .map(|field| (field.region, field.id, field.phase))
+            .collect();
+        opportunities.par_sort_unstable_by_key(|row| (row.0, row.1));
+        proposals.par_extend(owner.discoverers.par_iter().filter_map(|a| {
+            let asker = person(a.person)?;
+            let region = asker.region?;
+            if !context.tick.is_multiple_of(a.interval)
+                || already.binary_search(&a.person).is_ok()
+                || asker.controlled
+                || asker.health == 0
+                || asker.hunger > context.agriculture.max_hunger
+                || unavailable(a.person)
+                || reserved.binary_search(&a.person).is_ok()
+            {
+                return None;
+            }
+            let first = workers.partition_point(|row| row.0 < region);
+            let last = workers.partition_point(|row| row.0 <= region);
+            let nearby = &workers[first..last];
+            if nearby.len() < 2 {
+                return None;
+            }
+            let hash = a
+                .person
+                .wrapping_mul(0x9e3779b97f4a7c15)
+                .wrapping_add(context.tick);
+            let mut index = (hash % nearby.len() as u64) as usize;
+            if nearby[index].1 == a.person {
+                index = (index + 1) % nearby.len();
+            }
+            let first = opportunities.partition_point(|row| row.0 < region);
+            let last = opportunities.partition_point(|row| row.0 <= region);
+            let fields = &opportunities[first..last];
+            if fields.is_empty() {
+                return None;
+            }
+            let chosen = fields[(hash.rotate_left(23) % fields.len() as u64) as usize];
+            Some((a.person, nearby[index].1, chosen.1, chosen.2, a.lifetime))
+        }));
+    }
+    proposals.par_sort_unstable_by_key(|row| row.0);
     let count = u64::try_from(proposals.len()).map_err(|_| "cultivation request overflow")?;
     let next_id = owner
         .next_id
@@ -363,17 +445,17 @@ pub fn prepare(
     let opened: Vec<_> = proposals
         .into_par_iter()
         .enumerate()
-        .map(|(i, (a, phase))| {
+        .map(|(i, (requester, worker, field, phase, lifetime))| {
             Ok(Request {
                 id: owner.next_id + i as u64,
-                requester: a.person,
-                worker: a.worker,
-                field: a.field,
+                requester,
+                worker,
+                field,
                 phase,
                 created_at: context.tick,
                 expires: context
                     .tick
-                    .checked_add(a.lifetime)
+                    .checked_add(lifetime)
                     .ok_or("cultivation request expiry overflow")?,
             })
         })
@@ -387,8 +469,9 @@ pub fn prepare(
     Ok(Prepared {
         owner: Requests {
             next_id,
-            askers: owner.askers.clone(),
-            preferences: owner.preferences.clone(),
+            askers: owner.askers.par_iter().cloned().collect(),
+            discoverers: owner.discoverers.par_iter().cloned().collect(),
+            preferences: owner.preferences.par_iter().cloned().collect(),
             pending: retained,
             events,
         },
