@@ -6804,6 +6804,61 @@ fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
 }
 
 #[test]
+fn cultivation_thanks_scenario_requires_witness_and_personal_willingness() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers, willing| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let world = scenario(
+                    &root.join("content/scenarios/economy-cultivation-thanks.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut initial = world.snapshot();
+                initial.agreements.as_mut().unwrap().work_offering[0].willing = willing;
+                let mut world = game_economy::Economy::compile(initial).unwrap();
+                for _ in 0..2 {
+                    world.advance().unwrap();
+                }
+                let before = world.snapshot();
+                assert_eq!(
+                    before
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .work_memories
+                        .len(),
+                    1
+                );
+                assert!(before.agreements.as_ref().unwrap().contracts.is_empty());
+                let mut restored = game_economy::Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let result = world.snapshot();
+                assert_eq!(result, restored.snapshot());
+                result
+            })
+    };
+    let state = run(1, true);
+    assert_eq!(state, run(4, true));
+    let promise = &state.agreements.unwrap().contracts[0];
+    assert_eq!(
+        (promise.debtor, promise.creditor, promise.delivered),
+        (1, 2, 0)
+    );
+    assert!(run(1, false).agreements.unwrap().contracts.is_empty());
+}
+
+#[test]
 fn cultivation_offer_scenario_uses_named_goods_and_nonbinding_promises() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let run = |workers| {

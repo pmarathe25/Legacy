@@ -1,0 +1,70 @@
+# A requester may offer a future gift after personally witnessing cultivation.
+seed = 7
+tick_millis = 900000
+stock_capacity = 1000
+food_relief_divisor = 20
+
+[rules]
+hunger_per_tick = 1
+meal_threshold = 5
+starvation_threshold = 50
+starvation_damage = 1
+max_health = 100
+carrying_capacity = 100
+max_work_hunger = 20
+
+[[regions]]
+id = 1
+stock = { grain-seed = 20 }
+
+[[people]]
+id = 1
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+
+[[people]]
+id = 2
+region = 1
+health = 100
+hunger = 0
+willing_to_work = true
+seek_meals = false
+
+[dynamics.claims]
+field_claims = [{ person = 1, field = 1 }]
+
+[cultivation]
+max_hunger = 20
+policies = []
+
+[[cultivation.fields]]
+id = 1
+region = 1
+crop = "grain"
+
+[cultivation.requests]
+next_id = 1
+
+[[cultivation.requests.discoverers]]
+person = 1
+interval = 1
+lifetime = 3
+
+[[cultivation.requests.preferences]]
+person = 2
+help_value = 1
+effort = 1
+
+[agreements]
+next_id = 1
+
+[[work_promise_offering]]
+person = 1
+good = "bread"
+quantity = 1
+due_after = 8
+retry_ticks = 1
+willing = true
