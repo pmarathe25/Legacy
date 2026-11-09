@@ -4,6 +4,10 @@ This composed simulation joins personal work, actual dated goods, food acquisiti
 
 `boundary_time` derives an exact elapsed time and configured quantum from the persisted tick. `advance_boundaries` runs a bounded number of whole boundaries, streams each committed event set, and reports completion, a caller-requested yield, or a failure with any pending invocation warning. Earlier boundaries remain committed when a later one stops. This API does not yet advance partway through a boundary; arbitrary-duration progress and saved in-flight intervals remain unimplemented.
 
+The separate `core_interval` API composes already-admitted physical work, travel, hunger, nutrition, and pending food effects for fractional progress inside one existing quantum. It freezes work rates, saves and resumes the in-flight state, and settles physical and personal effects once at the quantum boundary. It does not run the rest of the economy, select new actions, process commands during the interval, or publish early completions; it is not arbitrary-time advancement of an `Economy`.
+
+An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
+
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.
 
 With local walking enabled, people at the same endpoint can make personal work and hauling requests, offer and fulfill promises, and exchange carried goods. A request or promise does not compel the other person. Work at a regional site and departures from the region still require reaching the stock endpoint. Moving or performing another chosen action can make someone unavailable for an interaction.

@@ -152,6 +152,7 @@ pub use hunting::{
 pub use medical::{
     AcquaintancePolicy as MedicalAcquaintancePolicy, Medical, Policy as MedicalPolicy,
 };
+pub mod core_interval;
 mod purpose;
 mod recovery;
 pub use game_purpose::Purpose;
