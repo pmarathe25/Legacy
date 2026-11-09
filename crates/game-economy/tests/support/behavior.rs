@@ -37594,6 +37594,7 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
         next_id: 1,
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: vec![],
         askers: vec![
             Asker {
@@ -37848,6 +37849,178 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
             .all(|field| field.phase == CropPhase::Fallow)
     );
 }
+
+#[test]
+fn cultivation_offer_value_is_personal_and_does_not_move_goods() {
+    use crate::cultivation_requests::{OfferValue, Outcome, Preference, Request, Requests};
+    let mut initial = field_workload(2);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.policies.iter_mut().for_each(|p| p.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 2,
+        askers: vec![],
+        discoverers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
+        offer_values: vec![OfferValue {
+            person: 2,
+            good: 3,
+            value_per_unit: 1,
+            max_quantity: 2,
+        }],
+        preferences: vec![Preference {
+            person: 2,
+            help_value: 0,
+            effort: 2,
+            affinity_weight: 0,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
+        }],
+        pending: vec![Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            field: 1,
+            phase: CropPhase::Fallow,
+            created_at: 0,
+            expires: 4,
+        }],
+        events: vec![],
+    });
+    initial.agreements = Some(Agreements {
+        next_id: 2,
+        policies: vec![],
+        offering: vec![],
+        work_offering: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![Contract {
+            id: 1,
+            debtor: 1,
+            creditor: 2,
+            good: 3,
+            quantity: 2,
+            delivered: 0,
+            due: 3,
+            status: Status::Proposed,
+        }],
+        events: vec![],
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let mut reload = Economy::compile(world.snapshot()).unwrap();
+                world.advance().unwrap();
+                reload.advance().unwrap();
+                let result = world.snapshot();
+                assert_eq!(result, reload.snapshot());
+                result
+            })
+    };
+    let accepted = run(initial.clone(), 1);
+    assert_eq!(accepted, run(initial.clone(), 4));
+    assert_eq!(
+        accepted
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Fulfilled
+    );
+    assert_eq!(
+        accepted.agreements.as_ref().unwrap().contracts[0].delivered,
+        0
+    );
+    let mut withdrawn = initial.clone();
+    withdrawn.agreements.as_mut().unwrap().contracts[0].status = Status::Withdrawn;
+    assert_eq!(
+        run(withdrawn, 1)
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Refused
+    );
+    let mut dislikes = initial.clone();
+    dislikes
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .offer_values[0]
+        .value_per_unit = -1;
+    assert_eq!(
+        run(dislikes, 1)
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Refused
+    );
+    let mut wrong_good = initial.clone();
+    wrong_good.agreements.as_mut().unwrap().contracts[0].good = 2;
+    assert_eq!(
+        run(wrong_good, 1)
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Refused
+    );
+    let mut capped = initial.clone();
+    capped
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .offer_values[0]
+        .max_quantity = 1;
+    assert_eq!(
+        run(capped, 1).agriculture.unwrap().requests.unwrap().events[0].outcome,
+        Outcome::Refused
+    );
+    let mut invalid = initial.clone();
+    invalid
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .offer_values[0]
+        .good = u32::MAX;
+    assert!(Economy::compile(invalid).is_err());
+    let mut partial = initial;
+    partial.agreements.as_mut().unwrap().contracts[0].delivered = 1;
+    assert_eq!(
+        run(partial, 1)
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Refused
+    );
+}
 #[test]
 fn simultaneous_planting_and_harvest_remain_deterministic() {
     let mut initial = field_workload(2);
@@ -37895,6 +38068,7 @@ fn field_claims_are_personal_and_follow_actual_cultivation() {
         askers: vec![],
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: vec![],
         preferences: vec![RequestPreference {
             person: 2,
@@ -38399,6 +38573,7 @@ fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
         askers: vec![],
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: vec![],
         preferences: vec![Preference {
             person: 2,
@@ -38541,6 +38716,7 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
         askers: vec![],
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: (1..=64)
             .map(|person| Discoverer {
                 person,
@@ -38617,6 +38793,7 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
         askers: vec![],
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: vec![Discoverer {
             person: 1,
             interval: 1,
@@ -38700,6 +38877,7 @@ fn autonomous_requesters_reconsider_locally_and_wait_before_retrying() {
             retry_after: 3,
         }],
         retry_backoffs: vec![],
+        offer_values: vec![],
         preferences: vec![Preference {
             person: 2,
             help_value: 1,
@@ -38881,6 +39059,7 @@ fn a_request_can_be_withdrawn_without_binding_the_worker() {
         askers: vec![],
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: vec![],
         preferences: vec![RequestPreference {
             person: 2,
@@ -39020,6 +39199,7 @@ fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
         next_id: 1,
         withdrawal_preferences: vec![],
         retry_backoffs: vec![],
+        offer_values: vec![],
         discoverers: vec![],
         askers: vec![Asker {
             person: 1,
@@ -39124,7 +39304,9 @@ fn concentrated_field_benchmark() {
     let mut initial = field_workload(count);
     let discovery = std::env::var_os("LEGACY_FIELD_DISCOVERY").is_some();
     let withdrawal = std::env::var_os("LEGACY_FIELD_WITHDRAW").is_some();
-    let requests = discovery || withdrawal || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
+    let offers = std::env::var_os("LEGACY_FIELD_OFFERS").is_some();
+    let requests =
+        discovery || withdrawal || offers || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
     let feelings = std::env::var_os("LEGACY_FIELD_FEELINGS").is_some();
     let failures = std::env::var_os("LEGACY_FIELD_FAILURES").is_some();
     let field_claims = std::env::var_os("LEGACY_FIELD_CLAIMS").is_some();
@@ -39133,10 +39315,11 @@ fn concentrated_field_benchmark() {
     assert!(!field_claims || !requests);
     assert!(!field_claims || count >= 2);
     assert!(!withdrawal || (!discovery && !feelings && !field_claims));
+    assert!(!offers || (!discovery && !withdrawal && !feelings && !field_claims));
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
         use crate::cultivation_requests::{
-            Asker, Discoverer, Preference, Request, Requests, WithdrawalPreference,
+            Asker, Discoverer, OfferValue, Preference, Request, Requests, WithdrawalPreference,
         };
         let farm = initial.agriculture.as_mut().unwrap();
         farm.policies
@@ -39156,6 +39339,18 @@ fn concentrated_field_benchmark() {
                 vec![]
             },
             retry_backoffs: vec![],
+            offer_values: if offers {
+                (count / 2 + 1..=count)
+                    .map(|person| OfferValue {
+                        person,
+                        good: 3,
+                        value_per_unit: 1,
+                        max_quantity: 1,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            },
             discoverers: if discovery {
                 (1..=count / 2)
                     .map(|person| Discoverer {
@@ -39179,7 +39374,7 @@ fn concentrated_field_benchmark() {
             preferences: (if discovery { 1 } else { count / 2 + 1 }..=count)
                 .map(|person| Preference {
                     person,
-                    help_value: 1,
+                    help_value: if offers { 0 } else { 1 },
                     effort: 1,
                     affinity_weight: 0,
                     trust_weight: 0,
@@ -39203,6 +39398,28 @@ fn concentrated_field_benchmark() {
                 vec![]
             },
             events: vec![],
+        });
+    }
+    if offers {
+        initial.agreements = Some(Agreements {
+            next_id: count / 2 + 1,
+            policies: vec![],
+            offering: vec![],
+            work_offering: vec![],
+            bulk_debtors: vec![],
+            events: vec![],
+            contracts: (1..=count / 2)
+                .map(|id| Contract {
+                    id,
+                    debtor: id,
+                    creditor: id + count / 2,
+                    good: 3,
+                    quantity: 1,
+                    delivered: 0,
+                    due: 10,
+                    status: Status::Proposed,
+                })
+                .collect(),
         });
     }
     if feelings {

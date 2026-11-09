@@ -208,6 +208,13 @@ impl Agriculture {
         }
         if let Some(requests) = &self.requests {
             requests.validate(&ids, &fields)?;
+            if requests
+                .offer_values
+                .par_iter()
+                .any(|row| !goods.contains(&row.good))
+            {
+                return Err("invalid cultivation offer good".into());
+            }
         }
         Ok(())
     }
@@ -328,6 +335,7 @@ pub fn publish_optional(
 }
 pub struct Context<'a> {
     pub agriculture: &'a Agriculture,
+    pub agreements: Option<&'a game_agreements::Agreements>,
     pub people: &'a [Person],
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_economy_claims::Index<'a>>,

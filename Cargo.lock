@@ -223,6 +223,7 @@ dependencies = [
 name = "game-economy-agriculture"
 version = "0.2.0"
 dependencies = [
+ "game-agreements",
  "game-diagnostics",
  "game-economy-claims",
  "game-economy-person",

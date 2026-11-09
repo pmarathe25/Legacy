@@ -8,6 +8,7 @@ license.workspace = true
 profile = ["dep:game-diagnostics"]
 
 [dependencies]
+game-agreements = { path = "../game-agreements" }
 game-diagnostics = { workspace = true, optional = true }
 game-environment = { path = "../game-environment" }
 game-economy-person = { path = "../game-economy-person" }

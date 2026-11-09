@@ -41,6 +41,16 @@ pub struct RetryBackoff {
     pub until: u64,
 }
 
+/// A recipient's personal valuation of an outstanding promise for one good.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OfferValue {
+    pub person: u64,
+    pub good: u32,
+    pub value_per_unit: i64,
+    pub max_quantity: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preference {
@@ -100,6 +110,8 @@ pub struct Requests {
     #[serde(default)]
     pub retry_backoffs: Vec<RetryBackoff>,
     #[serde(default)]
+    pub offer_values: Vec<OfferValue>,
+    #[serde(default)]
     pub preferences: Vec<Preference>,
     #[serde(default)]
     pub pending: Vec<Request>,
@@ -127,11 +139,13 @@ impl Requests {
             .par_iter()
             .map(|row| row.person)
             .collect();
+        let mut offer_values: Vec<_> = self.offer_values.par_iter().map(|row| row.person).collect();
         let mut ids: Vec<_> = self.pending.par_iter().map(|r| r.id).collect();
         askers.par_sort_unstable();
         preferences.par_sort_unstable();
         withdrawal_preferences.par_sort_unstable();
         retry_backoffs.par_sort_unstable();
+        offer_values.par_sort_unstable();
         ids.par_sort_unstable();
         if self.next_id == 0
             || ids.last().is_some_and(|id| *id >= self.next_id)
@@ -141,6 +155,11 @@ impl Requests {
             || preferences.par_windows(2).any(|p| p[0] == p[1])
             || withdrawal_preferences.par_windows(2).any(|p| p[0] == p[1])
             || retry_backoffs.par_windows(2).any(|p| p[0] == p[1])
+            || offer_values.par_windows(2).any(|p| p[0] == p[1])
+            || self
+                .offer_values
+                .par_iter()
+                .any(|row| !people.contains(&row.person))
             || self
                 .withdrawal_preferences
                 .par_iter()
@@ -203,6 +222,47 @@ pub fn prepare(
     fields.par_sort_unstable_by_key(|f| f.id);
     let mut preferences: Vec<_> = owner.preferences.par_iter().collect();
     preferences.par_sort_unstable_by_key(|p| p.person);
+    let mut values: Vec<_> = owner.offer_values.par_iter().collect();
+    values.par_sort_unstable_by_key(|row| row.person);
+    let mut offers: Vec<_> = if values.par_iter().any(|row| row.value_per_unit != 0) {
+        context
+            .agreements
+            .map_or(&[][..], |owner| owner.contracts.as_slice())
+            .par_iter()
+            .filter_map(|contract| {
+                use game_agreements::Status;
+                let live = match contract.status {
+                    Status::Proposed => contract.due > context.tick,
+                    Status::Active => contract.due >= context.tick,
+                    _ => false,
+                };
+                let remaining = contract.quantity.saturating_sub(contract.delivered);
+                (live && remaining > 0).then_some((
+                    contract.creditor,
+                    contract.debtor,
+                    contract.good,
+                    remaining,
+                ))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    offers.par_sort_unstable_by_key(|row| (row.0, row.1, row.2));
+    let offers: Vec<_> = offers
+        .par_chunk_by(|a, b| (a.0, a.1, a.2) == (b.0, b.1, b.2))
+        .map(|group| {
+            (
+                group[0].0,
+                group[0].1,
+                group[0].2,
+                group
+                    .par_iter()
+                    .map(|row| row.3)
+                    .reduce(|| 0, u64::saturating_add),
+            )
+        })
+        .collect();
     let field = |id| {
         fields
             .binary_search_by_key(&id, |f| f.id)
@@ -410,11 +470,27 @@ pub fn prepare(
                         opinions.map_or(0, |index| index.affinity(worker.id, request.requester));
                     let trust =
                         opinions.map_or(0, |index| index.trust(worker.id, request.requester));
+                    let offer_score = values
+                        .binary_search_by_key(&worker.id, |row| row.person)
+                        .ok()
+                        .map_or(0, |i| {
+                            let value = values[i];
+                            let quantity = offers
+                                .binary_search_by_key(
+                                    &(worker.id, request.requester, value.good),
+                                    |row| (row.0, row.1, row.2),
+                                )
+                                .ok()
+                                .map_or(0, |j| offers[j].3)
+                                .min(value.max_quantity);
+                            i128::from(quantity) * i128::from(value.value_per_unit)
+                        });
                     let score = i128::from(p.help_value)
                         .saturating_add(i128::from(fear) * i128::from(p.fear_weight))
                         .saturating_add(i128::from(obligation) * i128::from(p.obligation_weight))
                         .saturating_add(i128::from(affinity) * i128::from(p.affinity_weight))
-                        .saturating_add(i128::from(trust) * i128::from(p.trust_weight));
+                        .saturating_add(i128::from(trust) * i128::from(p.trust_weight))
+                        .saturating_add(offer_score);
                     if score < i128::from(p.effort) {
                         Evaluation::Event(Event {
                             request: request.id,
@@ -631,6 +707,7 @@ pub fn prepare(
             discoverers: owner.discoverers.par_iter().cloned().collect(),
             withdrawal_preferences: owner.withdrawal_preferences.par_iter().cloned().collect(),
             retry_backoffs,
+            offer_values: owner.offer_values.par_iter().cloned().collect(),
             preferences: owner.preferences.par_iter().cloned().collect(),
             pending: retained,
             events,

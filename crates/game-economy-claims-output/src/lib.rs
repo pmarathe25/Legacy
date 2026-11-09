@@ -75,6 +75,7 @@ macro_rules! prepare_farming {
             .map(|agriculture| {
                 game_economy_agriculture::Context {
                     agriculture,
+                    agreements: $world.agreements.as_ref(),
                     people: &$world.people,
                     opinions: $world.opinions.as_ref(),
                     claims: $claims.as_ref(),

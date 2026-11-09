@@ -12,6 +12,8 @@ An autonomous requester may have a `[[cultivation.requests.withdrawal_preference
 
 Requests become actionable on a later boundary. Each attempted action reserves its worker and field alongside ordinary farming and uses the same actual seed, claims and storage arbitration. Latest-boundary events distinguish refusal, expiry, a changed field, physical failure and fulfillment; only an accepted physical receipt reports fulfillment. Pending requests and personal preferences are saved with agriculture.
 
+An optional `[[cultivation.requests.offer_values]]` entry lets a recipient assign a signed `value_per_unit` and `max_quantity` to a particular `good` in a still-outstanding promise addressed to them by the requester. A proposed promise can influence their choice even if its maker has no goods or does not intend to deliver. The offer does not itself transfer anything or compel either person; delivered amounts, expired and withdrawn promises no longer count.
+
 A requester who personally witnesses fulfillment, refusal, or failed physical work may interpret each through their own work-affinity sensitivities. Failure has its own optional signed reaction and is not a refusal; an unwitnessed outcome does not change the requester's feelings. No obligation is created by the request.
 
 For example, scenario content can give person 1 an inclination to ask person 2 to cultivate field 7:
