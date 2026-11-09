@@ -22,9 +22,9 @@
 
 ## Game Integration
 
-- **Plugin / Entry Point:** Pure utility crate (`span`, `failure`, `enabled`, `snapshot`, `reset`); registers no `game-sim` plugin.
+- **Entry point:** Pure utility crate (`span`, `failure`, `enabled`, `snapshot`, `reset`); it registers no simulation plugin.
 - **Requests & Events:** None.
-- **Callers:** Instrumented across hot feature crates (`game-characters`, `game-provisioning`, `game-knowledge`, `game-soma`, `game-botany`, `game-livelihoods`, etc.) and read by `tools/history`.
+- **Callers:** Instrumented simulation owners, including `game-economy`, expose spans through the current campaign benchmark when its profiling feature is enabled.
 
 ## Dependencies & Testing
 
