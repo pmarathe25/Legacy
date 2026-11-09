@@ -8955,6 +8955,17 @@ impl Economy {
                 .collect();
             game_economy_claims::publish_built_site_claims(claims, &built, &person.people);
         }
+        let claimant_walking = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref());
+        let claimant_at_stock = |person, region| {
+            claimant_walking
+                .expect("walking enabled")
+                .present(person, region, LocalEndpoint::Stock)
+        };
+        let claimant_presence =
+            claimant_walking.map(|_| &claimant_at_stock as &(dyn Fn(u64, u64) -> bool + Sync));
         if let Some(owner) = dynamics.as_mut().and_then(|d| d.claims.as_mut()) {
             let mut uses = Vec::new();
             if !site_classes.is_empty() {
@@ -9092,7 +9103,14 @@ impl Economy {
                     sites.par_sort_unstable_by_key(|row| row.0);
                 }
             }
-            game_economy_claims::publish_site_uses(owner, &uses, &sites, &self.people, tick);
+            game_economy_claims::publish_site_uses(
+                owner,
+                &uses,
+                &sites,
+                &self.people,
+                tick,
+                claimant_presence,
+            );
         }
         game_economy_combat::finish_world!(combat, person);
         if let Some((combat, selected)) = combat.as_mut().zip(intervention.as_ref()) {
@@ -9596,7 +9614,8 @@ impl Economy {
             claim_uses,
             physical.events(),
             self.people,
-            next_opinions
+            next_opinions,
+            claimant_presence
         );
         game_economy_claims_output::publish!(dynamics, claim_outputs, physical.events());
         development::advance(

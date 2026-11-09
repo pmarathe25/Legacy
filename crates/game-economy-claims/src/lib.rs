@@ -379,9 +379,9 @@ macro_rules! prepare_index {
 }
 #[macro_export]
 macro_rules! publish_claims {
-    ($dynamics:expr, $uses:expr, $events:expr, $people:expr, $opinions:expr) => {
+    ($dynamics:expr, $uses:expr, $events:expr, $people:expr, $opinions:expr, $present:expr) => {
         if let Some(claims) = $dynamics.as_mut().and_then(|d| d.claims.as_mut()) {
-            $crate::publish(claims, &$uses, $events, &$people, &mut $opinions);
+            $crate::publish(claims, &$uses, $events, &$people, &mut $opinions, $present);
         }
     };
 }
@@ -794,6 +794,7 @@ pub fn publish_site_uses(
     sites: &[(u64, u64)],
     people: &[Person],
     tick: u64,
+    present: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
 ) {
     if claims.site_claims.is_empty() || uses.is_empty() {
         claims.site_events.clear();
@@ -814,6 +815,7 @@ pub fn publish_site_uses(
                 .binary_search_by_key(&claim.person, |p| p.id)
                 .ok()
                 .is_some_and(|i| people[i].health > 0 && people[i].region == Some(region))
+                && present.is_none_or(|check| check(claim.person, region))
         })
         .collect();
     observers.par_sort_unstable_by_key(|claim| (claim.site, claim.person));
@@ -954,6 +956,7 @@ pub fn publish(
     events: &Events,
     people: &[Person],
     opinions: &mut Option<Opinions>,
+    present: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
 ) {
     if claims.claims.is_empty() {
         claims.events.clear();
@@ -969,6 +972,7 @@ pub fn publish(
                 .binary_search_by_key(&c.person, |p| p.id)
                 .ok()
                 .is_some_and(|i| people[i].health > 0 && people[i].region == Some(c.region))
+                && present.is_none_or(|check| check(c.person, c.region))
         })
         .collect();
     observers.par_sort_unstable_by_key(|c| (c.region, c.good, c.person));

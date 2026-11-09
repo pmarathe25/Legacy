@@ -12712,6 +12712,62 @@ fn conflicting_claims_are_personal_and_observed_only_after_actual_use() {
                 assert!(world.claim_stock(1, 1, 1).is_err());
                 world.advance().unwrap();
                 let before = world.snapshot();
+                let mut at_store = before.clone();
+                at_store
+                    .physical
+                    .custody
+                    .containers
+                    .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+                at_store
+                    .physical
+                    .custody
+                    .containers
+                    .sort_unstable_by_key(|row| row.place);
+                at_store.local_transport = Some(LocalTransport {
+                    stores: vec![LocalStore {
+                        id: 1,
+                        region: 1,
+                        name: "store".into(),
+                    }],
+                    policies: vec![],
+                    goal_fetchers: vec![],
+                    events: vec![],
+                    walking: Some(LocalWalking {
+                        routes: vec![].into(),
+                        preferences: vec![].into(),
+                        events: vec![],
+                        positions: vec![LocalPosition {
+                            person: 1,
+                            location: LocalLocation::At {
+                                region: 1,
+                                endpoint: LocalEndpoint::Store { id: 1 },
+                            },
+                        }],
+                    }),
+                });
+                let mut at_store = Economy::compile(at_store).unwrap();
+                at_store.set_claim_choice(2, true).unwrap();
+                at_store.advance().unwrap();
+                let witnessed = at_store.snapshot();
+                let events = &witnessed
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .claims
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), 1);
+                assert_eq!(events[0].claimant, 4);
+                assert!(
+                    witnessed
+                        .opinions
+                        .as_ref()
+                        .unwrap()
+                        .records
+                        .iter()
+                        .all(|record| !(record.observer == 1 && record.target == 2))
+                );
                 assert!(
                     before
                         .opinions
@@ -24410,26 +24466,71 @@ fn concentrated_claims_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = claim_workload(count);
+    let local = std::env::var_os("LEGACY_CLAIMS_LOCAL").is_some();
+    let mut initial = claim_workload(count);
+    if local {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_unstable_by_key(|row| row.place);
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![LocalStore {
+                id: 1,
+                region: 1,
+                name: "store".into(),
+            }],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                events: vec![],
+                positions: (count / 2 + 1..=count)
+                    .filter(|person| person.is_multiple_of(2))
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect(),
+            }),
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut expected = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = started.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                let events = &state.dynamics.as_ref().unwrap().claims.as_ref().unwrap().events;
+                assert_eq!(events.len(), count as usize / 2 * 4);
+                if local { assert!(events.iter().all(|event| !event.claimant.is_multiple_of(2))); }
+                let fingerprint = serde_json::to_vec(&state).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+                if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
                 if round > 0 {
                     samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=1 elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} local={local} ticks=1 elapsed={:.6} state_fingerprint={:016x}",
+                samples[1], expected.unwrap()
             );
         });
 }
@@ -47722,6 +47823,65 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
 
 #[test]
 fn a_remote_claimant_does_not_observe_site_use() {
+    let mut local = Economy::compile(claimed_work_sites_fixture()).unwrap();
+    local.claim_site(1, 7).unwrap();
+    let mut local = local.snapshot();
+    local
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    local
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    local.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 1,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut local = Economy::compile(local).unwrap();
+    local.advance().unwrap();
+    let state = local.snapshot();
+    assert!(
+        state
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .claims
+            .as_ref()
+            .unwrap()
+            .site_events
+            .is_empty()
+    );
+    assert!(
+        state
+            .work_sites
+            .as_ref()
+            .unwrap()
+            .bindings
+            .iter()
+            .any(|binding| binding.site == 7)
+    );
+
     let mut world = Economy::compile(claimed_work_sites_fixture()).unwrap();
     world.claim_site(1, 7).unwrap();
     let mut state = world.snapshot();
