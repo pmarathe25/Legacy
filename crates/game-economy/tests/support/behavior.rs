@@ -10219,6 +10219,46 @@ fn companions_can_meet_on_a_shared_journey_without_forcing_their_response() {
 }
 
 #[test]
+fn pending_arrival_round_trips_and_settles_once() {
+    let mut initial = expedition_fixture();
+    initial.people[0].region = None;
+    initial.travel.as_mut().unwrap().journeys.push(Journey {
+        person: 1,
+        source: 1,
+        destination: 2,
+        remaining: 0,
+        progress_millis: 0,
+        pending_arrival: true,
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let saved = serde_json::to_string(&initial).unwrap();
+                let mut world = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert_eq!(world.snapshot().people[0].region, None);
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.people[0].region, Some(2));
+                assert!(
+                    !state
+                        .travel
+                        .as_ref()
+                        .unwrap()
+                        .journeys
+                        .iter()
+                        .any(|j| j.person == 1)
+                );
+                Economy::compile(state.clone()).unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn autonomous_encounters_keep_travelers_separate_from_people_at_the_source() {
     use game_social::Participant;
     let mut initial = expedition_fixture();
@@ -10290,6 +10330,7 @@ fn autonomous_encounters_keep_travelers_separate_from_people_at_the_source() {
             destination: 2,
             remaining: 3,
             progress_millis: 0,
+            pending_arrival: false,
         },
         Journey {
             person: 2,
@@ -10297,6 +10338,7 @@ fn autonomous_encounters_keep_travelers_separate_from_people_at_the_source() {
             destination: 2,
             remaining: 3,
             progress_millis: 0,
+            pending_arrival: false,
         },
         Journey {
             person: 3,
@@ -10304,6 +10346,7 @@ fn autonomous_encounters_keep_travelers_separate_from_people_at_the_source() {
             destination: 2,
             remaining: 2,
             progress_millis: 0,
+            pending_arrival: false,
         },
     ];
     let mut separated = initial.clone();
@@ -19144,6 +19187,7 @@ fn distinct_cells_and_journeys_keep_social_contact_separate() {
                 destination: 2,
                 remaining: 10,
                 progress_millis: 0,
+                pending_arrival: false,
             })
             .collect(),
     });
@@ -21688,6 +21732,7 @@ fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
         destination: 2,
         remaining: 2,
         progress_millis: 0,
+        pending_arrival: false,
     });
     let nutrition = initial.nutrition.as_mut().unwrap();
     nutrition.rules.metabolism = [1; 6];
@@ -36846,6 +36891,7 @@ fn traveling_fatigue_workload(count: u64) -> State {
                 destination: 2,
                 remaining: 10,
                 progress_millis: 0,
+                pending_arrival: false,
             })
             .collect(),
     });

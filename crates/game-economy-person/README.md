@@ -10,7 +10,7 @@ Meal seekers can choose an actual portion from regional stock or an observed nam
 
 Directed routes can have authored half-open closure intervals. A valid departure batch resolves physical closures independently, records each traveler's own bounded observations, and leaves already-started journeys unchanged. Observations include their time and are not automatically broadcast. Optional personal routing uses only an individual's reports and their estimated travel times; a route attempt updates whether it is open without replacing that estimate with hidden physical information.
 
-Journeys retain exact fractional progress and can report an arrival deadline. Travelers on the same route are colocated only when their recorded progress matches. These are owner-level facilities; whole-boundary economy advancement still publishes arrivals at a boundary, and partial-boundary world advancement is not yet supported.
+Journeys retain exact fractional progress and can report an arrival deadline. A finished journey can be saved as pending until arrival is published; the traveler remains in transit until settlement. Travelers on the same route are colocated only when their recorded progress matches. These are owner-level facilities; whole-boundary economy advancement still publishes arrivals at a boundary, and partial-boundary world advancement is not yet supported.
 
 The report owner can merge batches of already validated received reports, resolving each person's bounded history in parallel while retaining observation time and immediate source. The ignored `route_report_batch_benchmark` accepts `LEGACY_PEOPLE`, `LEGACY_WORKERS`, and `LEGACY_HOT=1` for a single recipient.
 

@@ -1134,6 +1134,7 @@ impl<'a> Player<'a> {
                         destination: journey.destination,
                         remaining: u64::from(journey.remaining),
                         progress_millis: 0,
+                        pending_arrival: false,
                     }),
                 student: guardian.student,
                 mentorship: guardian.mentorship,

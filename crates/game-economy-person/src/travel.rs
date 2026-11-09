@@ -24,15 +24,25 @@ pub struct Journey {
     /// Milliseconds already traveled toward the next whole travel tick.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub progress_millis: u64,
+    /// Travel has finished, but arrival has not yet been published.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pending_arrival: bool,
 }
 fn is_zero(value: &u64) -> bool {
     *value == 0
+}
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl Journey {
     /// Time until arrival; the caller publishes arrival and other world effects.
     pub fn arrival_after(&self, quantum_millis: u64) -> Result<u128, &'static str> {
-        if quantum_millis == 0 || self.progress_millis >= quantum_millis || self.remaining == 0 {
+        if quantum_millis == 0
+            || self.progress_millis >= quantum_millis
+            || (self.remaining == 0) != self.pending_arrival
+            || (self.pending_arrival && self.progress_millis != 0)
+        {
             return Err("invalid journey progress");
         }
         Ok(u128::from(self.remaining) * u128::from(quantum_millis)
@@ -49,6 +59,7 @@ impl Journey {
         let progress = u128::from(self.progress_millis) + u128::from(consumed);
         self.remaining -= (progress / u128::from(quantum_millis)) as u64;
         self.progress_millis = (progress % u128::from(quantum_millis)) as u64;
+        self.pending_arrival = self.remaining == 0;
         Ok(consumed)
     }
 }
@@ -405,11 +416,14 @@ impl Travel {
                     .binary_search_by_key(&(j.source, j.destination), |r| (r.source, r.destination))
                     .ok()
                     .map(|i| routes[i]);
-                route.is_none_or(|r| j.remaining == 0 || j.remaining > r.ticks)
-                    || people
-                        .binary_search_by_key(&j.person, |p| p.id)
-                        .ok()
-                        .is_none_or(|i| people[i].region.is_some())
+                route.is_none_or(|r| {
+                    (j.remaining == 0) != j.pending_arrival
+                        || (j.pending_arrival && j.progress_millis != 0)
+                        || j.remaining > r.ticks
+                }) || people
+                    .binary_search_by_key(&j.person, |p| p.id)
+                    .ok()
+                    .is_none_or(|i| people[i].region.is_some())
                     || working.binary_search(&j.person).is_ok()
             })
             || people
@@ -462,6 +476,7 @@ impl Travel {
                     destination: route.destination,
                     remaining: route.ticks,
                     progress_millis: 0,
+                    pending_arrival: false,
                 })
             })
             .collect::<Result<_, &str>>()
@@ -674,7 +689,7 @@ impl Travel {
                     .binary_search_by_key(&j.person, |p| p.id)
                     .ok()
                     .is_some_and(|i| people[i].health == 0 && people[i].immortal.is_some());
-                if !incapacitated_immortal {
+                if !incapacitated_immortal && !j.pending_arrival {
                     j.remaining -= 1;
                 }
                 j
@@ -751,6 +766,7 @@ mod elapsed_tests {
             destination: 2,
             remaining: 2,
             progress_millis: 0,
+            pending_arrival: false,
         }
     }
 
@@ -789,6 +805,9 @@ mod elapsed_tests {
         let before = row.clone();
         assert!(row.advance_elapsed(1, 1000).is_err());
         assert_eq!(row, before);
+        let mut row = journey(1);
+        row.pending_arrival = true;
+        assert!(row.advance_elapsed(1, 1000).is_err());
     }
 
     #[test]
@@ -799,12 +818,9 @@ mod elapsed_tests {
         assert_eq!(serde_json::from_str::<Journey>(&saved).unwrap(), row);
         let mut old = serde_json::to_value(row).unwrap();
         old.as_object_mut().unwrap().remove("progress_millis");
-        assert_eq!(
-            serde_json::from_value::<Journey>(old)
-                .unwrap()
-                .progress_millis,
-            0
-        );
+        let restored = serde_json::from_value::<Journey>(old).unwrap();
+        assert_eq!(restored.progress_millis, 0);
+        assert!(!restored.pending_arrival);
     }
 
     #[test]
@@ -837,6 +853,43 @@ mod elapsed_tests {
         assert_eq!(people[0].region, None);
         let travel = travel.advance(&mut people);
         assert!(travel.journeys.is_empty());
+        assert_eq!(people[0].region, Some(2));
+    }
+
+    #[test]
+    fn finished_journey_can_be_saved_before_arrival_is_published() {
+        let mut row = journey(1);
+        assert_eq!(row.advance_elapsed(2500, 1000).unwrap(), 2000);
+        assert!(row.pending_arrival);
+        assert_eq!(row.arrival_after(1000).unwrap(), 0);
+        let saved = serde_json::to_string(&row).unwrap();
+        let row: Journey = serde_json::from_str(&saved).unwrap();
+        let travel = Travel {
+            routes: vec![Route {
+                source: 1,
+                destination: 2,
+                ticks: 2,
+            }],
+            journeys: vec![row],
+            ..Travel::default()
+        };
+        let mut people = vec![Person {
+            id: 1,
+            region: None,
+            health: 100,
+            hunger: 0,
+            hunger_remainder: 0,
+            immortal: None,
+            willing_to_work: false,
+            seek_meals: false,
+            controlled: false,
+        }];
+        travel
+            .validate(&people, &HashSet::from([1, 2]), &[], 0)
+            .unwrap();
+        assert_eq!(people[0].region, None);
+        let settled = travel.advance(&mut people);
+        assert!(settled.journeys.is_empty());
         assert_eq!(people[0].region, Some(2));
     }
 }
