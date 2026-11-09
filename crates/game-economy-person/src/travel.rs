@@ -320,6 +320,44 @@ pub fn validate_world(
 }
 
 impl Travel {
+    /// Progress existing journeys without publishing arrival. The caller owns
+    /// the world interval, generation and any later settlement. All input is
+    /// validated before mutation; incapacitated travelers remain in place.
+    pub fn progress_elapsed(
+        &mut self,
+        people: &[Person],
+        elapsed_millis: u64,
+        quantum_millis: u64,
+    ) -> Result<(), &'static str> {
+        if quantum_millis == 0
+            || people.par_windows(2).any(|pair| pair[0].id >= pair[1].id)
+            || self
+                .journeys
+                .par_windows(2)
+                .any(|pair| pair[0].person >= pair[1].person)
+            || self.journeys.par_iter().any(|journey| {
+                journey.arrival_after(quantum_millis).is_err()
+                    || people
+                        .binary_search_by_key(&journey.person, |p| p.id)
+                        .ok()
+                        .is_none_or(|index| people[index].region.is_some())
+            })
+        {
+            return Err("invalid journey progress batch");
+        }
+        self.journeys.par_iter_mut().for_each(|journey| {
+            let index = people
+                .binary_search_by_key(&journey.person, |p| p.id)
+                .expect("validated traveler");
+            if people[index].health > 0 {
+                journey
+                    .advance_elapsed(elapsed_millis, quantum_millis)
+                    .expect("validated journey progress");
+            }
+        });
+        Ok(())
+    }
+
     /// Build the current physical admission index without updating anyone's beliefs.
     pub fn closed_routes(&self, tick: u64) -> Vec<(u64, u64)> {
         let mut closed: Vec<_> = self
@@ -680,7 +718,7 @@ impl Travel {
     }
     /// Arrival occurs after this interval's personal and physical decisions.
     pub fn advance(&self, people: &mut [Person]) -> Self {
-        let mut journeys: Vec<_> = self
+        let journeys: Vec<_> = self
             .journeys
             .par_iter()
             .map(|j| {
@@ -695,6 +733,15 @@ impl Travel {
                 j
             })
             .collect();
+        self.settle_journeys(people, journeys)
+    }
+
+    /// Publish pending arrivals and place mortal bodies without adding travel time.
+    pub fn settle_elapsed(&self, people: &mut [Person]) -> Self {
+        self.settle_journeys(people, self.journeys.par_iter().cloned().collect())
+    }
+
+    fn settle_journeys(&self, people: &mut [Person], mut journeys: Vec<Journey>) -> Self {
         journeys.par_sort_unstable_by_key(|j| j.person);
         people.par_iter_mut().for_each(|person| {
             if let Ok(index) = journeys.binary_search_by_key(&person.id, |j| j.person) {
@@ -888,8 +935,114 @@ mod elapsed_tests {
             .validate(&people, &HashSet::from([1, 2]), &[], 0)
             .unwrap();
         assert_eq!(people[0].region, None);
-        let settled = travel.advance(&mut people);
+        let settled = travel.settle_elapsed(&mut people);
         assert!(settled.journeys.is_empty());
         assert_eq!(people[0].region, Some(2));
+    }
+
+    #[test]
+    fn settlement_does_not_add_travel_progress() {
+        let mut row = journey(1);
+        row.advance_elapsed(500, 1000).unwrap();
+        let travel = Travel {
+            journeys: vec![row.clone()],
+            ..Travel::default()
+        };
+        let mut people = vec![Person {
+            id: 1,
+            region: None,
+            health: 100,
+            hunger: 0,
+            hunger_remainder: 0,
+            immortal: None,
+            willing_to_work: false,
+            seek_meals: false,
+            controlled: false,
+        }];
+        let settled = travel.settle_elapsed(&mut people);
+        assert_eq!(settled.journeys, vec![row]);
+        assert_eq!(people[0].region, None);
+    }
+
+    #[test]
+    fn split_progress_and_settlement_match_whole_boundary() {
+        let people: Vec<_> = (1..=3)
+            .map(|id| Person {
+                id,
+                region: None,
+                health: if id == 2 { 0 } else { 100 },
+                hunger: 0,
+                hunger_remainder: 0,
+                immortal: (id == 2).then_some(crate::Immortal {
+                    recovery_per_tick: 1,
+                }),
+                willing_to_work: false,
+                seek_meals: false,
+                controlled: false,
+            })
+            .collect();
+        let mut first = journey(1);
+        first.remaining = 1;
+        let initial = Travel {
+            journeys: vec![first, journey(2), journey(3)],
+            ..Travel::default()
+        };
+        let mut whole_people = people.clone();
+        let expected = initial.advance(&mut whole_people);
+        let mut split_people = people;
+        let mut split = initial;
+        split.progress_elapsed(&split_people, 333, 1000).unwrap();
+        split.progress_elapsed(&split_people, 667, 1000).unwrap();
+        let actual = split.settle_elapsed(&mut split_people);
+        assert_eq!(actual, expected);
+        assert_eq!(split_people, whole_people);
+    }
+
+    #[test]
+    fn batched_journeys_pause_incapacitated_and_match_across_workers() {
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut people: Vec<_> = (1..=4096)
+                        .map(|id| Person {
+                            id,
+                            region: None,
+                            health: if id == 1 { 0 } else { 100 },
+                            hunger: 0,
+                            hunger_remainder: 0,
+                            immortal: (id == 1).then_some(crate::Immortal {
+                                recovery_per_tick: 1,
+                            }),
+                            willing_to_work: false,
+                            seek_meals: false,
+                            controlled: false,
+                        })
+                        .collect();
+                    let mut travel = Travel {
+                        journeys: (1..=4096).map(journey).collect(),
+                        ..Travel::default()
+                    };
+                    let before = travel.clone();
+                    assert!(travel.progress_elapsed(&people, 1, 0).is_err());
+                    assert_eq!(travel, before);
+                    people[100].region = Some(1);
+                    assert!(travel.progress_elapsed(&people, 1, 1000).is_err());
+                    assert_eq!(travel, before);
+                    people[100].region = None;
+                    travel.progress_elapsed(&people, 333, 1000).unwrap();
+                    travel.progress_elapsed(&people, 1667, 1000).unwrap();
+                    assert_eq!(travel.journeys[0], journey(1));
+                    assert!(
+                        travel.journeys[1..]
+                            .iter()
+                            .all(|row| row.pending_arrival && row.remaining == 0)
+                    );
+                    travel
+                })
+        };
+        assert_eq!(run(1), run(4));
     }
 }

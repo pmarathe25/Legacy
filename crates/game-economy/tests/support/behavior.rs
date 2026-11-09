@@ -36979,13 +36979,28 @@ fn traveling_social_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
     let initial = traveling_social_workload(count);
+    let interval_progress = std::env::var_os("LEGACY_INTERVAL_PROGRESS").is_some();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut expected = None;
             for round in 0..4 {
+                if interval_progress {
+                    let mut state = initial.clone();
+                    let quantum = state.physical.tick_millis;
+                    let started = std::time::Instant::now();
+                    state.travel.as_mut().unwrap().progress_elapsed(&state.people, quantum / 2, quantum).unwrap();
+                    game_economy_person::progress_hunger(&mut state.people, 1, quantum / 2, quantum).unwrap();
+                    let elapsed = started.elapsed().as_secs_f64();
+                    assert!(state.travel.as_ref().unwrap().journeys.par_iter().all(|row| row.progress_millis == quantum / 2));
+                    let fingerprint = serde_json::to_vec(&state).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+                    if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
+                    if round > 0 { samples.push(elapsed); }
+                    continue;
+                }
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 for _ in 0..2 {
@@ -36996,10 +37011,11 @@ fn traveling_social_benchmark() {
                 }
             }
             samples.sort_by(f64::total_cmp);
-            println!(
-                "workers={workers} people={count} ticks=2 elapsed={:.6}",
-                samples[1]
-            );
+            if let Some(fingerprint) = expected {
+                println!("workers={workers} people={count} interval_progress=true elapsed={:.6} state_fingerprint={fingerprint:016x}", samples[1]);
+            } else {
+                println!("workers={workers} people={count} ticks=2 elapsed={:.6}", samples[1]);
+            }
         });
 }
 

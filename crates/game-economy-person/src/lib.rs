@@ -10,6 +10,29 @@ use game_production_model::FoodEffect;
 pub use model::{Immortal, Person, Rules};
 use rayon::prelude::*;
 
+/// Progress individual hunger without applying meals, damage or decisions.
+/// The enclosing coordinator owns world time and draft invalidation.
+pub fn progress_hunger(
+    people: &mut [Person],
+    rate: u32,
+    elapsed_millis: u64,
+    quantum_millis: u64,
+) -> Result<(), &'static str> {
+    if quantum_millis == 0
+        || people
+            .par_iter()
+            .any(|p| !p.valid_hunger_progress(quantum_millis))
+    {
+        return Err("invalid fractional hunger batch");
+    }
+    people.par_iter_mut().for_each(|person| {
+        person
+            .advance_hunger(rate, elapsed_millis, quantum_millis)
+            .expect("validated fractional hunger");
+    });
+    Ok(())
+}
+
 pub struct Draft {
     pub people: Vec<Person>,
     pub nutrition: Option<Nutrition>,
@@ -22,6 +45,31 @@ pub fn prepare(
     pending: &[FoodEffect],
     effects: Effects,
     tick: u64,
+) -> Draft {
+    prepare_inner(people, rules, nutrition, pending, effects, tick, true)
+}
+
+/// Apply boundary food, recovery and damage after hunger has already been
+/// progressed by the coordinator. This does not select meals or decisions.
+pub fn settle_elapsed(
+    people: &[Person],
+    rules: &Rules,
+    nutrition: Option<&Nutrition>,
+    pending: &[FoodEffect],
+    effects: Effects,
+    tick: u64,
+) -> Draft {
+    prepare_inner(people, rules, nutrition, pending, effects, tick, false)
+}
+
+fn prepare_inner(
+    people: &[Person],
+    rules: &Rules,
+    nutrition: Option<&Nutrition>,
+    pending: &[FoodEffect],
+    effects: Effects,
+    tick: u64,
+    add_boundary_hunger: bool,
 ) -> Draft {
     let mut due: Vec<_> = pending
         .par_iter()
@@ -57,7 +105,7 @@ pub fn prepare(
                     .unwrap_or(rules.initial)
             });
             if person.health > 0 {
-                if person.immortal.is_none() {
+                if add_boundary_hunger && person.immortal.is_none() {
                     person.hunger = person.hunger.saturating_add(rules.hunger_per_tick);
                     if person.hunger == u32::MAX {
                         person.hunger_remainder = 0;
