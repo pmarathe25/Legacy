@@ -2,6 +2,40 @@ use super::{load, save, scenario};
 use std::path::PathBuf;
 
 #[test]
+fn player_boundary_advancement_yields_only_times() {
+    use std::ops::ControlFlow;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-local-walking.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut player = game_economy_player::Player::new(&mut world);
+    let mut observed = Vec::new();
+    let progress = player.advance_boundaries(3, |time| {
+        observed.push(time);
+        if observed.len() == 2 {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    });
+    assert_eq!(progress.stop, game_economy::BoundaryStop::Yielded);
+    assert_eq!(progress.completed, 2);
+    assert_eq!(
+        observed,
+        vec![
+            game_economy::BoundaryTime {
+                tick: 1,
+                elapsed_millis: u128::from(progress.end.quantum_millis),
+                quantum_millis: progress.end.quantum_millis
+            },
+            progress.end
+        ]
+    );
+}
+
+#[test]
 fn local_walking_limits_store_observation_and_physical_pickup() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

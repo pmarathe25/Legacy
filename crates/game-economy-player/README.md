@@ -4,6 +4,8 @@ This interface exposes the controlled person's own state, possessions, current j
 
 The interface is an initial playable slice of the economic host, not a complete game client.
 
+`advance_boundaries` can yield between committed whole boundaries and reports partial progress and pending warnings. Its callback exposes boundary time only; administrative physical events remain outside the player view. Partial-boundary time is not yet supported.
+
 The explicit guardian search view reads embodied guardians' current health, location and journeys from the same person and travel records as the rest of the world. The ruler may meet a local guardian and request release; the guardian's decision uses their own accumulated mentorship.
 
 The view shows the controlled person's health and their own configured medicine and quantity. It does not reveal an unobserved infection, its strain, or a hidden match between that strain and a remedy. A treatment attempt reports whether medicine was consumed; later observable health may provide evidence of its effects.

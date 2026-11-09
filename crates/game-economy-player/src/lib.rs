@@ -2199,8 +2199,15 @@ impl<'a> Player<'a> {
     pub fn advance_boundaries(
         &mut self,
         requested: u64,
-        observe: impl FnMut(&game_lot_runtime::Events) -> std::ops::ControlFlow<()>,
+        mut observe: impl FnMut(game_economy::BoundaryTime) -> std::ops::ControlFlow<()>,
     ) -> game_economy::BoundaryAdvance {
-        self.world.advance_boundaries(requested, observe)
+        let quantum_millis = self.world.boundary_time().quantum_millis;
+        self.world.advance_boundaries(requested, |events| {
+            observe(game_economy::BoundaryTime {
+                tick: events.tick,
+                elapsed_millis: u128::from(events.tick) * u128::from(quantum_millis),
+                quantum_millis,
+            })
+        })
     }
 }
