@@ -6804,6 +6804,68 @@ fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
 }
 
 #[test]
+fn cultivation_offer_scenario_uses_named_goods_and_nonbinding_promises() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = scenario(
+                    &root.join("content/scenarios/economy-cultivation-offer.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let initial = world.snapshot();
+                let value = &initial
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap()
+                    .offer_values[0];
+                assert_eq!(
+                    initial
+                        .physical
+                        .goods
+                        .iter()
+                        .find(|good| good.id == value.good)
+                        .unwrap()
+                        .name,
+                    "bread"
+                );
+                assert!(
+                    initial
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .flat_map(|container| &container.lots)
+                        .all(|lot| lot.good != value.good || lot.quantity == 0)
+                );
+                let mut restored = game_economy::Economy::compile(initial).unwrap();
+                for _ in 0..6 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                    let state = world.snapshot();
+                    assert_eq!(state, restored.snapshot());
+                    if state.agriculture.as_ref().unwrap().fields[0].phase
+                        != game_economy::CropPhase::Fallow
+                    {
+                        let promise = &state.agreements.as_ref().unwrap().contracts[0];
+                        assert_eq!(promise.delivered, 0);
+                        return state;
+                    }
+                }
+                panic!("the helper did not cultivate after the offer");
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn scenario_loads_a_personal_choice_to_retry_after_an_offer() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let source =

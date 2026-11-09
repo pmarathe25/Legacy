@@ -56,6 +56,8 @@ struct Scenario {
     #[serde(default)]
     work_offer_values: Vec<WorkOfferValueConfig>,
     #[serde(default)]
+    cultivation_offer_values: Vec<WorkOfferValueConfig>,
+    #[serde(default)]
     work_tools: Vec<WorkToolConfig>,
     #[serde(default)]
     tool_wear: Option<ToolWearConfig>,
@@ -932,6 +934,41 @@ pub fn scenario_with_options(
         .iter()
         .map(|recipe| (recipe.name.as_str(), recipe.id))
         .collect();
+    if !scenario.cultivation_offer_values.is_empty() {
+        let requests = scenario
+            .cultivation
+            .as_mut()
+            .and_then(|farm| farm.requests.as_mut())
+            .ok_or("cultivation offer values require cultivation requests")?;
+        for value in scenario.cultivation_offer_values {
+            if requests
+                .offer_values
+                .iter()
+                .any(|row| row.person == value.person)
+            {
+                return Err("duplicate cultivation offer value".into());
+            }
+            if !requests
+                .preferences
+                .iter()
+                .any(|row| row.person == value.person)
+            {
+                return Err(
+                    "cultivation offer value requires a personal cultivation preference".into(),
+                );
+            }
+            requests
+                .offer_values
+                .push(game_economy::cultivation_requests::OfferValue {
+                    person: value.person,
+                    good: *goods
+                        .get(value.good.as_str())
+                        .ok_or_else(|| format!("unknown cultivation offer good {}", value.good))?,
+                    value_per_unit: value.value_per_unit,
+                    max_quantity: value.max_quantity,
+                });
+        }
+    }
     if !scenario.work_offer_values.is_empty() {
         let requests = scenario
             .work_requests
