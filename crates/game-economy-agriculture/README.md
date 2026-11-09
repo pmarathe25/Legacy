@@ -36,3 +36,5 @@ fear_weight = 1
 Unspecified relationship weights default to zero. The selected action follows the field's current phase when the request is made; it becomes stale if that phase changes before work begins.
 
 Instead of naming a fixed worker and field, an autonomous person may have a `[[cultivation.requests.discoverers]]` entry with `person`, `interval` and `lifetime`. At the regional stock endpoint they select a locally visible field and another reachable person from bounded regional indexes. They can still be refused, and selection does not imply knowledge that the required seed or capacity will remain available. A person may have either a fixed asker or a discoverer inclination, not both.
+
+The optional `profile` feature records separate worker selection, field selection, matching, action construction, growth, assembly, and publication spans through `game-diagnostics`. These measurements do not affect simulation state.

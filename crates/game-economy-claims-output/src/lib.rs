@@ -58,6 +58,8 @@ macro_rules! prepare_farming {
                 return Err("person cannot cultivate now".into());
             }
         }
+        #[cfg(feature = "profile")]
+        let farming_context_phase = game_diagnostics::span("agriculture.context");
         let plan = $world
             .agriculture
             .as_ref()
@@ -80,10 +82,18 @@ macro_rules! prepare_farming {
                 .prepare($base)
             })
             .transpose()?;
+        #[cfg(feature = "profile")]
+        drop(farming_context_phase);
+        #[cfg(feature = "profile")]
+        let farming_reserve_phase = game_diagnostics::span("agriculture.reserve");
         if let Some(plan) = &plan {
             game_economy_work::reserve(&mut $busy, plan.actors.iter().copied());
             game_economy_work::reserve(&mut $busy, plan.requesters.iter().copied());
         }
+        #[cfg(feature = "profile")]
+        drop(farming_reserve_phase);
+        #[cfg(feature = "profile")]
+        let farming_claim_output_phase = game_diagnostics::span("agriculture.claim_outputs");
         let output = $crate::prepare(
             plan.as_ref(),
             $world.physical.work(),
@@ -91,6 +101,8 @@ macro_rules! prepare_farming {
             &$world.people,
             $world.dynamics.as_ref().and_then(|d| d.claims.as_ref()),
         );
+        #[cfg(feature = "profile")]
+        drop(farming_claim_output_phase);
         (plan, output)
     }};
 }

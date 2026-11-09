@@ -322,6 +322,8 @@ pub struct Context<'a> {
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
+        #[cfg(feature = "profile")]
+        let mut phase = game_diagnostics::span("agriculture.workers");
         let manual = if let Some((actor, field)) = self.manual {
             let person = self
                 .people
@@ -404,6 +406,11 @@ impl Context<'_> {
         if workers.par_windows(2).any(|p| p[0] > p[1]) {
             workers.par_sort_unstable();
         }
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("agriculture.fields");
+        }
         let mut candidates: Vec<_> = self
             .agriculture
             .fields
@@ -446,6 +453,11 @@ impl Context<'_> {
         let key = |f: &&Field| (f.region, f.phase != Phase::Ripe, f.id);
         if candidates.par_windows(2).any(|p| key(&p[0]) > key(&p[1])) {
             candidates.par_sort_unstable_by_key(key);
+        }
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("agriculture.match");
         }
         let mut picked: Vec<_> = candidates
             .par_chunk_by(|a, b| a.region == b.region)
@@ -492,6 +504,11 @@ impl Context<'_> {
                     .expect("validated field")];
                 (field, attempt.worker)
             }));
+        }
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("agriculture.actions");
         }
         let count = u64::try_from(picked.len()).map_err(|_| "cultivation action overflow")?;
         base.checked_add(count)
@@ -570,6 +587,11 @@ impl Context<'_> {
         } else {
             Vec::new()
         };
+        #[cfg(feature = "profile")]
+        {
+            drop(phase);
+            phase = game_diagnostics::span("agriculture.growth");
+        }
         let mut fields: Vec<_> = self.agriculture.fields.par_iter().cloned().collect();
         fields
             .par_iter_mut()
@@ -591,26 +613,31 @@ impl Context<'_> {
                     f.phase = Phase::Ripe;
                 }
             });
-        let (actors, records): (Vec<_>, Vec<_>) = plans
-            .into_par_iter()
-            .map(
-                |(worker, field, action, phase, remaining, plant, harvest)| {
-                    (
-                        worker,
-                        ((field, action, phase, remaining), (plant, harvest)),
-                    )
-                },
-            )
+        #[cfg(feature = "profile")]
+        drop(phase);
+        #[cfg(feature = "profile")]
+        let _assembly = game_diagnostics::span("agriculture.assemble");
+        let (actors, changes): (Vec<_>, Vec<_>) = plans
+            .par_iter()
+            .map(|(worker, field, action, phase, remaining, _, _)| {
+                (*worker, (*field, *action, *phase, *remaining))
+            })
             .unzip();
-        let (changes, outputs): (Vec<_>, Vec<_>) = records.into_par_iter().unzip();
-        let (plant, harvest): (Vec<_>, Vec<_>) = outputs.into_par_iter().unzip();
+        let (plant, harvest): (Vec<_>, Vec<_>) =
+            plans
+                .into_par_iter()
+                .partition_map(|(_, _, _, _, _, plant, harvest)| match (plant, harvest) {
+                    (Some(plant), None) => rayon::iter::Either::Left(plant),
+                    (None, Some(harvest)) => rayon::iter::Either::Right(harvest),
+                    _ => unreachable!("each cultivation action has exactly one transaction"),
+                });
         Ok(Plan {
             actors,
             requesters: requested
                 .as_ref()
                 .map_or_else(Vec::new, |plan| plan.requesters.clone()),
-            plant: plant.into_par_iter().flatten().collect(),
-            harvest: harvest.into_par_iter().flatten().collect(),
+            plant,
+            harvest,
             uses,
             changes,
             fields,
@@ -636,6 +663,8 @@ impl Plan {
         });
     }
     pub fn publish(self, owner: &Agriculture, events: &Events) -> Result<Agriculture, String> {
+        #[cfg(feature = "profile")]
+        let _phase = game_diagnostics::span("agriculture.publish");
         self.plant
             .into_par_iter()
             .chain(self.harvest.into_par_iter())

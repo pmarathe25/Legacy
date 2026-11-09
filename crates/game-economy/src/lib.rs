@@ -5938,6 +5938,8 @@ impl Economy {
         {
             game_economy_work::reserve(&mut farming_contact_blocked, held.iter().copied());
         }
+        #[cfg(feature = "profile")]
+        let farming_phase = game_diagnostics::span("economy.farming.plan");
         let (mut farming, mut claim_outputs) = game_economy_claims_output::prepare_farming!(
             self,
             busy,
@@ -5953,6 +5955,8 @@ impl Economy {
         {
             plan.gate_dry_growth(owner, irrigation);
         }
+        #[cfg(feature = "profile")]
+        drop(farming_phase);
         action_base = action_base
             .checked_add(farming.as_ref().map_or(0, |p| p.changes.len() as u64))
             .ok_or("action count overflow")?;
@@ -8283,6 +8287,8 @@ impl Economy {
         } else {
             None
         };
+        #[cfg(feature = "profile")]
+        let field_receipt_phase = game_diagnostics::span("economy.field_claims.receipts");
         let field_interest = farming.is_some()
             && self
                 .dynamics
@@ -8320,6 +8326,8 @@ impl Economy {
         } else {
             Vec::new()
         };
+        #[cfg(feature = "profile")]
+        drop(field_receipt_phase);
         let mut agriculture = game_economy_agriculture::publish_optional(
             farming,
             self.agriculture.as_ref(),
@@ -9299,6 +9307,8 @@ impl Economy {
             };
             let field_contact = (self.confinement.is_some() || next_confinement.is_some())
                 .then_some(&field_contact as &(dyn Fn(u64, u64) -> bool + Sync));
+            #[cfg(feature = "profile")]
+            let field_claim_phase = game_diagnostics::span("economy.field_claims.publish");
             game_economy_claims::publish_field_uses(
                 owner,
                 &field_uses,
@@ -9309,6 +9319,8 @@ impl Economy {
                 field_contact,
             );
             game_economy_claims::publish_cultivated_field_claims(owner, &field_uses);
+            #[cfg(feature = "profile")]
+            drop(field_claim_phase);
         }
         game_economy_combat::finish_world!(combat, person);
         if let Some((combat, selected)) = combat.as_mut().zip(intervention.as_ref()) {

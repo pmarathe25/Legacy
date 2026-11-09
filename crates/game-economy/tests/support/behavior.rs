@@ -37847,6 +37847,36 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
     );
 }
 #[test]
+fn simultaneous_planting_and_harvest_remain_deterministic() {
+    let mut initial = field_workload(2);
+    initial.agriculture.as_mut().unwrap().fields[1].phase = CropPhase::Ripe;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let events = world.advance().unwrap();
+                assert_eq!(
+                    events
+                        .physical_actions
+                        .iter()
+                        .filter(|event| event.accepted)
+                        .count(),
+                    2
+                );
+                let state = world.snapshot();
+                let fields = &state.agriculture.as_ref().unwrap().fields;
+                assert_eq!(fields[0].phase, CropPhase::Growing);
+                assert_eq!(fields[1].phase, CropPhase::Fallow);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn field_claims_are_personal_and_follow_actual_cultivation() {
     use crate::cultivation_requests::{
         Outcome, Preference as RequestPreference, Request, Requests,
@@ -38703,6 +38733,39 @@ fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
 fn concentrated_field_benchmark() {
     use game_opinions::AffinityRules;
     use std::hash::{Hash, Hasher};
+    #[cfg(feature = "profile")]
+    fn report_boundary(
+        label: &str,
+        previous: &mut std::collections::BTreeMap<&'static str, game_diagnostics::Measurement>,
+        events: &game_lot_runtime::Events,
+    ) {
+        let current = game_diagnostics::snapshot();
+        let accepted = events
+            .physical_actions
+            .iter()
+            .filter(|row| row.accepted)
+            .count();
+        println!(
+            "boundary={label} attempts={} accepted={accepted}",
+            events.physical_actions.len()
+        );
+        for (name, measurement) in &current {
+            if name.starts_with("agriculture.")
+                || name.starts_with("economy.field_claims.")
+                || name.starts_with("physical.")
+            {
+                let before = previous.get(name).map_or(0, |old| old.nanoseconds);
+                let delta = measurement.nanoseconds.saturating_sub(before);
+                if delta > 0 {
+                    println!(
+                        "boundary-profile {label} {name} ms={:.3}",
+                        delta as f64 / 1_000_000.0
+                    );
+                }
+            }
+        }
+        *previous = current;
+    }
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -38843,11 +38906,18 @@ fn concentrated_field_benchmark() {
             let mut samples = Vec::new();
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
+                #[cfg(feature = "profile")]
+                let mut boundary_profile = (round == 3
+                    && std::env::var_os("LEGACY_PROFILE").is_some())
+                .then(game_diagnostics::snapshot);
                 let started = std::time::Instant::now();
+                let first = world.advance().unwrap();
+                #[cfg(feature = "profile")]
+                if let Some(previous) = &mut boundary_profile {
+                    report_boundary("plant", previous, &first);
+                }
                 assert_eq!(
-                    world
-                        .advance()
-                        .unwrap()
+                    first
                         .physical_actions
                         .iter()
                         .filter(|row| row.accepted)
@@ -38855,6 +38925,10 @@ fn concentrated_field_benchmark() {
                     if requests { 0 } else { count as usize / 2 }
                 );
                 let second = world.advance().unwrap();
+                #[cfg(feature = "profile")]
+                if let Some(previous) = &mut boundary_profile {
+                    report_boundary("growth", previous, &second);
+                }
                 if requests {
                     let accepted = second
                         .physical_actions
@@ -38867,9 +38941,12 @@ fn concentrated_field_benchmark() {
                         assert_eq!(accepted, count as usize / if failures { 4 } else { 2 });
                     }
                 }
-                let third = world
-                    .advance()
-                    .unwrap()
+                let third_events = world.advance().unwrap();
+                #[cfg(feature = "profile")]
+                if let Some(previous) = &mut boundary_profile {
+                    report_boundary("harvest", previous, &third_events);
+                }
+                let third = third_events
                     .physical_actions
                     .iter()
                     .filter(|row| row.accepted)
@@ -38947,6 +39024,16 @@ fn concentrated_field_benchmark() {
                 "workers={workers} people={count} fields={count} ticks=3 elapsed={:.6}",
                 samples[1]
             );
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (name, measurement) in game_diagnostics::snapshot() {
+                    println!(
+                        "profile {name} calls={} mean_ms={:.3}",
+                        measurement.calls,
+                        measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0
+                    );
+                }
+            }
         });
 }
 #[test]
