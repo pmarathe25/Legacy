@@ -4481,16 +4481,28 @@ impl Economy {
                 LocalLocation::Walking { .. } => None,
             };
         let together = |a, b| self.local_people_together(a, b);
+        #[cfg(feature = "profile")]
+        let exchange_cargo_phase = game_diagnostics::span("economy.exchange.cargo");
+        let exchange_cargo = self
+            .market
+            .as_ref()
+            .map(|_| game_lot_projection::cargo(&view, self.rules.carrying_capacity))
+            .transpose()?;
+        #[cfg(feature = "profile")]
+        drop(exchange_cargo_phase);
         let exchange = game_economy_exchange::Context {
             market: self.market.as_ref(),
             view: &view,
             capacity: self.rules.carrying_capacity,
+            cargo: exchange_cargo.as_ref(),
             people: &people,
             goods: self.physical.goods(),
             opinions: self.opinions.as_ref(),
             endpoint: walking.map(|_| &endpoint as &game_economy_exchange::EndpointLookup<'_>),
             together: walking.map(|_| &together as &game_economy_exchange::Together<'_>),
         };
+        #[cfg(feature = "profile")]
+        let exchange_trade_phase = game_diagnostics::span("economy.exchange.trade");
         let mut local_exchange_busy =
             (self.market.is_some() && !local_nonstock.is_empty()).then(|| {
                 local_walking::carrying_busy(
@@ -4512,6 +4524,8 @@ impl Economy {
             game_economy_work::reserve(&mut busy, actors.iter().copied());
             game_economy_work::reserve(&mut local_prior_busy, actors);
         }
+        #[cfg(feature = "profile")]
+        drop(exchange_trade_phase);
         action_base = action_base
             .checked_add(game_economy_exchange::actions(trade.as_ref()).len() as u64)
             .ok_or("action count overflow")?;
@@ -4576,6 +4590,8 @@ impl Economy {
             game_economy_work::reserve(&mut busy, promise_actors.iter().copied());
             game_economy_work::reserve(&mut local_prior_busy, promise_actors);
         }
+        #[cfg(feature = "profile")]
+        let exchange_proposal_phase = game_diagnostics::span("economy.exchange.proposals");
         let mut local_exchange_busy =
             (self.market.is_some() && !local_nonstock.is_empty()).then(|| {
                 local_walking::carrying_busy(
@@ -4593,6 +4609,8 @@ impl Economy {
             game_economy_work::reserve(&mut busy, plan.actors.iter().copied());
             game_economy_work::reserve(&mut local_prior_busy, plan.actors.iter().copied());
         }
+        #[cfg(feature = "profile")]
+        drop(exchange_proposal_phase);
         action_base = action_base
             .checked_add(promises.action_count() as u64)
             .ok_or("action count overflow")?;

@@ -9,9 +9,10 @@ use rayon::prelude::*;
 pub type Together<'a> = dyn Fn(u64, u64) -> bool + Sync + 'a;
 struct Accepted {
     market: DecisionDraft,
-    cargo: GoodsCargo,
+    cargo: Option<GoodsCargo>,
     actors: Vec<u64>,
 }
+
 pub struct Draft {
     accepted: Option<Accepted>,
     proposed: Option<proposals::Draft>,
@@ -30,7 +31,9 @@ impl Draft {
                 opinions.learn_help(accepted.market.gifts());
             }
             accepted.market.commit(market);
-            *cargo = accepted.cargo;
+            *cargo = accepted
+                .cargo
+                .expect("published acceptance has cargo changes");
         }
         if let Some(proposed) = self.proposed {
             proposed.commit(market);
@@ -58,7 +61,11 @@ fn prepare_acceptance(
     goods: &[Good],
     busy: &[u64],
     tick: u64,
-    (opinions, together): (Option<&game_opinions::Opinions>, Option<&Together<'_>>),
+    (opinions, together, materialize): (
+        Option<&game_opinions::Opinions>,
+        Option<&Together<'_>>,
+        bool,
+    ),
 ) -> Result<Option<Accepted>, String> {
     if market.policies.is_empty() || market.offers.is_empty() {
         return Ok(None);
@@ -219,11 +226,13 @@ fn prepare_acceptance(
             .collect();
         market.record_influences(&considered);
     }
-    let changes = selected
-        .into_par_iter()
-        .map(|(_, changes)| changes)
-        .collect();
-    let cargo = custody::apply(cargo, &actors, changes);
+    let cargo = materialize.then(|| {
+        let changes = selected
+            .into_par_iter()
+            .map(|(_, changes)| changes)
+            .collect();
+        custody::apply(cargo, &actors, changes)
+    });
     Ok(Some(Accepted {
         market,
         cargo,
@@ -259,7 +268,7 @@ pub fn selected_offers_together(
         goods,
         busy,
         tick,
-        (opinions, together),
+        (opinions, together, false),
     )?
     .map_or_else(Vec::new, |accepted| accepted.market.events().to_vec()))
 }
@@ -283,7 +292,15 @@ pub fn prepare_with_opinions(
     tick: u64,
     opinions: Option<&game_opinions::Opinions>,
 ) -> Result<Option<Draft>, String> {
-    let accepted = prepare_acceptance(market, cargo, people, goods, busy, tick, (opinions, None))?;
+    let accepted = prepare_acceptance(
+        market,
+        cargo,
+        people,
+        goods,
+        busy,
+        tick,
+        (opinions, None, true),
+    )?;
     let mut occupied = busy.to_vec();
     if let Some(accepted) = &accepted {
         occupied.extend_from_slice(&accepted.actors);
@@ -440,5 +457,70 @@ impl<'a> Context<'a> {
             )?)
         };
         Ok((next, cargo, gifts))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use game_goods_cargo::GoodsHolding;
+    use game_market::Value;
+
+    #[test]
+    fn selected_offers_and_committed_cargo_share_the_same_decision() {
+        let people = [(1, Some(1), 10, 0), (2, Some(1), 10, 0)];
+        let goods = [Good {
+            id: 1,
+            name: "wood".into(),
+            food: None,
+        }];
+        let mut cargo = GoodsCargo {
+            capacity: 2,
+            holdings: vec![GoodsHolding {
+                person: 1,
+                items: vec![Amount {
+                    good: 1,
+                    quantity: 1,
+                }]
+                .into(),
+            }],
+        };
+        let mut market = Market {
+            next_id: 2,
+            policies: vec![Policy {
+                person: 2,
+                enabled: true,
+                propose: false,
+                request_help: false,
+                min_gain: 0,
+                help_value: 0,
+                values: vec![Value { good: 1, value: 1 }],
+                influences: vec![],
+            }],
+            offers: vec![Offer {
+                id: 1,
+                proposer: 1,
+                recipient: 2,
+                give: vec![Amount {
+                    good: 1,
+                    quantity: 1,
+                }]
+                .into(),
+                receive: vec![].into(),
+                proposed_at: 0,
+            }],
+            events: vec![],
+        };
+        let selected = selected_offers(&market, &cargo, &people, &goods, &[], 1, None).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(cargo.holdings[0].person, 1);
+        prepare(&market, &cargo, &people, &goods, &[], 1)
+            .unwrap()
+            .unwrap()
+            .commit(&mut market, &mut cargo, None);
+        assert_eq!(market.events, selected);
+        assert!(market.offers.is_empty());
+        assert_eq!(cargo.holdings[0].person, 2);
+        assert_eq!(cargo.holdings[0].items[0].quantity, 1);
     }
 }

@@ -204,6 +204,10 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
     };
     let plan = context.plan(100).unwrap();
     assert_eq!(plan.actions().len(), 1);
+    let projected = cargo(&view, 2).unwrap();
+    let reused = context.plan_with_cargo(100, &projected).unwrap();
+    assert_eq!(reused.actions(), plan.actions());
+    assert_eq!(reused.actors(), plan.actors());
     let distant = market::Context {
         together: Some(&|_, _| false),
         ..context

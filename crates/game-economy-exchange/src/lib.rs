@@ -1,4 +1,5 @@
 //! Individual exchange and requests, reconciled against real lot transfers.
+use game_goods_cargo::GoodsCargo;
 use game_lot_projection::market;
 use game_lot_runtime::Events;
 use game_lots::{Transaction, View};
@@ -18,6 +19,7 @@ pub struct Context<'a> {
     pub market: Option<&'a Market>,
     pub view: &'a View,
     pub capacity: u64,
+    pub cargo: Option<&'a GoodsCargo>,
     pub people: &'a [PersonSnapshot],
     pub goods: &'a [Good],
     pub opinions: Option<&'a Opinions>,
@@ -43,7 +45,10 @@ impl Context<'_> {
             opinions: self.opinions,
             together: self.together,
         }
-        .plan(action_base)?;
+        .plan_with_cargo(
+            action_base,
+            self.cargo.ok_or("market needs cargo projection")?,
+        )?;
         reserve(busy, plan.actors());
         Ok(Some(plan))
     }
@@ -54,10 +59,10 @@ impl Context<'_> {
         let Some(market) = self.market else {
             return Ok(None);
         };
-        let cargo = game_lot_projection::cargo(self.view, self.capacity)?;
+        let cargo = self.cargo.ok_or("market needs cargo projection")?;
         let plan = game_market_proposals::prepare_at_endpoints(
             market,
-            &cargo,
+            cargo,
             self.people,
             busy,
             self.view.boundary,

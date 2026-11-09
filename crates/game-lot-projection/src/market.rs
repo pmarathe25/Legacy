@@ -1,5 +1,6 @@
 //! Individual trade decisions staged against actual lot custody.
 use crate::cargo;
+use game_goods_cargo::GoodsCargo;
 use game_lot_runtime::Events;
 use game_lots::{Movement, Place, Transaction, View};
 use game_market::{Decision, DecisionDraft, Event, Market, Offer, Outcome};
@@ -109,10 +110,19 @@ pub struct Context<'a> {
 impl Context<'_> {
     /// `action_base` reserves a caller-selected, nonzero range for these choices.
     pub fn plan(&self, action_base: u64) -> Result<Plan, String> {
+        if action_base == 0 {
+            return Err("invalid trade action base".into());
+        }
+        let cargo = cargo(self.view, self.capacity)?;
+        self.plan_with_cargo(action_base, &cargo)
+    }
+
+    /// Reuse the same boundary's already projected personal cargo.
+    pub fn plan_with_cargo(&self, action_base: u64, cargo: &GoodsCargo) -> Result<Plan, String> {
         let Self {
             market,
             view,
-            capacity,
+            capacity: _,
             people,
             goods,
             busy,
@@ -122,10 +132,9 @@ impl Context<'_> {
         if action_base == 0 {
             return Err("invalid trade action base".into());
         }
-        let cargo = cargo(view, capacity)?;
         let mut selected = game_market_auto::selected_offers_together(
             market,
-            &cargo,
+            cargo,
             people,
             goods,
             busy,
