@@ -37592,6 +37592,8 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
         .for_each(|policy| policy.willing = false);
     farm.requests = Some(Requests {
         next_id: 1,
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: vec![],
         askers: vec![
             Asker {
@@ -37891,6 +37893,8 @@ fn field_claims_are_personal_and_follow_actual_cultivation() {
     farm.requests = Some(Requests {
         next_id: 2,
         askers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: vec![],
         preferences: vec![RequestPreference {
             person: 2,
@@ -38393,6 +38397,8 @@ fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
     farm.requests = Some(Requests {
         next_id: 2,
         askers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: vec![],
         preferences: vec![Preference {
             person: 2,
@@ -38533,6 +38539,8 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
     farm.requests = Some(Requests {
         next_id: 1,
         askers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: (1..=64)
             .map(|person| Discoverer {
                 person,
@@ -38607,6 +38615,8 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
     separate.agriculture.as_mut().unwrap().requests = Some(Requests {
         next_id: 1,
         askers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: vec![Discoverer {
             person: 1,
             interval: 1,
@@ -38663,6 +38673,198 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
 }
 
 #[test]
+fn autonomous_requesters_reconsider_locally_and_wait_before_retrying() {
+    use crate::cultivation_requests::{
+        Asker, Outcome, Preference, Request, Requests, WithdrawalPreference,
+    };
+    use game_opinions::AffinityRules;
+    let mut initial = field_workload(2);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 2,
+        askers: vec![Asker {
+            person: 1,
+            worker: 2,
+            field: 1,
+            interval: 1,
+            lifetime: 5,
+        }],
+        discoverers: vec![],
+        withdrawal_preferences: vec![WithdrawalPreference {
+            person: 1,
+            affinity_below: 0,
+            retry_after: 3,
+        }],
+        retry_backoffs: vec![],
+        preferences: vec![Preference {
+            person: 2,
+            help_value: 1,
+            effort: 1,
+            affinity_weight: 0,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
+        }],
+        pending: vec![Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            field: 1,
+            phase: CropPhase::Fallow,
+            created_at: 0,
+            expires: 5,
+        }],
+        events: vec![],
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.records = vec![Opinion {
+        observer: 1,
+        target: 2,
+        trust: 0,
+        fear: 0,
+        obligation: 0,
+        affinity: -2,
+    }];
+    initial.opinions = Some(opinions);
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let requests = state
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap();
+                assert_eq!(requests.events[0].outcome, Outcome::Withdrawn);
+                assert!(requests.pending.is_empty());
+                assert_eq!(requests.retry_backoffs[0].until, 4);
+                let mut reloaded = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..2 {
+                    world.advance().unwrap();
+                    reloaded.advance().unwrap();
+                }
+                assert!(
+                    world
+                        .snapshot()
+                        .agriculture
+                        .unwrap()
+                        .requests
+                        .unwrap()
+                        .pending
+                        .is_empty()
+                );
+                world.advance().unwrap();
+                reloaded.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, reloaded.snapshot());
+                assert_eq!(
+                    state
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .len(),
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut favorable = initial.clone();
+    favorable.opinions.as_mut().unwrap().records[0].affinity = 1;
+    let mut favorable = Economy::compile(favorable).unwrap();
+    favorable.advance().unwrap();
+    assert_eq!(
+        favorable
+            .snapshot()
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Fulfilled
+    );
+    let mut busy = initial.clone();
+    busy.agriculture.as_mut().unwrap().policies[0].willing = true;
+    let mut busy = Economy::compile(busy).unwrap();
+    busy.advance().unwrap();
+    assert_eq!(
+        busy.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Fallow
+    );
+    let mut independent = initial.clone();
+    independent.agriculture.as_mut().unwrap().policies[1].willing = true;
+    let mut independent = Economy::compile(independent).unwrap();
+    independent.advance().unwrap();
+    let farm = independent.snapshot().agriculture.unwrap();
+    assert_eq!(farm.requests.unwrap().events[0].outcome, Outcome::Withdrawn);
+    assert_eq!(farm.fields[0].phase, CropPhase::Growing);
+    let mut distant = initial;
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut distant = Economy::compile(distant).unwrap();
+    distant.advance().unwrap();
+    let requests = distant.snapshot().agriculture.unwrap().requests.unwrap();
+    assert!(requests.events.is_empty());
+    assert_eq!(requests.pending.len(), 1);
+}
+
+#[test]
 fn a_request_can_be_withdrawn_without_binding_the_worker() {
     use crate::cultivation_requests::{
         Outcome, Preference as RequestPreference, Request, Requests,
@@ -38677,6 +38879,8 @@ fn a_request_can_be_withdrawn_without_binding_the_worker() {
     farm.requests = Some(Requests {
         next_id: 2,
         askers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: vec![],
         preferences: vec![RequestPreference {
             person: 2,
@@ -38814,6 +39018,8 @@ fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
         .for_each(|policy| policy.willing = false);
     farm.requests = Some(Requests {
         next_id: 1,
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
         discoverers: vec![],
         askers: vec![Asker {
             person: 1,
@@ -38917,7 +39123,8 @@ fn concentrated_field_benchmark() {
         .unwrap_or(100_000u64);
     let mut initial = field_workload(count);
     let discovery = std::env::var_os("LEGACY_FIELD_DISCOVERY").is_some();
-    let requests = discovery || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
+    let withdrawal = std::env::var_os("LEGACY_FIELD_WITHDRAW").is_some();
+    let requests = discovery || withdrawal || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
     let feelings = std::env::var_os("LEGACY_FIELD_FEELINGS").is_some();
     let failures = std::env::var_os("LEGACY_FIELD_FAILURES").is_some();
     let field_claims = std::env::var_os("LEGACY_FIELD_CLAIMS").is_some();
@@ -38925,15 +39132,30 @@ fn concentrated_field_benchmark() {
     assert!(!failures || (feelings && !discovery && count.is_multiple_of(4)));
     assert!(!field_claims || !requests);
     assert!(!field_claims || count >= 2);
+    assert!(!withdrawal || (!discovery && !feelings && !field_claims));
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
-        use crate::cultivation_requests::{Asker, Discoverer, Preference, Requests};
+        use crate::cultivation_requests::{
+            Asker, Discoverer, Preference, Request, Requests, WithdrawalPreference,
+        };
         let farm = initial.agriculture.as_mut().unwrap();
         farm.policies
             .iter_mut()
             .for_each(|policy| policy.willing = false);
         farm.requests = Some(Requests {
-            next_id: 1,
+            next_id: if withdrawal { count / 2 + 1 } else { 1 },
+            withdrawal_preferences: if withdrawal {
+                (1..=count / 2)
+                    .map(|person| WithdrawalPreference {
+                        person,
+                        affinity_below: 1,
+                        retry_after: 3,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            },
+            retry_backoffs: vec![],
             discoverers: if discovery {
                 (1..=count / 2)
                     .map(|person| Discoverer {
@@ -38965,7 +39187,21 @@ fn concentrated_field_benchmark() {
                     obligation_weight: 0,
                 })
                 .collect(),
-            pending: vec![],
+            pending: if withdrawal {
+                (1..=count / 2)
+                    .map(|person| Request {
+                        id: person,
+                        requester: person,
+                        worker: person + count / 2,
+                        field: person,
+                        phase: CropPhase::Fallow,
+                        created_at: 0,
+                        expires: 5,
+                    })
+                    .collect()
+            } else {
+                vec![]
+            },
             events: vec![],
         });
     }
@@ -39076,7 +39312,9 @@ fn concentrated_field_benchmark() {
                         .iter()
                         .filter(|row| row.accepted)
                         .count();
-                    if discovery {
+                    if withdrawal {
+                        assert_eq!(accepted, 0);
+                    } else if discovery {
                         assert!(accepted > 0 && accepted <= count as usize / 2);
                     } else {
                         assert_eq!(accepted, count as usize / if failures { 4 } else { 2 });
@@ -39098,6 +39336,20 @@ fn concentrated_field_benchmark() {
                 let elapsed = started.elapsed().as_secs_f64();
                 if (requests || field_claims) && round == 3 {
                     let state = world.snapshot();
+                    if withdrawal {
+                        assert_eq!(
+                            state
+                                .agriculture
+                                .as_ref()
+                                .unwrap()
+                                .requests
+                                .as_ref()
+                                .unwrap()
+                                .retry_backoffs
+                                .len(),
+                            count as usize / 2
+                        );
+                    }
                     if field_claims {
                         assert_eq!(
                             state

@@ -8,6 +8,8 @@ Optional `requests` describe personal requests for one planting or harvest actio
 
 The player view lists addressed requests; use `respond-cultivation REQUEST accept|decline` to answer one. A requester can use `withdraw-cultivation REQUEST` to tell the addressed person locally that the request is withdrawn. Withdrawal removes the request and its scoped signal; it does not physically prevent the other person from cultivating independently.
 
+An autonomous requester may have a `[[cultivation.requests.withdrawal_preferences]]` entry with `person`, `affinity_below`, and a positive `retry_after` in boundaries. When their own affinity toward the addressed person falls below the threshold, they may locally communicate withdrawal. The saved retry delay prevents immediate repeated requests; it does not bind the recipient. Automatic withdrawal currently requires both people at the same regional stock endpoint.
+
 Requests become actionable on a later boundary. Each attempted action reserves its worker and field alongside ordinary farming and uses the same actual seed, claims and storage arbitration. Latest-boundary events distinguish refusal, expiry, a changed field, physical failure and fulfillment; only an accepted physical receipt reports fulfillment. Pending requests and personal preferences are saved with agriculture.
 
 A requester who personally witnesses fulfillment, refusal, or failed physical work may interpret each through their own work-affinity sensitivities. Failure has its own optional signed reaction and is not a refusal; an unwitnessed outcome does not change the requester's feelings. No obligation is created by the request.

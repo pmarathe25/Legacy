@@ -25,6 +25,22 @@ pub struct Discoverer {
     pub lifetime: u64,
 }
 
+/// A person's own rule for reconsidering requests and waiting before retrying.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WithdrawalPreference {
+    pub person: u64,
+    pub affinity_below: i32,
+    pub retry_after: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RetryBackoff {
+    pub person: u64,
+    pub until: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preference {
@@ -80,6 +96,10 @@ pub struct Requests {
     #[serde(default)]
     pub discoverers: Vec<Discoverer>,
     #[serde(default)]
+    pub withdrawal_preferences: Vec<WithdrawalPreference>,
+    #[serde(default)]
+    pub retry_backoffs: Vec<RetryBackoff>,
+    #[serde(default)]
     pub preferences: Vec<Preference>,
     #[serde(default)]
     pub pending: Vec<Request>,
@@ -97,9 +117,21 @@ impl Requests {
             .chain(self.discoverers.par_iter().map(|a| a.person))
             .collect();
         let mut preferences: Vec<_> = self.preferences.par_iter().map(|a| a.person).collect();
+        let mut withdrawal_preferences: Vec<_> = self
+            .withdrawal_preferences
+            .par_iter()
+            .map(|row| row.person)
+            .collect();
+        let mut retry_backoffs: Vec<_> = self
+            .retry_backoffs
+            .par_iter()
+            .map(|row| row.person)
+            .collect();
         let mut ids: Vec<_> = self.pending.par_iter().map(|r| r.id).collect();
         askers.par_sort_unstable();
         preferences.par_sort_unstable();
+        withdrawal_preferences.par_sort_unstable();
+        retry_backoffs.par_sort_unstable();
         ids.par_sort_unstable();
         if self.next_id == 0
             || ids.last().is_some_and(|id| *id >= self.next_id)
@@ -107,6 +139,16 @@ impl Requests {
             || ids.par_windows(2).any(|p| p[0] == p[1])
             || askers.par_windows(2).any(|p| p[0] == p[1])
             || preferences.par_windows(2).any(|p| p[0] == p[1])
+            || withdrawal_preferences.par_windows(2).any(|p| p[0] == p[1])
+            || retry_backoffs.par_windows(2).any(|p| p[0] == p[1])
+            || self
+                .withdrawal_preferences
+                .par_iter()
+                .any(|row| !people.contains(&row.person) || row.retry_after == 0)
+            || self
+                .retry_backoffs
+                .par_iter()
+                .any(|row| !people.contains(&row.person) || row.until == 0)
             || self
                 .preferences
                 .par_iter()
@@ -230,6 +272,85 @@ pub fn prepare(
             return Err("person cannot withdraw this cultivation request".into());
         }
     }
+    // Withdrawal is a personal communication, selected from the opening state.
+    let mut automatic = if owner.withdrawal_preferences.is_empty() {
+        Vec::new()
+    } else {
+        let mut rules: Vec<_> = owner.withdrawal_preferences.par_iter().collect();
+        rules.par_sort_unstable_by_key(|rule| rule.person);
+        owner
+            .pending
+            .par_iter()
+            .filter_map(|request| {
+                let requester = person(request.requester)?;
+                let worker = person(request.worker)?;
+                let rule = rules.get(
+                    rules
+                        .binary_search_by_key(&requester.id, |rule| rule.person)
+                        .ok()?,
+                )?;
+                if requester.controlled
+                    || requester.health == 0
+                    || worker.health == 0
+                    || requester.region.is_none()
+                    || requester.region != worker.region
+                    || unavailable(requester.id)
+                    || context.contact_blocked.binary_search(&requester.id).is_ok()
+                    || context.contact_blocked.binary_search(&worker.id).is_ok()
+                    || request.created_at >= context.tick
+                    || context.tick > request.expires
+                    || field(request.field).is_none_or(|field| field.phase != request.phase)
+                    || context
+                        .manual_response
+                        .is_some_and(|(_, id, _)| id == request.id)
+                    || opinions.map_or(0, |index| index.affinity(requester.id, worker.id))
+                        >= rule.affinity_below
+                {
+                    return None;
+                }
+                Some((request.id, requester.id, rule.retry_after))
+            })
+            .collect::<Vec<_>>()
+    };
+    automatic.par_sort_unstable_by_key(|row| (row.1, row.0));
+    let automatic: Vec<_> = automatic
+        .par_chunk_by(|a, b| a.1 == b.1)
+        .map(|group| group[0])
+        .collect();
+    let mut withdrawn: Vec<_> = automatic.par_iter().map(|row| row.0).collect();
+    withdrawn.par_sort_unstable();
+    let mut withdrawal_actors: Vec<_> = automatic.par_iter().map(|row| row.1).collect();
+    withdrawal_actors.par_sort_unstable();
+    let mut retry_backoffs: Vec<_> = owner
+        .retry_backoffs
+        .par_iter()
+        .filter(|row| row.until > context.tick)
+        .cloned()
+        .collect();
+    let new_backoffs: Vec<_> = automatic
+        .par_iter()
+        .map(|&(_, person, delay)| {
+            Ok(RetryBackoff {
+                person,
+                until: context
+                    .tick
+                    .checked_add(delay)
+                    .ok_or("cultivation retry overflow")?,
+            })
+        })
+        .collect::<Result<_, String>>()?;
+    retry_backoffs.par_extend(new_backoffs);
+    retry_backoffs.par_sort_unstable_by_key(|row| (row.person, row.until));
+    retry_backoffs = retry_backoffs
+        .par_chunk_by(|a, b| a.person == b.person)
+        .map(|group| group[group.len() - 1].clone())
+        .collect();
+    let waiting = |person| {
+        retry_backoffs
+            .binary_search_by_key(&person, |row| row.person)
+            .ok()
+            .is_some_and(|i| retry_backoffs[i].until > context.tick)
+    };
     enum Evaluation {
         Event(Event),
         Candidate(Request),
@@ -245,9 +366,10 @@ pub fn prepare(
                 .manual_response
                 .filter(|(actor, id, _)| *actor == worker.id && *id == request.id);
             Ok(
-                if context
-                    .manual_withdrawal
-                    .is_some_and(|(actor, id)| actor == request.requester && id == request.id)
+                if withdrawn.binary_search(&request.id).is_ok()
+                    || context
+                        .manual_withdrawal
+                        .is_some_and(|(actor, id)| actor == request.requester && id == request.id)
                 {
                     Evaluation::Event(Event {
                         request: request.id,
@@ -274,6 +396,7 @@ pub fn prepare(
                     || worker.hunger > context.agriculture.max_hunger
                     || worker.region != Some(f.region)
                     || (unavailable(worker.id) && response.is_none())
+                    || (withdrawal_actors.binary_search(&worker.id).is_ok() && response.is_none())
                     || context.manual.is_some_and(|(_, id)| id == f.id)
                 {
                     Evaluation::Retained(request.clone())
@@ -372,6 +495,7 @@ pub fn prepare(
         })
         .collect();
     let mut reserved: Vec<_> = attempts.par_iter().map(|a| a.worker).collect();
+    reserved.par_extend(withdrawal_actors.par_iter().copied());
     reserved.par_sort_unstable();
     let mut used_fields: Vec<_> = attempts.par_iter().map(|a| a.field).collect();
     used_fields.par_sort_unstable();
@@ -386,6 +510,7 @@ pub fn prepare(
             let f = field(a.field)?;
             if !context.tick.is_multiple_of(a.interval)
                 || already.binary_search(&a.person).is_ok()
+                || waiting(a.person)
                 || asker.controlled
                 || asker.health == 0
                 || asker.hunger > context.agriculture.max_hunger
@@ -433,6 +558,7 @@ pub fn prepare(
             let region = asker.region?;
             if !context.tick.is_multiple_of(a.interval)
                 || already.binary_search(&a.person).is_ok()
+                || waiting(a.person)
                 || asker.controlled
                 || asker.health == 0
                 || asker.hunger > context.agriculture.max_hunger
@@ -489,7 +615,10 @@ pub fn prepare(
             })
         })
         .collect::<Result<_, String>>()?;
-    let requesters: Vec<_> = opened.par_iter().map(|request| request.requester).collect();
+    let mut requesters: Vec<_> = opened.par_iter().map(|request| request.requester).collect();
+    requesters.par_extend(withdrawal_actors);
+    requesters.par_sort_unstable();
+    requesters.dedup();
     retained.par_extend(opened);
     reserved.par_extend(requesters.par_iter().copied());
     reserved.par_sort_unstable();
@@ -500,6 +629,8 @@ pub fn prepare(
             next_id,
             askers: owner.askers.par_iter().cloned().collect(),
             discoverers: owner.discoverers.par_iter().cloned().collect(),
+            withdrawal_preferences: owner.withdrawal_preferences.par_iter().cloned().collect(),
+            retry_backoffs,
             preferences: owner.preferences.par_iter().cloned().collect(),
             pending: retained,
             events,
