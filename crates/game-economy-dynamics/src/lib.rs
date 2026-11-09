@@ -323,20 +323,35 @@ impl Dynamics {
             .social
             .as_ref()
             .and_then(|_| travel_social::Locality::new(old, travel, partition, local));
-        let contacts: Vec<_> = old
-            .par_iter()
-            .map(|p| Contact {
-                person: p.id,
-                region: locality
-                    .as_ref()
-                    .map_or(p.region, |locations| locations.key(p)),
-                health: p.health,
-                hunger: p.hunger,
-                busy: p.controlled
-                    || busy.binary_search(&p.id).is_ok()
-                    || occupied.binary_search(&p.id).is_ok(),
-            })
-            .collect();
+        let make_contact = |p: &Person, region| Contact {
+            person: p.id,
+            region,
+            health: p.health,
+            hunger: p.hunger,
+            busy: p.controlled
+                || busy.binary_search(&p.id).is_ok()
+                || occupied.binary_search(&p.id).is_ok(),
+        };
+        let contacts: Vec<_> = if let Some(aligned) = locality
+            .as_ref()
+            .and_then(|locations| locations.aligned(old))
+        {
+            old.par_iter()
+                .zip(aligned.par_iter())
+                .map(|(p, row)| make_contact(p, travel_social::Locality::slot_key(row.1)))
+                .collect()
+        } else {
+            old.par_iter()
+                .map(|p| {
+                    make_contact(
+                        p,
+                        locality
+                            .as_ref()
+                            .map_or(p.region, |locations| locations.key(p)),
+                    )
+                })
+                .collect()
+        };
         let requested = requested.map(|encounter| {
             let mut encounter = encounter.clone();
             if locality.is_some() {

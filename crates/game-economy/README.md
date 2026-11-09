@@ -81,7 +81,7 @@ Regional work sites occupy the stock endpoint when local walking is enabled. Tac
 
 The ignored `route_closure_batch_benchmark` attempts a mixed batch of open and closed routes and advances a boundary. `LEGACY_PEOPLE` controls the number of travelers, `LEGACY_DISTRIBUTED=1` gives them independent routes, and `LEGACY_WORKERS` controls concurrency.
 
-With `LEGACY_LOCAL_WALKERS=1`, the existing `traveling_social_benchmark` places people at the same recorded point on a local walking leg and checks their autonomous encounters. A 100,000-person, two-boundary run took 88 ms with one worker and 43 ms with six; the state fingerprints matched. With the profiling feature and `LEGACY_PROFILE=1`, the benchmark also reports phase timings. These measurements are specific to this concentrated workload.
+With `LEGACY_LOCAL_WALKERS=1`, the existing `traveling_social_benchmark` places people at the same recorded point on a local walking leg and checks their autonomous encounters. A 100,000-person, two-boundary run took 83 ms with one worker and 41 ms with six; the state fingerprints matched. With the profiling feature and `LEGACY_PROFILE=1`, the benchmark also reports phase timings. These measurements are specific to this concentrated workload.
 
 The ignored `personal_route_planning_benchmark` measures a full boundary of food seekers planning from individual route reports. `LEGACY_PEOPLE` sets the population, `LEGACY_MULTIHOP=1` exercises multi-leg paths, and `LEGACY_WORKERS` sets concurrency.
 

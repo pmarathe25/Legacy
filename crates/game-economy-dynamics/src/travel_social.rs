@@ -3,6 +3,22 @@ use game_economy_person::{Person, travel::Travel};
 use game_social::Encounter;
 use rayon::prelude::*;
 
+fn sorted_unique<T: Copy + Ord + Send + Sync>(mut rows: Vec<T>) -> Vec<T> {
+    let Some(&first) = rows.first() else {
+        return rows;
+    };
+    if rows.par_iter().all(|row| *row == first) {
+        rows.truncate(1);
+        return rows;
+    }
+    if rows.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        rows.par_sort_unstable();
+    }
+    rows.par_chunk_by(|a, b| a == b)
+        .map(|group| group[0])
+        .collect()
+}
+
 pub struct Locality {
     regions: Vec<u64>,
     routes: Vec<(u64, u64, u64, u64)>,
@@ -20,19 +36,19 @@ impl Locality {
         if journeys.is_empty() && partition.is_none() && local.is_none() {
             return None;
         }
-        let mut regions: Vec<_> = people
-            .par_iter()
-            .filter_map(|p| p.region)
-            .chain(journeys.par_iter().map(|j| j.source))
-            .collect();
-        regions.par_sort_unstable();
-        regions = regions.par_chunk_by(|a, b| a == b).map(|g| g[0]).collect();
-        let mut routes: Vec<_> = journeys
-            .par_iter()
-            .map(|j| (j.source, j.destination, j.remaining, j.progress_millis))
-            .collect();
-        routes.par_sort_unstable();
-        routes = routes.par_chunk_by(|a, b| a == b).map(|g| g[0]).collect();
+        let regions = sorted_unique(
+            people
+                .par_iter()
+                .filter_map(|p| p.region)
+                .chain(journeys.par_iter().map(|j| j.source))
+                .collect(),
+        );
+        let routes = sorted_unique(
+            journeys
+                .par_iter()
+                .map(|j| (j.source, j.destination, j.remaining, j.progress_millis))
+                .collect(),
+        );
         let cell_people: Vec<_> = if partition.is_some() || local.is_some() {
             people
                 .par_iter()
@@ -47,11 +63,13 @@ impl Locality {
         } else {
             Vec::new()
         };
-        let mut cells: Vec<_> = cell_people.par_iter().map(|row| row.1).collect();
-        if cells.par_windows(2).any(|pair| pair[0] > pair[1]) {
-            cells.par_sort_unstable();
-        }
-        cells = cells.par_chunk_by(|a, b| a == b).map(|g| g[0]).collect();
+        let cells = if let Some(first) = cell_people.first().map(|row| row.1)
+            && cell_people.par_iter().all(|row| row.1 == first)
+        {
+            vec![first]
+        } else {
+            sorted_unique(cell_people.par_iter().map(|row| row.1).collect())
+        };
         let mut locations: Vec<_> = journeys
             .par_iter()
             .map(|j| {
@@ -89,6 +107,19 @@ impl Locality {
                 .ok()
                 .map(|i| self.people[i].1)?
         };
+        Self::slot_key(slot)
+    }
+    /// Use direct paired access when every person already has an explicit slot.
+    pub fn aligned<'a>(&'a self, people: &[Person]) -> Option<&'a [(u64, usize)]> {
+        (self.people.len() == people.len()
+            && self
+                .people
+                .par_iter()
+                .zip(people.par_iter())
+                .all(|(row, person)| row.0 == person.id))
+        .then_some(self.people.as_slice())
+    }
+    pub fn slot_key(slot: usize) -> Option<u64> {
         u64::try_from(slot).ok()?.checked_add(1)
     }
     pub fn restore(&self, event: &mut Encounter) {
