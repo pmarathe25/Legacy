@@ -6050,6 +6050,7 @@ impl Economy {
                     nonstock: &nonstock,
                     occupied_fields: &occupied,
                     claims: claims.as_ref(),
+                    opinions: self.opinions.as_ref(),
                     view: &view,
                     max_hunger: self.rules.max_work_hunger,
                     seed: self.seed,

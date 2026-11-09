@@ -15,6 +15,12 @@ pub struct Choice {
     pub field: u64,
     pub willing: bool,
     #[serde(default)]
+    pub pressured_by: Option<u64>,
+    #[serde(default)]
+    pub fear_at_least: Option<u64>,
+    #[serde(default)]
+    pub obligation_at_least: Option<u64>,
+    #[serde(default)]
     pub disregard_claims: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -55,6 +61,7 @@ pub struct Context<'a> {
     pub nonstock: &'a [u64],
     pub occupied_fields: &'a [u64],
     pub claims: Option<&'a Index<'a>>,
+    pub opinions: Option<&'a game_opinions::Opinions>,
     pub view: &'a View,
     pub max_hunger: u32,
     pub seed: u64,
@@ -75,6 +82,11 @@ impl Amendment {
             || actors.par_windows(2).any(|p| p[0] == p[1])
             || self.choices.par_iter().any(|row| {
                 !people.contains(&row.person)
+                    || row
+                        .pressured_by
+                        .is_some_and(|id| id == row.person || !people.contains(&id))
+                    || (row.fear_at_least.is_some() || row.obligation_at_least.is_some())
+                        != row.pressured_by.is_some()
                     || soil
                         .fields
                         .binary_search_by_key(&row.field, |field| field.field)
@@ -101,11 +113,19 @@ impl Amendment {
             nonstock,
             occupied_fields,
             claims,
+            opinions,
             view,
             max_hunger,
             seed,
             tick,
         } = context;
+        let opinions = opinions
+            .filter(|_| {
+                self.choices
+                    .par_iter()
+                    .any(|choice| !choice.willing && choice.pressured_by.is_some())
+            })
+            .map(game_opinions::Opinions::index);
         let mut fields: Vec<_> = agriculture.fields.par_iter().collect();
         if fields.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
             fields.par_sort_unstable_by_key(|row| row.id);
@@ -129,7 +149,21 @@ impl Amendment {
                         .binary_search_by_key(&choice.field, |row| row.field)
                         .ok()?,
                 )?;
-                if !choice.willing
+                let (fear, obligation) = choice
+                    .pressured_by
+                    .and_then(|target| {
+                        opinions
+                            .as_ref()
+                            .map(|index| index.feelings(person.id, target))
+                    })
+                    .unwrap_or((0, 0));
+                if (!choice.willing
+                    && !choice
+                        .fear_at_least
+                        .is_some_and(|threshold| fear >= threshold)
+                    && !choice
+                        .obligation_at_least
+                        .is_some_and(|threshold| obligation >= threshold))
                     || person.controlled
                     || person.health == 0
                     || person.hunger > max_hunger

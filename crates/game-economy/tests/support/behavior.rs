@@ -38745,12 +38745,18 @@ fn soil_improvement_consumes_real_material_and_arbitrates_competing_people() {
                     person: 1,
                     field: 1,
                     willing: true,
+                    pressured_by: None,
+                    fear_at_least: None,
+                    obligation_at_least: None,
                     disregard_claims: false,
                 },
                 Choice {
                     person: 2,
                     field: 2,
                     willing: true,
+                    pressured_by: None,
+                    fear_at_least: None,
+                    obligation_at_least: None,
                     disregard_claims: false,
                 },
             ],
@@ -38815,6 +38821,50 @@ fn soil_improvement_consumes_real_material_and_arbitrates_competing_people() {
     let soil = result.agriculture.unwrap().soil.unwrap();
     assert_eq!(soil.amendment.unwrap().events.len(), 1);
     assert_eq!(soil.fields[0].fertility, 40);
+    let mut pressured = initial.clone();
+    let choices = &mut pressured
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .soil
+        .as_mut()
+        .unwrap()
+        .amendment
+        .as_mut()
+        .unwrap()
+        .choices;
+    choices.iter_mut().for_each(|row| row.willing = false);
+    choices[1].pressured_by = Some(1);
+    choices[1].fear_at_least = Some(3);
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 3,
+        obligation: 0,
+        affinity: 0,
+    }];
+    pressured.opinions = Some(opinions);
+    let result = run(pressured.clone(), 1);
+    assert_eq!(result, run(pressured.clone(), 4));
+    assert_eq!(
+        result.agriculture.unwrap().soil.unwrap().fields[1].fertility,
+        40
+    );
+    pressured.opinions.as_mut().unwrap().records[0].fear = 0;
+    let result = run(pressured, 1);
+    assert!(
+        result
+            .agriculture
+            .unwrap()
+            .soil
+            .unwrap()
+            .amendment
+            .unwrap()
+            .events
+            .is_empty()
+    );
     let mut unwilling = initial;
     unwilling
         .agriculture
@@ -39849,7 +39899,8 @@ fn concentrated_field_benchmark() {
     let offers = std::env::var_os("LEGACY_FIELD_OFFERS").is_some();
     let remember = std::env::var_os("LEGACY_FIELD_REMEMBER").is_some();
     let soil = std::env::var_os("LEGACY_FIELD_SOIL").is_some();
-    let amend = std::env::var_os("LEGACY_FIELD_AMEND").is_some();
+    let amendment_pressure = std::env::var_os("LEGACY_FIELD_AMEND_PRESSURE").is_some();
+    let amend = amendment_pressure || std::env::var_os("LEGACY_FIELD_AMEND").is_some();
     let requests = discovery
         || withdrawal
         || offers
@@ -39906,13 +39957,34 @@ fn concentrated_field_benchmark() {
                     .map(|person| Choice {
                         person,
                         field: person,
-                        willing: true,
+                        willing: !amendment_pressure,
+                        pressured_by: amendment_pressure.then_some(if person == count {
+                            1
+                        } else {
+                            person + 1
+                        }),
+                        fear_at_least: amendment_pressure.then_some(1),
+                        obligation_at_least: None,
                         disregard_claims: false,
                     })
                     .collect(),
                 events: vec![],
             }),
         });
+    }
+    if amendment_pressure {
+        let mut opinions = fixture().opinions.unwrap();
+        opinions.records = (1..=count)
+            .map(|person| Opinion {
+                observer: person,
+                target: if person == count { 1 } else { person + 1 },
+                trust: 0,
+                fear: 1,
+                obligation: 0,
+                affinity: 0,
+            })
+            .collect();
+        initial.opinions = Some(opinions);
     }
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
