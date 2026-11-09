@@ -25155,6 +25155,27 @@ fn market_proposals_and_trades_require_a_shared_endpoint() {
             .unwrap()
             .install(|| {
                 let mut store = initial.clone();
+                store.giving = Some(Giving {
+                    practices: None,
+                    inherit_births: false,
+                    policies: vec![GivingPolicy {
+                        person: 4,
+                        recipient: 3,
+                        good: 1,
+                        quantity: 1,
+                        recipient_hunger_at_least: 0,
+                        willing: true,
+                        requires_request: false,
+                        pressured_by: None,
+                        pressure_threshold: None,
+                    }]
+                    .into(),
+                    responses: vec![].into(),
+                    learning: vec![],
+                    asking: vec![],
+                    acquaintance_asking: vec![],
+                    requests: vec![],
+                });
                 store
                     .local_transport
                     .as_mut()
@@ -25175,6 +25196,18 @@ fn market_proposals_and_trades_require_a_shared_endpoint() {
                 let mut store = Economy::compile(store).unwrap();
                 store.advance().unwrap();
                 assert_eq!(store.snapshot().market.as_ref().unwrap().offers.len(), 1);
+                assert_eq!(
+                    store
+                        .snapshot()
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(4))
+                        .unwrap()
+                        .used,
+                    1
+                );
                 store.advance().unwrap();
                 let state = store.snapshot();
                 assert!(state.market.as_ref().unwrap().offers.is_empty());
