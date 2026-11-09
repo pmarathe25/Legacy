@@ -9613,6 +9613,12 @@ impl Economy {
         }
         let mut autowork = self.autowork.clone();
         if let (Some(auto), Some(plan)) = (&mut autowork, work) {
+            let proximity = |a, b| self.local_people_together(a, b);
+            let together = self
+                .local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref())
+                .map(|_| &proximity as &game_economy_work::Proximity<'_>);
             if let Some(opinions) = next_opinions.as_mut().filter(|o| {
                 plan.may_have_work_experiences(physical.events()) && o.tracks_work_affinity()
             }) {
@@ -9620,9 +9626,10 @@ impl Economy {
                     auto,
                     physical.events(),
                     &people,
+                    together,
                 ));
             }
-            plan.publish(auto, physical.events(), &people);
+            plan.publish(auto, physical.events(), &people, together);
         }
         if let Some((requests, family)) = autowork
             .as_mut()

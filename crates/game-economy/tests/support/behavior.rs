@@ -38089,6 +38089,52 @@ fn requested_work_is_learned_only_by_a_present_observer() {
     let mut economy = Economy::compile(initial).unwrap();
     assert_eq!(economy.advance().unwrap().started, vec![1]);
     let present = economy.snapshot();
+    let mut distant_store = present.clone();
+    distant_store
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant_store
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant_store.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 1,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut distant_store = Economy::compile(distant_store).unwrap();
+    assert_eq!(distant_store.advance().unwrap().finished, vec![1]);
+    let distant_store = distant_store.snapshot();
+    assert!(
+        distant_store
+            .autowork
+            .unwrap()
+            .requests
+            .unwrap()
+            .memories
+            .is_empty()
+    );
+    assert!(distant_store.dreams.unwrap().people.is_empty());
     let mut absent = present.clone();
     absent.people[0].region = Some(2);
     let mut absent = Economy::compile(absent).unwrap();
@@ -38264,6 +38310,28 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                     .pending[0]
                     .id;
                 state.people[1].controlled = true;
+                let mut separated = state.clone();
+                separated
+                    .local_transport
+                    .as_mut()
+                    .unwrap()
+                    .walking
+                    .as_mut()
+                    .unwrap()
+                    .positions
+                    .retain(|position| position.person != 1);
+                let mut separated = Economy::compile(separated).unwrap();
+                separated.respond_work_request(2, request, false).unwrap();
+                assert!(
+                    separated
+                        .snapshot()
+                        .autowork
+                        .unwrap()
+                        .requests
+                        .unwrap()
+                        .memories
+                        .is_empty()
+                );
                 let mut world = Economy::compile(state).unwrap();
                 let before = world.snapshot();
                 assert!(world.respond_work_request(2, request, true).is_err());
@@ -38286,6 +38354,18 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                         .unwrap()
                         .pending
                         .is_empty()
+                );
+                assert_eq!(
+                    state
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .memories[0]
+                        .last_refusal_at,
+                    Some(state.physical.custody.tick)
                 );
                 state
             })

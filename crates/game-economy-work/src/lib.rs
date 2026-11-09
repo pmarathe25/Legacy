@@ -550,10 +550,18 @@ pub fn pressured_workers(
     workers.dedup();
     workers
 }
-fn visible(people: &[PersonSnapshot], requester: u64, worker: u64, region: u64) -> bool {
+pub type Proximity<'a> = dyn Fn(u64, u64) -> bool + Sync + 'a;
+fn visible(
+    people: &[PersonSnapshot],
+    requester: u64,
+    worker: u64,
+    region: u64,
+    together: Option<&Proximity<'_>>,
+) -> bool {
     let a = person_index(people, requester).map(|index| people[index]);
     let b = person_index(people, worker).map(|index| people[index]);
     matches!((a, b), (Some((_, Some(ar), ah, _)), Some((_, Some(br), bh, _))) if ar == region && br == ar && ah > 0 && bh > 0)
+        && together.is_none_or(|check| check(requester, worker))
 }
 impl Plan {
     /// Include a controlled person's independent decision in the same outcome
@@ -643,6 +651,7 @@ impl Plan {
         auto: &Autowork,
         physical: &Events,
         people: &[PersonSnapshot],
+        together: Option<&Proximity<'_>>,
     ) -> Vec<(u64, u64, bool)> {
         let Some(owner) = &auto.requests else {
             return Vec::new();
@@ -652,7 +661,7 @@ impl Plan {
             .par_iter()
             .filter(|link| {
                 physical.finished.binary_search(&link.job).is_ok()
-                    && visible(people, link.requester, link.worker, link.region)
+                    && visible(people, link.requester, link.worker, link.region, together)
             })
             .map(|link| (link.requester, link.worker, true))
             .collect();
@@ -673,18 +682,21 @@ impl Plan {
                             .binary_search_by_key(&decision.request, |row| row.id)
                             .ok()
                             .map(|i| pending[i])?;
-                        visible(people, row.requester, row.worker, row.region).then_some((
-                            row.requester,
-                            row.worker,
-                            false,
-                        ))
+                        visible(people, row.requester, row.worker, row.region, together)
+                            .then_some((row.requester, row.worker, false))
                     }),
             );
         }
         observations
     }
     /// Publish remembered outcomes only after the physical generation succeeded.
-    pub fn publish(self, auto: &mut Autowork, physical: &Events, people: &[PersonSnapshot]) {
+    pub fn publish(
+        self,
+        auto: &mut Autowork,
+        physical: &Events,
+        people: &[PersonSnapshot],
+        together: Option<&Proximity<'_>>,
+    ) {
         if let Some(work) = &self.work {
             auto.next_id = work.next_id;
         }
@@ -709,7 +721,7 @@ impl Plan {
             .collect();
         existing.par_sort_unstable_by_key(|row| row.0);
         owner.resolve(&existing, physical.tick, |link| {
-            visible(people, link.requester, link.worker, link.region)
+            visible(people, link.requester, link.worker, link.region, together)
         });
         let Some(request) = self.request else {
             owner.events.clear();
@@ -755,7 +767,7 @@ impl Plan {
         let mut witnessed: Vec<_> = owner
             .pending
             .par_iter()
-            .filter(|row| visible(people, row.requester, row.worker, row.region))
+            .filter(|row| visible(people, row.requester, row.worker, row.region, together))
             .map(|row| row.id)
             .collect();
         witnessed.par_sort_unstable();
@@ -770,7 +782,7 @@ impl Plan {
             })
             .collect();
         owner.resolve(&ended_on_start, physical.tick, |link| {
-            visible(people, link.requester, link.worker, link.region)
+            visible(people, link.requester, link.worker, link.region, together)
         });
         owner.observe_refusals(&events, &witnessed, physical.tick);
         let ids: Vec<_> = events.par_iter().map(|row| row.request).collect();
