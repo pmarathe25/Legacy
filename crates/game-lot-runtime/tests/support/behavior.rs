@@ -354,6 +354,73 @@ fn finished_work_retains_inputs_until_settlement_after_reload() {
 }
 
 #[test]
+fn batched_partial_work_is_atomic_and_invalidates_stale_drafts() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let before = world.snapshot();
+    let draft = world.prepare_advance(&[], &[], 7).unwrap();
+    assert!(world.progress_work(&[(1, 1), (1, 2)], 10).is_err());
+    assert_eq!(world.snapshot(), before);
+    assert!(world.validate_advance(&draft).is_ok());
+    let quantum = world.tick_millis();
+    world.progress_work(&[(1, 1)], quantum / 2).unwrap();
+    assert_eq!(world.tick(), before.custody.tick);
+    assert_eq!(world.work()[0].progress_remainder, quantum / 2);
+    assert_eq!(world.custody(Place::JobInput(1)).unwrap().used, 2);
+    assert!(world.commit_advance(draft).is_err());
+    let saved = serde_json::to_string(&world.snapshot()).unwrap();
+    let mut resumed = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    resumed
+        .progress_work(&[(1, 1)], quantum + quantum / 2)
+        .unwrap();
+    assert_eq!(resumed.work()[0].job.remaining, 0);
+    assert_eq!(resumed.custody(Place::JobInput(1)).unwrap().used, 2);
+    assert_eq!(resumed.advance(&[], 7).unwrap().finished, vec![1]);
+}
+
+#[test]
+fn batched_partial_work_accepts_unsorted_independent_rates() {
+    let mut world = runtime();
+    let starts: Vec<_> = (1..=2)
+        .map(|id| Start {
+            id,
+            worker: id,
+            region: 1,
+            recipe: 1,
+            units: 1,
+        })
+        .collect();
+    assert!(world.start(&starts, 1).unwrap().iter().all(|row| row.1));
+    let quantum = world.tick_millis();
+    world.progress_work(&[(2, 1), (1, 2)], quantum / 2).unwrap();
+    assert_eq!(
+        (
+            world.work()[0].job.remaining,
+            world.work()[0].progress_remainder
+        ),
+        (1, 0)
+    );
+    assert_eq!(
+        (
+            world.work()[1].job.remaining,
+            world.work()[1].progress_remainder
+        ),
+        (2, quantum / 2)
+    );
+}
+
+#[test]
 fn worker_can_abandon_even_when_reserved_material_cannot_yet_fit() {
     let mut runtime = runtime();
     runtime
@@ -467,7 +534,10 @@ fn concentrated_production_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(100_000);
     let fractional = std::env::var_os("LEGACY_FRACTIONAL").is_some();
-    let progress_only = fractional || std::env::var_os("LEGACY_PROGRESS_ONLY").is_some();
+    let interval_progress = std::env::var_os("LEGACY_INTERVAL_PROGRESS").is_some();
+    assert!(!(fractional && interval_progress));
+    let progress_only =
+        fractional || interval_progress || std::env::var_os("LEGACY_PROGRESS_ONLY").is_some();
     let (snapshot, requests) = concentrated(count);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -495,12 +565,19 @@ fn concentrated_production_benchmark() {
                 .filter(|row| row.1)
                 .map(|row| (row.0, 1))
                 .collect();
-            let finished = runtime.advance(&rates, 9).unwrap();
-            let delivered = runtime.advance(&[], 9).unwrap();
+            if interval_progress {
+                runtime.progress_work(&rates, runtime.tick_millis() / 2).unwrap();
+            } else {
+                let finished = runtime.advance(&rates, 9).unwrap();
+                let delivered = runtime.advance(&[], 9).unwrap();
+                assert_eq!(finished.finished.len(), rates.len());
+                assert_eq!(delivered.delivered.len(), rates.len());
+            }
             let elapsed = start.elapsed().as_secs_f64();
+            if interval_progress {
+                assert!(runtime.work().par_iter().all(|work| work.progress_remainder == runtime.tick_millis() / 2));
+            }
             assert_eq!(rates.len(), count as usize / 2);
-            assert_eq!(finished.finished.len(), rates.len());
-            assert_eq!(delivered.delivered.len(), rates.len());
             let fingerprint = serde_json::to_vec(&runtime.snapshot()).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
             if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
             if round > 0 {
@@ -509,7 +586,7 @@ fn concentrated_production_benchmark() {
         }
         samples.sort_by(f64::total_cmp);
         println!(
-            "workers={workers} jobs={count} admitted={} progress_only={progress_only} fractional={fractional} elapsed={:.6} state_fingerprint={:016x}",
+            "workers={workers} jobs={count} admitted={} progress_only={progress_only} fractional={fractional} interval_progress={interval_progress} elapsed={:.6} state_fingerprint={:016x}",
             count / 2,
             samples[1], expected.unwrap()
         );

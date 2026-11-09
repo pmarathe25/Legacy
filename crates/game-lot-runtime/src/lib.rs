@@ -140,6 +140,46 @@ impl Runtime {
     pub fn work(&self) -> &[Work] {
         &self.work
     }
+    /// Advance reserved work counters without publishing completion or advancing
+    /// the boundary. The caller owns interval admission, frozen rates and time.
+    /// Invalid batches leave both counters and the draft generation unchanged.
+    pub fn progress_work(
+        &mut self,
+        rates: &[(u64, u64)],
+        elapsed_millis: u64,
+    ) -> Result<(), String> {
+        let mut rates = rates.to_vec();
+        if rates.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+            rates.par_sort_unstable_by_key(|row| row.0);
+        }
+        if rates.par_windows(2).any(|pair| pair[0].0 == pair[1].0)
+            || rates.par_iter().any(|&(job, rate)| {
+                rate == 0
+                    || self
+                        .work
+                        .binary_search_by_key(&job, |row| row.job.id)
+                        .map_or(true, |index| self.work[index].phase != Phase::Working)
+            })
+        {
+            return Err("invalid work rate".into());
+        }
+        if rates.is_empty() || elapsed_millis == 0 {
+            return Ok(());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let quantum = self.tick_millis;
+        self.work.par_iter_mut().for_each(|row| {
+            if let Ok(index) = rates.binary_search_by_key(&row.job.id, |rate| rate.0) {
+                row.advance_elapsed(rates[index].1, elapsed_millis, quantum)
+                    .expect("validated work progress");
+            }
+        });
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Reserve physical materials at the current time, after the caller's actor checks.
     pub fn start(&mut self, requests: &[Start], seed: u64) -> Result<Vec<(u64, bool)>, String> {
         game_lot_work::validate_starts(&self.work, requests)?;
