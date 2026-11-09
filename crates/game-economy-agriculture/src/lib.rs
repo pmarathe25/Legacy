@@ -2,6 +2,7 @@
 pub mod content;
 pub mod irrigation;
 pub mod requests;
+pub mod soil;
 use game_economy_person::Person;
 use game_lot_content::Catalog;
 use game_lot_runtime::Events;
@@ -57,6 +58,8 @@ pub struct Agriculture {
     /// Optional personal requests for specific cultivation actions.
     #[serde(default)]
     pub requests: Option<requests::Requests>,
+    #[serde(default)]
+    pub soil: Option<soil::Soil>,
     pub crops: Vec<Crop>,
     pub fields: Vec<Field>,
     pub policies: Vec<Policy>,
@@ -67,6 +70,7 @@ impl Clone for Agriculture {
         Self {
             inherit_births: self.inherit_births,
             requests: self.requests.clone(),
+            soil: self.soil.clone(),
             crops: self.crops.par_iter().cloned().collect(),
             fields: self.fields.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
@@ -215,6 +219,9 @@ impl Agriculture {
             {
                 return Err("invalid cultivation offer good".into());
             }
+        }
+        if let Some(soil) = &self.soil {
+            soil.validate(&fields)?;
         }
         Ok(())
     }
@@ -478,7 +485,16 @@ impl Context<'_> {
                             region: field.region,
                             good: crop.output,
                         })
-                        .is_some_and(|stock| stock.capacity - stock.used >= crop.output_quantity),
+                        .is_some_and(|stock| {
+                            stock.capacity - stock.used
+                                >= self
+                                    .agriculture
+                                    .soil
+                                    .as_ref()
+                                    .map_or(crop.output_quantity, |soil| {
+                                        soil.yield_quantity(field.id, crop.output_quantity)
+                                    })
+                        }),
                 })
             })
             .collect();
@@ -579,16 +595,23 @@ impl Context<'_> {
                         Some(Transaction {
                             id: action,
                             movements: vec![],
-                            creations: vec![catalog.creation(
-                                action,
-                                Place::Stock {
-                                    region: field.region,
-                                    good: crop.output,
-                                },
-                                crop.output,
-                                crop.output_quantity,
-                                self.tick,
-                            )?],
+                            creations: vec![
+                                catalog.creation(
+                                    action,
+                                    Place::Stock {
+                                        region: field.region,
+                                        good: crop.output,
+                                    },
+                                    crop.output,
+                                    self.agriculture
+                                        .soil
+                                        .as_ref()
+                                        .map_or(crop.output_quantity, |soil| {
+                                            soil.yield_quantity(field.id, crop.output_quantity)
+                                        }),
+                                    self.tick,
+                                )?,
+                            ],
                         }),
                         Phase::Fallow,
                         0,
@@ -715,6 +738,25 @@ impl Plan {
         if changes.par_windows(2).any(|p| p[0].0 > p[1].0) {
             changes.par_sort_unstable_by_key(|row| row.0);
         }
+        let harvested: Vec<_> = if owner.soil.is_some() {
+            changes
+                .par_iter()
+                .filter_map(|&(field, action, phase, _)| {
+                    (phase == Phase::Fallow
+                        && decisions
+                            .binary_search_by_key(&action, |row| row.id)
+                            .ok()
+                            .is_some_and(|i| decisions[i].accepted))
+                    .then_some(field)
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let soil = owner
+            .soil
+            .as_ref()
+            .map(|soil| soil.advance(&owner.fields, &harvested));
         let rows: Vec<_> = self
             .fields
             .into_par_iter()
@@ -741,6 +783,7 @@ impl Plan {
         Ok(Agriculture {
             inherit_births: owner.inherit_births,
             requests,
+            soil,
             crops: owner.crops.par_iter().cloned().collect(),
             fields: rows,
             policies: owner.policies.par_iter().cloned().collect(),

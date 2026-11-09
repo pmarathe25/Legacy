@@ -108,6 +108,7 @@ fn player_sees_and_gives_only_to_people_at_the_same_local_position() {
         .unwrap()
         .id;
     initial.agriculture = Some(game_economy::Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         max_hunger: 100,
@@ -6800,6 +6801,31 @@ fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
             .find(|goal| goal.person == 2)
             .unwrap()
             .recognize_help
+    );
+}
+
+#[test]
+fn cultivation_soil_scenario_loads_and_recovers_fertility() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-cultivation-soil.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let initial = world.snapshot();
+    let soil = initial.agriculture.as_ref().unwrap().soil.as_ref().unwrap();
+    assert_eq!((soil.capacity, soil.fields[0].fertility), (100, 50));
+    let mut old_save = serde_json::to_value(initial).unwrap();
+    old_save["agriculture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("soil");
+    let old = game_economy::Economy::compile(serde_json::from_value(old_save).unwrap()).unwrap();
+    assert!(old.snapshot().agriculture.unwrap().soil.is_none());
+    world.advance().unwrap();
+    assert_eq!(
+        world.snapshot().agriculture.unwrap().soil.unwrap().fields[0].fertility,
+        60
     );
 }
 

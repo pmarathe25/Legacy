@@ -9445,6 +9445,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
     }
     initial.people[1].controlled = true;
     initial.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         crops: vec![Crop {
@@ -13408,6 +13409,7 @@ fn cultivation_retries_another_person_and_observes_claimed_seed_use() {
         claims: Some(Claims::default()),
     });
     initial.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         crops: vec![Crop {
@@ -16805,6 +16807,7 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
         person.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: true,
         requests: None,
         max_hunger: 100,
@@ -35608,6 +35611,7 @@ fn crops_consume_seed_grow_without_labor_and_harvest_only_from_personal_choice()
         affinity: 0,
     }];
     initial.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         crops: vec![Crop {
@@ -36027,6 +36031,7 @@ fn field_workload(count: u64) -> State {
     )
     .unwrap();
     initial.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         crops: vec![Crop {
@@ -36644,6 +36649,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
         p.seek_meals = false;
     }
     initial.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         max_hunger: 20,
@@ -38708,6 +38714,213 @@ fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
 }
 
 #[test]
+fn soil_fertility_changes_real_harvests_and_recovers_while_fallow() {
+    use game_economy_agriculture::soil::{FieldSoil, Soil};
+    let mut initial = field_workload(2);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.fields[0].phase = CropPhase::Ripe;
+    farm.crops[0].output_quantity = 10;
+    farm.policies[1].willing = false;
+    farm.soil = Some(Soil {
+        capacity: 100,
+        loss_per_harvest: 20,
+        recovery_per_fallow: 10,
+        fields: vec![FieldSoil {
+            field: 1,
+            fertility: 50,
+        }],
+    });
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(stock.place, 100, vec![]).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let first = world.snapshot();
+                assert_eq!(
+                    first
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .soil
+                        .as_ref()
+                        .unwrap()
+                        .fields[0]
+                        .fertility,
+                    30
+                );
+                assert_eq!(
+                    first
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    5
+                );
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&first).unwrap()).unwrap(),
+                )
+                .unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                    restored.advance().unwrap();
+                }
+                assert_eq!(world.snapshot(), restored.snapshot());
+                let second = world.snapshot();
+                assert_eq!(
+                    second
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .soil
+                        .as_ref()
+                        .unwrap()
+                        .fields[0]
+                        .fertility,
+                    20
+                );
+                assert_eq!(
+                    second
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    9
+                );
+                world.set_farming_choice(1, false).unwrap();
+                for _ in 0..3 {
+                    world.advance().unwrap();
+                }
+                let state = world.snapshot();
+                assert_eq!(
+                    state
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .soil
+                        .as_ref()
+                        .unwrap()
+                        .fields[0]
+                        .fertility,
+                    50
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut blocked = initial.clone();
+    let farm = blocked.agriculture.as_mut().unwrap();
+    farm.policies.iter_mut().for_each(|row| row.willing = false);
+    farm.requests = Some(crate::cultivation_requests::Requests {
+        next_id: 2,
+        askers: vec![],
+        discoverers: vec![],
+        withdrawal_preferences: vec![],
+        retry_backoffs: vec![],
+        offer_values: vec![],
+        work_memories: vec![],
+        preferences: vec![crate::cultivation_requests::Preference {
+            person: 2,
+            help_value: 1,
+            effort: 1,
+            affinity_weight: 0,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
+        }],
+        pending: vec![crate::cultivation_requests::Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            field: 1,
+            phase: CropPhase::Ripe,
+            created_at: 0,
+            expires: 5,
+        }],
+        events: vec![],
+    });
+    let stock = blocked
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 3 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        5,
+        vec![Lot {
+            item: None,
+            good: 3,
+            quantity: 5,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let mut blocked = Economy::compile(blocked).unwrap();
+    blocked.advance().unwrap();
+    let blocked = blocked.snapshot();
+    assert_eq!(
+        blocked
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .requests
+            .as_ref()
+            .unwrap()
+            .events[0]
+            .outcome,
+        crate::cultivation_requests::Outcome::Failed
+    );
+    assert_eq!(
+        blocked
+            .agriculture
+            .as_ref()
+            .unwrap()
+            .soil
+            .as_ref()
+            .unwrap()
+            .fields[0]
+            .fertility,
+        50
+    );
+    let mut invalid = initial;
+    invalid
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .soil
+        .as_mut()
+        .unwrap()
+        .fields[0]
+        .fertility = 101;
+    assert!(Economy::compile(invalid).is_err());
+}
+
+#[test]
 fn witnessed_cultivation_can_motivate_a_separate_personal_offer() {
     use crate::cultivation_requests::{Outcome, Preference, Request, Requests};
     let mut initial = field_workload(2);
@@ -39504,6 +39717,7 @@ fn concentrated_field_benchmark() {
     let withdrawal = std::env::var_os("LEGACY_FIELD_WITHDRAW").is_some();
     let offers = std::env::var_os("LEGACY_FIELD_OFFERS").is_some();
     let remember = std::env::var_os("LEGACY_FIELD_REMEMBER").is_some();
+    let soil = std::env::var_os("LEGACY_FIELD_SOIL").is_some();
     let requests = discovery
         || withdrawal
         || offers
@@ -39519,6 +39733,20 @@ fn concentrated_field_benchmark() {
     assert!(!withdrawal || (!discovery && !feelings && !field_claims));
     assert!(!offers || (!discovery && !withdrawal && !feelings && !field_claims));
     assert!(!remember || (!discovery && !withdrawal && !offers && !feelings && !field_claims));
+    assert!(!soil || (!requests && !field_claims && count.is_multiple_of(2)));
+    if soil {
+        initial.agriculture.as_mut().unwrap().soil = Some(game_economy_agriculture::soil::Soil {
+            capacity: 100,
+            loss_per_harvest: 20,
+            recovery_per_fallow: 10,
+            fields: (1..=count)
+                .map(|field| game_economy_agriculture::soil::FieldSoil {
+                    field,
+                    fertility: 100,
+                })
+                .collect(),
+        });
+    }
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
         use crate::cultivation_requests::{
@@ -39780,8 +40008,24 @@ fn concentrated_field_benchmark() {
                     assert_eq!(third, if requests { 0 } else { count as usize / 2 });
                 }
                 let elapsed = started.elapsed().as_secs_f64();
-                if (requests || field_claims) && round == 3 {
+                if (requests || field_claims || soil) && round == 3 {
                     let state = world.snapshot();
+                    if soil {
+                        assert_eq!(
+                            state
+                                .agriculture
+                                .as_ref()
+                                .unwrap()
+                                .soil
+                                .as_ref()
+                                .unwrap()
+                                .fields
+                                .iter()
+                                .filter(|row| row.fertility == 80)
+                                .count(),
+                            count as usize / 2
+                        );
+                    }
                     if remember {
                         assert_eq!(
                             state
@@ -57188,6 +57432,7 @@ fn irrigation_fixture() -> State {
         person.hunger = 0;
     }
     state.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         crops: vec![Crop {
@@ -57356,6 +57601,7 @@ fn irrigation_boundary_benchmark() {
     )
     .unwrap();
     state.agriculture = Some(Agriculture {
+        soil: None,
         inherit_births: false,
         requests: None,
         crops: vec![Crop {

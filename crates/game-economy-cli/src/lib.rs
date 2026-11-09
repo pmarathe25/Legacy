@@ -584,6 +584,8 @@ struct MedicalPolicyConfig {
 struct Cultivation {
     max_hunger: u32,
     #[serde(default)]
+    soil: Option<game_economy_agriculture::soil::Soil>,
+    #[serde(default)]
     inherit_births: bool,
     #[serde(default)]
     requests: Option<game_economy::cultivation_requests::Requests>,
@@ -1511,6 +1513,7 @@ pub fn scenario_with_options(
             Ok(Agriculture {
                 inherit_births: state.inherit_births,
                 requests: state.requests,
+                soil: state.soil,
                 crops: crops.into_values().collect(),
                 fields,
                 policies: state.policies,
