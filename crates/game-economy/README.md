@@ -4,6 +4,10 @@ This composed simulation joins personal work, actual dated goods, food acquisiti
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.
 
+With local walking enabled, people at the same endpoint can make personal work and hauling requests, offer and fulfill promises, and exchange carried goods. A request or promise does not compel the other person. Work at a regional site and departures from the region still require reaching the stock endpoint. Moving or performing another chosen action can make someone unavailable for an interaction.
+
+The existing `autonomous_hauling_requests_benchmark` accepts `LEGACY_HAUL_STORE=1` to place all requesters and their shared carrier at one store. On the measured machine, 100,000 people over two boundaries took 72.8 ms with one worker and 33.7 ms with six, with matching state fingerprints and 99,999 requests retained. This isolated workload scales sublinearly.
+
 Optional combat wounds persist independently of health. They can pause or reduce continuing work and optionally prevent tactical movement, retreat, and strategic departure. A real, accepted treatment using configured medicine can clear an earlier wound; a new wound in the same boundary remains. The player's local view shows who is visibly wounded without exposing private causes.
 
 An idle autonomous person can choose to treat their own wound through an individual medical policy naming themselves as patient. They consume their own supplies, and after their wound clears they do not repeat the wound treatment merely because their health remains low.

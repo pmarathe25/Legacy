@@ -14363,27 +14363,70 @@ fn autonomous_hauling_requests_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = autonomous_hauling_requests_workload(count);
+    let store = std::env::var_os("LEGACY_HAUL_STORE").is_some();
+    let mut initial = autonomous_hauling_requests_workload(count);
+    if store {
+        initial
+            .physical
+            .custody
+            .containers
+            .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_unstable_by_key(|row| row.place);
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![LocalStore {
+                id: 1,
+                region: 1,
+                name: "store".into(),
+            }],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                events: vec![],
+                positions: (1..=count)
+                    .map(|person| LocalPosition {
+                        person,
+                        location: LocalLocation::At {
+                            region: 1,
+                            endpoint: LocalEndpoint::Store { id: 1 },
+                        },
+                    })
+                    .collect(),
+            }),
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut expected = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let started = std::time::Instant::now();
                 for _ in 0..2 {
                     world.advance().unwrap();
                 }
+                let elapsed = started.elapsed().as_secs_f64();
+                let state = world.snapshot();
+                assert_eq!(state.hauling.as_ref().unwrap().requests.len(), count as usize - 1);
+                let fingerprint = serde_json::to_vec(&state).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+                if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} ticks=2 elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} store={store} ticks=2 elapsed={:.6} state_fingerprint={:016x}",
+                samples[1], expected.unwrap()
             );
         });
 }
