@@ -3112,21 +3112,24 @@ impl Economy {
                     .and_then(|i| self.people[i].region)
                     .is_some_and(|region| walking.present(person, region, LocalEndpoint::Stock))
             };
-            if player_work.is_some_and(|work| !at_stock(work.actor()))
-                || player_transfer.is_some_and(|choice| {
-                    matches!(
-                        choice,
-                        game_economy_interaction::PhysicalChoice::Stock(_)
-                            | game_economy_interaction::PhysicalChoice::Farm { .. }
-                            | game_economy_interaction::PhysicalChoice::WaterField { .. }
-                            | game_economy_interaction::PhysicalChoice::Build { .. }
-                            | game_economy_interaction::PhysicalChoice::DestroySite { .. }
-                            | game_economy_interaction::PhysicalChoice::RepairSite { .. }
-                            | game_economy_interaction::PhysicalChoice::SalvageSite { .. }
-                            | game_economy_interaction::PhysicalChoice::Gather { .. }
-                    ) && !at_stock(choice.person())
-                })
-            {
+            if player_work.is_some_and(|work| {
+                !matches!(
+                    work,
+                    game_economy_interaction::WorkAction::Respond { accept: false, .. }
+                ) && !at_stock(work.actor())
+            }) || player_transfer.is_some_and(|choice| {
+                matches!(
+                    choice,
+                    game_economy_interaction::PhysicalChoice::Stock(_)
+                        | game_economy_interaction::PhysicalChoice::Farm { .. }
+                        | game_economy_interaction::PhysicalChoice::WaterField { .. }
+                        | game_economy_interaction::PhysicalChoice::Build { .. }
+                        | game_economy_interaction::PhysicalChoice::DestroySite { .. }
+                        | game_economy_interaction::PhysicalChoice::RepairSite { .. }
+                        | game_economy_interaction::PhysicalChoice::SalvageSite { .. }
+                        | game_economy_interaction::PhysicalChoice::Gather { .. }
+                ) && !at_stock(choice.person())
+            }) {
                 return Err("this action requires the regional stock location".into());
             }
         }

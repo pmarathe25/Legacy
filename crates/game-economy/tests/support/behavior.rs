@@ -38253,8 +38253,41 @@ fn a_person_asks_for_help_with_a_goal_and_learns_from_observed_work() {
                         .len(),
                     1
                 );
-                assert!(world.advance().unwrap().started.is_empty());
-                world.snapshot()
+                let mut state = world.snapshot();
+                let request = state
+                    .autowork
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap()
+                    .pending[0]
+                    .id;
+                state.people[1].controlled = true;
+                let mut world = Economy::compile(state).unwrap();
+                let before = world.snapshot();
+                assert!(world.respond_work_request(2, request, true).is_err());
+                assert_eq!(world.snapshot(), before);
+                assert!(
+                    world
+                        .respond_work_request(2, request, false)
+                        .unwrap()
+                        .started
+                        .is_empty()
+                );
+                let state = world.snapshot();
+                assert!(
+                    state
+                        .autowork
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .is_empty()
+                );
+                state
             })
     };
     assert_eq!(store_run(1), store_run(4));
