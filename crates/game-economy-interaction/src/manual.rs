@@ -34,6 +34,10 @@ pub enum PhysicalChoice {
         request: u64,
         accept: bool,
     },
+    WithdrawCultivation {
+        person: u64,
+        request: u64,
+    },
     WaterField {
         person: u64,
         field: u64,
@@ -195,6 +199,7 @@ impl PhysicalChoice {
             | Self::Treat { person }
             | Self::Farm { person, .. }
             | Self::RespondCultivation { person, .. }
+            | Self::WithdrawCultivation { person, .. }
             | Self::WaterField { person, .. }
             | Self::Build { person, .. }
             | Self::DestroySite { person, .. }

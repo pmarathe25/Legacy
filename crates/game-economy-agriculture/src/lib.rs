@@ -223,6 +223,27 @@ macro_rules! validate_world {
 #[macro_export]
 macro_rules! cultivation_methods {
     () => {
+        /// Tell the addressed person that a prior personal request is withdrawn.
+        pub fn withdraw_cultivation_request(
+            &mut self,
+            person: u64,
+            request: u64,
+        ) -> Result<(), String> {
+            game_economy_campaign::preflight!(self);
+            let draft = self.prepare_interaction(
+                None,
+                None,
+                None,
+                Some(
+                    game_economy_interaction::PhysicalChoice::WithdrawCultivation {
+                        person,
+                        request,
+                    },
+                ),
+            )?;
+            self.commit(draft)?;
+            Ok(())
+        }
         /// Personally answer one received request; acceptance attempts the specified action.
         pub fn respond_cultivation_request(
             &mut self,
@@ -318,6 +339,7 @@ pub struct Context<'a> {
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
     pub manual_response: Option<(u64, u64, bool)>,
+    pub manual_withdrawal: Option<(u64, u64)>,
     pub season: Option<&'a game_environment::Season>,
 }
 impl Context<'_> {
@@ -364,7 +386,9 @@ impl Context<'_> {
             policies.par_sort_unstable_by_key(|p| p.person);
         }
         let opinions = self.opinions.map(Opinions::index);
-        if self.manual_response.is_some() && self.agriculture.requests.is_none() {
+        if (self.manual_response.is_some() || self.manual_withdrawal.is_some())
+            && self.agriculture.requests.is_none()
+        {
             return Err("cultivation requests are disabled".into());
         }
         let requested = self

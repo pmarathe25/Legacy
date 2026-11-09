@@ -6,7 +6,7 @@ When `inherit_births` and family birth enrollment are enabled, a newborn may rec
 
 Optional `requests` describe personal requests for one planting or harvest action on a particular field. An authored asker names a person and field, an interval and a lifetime; a request is made only while both people are available at that field's regional stock endpoint. The recipient's own `help_value`, `effort`, and weights for directed affinity, trust, fear and felt obligation decide whether they accept or refuse. These weights may be zero or negative. A request imposes no obligation and promises no future work or ownership. Busy recipients can leave requests unanswered until they expire. A controlled recipient chooses whether to accept or decline; acceptance attempts the physical action.
 
-The player view lists addressed requests; use `respond-cultivation REQUEST accept|decline` to answer one.
+The player view lists addressed requests; use `respond-cultivation REQUEST accept|decline` to answer one. A requester can use `withdraw-cultivation REQUEST` to tell the addressed person locally that the request is withdrawn. Withdrawal removes the request and its scoped signal; it does not physically prevent the other person from cultivating independently.
 
 Requests become actionable on a later boundary. Each attempted action reserves its worker and field alongside ordinary farming and uses the same actual seed, claims and storage arbitration. Latest-boundary events distinguish refusal, expiry, a changed field, physical failure and fulfillment; only an accepted physical receipt reports fulfillment. Pending requests and personal preferences are saved with agriculture.
 

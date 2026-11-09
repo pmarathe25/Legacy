@@ -23,7 +23,16 @@ macro_rules! prepare_farming {
             }) => Some((person, request, accept)),
             _ => None,
         };
-        if manual_response.is_some() && $world.agriculture.is_none() {
+        let manual_withdrawal = match $choice {
+            Some(game_economy_interaction::PhysicalChoice::WithdrawCultivation {
+                person,
+                request,
+            }) => Some((person, request)),
+            _ => None,
+        };
+        if (manual_response.is_some() || manual_withdrawal.is_some())
+            && $world.agriculture.is_none()
+        {
             return Err("cultivation is disabled".into());
         }
         if let Some((person, _)) = manual {
@@ -77,6 +86,7 @@ macro_rules! prepare_farming {
                     tick: $tick,
                     manual,
                     manual_response,
+                    manual_withdrawal,
                     season: $world.environment.as_ref().and_then(|e| e.season($tick)),
                 }
                 .prepare($base)

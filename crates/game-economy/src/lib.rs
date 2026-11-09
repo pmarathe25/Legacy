@@ -3129,6 +3129,48 @@ impl Economy {
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("economy.setup");
         let tick = self.tick().checked_add(1).ok_or("tick overflow")?;
+        if let Some(game_economy_interaction::PhysicalChoice::WithdrawCultivation {
+            person,
+            request,
+        }) = player_transfer
+        {
+            let request = self
+                .agriculture
+                .as_ref()
+                .and_then(|owner| owner.requests.as_ref())
+                .and_then(|owner| {
+                    owner
+                        .pending
+                        .iter()
+                        .find(|row| row.id == request && row.requester == person)
+                })
+                .ok_or("unknown cultivation request")?;
+            let requester = self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .map(|i| &self.people[i])
+                .ok_or("unknown person")?;
+            let worker = self
+                .people
+                .binary_search_by_key(&request.worker, |row| row.id)
+                .ok()
+                .map(|i| &self.people[i])
+                .ok_or("unknown person")?;
+            if !requester.controlled
+                || requester.health == 0
+                || worker.health == 0
+                || requester.region.is_none()
+                || requester.region != worker.region
+                || !self.local_people_together(person, worker.id)
+                || self
+                    .confinement
+                    .as_ref()
+                    .is_some_and(|owner| !owner.can_communicate(person, worker.id))
+            {
+                return Err("withdrawing this request requires local communication".into());
+            }
+        }
         if let Some(walking) = self
             .local_transport
             .as_ref()
@@ -3185,6 +3227,7 @@ impl Economy {
                                     accept: false,
                                     ..
                                 }
+                                | game_economy_interaction::PhysicalChoice::WithdrawCultivation { .. }
                         ) || matches!(
                             row,
                             game_economy_interaction::PhysicalChoice::AskFood { .. }

@@ -421,6 +421,10 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             person.parse().map_err(|_| "invalid person")?,
             field.parse().map_err(|_| "invalid field")?,
         )?,
+        ["withdraw-cultivation", person, request] => world.withdraw_cultivation_request(
+            person.parse().map_err(|_| "invalid person")?,
+            request.parse().map_err(|_| "invalid request")?,
+        )?,
         ["unclaim-field", person, field] => world.withdraw_field_claim(
             person.parse().map_err(|_| "invalid person")?,
             field.parse().map_err(|_| "invalid field")?,

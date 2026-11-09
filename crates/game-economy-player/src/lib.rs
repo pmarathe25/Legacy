@@ -1957,6 +1957,10 @@ impl<'a> Player<'a> {
         self.world
             .respond_cultivation_request(self.current()?, request, accept)
     }
+    pub fn withdraw_cultivation_request(&mut self, request: u64) -> Result<(), String> {
+        self.world
+            .withdraw_cultivation_request(self.current()?, request)
+    }
     /// Assert a personal claim over a local stock; this does not compel anyone.
     pub fn claim_stock(&mut self, good: u32) -> Result<(), String> {
         let person = self.current()?;

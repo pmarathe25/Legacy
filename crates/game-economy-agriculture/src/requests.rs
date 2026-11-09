@@ -61,6 +61,7 @@ pub enum Outcome {
     Stale,
     Fulfilled,
     Failed,
+    Withdrawn,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -214,6 +215,21 @@ pub fn prepare(
             return Err("person cannot cultivate this field now".into());
         }
     }
+    if let Some((actor, id)) = context.manual_withdrawal {
+        let request = owner
+            .pending
+            .iter()
+            .find(|request| request.id == id && request.requester == actor)
+            .ok_or("unknown cultivation request")?;
+        let requester = person(actor).ok_or("unknown person")?;
+        if !requester.controlled
+            || requester.health == 0
+            || request.created_at >= context.tick
+            || context.tick > request.expires
+        {
+            return Err("person cannot withdraw this cultivation request".into());
+        }
+    }
     enum Evaluation {
         Event(Event),
         Candidate(Request),
@@ -228,73 +244,84 @@ pub fn prepare(
             let response = context
                 .manual_response
                 .filter(|(actor, id, _)| *actor == worker.id && *id == request.id);
-            Ok(if context.tick > request.expires {
-                Evaluation::Event(Event {
-                    request: request.id,
-                    outcome: Outcome::Expired,
-                })
-            } else if response.is_some_and(|(_, _, accept)| !accept) {
-                Evaluation::Event(Event {
-                    request: request.id,
-                    outcome: Outcome::Refused,
-                })
-            } else if f.phase != request.phase {
-                Evaluation::Event(Event {
-                    request: request.id,
-                    outcome: Outcome::Stale,
-                })
-            } else if context.tick <= request.created_at
-                || (worker.controlled && response.is_none())
-                || worker.health == 0
-                || worker.hunger > context.agriculture.max_hunger
-                || worker.region != Some(f.region)
-                || (unavailable(worker.id) && response.is_none())
-                || context.manual.is_some_and(|(_, id)| id == f.id)
-            {
-                Evaluation::Retained(request.clone())
-            } else if response.is_some() {
-                Evaluation::Candidate(request.clone())
-            } else if let Ok(i) = preferences.binary_search_by_key(&worker.id, |p| p.person) {
-                let p = preferences[i];
-                let (fear, obligation) =
-                    opinions.map_or((0, 0), |index| index.feelings(worker.id, request.requester));
-                let affinity =
-                    opinions.map_or(0, |index| index.affinity(worker.id, request.requester));
-                let trust = opinions.map_or(0, |index| index.trust(worker.id, request.requester));
-                let score = i128::from(p.help_value)
-                    .saturating_add(i128::from(fear) * i128::from(p.fear_weight))
-                    .saturating_add(i128::from(obligation) * i128::from(p.obligation_weight))
-                    .saturating_add(i128::from(affinity) * i128::from(p.affinity_weight))
-                    .saturating_add(i128::from(trust) * i128::from(p.trust_weight));
-                if score < i128::from(p.effort) {
+            Ok(
+                if context
+                    .manual_withdrawal
+                    .is_some_and(|(actor, id)| actor == request.requester && id == request.id)
+                {
+                    Evaluation::Event(Event {
+                        request: request.id,
+                        outcome: Outcome::Withdrawn,
+                    })
+                } else if context.tick > request.expires {
+                    Evaluation::Event(Event {
+                        request: request.id,
+                        outcome: Outcome::Expired,
+                    })
+                } else if response.is_some_and(|(_, _, accept)| !accept) {
                     Evaluation::Event(Event {
                         request: request.id,
                         outcome: Outcome::Refused,
                     })
-                } else if context.claims.is_some_and(|claims| {
-                    !claims.allows_field(worker.id, f.id, Some(request.requester))
-                }) || context.season.is_some_and(|s| match f.phase {
-                    Phase::Fallow => !s.planting_allowed,
-                    Phase::Ripe => !s.harvest_allowed,
-                    Phase::Growing => true,
-                }) || (f.phase == Phase::Fallow
-                    && context.claims.is_some_and(|claims| {
-                        let crop = context
-                            .agriculture
-                            .crops
-                            .iter()
-                            .find(|crop| crop.id == f.crop)
-                            .expect("validated crop");
-                        !claims.allows(worker.id, f.region, crop.seed)
-                    }))
+                } else if f.phase != request.phase {
+                    Evaluation::Event(Event {
+                        request: request.id,
+                        outcome: Outcome::Stale,
+                    })
+                } else if context.tick <= request.created_at
+                    || (worker.controlled && response.is_none())
+                    || worker.health == 0
+                    || worker.hunger > context.agriculture.max_hunger
+                    || worker.region != Some(f.region)
+                    || (unavailable(worker.id) && response.is_none())
+                    || context.manual.is_some_and(|(_, id)| id == f.id)
                 {
                     Evaluation::Retained(request.clone())
-                } else {
+                } else if response.is_some() {
                     Evaluation::Candidate(request.clone())
-                }
-            } else {
-                Evaluation::Retained(request.clone())
-            })
+                } else if let Ok(i) = preferences.binary_search_by_key(&worker.id, |p| p.person) {
+                    let p = preferences[i];
+                    let (fear, obligation) = opinions
+                        .map_or((0, 0), |index| index.feelings(worker.id, request.requester));
+                    let affinity =
+                        opinions.map_or(0, |index| index.affinity(worker.id, request.requester));
+                    let trust =
+                        opinions.map_or(0, |index| index.trust(worker.id, request.requester));
+                    let score = i128::from(p.help_value)
+                        .saturating_add(i128::from(fear) * i128::from(p.fear_weight))
+                        .saturating_add(i128::from(obligation) * i128::from(p.obligation_weight))
+                        .saturating_add(i128::from(affinity) * i128::from(p.affinity_weight))
+                        .saturating_add(i128::from(trust) * i128::from(p.trust_weight));
+                    if score < i128::from(p.effort) {
+                        Evaluation::Event(Event {
+                            request: request.id,
+                            outcome: Outcome::Refused,
+                        })
+                    } else if context.claims.is_some_and(|claims| {
+                        !claims.allows_field(worker.id, f.id, Some(request.requester))
+                    }) || context.season.is_some_and(|s| match f.phase {
+                        Phase::Fallow => !s.planting_allowed,
+                        Phase::Ripe => !s.harvest_allowed,
+                        Phase::Growing => true,
+                    }) || (f.phase == Phase::Fallow
+                        && context.claims.is_some_and(|claims| {
+                            let crop = context
+                                .agriculture
+                                .crops
+                                .iter()
+                                .find(|crop| crop.id == f.crop)
+                                .expect("validated crop");
+                            !claims.allows(worker.id, f.region, crop.seed)
+                        }))
+                    {
+                        Evaluation::Retained(request.clone())
+                    } else {
+                        Evaluation::Candidate(request.clone())
+                    }
+                } else {
+                    Evaluation::Retained(request.clone())
+                },
+            )
         })
         .collect::<Result<_, _>>()?;
     let events: Vec<_> = evaluations

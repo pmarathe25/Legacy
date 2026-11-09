@@ -38663,6 +38663,147 @@ fn people_discover_local_cultivation_opportunities_and_helpers() {
 }
 
 #[test]
+fn a_request_can_be_withdrawn_without_binding_the_worker() {
+    use crate::cultivation_requests::{
+        Outcome, Preference as RequestPreference, Request, Requests,
+    };
+    use game_economy_claims::{Claims, FieldClaim, Preference as ClaimPreference};
+    let mut initial = field_workload(2);
+    initial.people[0].controlled = true;
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.policies[0].willing = false;
+    farm.policies[1].willing = true;
+    farm.requests = Some(Requests {
+        next_id: 2,
+        askers: vec![],
+        discoverers: vec![],
+        preferences: vec![RequestPreference {
+            person: 2,
+            help_value: 1,
+            effort: 1,
+            affinity_weight: 0,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
+        }],
+        pending: vec![Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            field: 1,
+            phase: CropPhase::Fallow,
+            created_at: 0,
+            expires: 3,
+        }],
+        events: vec![],
+    });
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            field_claims: vec![FieldClaim {
+                person: 1,
+                field: 1,
+            }],
+            preferences: vec![ClaimPreference {
+                person: 2,
+                disregard_others: false,
+                assert_outputs: false,
+                assert_built_sites: false,
+                assert_cultivated_fields: false,
+                desperate_hunger: None,
+            }],
+            ..Default::default()
+        }),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                assert!(world.withdraw_cultivation_request(1, 999).is_err());
+                assert_eq!(world.snapshot(), before);
+                let mut reloaded = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&before).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.withdraw_cultivation_request(1, 1).unwrap();
+                reloaded.withdraw_cultivation_request(1, 1).unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, reloaded.snapshot());
+                let farm = state.agriculture.as_ref().unwrap();
+                assert!(farm.requests.as_ref().unwrap().pending.is_empty());
+                assert_eq!(
+                    farm.requests.as_ref().unwrap().events[0].outcome,
+                    Outcome::Withdrawn
+                );
+                assert_eq!(farm.fields[0].phase, CropPhase::Fallow);
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut disregarding = initial.clone();
+    disregarding
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .claims
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .disregard_others = true;
+    let mut world = Economy::compile(disregarding).unwrap();
+    world.withdraw_cultivation_request(1, 1).unwrap();
+    assert_eq!(
+        world.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Growing
+    );
+    let mut distant = initial;
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut distant = Economy::compile(distant).unwrap();
+    let before = distant.snapshot();
+    assert!(distant.withdraw_cultivation_request(1, 1).is_err());
+    assert_eq!(before, distant.snapshot());
+}
+
+#[test]
 fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
     use crate::cultivation_requests::{Asker, Outcome, Requests};
     let mut initial = field_workload(2);
