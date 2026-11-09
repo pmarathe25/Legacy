@@ -686,7 +686,12 @@ impl Runtime {
             .filter(|row| row.phase == Phase::Working)
             .for_each(|row| {
                 if let Ok(index) = rates.binary_search_by_key(&row.job.id, |rate| rate.0) {
-                    row.job.remaining = row.job.remaining.saturating_sub(rates[index].1);
+                    if row.progress_remainder == 0 {
+                        row.job.remaining = row.job.remaining.saturating_sub(rates[index].1);
+                    } else {
+                        row.advance_elapsed(rates[index].1, self.tick_millis, self.tick_millis)
+                            .expect("validated fractional work progress");
+                    }
                 }
             });
         let custody_rows = self.store.containers();
@@ -939,6 +944,7 @@ impl Runtime {
                 .map(|job| Work {
                     job,
                     phase: Phase::Working,
+                    progress_remainder: 0,
                 }),
         );
         next.par_sort_unstable_by_key(|row| row.job.id);

@@ -260,6 +260,47 @@ fn actual_work_progresses_only_when_person_chooses_and_survives_reload() {
     assert_eq!(resumed.advance(&[], 1).unwrap().delivered, vec![1]);
     assert_eq!(runtime.snapshot(), resumed.snapshot());
 }
+
+#[test]
+fn fractional_work_survives_reload_and_whole_boundary_completion() {
+    let mut runtime = runtime();
+    runtime
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let mut snapshot = runtime.snapshot();
+    let quantum = snapshot.tick_millis;
+    snapshot.work[0]
+        .advance_elapsed(1, quantum / 2, quantum)
+        .unwrap();
+    let mut invalid = snapshot.clone();
+    invalid.work[0].progress_remainder = quantum;
+    assert!(Runtime::compile(invalid).is_err());
+    let saved = serde_json::to_string(&snapshot).unwrap();
+    let mut original = Runtime::compile(snapshot).unwrap();
+    let mut restored = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+    for world in [&mut original, &mut restored] {
+        assert!(world.advance(&[(1, 1)], 7).unwrap().finished.is_empty());
+        assert_eq!(
+            (
+                world.work()[0].job.remaining,
+                world.work()[0].progress_remainder
+            ),
+            (1, quantum / 2)
+        );
+        assert_eq!(world.advance(&[(1, 1)], 7).unwrap().finished, vec![1]);
+        assert_eq!(world.work()[0].progress_remainder, 0);
+    }
+    assert_eq!(original.snapshot(), restored.snapshot());
+}
 #[test]
 fn worker_can_abandon_even_when_reserved_material_cannot_yet_fit() {
     let mut runtime = runtime();
@@ -373,6 +414,8 @@ fn concentrated_production_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(100_000);
+    let fractional = std::env::var_os("LEGACY_FRACTIONAL").is_some();
+    let progress_only = fractional || std::env::var_os("LEGACY_PROGRESS_ONLY").is_some();
     let (snapshot, requests) = concentrated(count);
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
@@ -380,10 +423,21 @@ fn concentrated_production_benchmark() {
         .unwrap();
     pool.install(|| {
         let mut samples = Vec::new();
+        let mut expected = None;
         for round in 0..4 {
             let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
+            let prestarted = if progress_only {
+                let admitted = runtime.start(&requests, 9).unwrap();
+                if fractional {
+                    let mut saved = runtime.snapshot();
+                    let quantum = saved.tick_millis;
+                    saved.work.par_iter_mut().for_each(|work| { work.progress_remainder = quantum / 2; });
+                    runtime = Runtime::compile(saved).unwrap();
+                }
+                Some(admitted)
+            } else { None };
             let start = std::time::Instant::now();
-            let admitted = runtime.start(&requests, 9).unwrap();
+            let admitted = match prestarted { Some(rows) => rows, None => runtime.start(&requests, 9).unwrap() };
             let rates: Vec<_> = admitted
                 .iter()
                 .filter(|row| row.1)
@@ -395,15 +449,17 @@ fn concentrated_production_benchmark() {
             assert_eq!(rates.len(), count as usize / 2);
             assert_eq!(finished.finished.len(), rates.len());
             assert_eq!(delivered.delivered.len(), rates.len());
+            let fingerprint = serde_json::to_vec(&runtime.snapshot()).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+            if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
             if round > 0 {
                 samples.push(elapsed);
             }
         }
         samples.sort_by(f64::total_cmp);
         println!(
-            "workers={workers} jobs={count} admitted={} elapsed={:.6}",
+            "workers={workers} jobs={count} admitted={} progress_only={progress_only} fractional={fractional} elapsed={:.6} state_fingerprint={:016x}",
             count / 2,
-            samples[1]
+            samples[1], expected.unwrap()
         );
     });
 }

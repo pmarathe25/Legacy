@@ -97,6 +97,8 @@ pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
         };
         !valid_items(&job.outputs, &goods)
             || job.remaining > u64::from(recipe.ticks) * units
+            || work.progress_remainder >= state.tick_millis
+            || (job.remaining == 0 && work.progress_remainder != 0)
             || match work.phase {
                 Phase::Working | Phase::Returning | Phase::Suspended { .. } => {
                     job.phase != JobPhase::Working

@@ -11,3 +11,7 @@ Construction can stage empty `Site` custody with the physical action that fills 
 `prepare_partitioned_flat_transfers` handles eligible simple actions from different owners in one batch. It assigns the same ordered identities as normal composition before resolving shared endpoints, then returns the original action and movement identifiers in receipts. Active production work and unsupported shapes fall back to the normal runtime.
 
 Movement events own their receipt batch and expose borrowed views through `iter` and `par_iter`; callers can use `into_owned` when receipts must be retained individually. The batch remains usable after the runtime commits or is dropped. Saves contain the committed world rather than transient receipt storage.
+
+Saved work may contain fractional progress from the work owner. Whole-boundary advancement retains that progress and publishes completion through the normal physical transaction. It does not itself advance the rest of the economy by fractional intervals.
+
+The ignored `concentrated_production_benchmark` accepts `LEGACY_PROGRESS_ONLY=1` to time advancement of already-admitted work and `LEGACY_FRACTIONAL=1` to seed fractional progress. In one 100,000-job run (50,000 admitted), the whole and fractional paths respectively took 175 and 178 ms with one worker, and 70 and 69 ms with six workers. All runs produced the same final fingerprint. These measurements characterize this workload, not linear scaling of the complete economy.

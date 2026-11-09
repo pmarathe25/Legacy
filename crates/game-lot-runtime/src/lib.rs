@@ -173,6 +173,7 @@ impl Runtime {
             .map(|job| Work {
                 job,
                 phase: Phase::Working,
+                progress_remainder: 0,
             })
             .collect();
         self.store.retire_in(&mut draft, retire)?;

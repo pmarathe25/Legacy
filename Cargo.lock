@@ -906,6 +906,7 @@ dependencies = [
  "game-production-model",
  "rayon",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

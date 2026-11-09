@@ -14,3 +14,4 @@ serde.workspace = true
 
 [dev-dependencies]
 game-lots = { path = "../game-lots" }
+serde_json.workspace = true
