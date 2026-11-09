@@ -2350,6 +2350,85 @@ fn animal_restraint_fixture() -> State {
 }
 
 #[test]
+fn regional_animals_are_not_reachable_from_a_store_and_a_hold_ends_on_departure() {
+    let mut initial = animal_restraint_fixture();
+    initial.hunting = hunting_fixture().hunting;
+    initial
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    initial.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![LocalWalkRoute {
+                region: 1,
+                from: LocalEndpoint::Stock,
+                to: LocalEndpoint::Store { id: 1 },
+                ticks: 2,
+            }]
+            .into(),
+            preferences: vec![].into(),
+            positions: vec![],
+            events: vec![],
+        }),
+    });
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                assert!(world.capture_animal(1, 1).unwrap());
+                assert_eq!(
+                    world
+                        .snapshot()
+                        .animal_restraints
+                        .as_ref()
+                        .unwrap()
+                        .holds
+                        .len(),
+                    1
+                );
+                world.walk_local(1, Some(1)).unwrap();
+                assert!(
+                    world
+                        .snapshot()
+                        .animal_restraints
+                        .as_ref()
+                        .unwrap()
+                        .holds
+                        .is_empty()
+                );
+                world.walk_local(1, Some(1)).unwrap();
+                let before = world.snapshot();
+                assert!(world.capture_animal(1, 1).is_err());
+                assert!(world.release_animal(1, 1).is_err());
+                assert!(world.defend_animal(1, 1).is_err());
+                assert!(world.handle_animal(1, 1).is_err());
+                assert!(world.hunt_animal(1, 1).is_err());
+                assert!(world.collect_animal_product(1, 1, false).is_err());
+                assert_eq!(world.snapshot(), before);
+                before
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn a_person_can_physically_capture_an_unwilling_animal_and_another_can_release_it() {
     let mut initial = animal_restraint_fixture();
     initial.people[1].controlled = true;
@@ -4229,8 +4308,23 @@ fn concentrated_animal_defense_benchmark() {
     let reactions = std::env::var_os("LEGACY_OPPOSED_REACTIONS").is_some();
     let preexisting = std::env::var_os("LEGACY_PREEXISTING_EDGES").is_some();
     let grazing = std::env::var_os("LEGACY_GRAZING").is_some();
+    let local = std::env::var_os("LEGACY_ANIMAL_LOCAL").is_some();
     assert!(!preexisting || (shared && reactions));
     let mut initial = animal_defense_workload(count, shared);
+    if local {
+        initial.local_transport = Some(LocalTransport {
+            stores: vec![],
+            policies: vec![],
+            goal_fetchers: vec![],
+            events: vec![],
+            walking: Some(LocalWalking {
+                routes: vec![].into(),
+                preferences: vec![].into(),
+                positions: vec![],
+                events: vec![],
+            }),
+        });
+    }
     if reactions {
         enable_opposed_action_reactions(&mut initial);
     }
@@ -4246,12 +4340,15 @@ fn concentrated_animal_defense_benchmark() {
         .unwrap()
         .install(|| {
             let mut samples = Vec::new();
+            let mut expected_fingerprint = None;
             for round in 0..4 {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 let now = std::time::Instant::now();
                 world.advance().unwrap();
                 let elapsed = now.elapsed().as_secs_f64();
                 let state = world.snapshot();
+                let fingerprint = serde_json::to_vec(&state).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+                if let Some(expected) = expected_fingerprint { assert_eq!(fingerprint, expected); } else { expected_fingerprint = Some(fingerprint); }
                 if grazing {
                     assert_eq!(state.gathering.as_ref().unwrap().nodes[0].available, if shared { count.saturating_sub(2) } else { 0 });
                 }
@@ -4277,8 +4374,8 @@ fn concentrated_animal_defense_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} shared={shared} reactions={reactions} preexisting={preexisting} grazing={grazing} elapsed={:.6}",
-                samples[1]
+                "workers={workers} people={count} shared={shared} reactions={reactions} preexisting={preexisting} grazing={grazing} local={local} elapsed={:.6} state_fingerprint={:016x}",
+                samples[1], expected_fingerprint.unwrap()
             );
             #[cfg(feature = "profile")]
             for (name, measurement) in game_diagnostics::snapshot() {

@@ -102,6 +102,8 @@ Live animal restraint is a separate physical interaction. An animal may yield, r
 
 Individuals can independently choose to release a local held animal, including one held by another person, according to their own affinity or social pressure. Releases contend per animal and take priority over its escape attempt. A handler may independently spend effort resisting one release, and a stronger releaser can prevail.
 
+Regional animals currently occupy the regional stock endpoint when local walking is enabled. A person at another endpoint cannot directly interact with them, and a restraint ends when its handler walks away.
+
 Each participant in an opposed release may interpret the other person using their own general or relationship-specific opposed-action reactions. These signed feelings can influence later choices; the outcome creates no automatic approval, hostility, or obligation.
 
 The ignored `concentrated_animal_defense_benchmark` exercises the complete boundary with contested or independent holds. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to compare population and worker counts, `LEGACY_SHARED` for one contested animal, `LEGACY_OPPOSED_REACTIONS` to include both participants' relationship updates, and `LEGACY_GRAZING` for competition over a shared food patch. With the shared and reaction flags, `LEGACY_PREEXISTING_EDGES` adds many existing relationships and checks sparse updates. Run it with `cargo test -p game-economy concentrated_animal_defense_benchmark -- --ignored --nocapture`; add `--features profile` and set `LEGACY_PROFILE` for phase timings. Timings depend on the machine and enabled systems.

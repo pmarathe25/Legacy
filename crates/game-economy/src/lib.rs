@@ -5198,6 +5198,19 @@ impl Economy {
             }
             _ => None,
         };
+        if player_transfer.is_some_and(|choice| {
+            matches!(
+                choice,
+                game_economy_interaction::PhysicalChoice::CaptureAnimal { .. }
+                    | game_economy_interaction::PhysicalChoice::ReleaseAnimal { .. }
+                    | game_economy_interaction::PhysicalChoice::DefendAnimal { .. }
+                    | game_economy_interaction::PhysicalChoice::CollectAnimalProduct { .. }
+                    | game_economy_interaction::PhysicalChoice::HuntAnimal { .. }
+                    | game_economy_interaction::PhysicalChoice::HandleAnimal { .. }
+            ) && !self.local_person_at_stock(choice.person())
+        }) {
+            return Err("animal interactions require the regional animal endpoint".into());
+        }
         let manual_restraint_target = manual_restraint.map(|choice| match choice {
             game_animal_restraint::Manual::Capture { animal, .. }
             | game_animal_restraint::Manual::Release { animal, .. }
@@ -9742,6 +9755,18 @@ impl Economy {
                 next_confinement
                     .as_ref()
                     .is_none_or(|confinement| !confinement.held(person))
+                    && next_local_transport
+                        .as_ref()
+                        .and_then(|owner| owner.walking.as_ref())
+                        .is_none_or(|walking| {
+                            self.people
+                                .binary_search_by_key(&person, |row| row.id)
+                                .ok()
+                                .and_then(|index| self.people[index].region)
+                                .is_some_and(|region| {
+                                    walking.present(person, region, LocalEndpoint::Stock)
+                                })
+                        })
             };
             match fauna {
                 FaunaDraft::Complete(fauna) => {
