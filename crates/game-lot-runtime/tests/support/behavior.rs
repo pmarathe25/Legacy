@@ -301,6 +301,58 @@ fn fractional_work_survives_reload_and_whole_boundary_completion() {
     }
     assert_eq!(original.snapshot(), restored.snapshot());
 }
+
+#[test]
+fn finished_work_retains_inputs_until_settlement_after_reload() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    let mut saved = world.snapshot();
+    let quantum = saved.tick_millis;
+    assert!(
+        saved.work[0]
+            .advance_elapsed(1, quantum * 2, quantum)
+            .unwrap()
+            .completed
+    );
+    let serialized = serde_json::to_string(&saved).unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world =
+                    Runtime::compile(serde_json::from_str(&serialized).unwrap()).unwrap();
+                assert_eq!(world.custody(Place::JobInput(1)).unwrap().used, 2);
+                assert_eq!(
+                    world
+                        .custody(Place::Stock { region: 1, good: 2 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                assert_eq!(world.advance(&[], 7).unwrap().finished, vec![1]);
+                assert_eq!(world.custody(Place::JobOutput(1)).unwrap().used, 1);
+                let events = world.advance(&[], 7).unwrap();
+                assert!(events.finished.is_empty());
+                assert_eq!(events.delivered, vec![1]);
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
 #[test]
 fn worker_can_abandon_even_when_reserved_material_cannot_yet_fit() {
     let mut runtime = runtime();
