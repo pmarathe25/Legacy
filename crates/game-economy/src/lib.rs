@@ -9380,6 +9380,76 @@ impl Economy {
         let mut next_opinions = game_economy_dynamics::next_opinions(&self.opinions);
         #[cfg(feature = "profile")]
         drop(opinions_clone_phase);
+        if let (Some(opinions), Some(previous), Some(current)) = (
+            &mut next_opinions,
+            self.agriculture
+                .as_ref()
+                .and_then(|owner| owner.requests.as_ref()),
+            agriculture
+                .as_ref()
+                .and_then(|owner| owner.requests.as_ref()),
+        ) && !current.events.is_empty()
+            && opinions.tracks_work_affinity()
+        {
+            let mut pending: Vec<_> = previous.pending.par_iter().collect();
+            if pending.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+                pending.par_sort_unstable_by_key(|request| request.id);
+            }
+            let experiences: Vec<_> = current
+                .events
+                .par_iter()
+                .filter_map(|event| {
+                    let outcome = match event.outcome {
+                        cultivation_requests::Outcome::Fulfilled => Some(true),
+                        cultivation_requests::Outcome::Refused => Some(false),
+                        cultivation_requests::Outcome::Failed => None,
+                        _ => return None,
+                    };
+                    let request = pending.get(
+                        pending
+                            .binary_search_by_key(&event.request, |request| request.id)
+                            .ok()?,
+                    )?;
+                    let requester = self.people.get(
+                        self.people
+                            .binary_search_by_key(&request.requester, |person| person.id)
+                            .ok()?,
+                    )?;
+                    let worker = self.people.get(
+                        self.people
+                            .binary_search_by_key(&request.worker, |person| person.id)
+                            .ok()?,
+                    )?;
+                    (requester.health > 0
+                        && worker.health > 0
+                        && requester.region.is_some()
+                        && requester.region == worker.region
+                        && self.local_people_together(requester.id, worker.id)
+                        && self
+                            .confinement
+                            .as_ref()
+                            .is_none_or(|owner| owner.can_communicate(requester.id, worker.id))
+                        && next_confinement
+                            .as_ref()
+                            .is_none_or(|owner| owner.can_communicate(requester.id, worker.id)))
+                    .then_some((requester.id, worker.id, outcome))
+                })
+                .collect();
+            let completed: Vec<_> = experiences
+                .par_iter()
+                .filter_map(|&(observer, worker, outcome)| {
+                    outcome.map(|success| (observer, worker, success))
+                })
+                .collect();
+            let failed: Vec<_> = experiences
+                .par_iter()
+                .filter_map(|&(observer, worker, outcome)| {
+                    outcome.is_none().then_some((observer, worker))
+                })
+                .collect();
+            opinions.learn_work_affinity(&completed);
+            opinions.learn_work_failure_affinity(&failed);
+        }
         let mut report_changes = Vec::new();
         if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking) {
             let active_complaints = previous.complaints.par_iter().any(|row| {

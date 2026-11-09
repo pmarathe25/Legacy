@@ -71,6 +71,9 @@ pub struct Sensitivity {
     pub affinity_work_success: Option<i32>,
     #[serde(default)]
     pub affinity_work_refusal: Option<i32>,
+    /// Signed personal reaction to witnessed work that was attempted but failed.
+    #[serde(default)]
+    pub affinity_work_failure: Option<i32>,
     /// This person's own signed interpretation of capture, resistance, and release.
     #[serde(default)]
     pub confinement_reaction: Option<ConfinementReaction>,
@@ -149,6 +152,8 @@ pub struct RelationshipCase {
     pub work_success: Option<i32>,
     #[serde(default)]
     pub work_refusal: Option<i32>,
+    #[serde(default)]
+    pub work_failure: Option<i32>,
     /// Overrides this observer's general confinement interpretation for this person.
     #[serde(default)]
     pub confinement_reaction: Option<ConfinementReaction>,

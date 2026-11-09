@@ -11972,6 +11972,7 @@ fn a_caregiver_treats_with_real_medicine_and_can_catch_the_illness() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -37829,6 +37830,148 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
     );
 }
 #[test]
+fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
+    use crate::cultivation_requests::{Outcome, Preference, Request, Requests};
+    use game_opinions::AffinityRules;
+    let mut initial = field_workload(2);
+    initial.dynamics = None;
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 2,
+        askers: vec![],
+        discoverers: vec![],
+        preferences: vec![Preference {
+            person: 2,
+            help_value: 1,
+            effort: 1,
+            affinity_weight: 0,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
+        }],
+        pending: vec![Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            field: 1,
+            phase: CropPhase::Fallow,
+            created_at: 0,
+            expires: 3,
+        }],
+        events: vec![],
+    });
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records.clear();
+    opinions.rules.affinity = Some(AffinityRules {
+        limit: 10,
+        encounter_change: 0,
+        pressured_encounter_change: 0,
+        help_change: 0,
+        harm_change_per_damage: 0,
+    });
+    opinions.sensitivities = vec![OpinionSensitivity {
+        person: 1,
+        affinity_work_success: Some(-3),
+        affinity_work_refusal: Some(2),
+        affinity_work_failure: Some(4),
+        ..Default::default()
+    }]
+    .into();
+    initial.opinions = Some(opinions);
+    let run = |state: State, expected| {
+        let mut world = Economy::compile(state).unwrap();
+        world.advance().unwrap();
+        let state = world.snapshot();
+        assert_eq!(
+            state
+                .agriculture
+                .as_ref()
+                .unwrap()
+                .requests
+                .as_ref()
+                .unwrap()
+                .events[0]
+                .outcome,
+            expected
+        );
+        state.opinions.unwrap().index().affinity(1, 2)
+    };
+    assert_eq!(run(initial.clone(), Outcome::Fulfilled), -3);
+    let mut shortage = initial.clone();
+    let stock = shortage
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, 4, vec![]).unwrap();
+    let mut indifferent = shortage.clone();
+    std::sync::Arc::make_mut(&mut indifferent.opinions.as_mut().unwrap().sensitivities)[0]
+        .affinity_work_failure = None;
+    assert_eq!(run(indifferent, Outcome::Failed), 0);
+    let mut specific = shortage.clone();
+    std::sync::Arc::make_mut(&mut specific.opinions.as_mut().unwrap().sensitivities)[0]
+        .relationship_cases
+        .push(RelationshipCase {
+            target: 2,
+            work_failure: Some(-2),
+            ..Default::default()
+        });
+    let specific = serde_json::from_str(&serde_json::to_string(&specific).unwrap()).unwrap();
+    assert_eq!(run(specific, Outcome::Failed), -2);
+    assert_eq!(run(shortage, Outcome::Failed), 4);
+    let mut refused = initial.clone();
+    refused
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .help_value = 0;
+    assert_eq!(run(refused, Outcome::Refused), 2);
+    let mut distant = initial;
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 1,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    assert_eq!(run(distant, Outcome::Fulfilled), 0);
+}
+
+#[test]
 fn people_discover_local_cultivation_opportunities_and_helpers() {
     use crate::cultivation_requests::{Discoverer, Outcome, Preference, Requests};
     let mut initial = field_workload(128);
@@ -38037,6 +38180,7 @@ fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
 #[test]
 #[ignore]
 fn concentrated_field_benchmark() {
+    use game_opinions::AffinityRules;
     use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
@@ -38049,6 +38193,10 @@ fn concentrated_field_benchmark() {
     let mut initial = field_workload(count);
     let discovery = std::env::var_os("LEGACY_FIELD_DISCOVERY").is_some();
     let requests = discovery || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
+    let feelings = std::env::var_os("LEGACY_FIELD_FEELINGS").is_some();
+    let failures = std::env::var_os("LEGACY_FIELD_FAILURES").is_some();
+    assert!(!feelings || requests);
+    assert!(!failures || (feelings && !discovery && count.is_multiple_of(4)));
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
         use crate::cultivation_requests::{Asker, Discoverer, Preference, Requests};
@@ -38093,6 +38241,47 @@ fn concentrated_field_benchmark() {
             events: vec![],
         });
     }
+    if feelings {
+        let mut opinions = fixture().opinions.unwrap();
+        opinions.records.clear();
+        opinions.rules.affinity = Some(AffinityRules {
+            limit: 10,
+            encounter_change: 0,
+            pressured_encounter_change: 0,
+            help_change: 0,
+            harm_change_per_damage: 0,
+        });
+        opinions.sensitivities = (1..=count / 2)
+            .map(|person| OpinionSensitivity {
+                person,
+                affinity_work_success: Some(-1),
+                affinity_work_failure: failures.then_some(1),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>()
+            .into();
+        initial.opinions = Some(opinions);
+    }
+    if failures {
+        let stock = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+            .unwrap();
+        *stock = Container::new(
+            stock.place,
+            count * 2,
+            vec![Lot {
+                item: None,
+                good: 2,
+                quantity: count / 4,
+                expires_at: None,
+            }],
+        )
+        .unwrap();
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -38122,7 +38311,7 @@ fn concentrated_field_benchmark() {
                     if discovery {
                         assert!(accepted > 0 && accepted <= count as usize / 2);
                     } else {
-                        assert_eq!(accepted, count as usize / 2);
+                        assert_eq!(accepted, count as usize / if failures { 4 } else { 2 });
                     }
                 }
                 let third = world
@@ -38137,7 +38326,34 @@ fn concentrated_field_benchmark() {
                 }
                 let elapsed = started.elapsed().as_secs_f64();
                 if requests && round == 3 {
-                    let bytes = serde_json::to_vec(&world.snapshot()).unwrap();
+                    let state = world.snapshot();
+                    if feelings && !discovery {
+                        assert_eq!(
+                            state
+                                .opinions
+                                .as_ref()
+                                .unwrap()
+                                .records
+                                .iter()
+                                .filter(|opinion| opinion.affinity == -1)
+                                .count(),
+                            count as usize / if failures { 4 } else { 2 }
+                        );
+                        if failures {
+                            assert_eq!(
+                                state
+                                    .opinions
+                                    .as_ref()
+                                    .unwrap()
+                                    .records
+                                    .iter()
+                                    .filter(|opinion| opinion.affinity == 1)
+                                    .count(),
+                                count as usize / 4
+                            );
+                        }
+                    }
+                    let bytes = serde_json::to_vec(&state).unwrap();
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     bytes.hash(&mut hash);
                     println!("fingerprint={:016x}", hash.finish());
@@ -42176,6 +42392,7 @@ fn an_actual_nonfood_gift_can_affect_affinity_without_creating_food_obligation()
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -42503,6 +42720,7 @@ fn a_person_may_feel_no_obligation_and_still_cooperate_out_of_fear() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -42713,6 +42931,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -42739,6 +42958,7 @@ fn personal_interpretations_can_change_atomically_without_creating_obligations()
         site_salvage: None,
         work_success: None,
         work_refusal: None,
+        work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -42805,6 +43025,7 @@ fn actual_harm_can_increase_one_persons_affinity_and_reduce_anothers() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -42904,6 +43125,7 @@ fn children_can_develop_different_obligation_dispositions_from_the_same_care() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -43091,6 +43313,7 @@ fn concentrated_upbringing_workload(count: u64) -> State {
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: None,
+            affinity_work_failure: None,
             opposed_action_reaction: None,
             teaching_reaction: None,
             confinement_reaction: None,
@@ -43348,6 +43571,7 @@ fn only_a_person_who_interprets_their_promise_as_an_obligation_feels_one() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -43512,6 +43736,7 @@ fn autonomous_promise_offers_can_be_refused_accepted_and_later_broken() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -43736,6 +43961,7 @@ fn concentrated_personal_promise_workload(count: u64) -> State {
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: None,
+            affinity_work_failure: None,
             opposed_action_reaction: None,
             teaching_reaction: None,
             confinement_reaction: None,
@@ -44629,6 +44855,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
             affinity_site_salvage: None,
             affinity_work_success: Some(-3),
             affinity_work_refusal: Some(5),
+            affinity_work_failure: None,
             opposed_action_reaction: None,
             teaching_reaction: None,
             confinement_reaction: None,
@@ -44651,6 +44878,7 @@ fn people_interpret_witnessed_work_and_refusal_individually() {
                     site_salvage: None,
                     work_success: Some(4),
                     work_refusal: Some(-2),
+                    work_failure: None,
                     opposed_action_reaction: None,
                     teaching_reaction: None,
                     confinement_reaction: None,
@@ -45143,6 +45371,7 @@ fn concentrated_work_refusals(count: u64) -> State {
             affinity_site_salvage: None,
             affinity_work_success: None,
             affinity_work_refusal: Some(2),
+            affinity_work_failure: None,
             opposed_action_reaction: None,
             teaching_reaction: None,
             confinement_reaction: None,
@@ -48725,6 +48954,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -48750,6 +48980,7 @@ fn witnessed_site_use_changes_affinity_only_as_each_person_interprets_it() {
         site_salvage: None,
         work_success: None,
         work_refusal: None,
+        work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -49116,6 +49347,7 @@ fn a_person_can_enjoy_witnessing_their_claimed_site_destroyed() {
         affinity_site_salvage: None,
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -50378,6 +50610,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         affinity_site_salvage: Some(rate),
         affinity_work_success: None,
         affinity_work_refusal: None,
+        affinity_work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -50403,6 +50636,7 @@ fn witnessed_salvage_changes_affinity_only_as_each_claimant_interprets_it() {
         site_salvage: Some(7),
         work_success: None,
         work_refusal: None,
+        work_failure: None,
         opposed_action_reaction: None,
         teaching_reaction: None,
         confinement_reaction: None,
@@ -51244,6 +51478,7 @@ fn concentrated_site_salvage_benchmark() {
                 affinity_site_salvage: Some(1),
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                affinity_work_failure: None,
                 opposed_action_reaction: None,
                 teaching_reaction: None,
                 confinement_reaction: None,

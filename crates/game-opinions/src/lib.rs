@@ -220,6 +220,7 @@ impl Opinions {
     pub fn tracks_work_affinity(&self) -> bool {
         harm::tracks_affinity(self, harm::AffinityKind::WorkSuccess)
             || harm::tracks_affinity(self, harm::AffinityKind::WorkRefusal)
+            || harm::tracks_affinity(self, harm::AffinityKind::WorkFailure)
     }
     pub fn tracks_report_discrepancy(&self) -> bool {
         harm::tracks_affinity(self, harm::AffinityKind::ReportDiscrepancy)
@@ -254,6 +255,17 @@ impl Opinions {
             .collect();
         harm::affinity(self, &success, harm::AffinityKind::WorkSuccess);
         harm::affinity(self, &refusals, harm::AffinityKind::WorkRefusal);
+    }
+    /// Interpret witnessed failed attempts separately from refusals.
+    pub fn learn_work_failure_affinity(&mut self, events: &[(u64, u64)]) {
+        if events.is_empty() || !harm::tracks_affinity(self, harm::AffinityKind::WorkFailure) {
+            return;
+        }
+        let rows: Vec<_> = events
+            .par_iter()
+            .map(|&(observer, worker)| (observer, worker, 1))
+            .collect();
+        harm::affinity(self, &rows, harm::AffinityKind::WorkFailure);
     }
     /// Each observer decides how to interpret witnessed recovery of their claimed debris.
     pub fn learn_salvage_affinity(&mut self, events: &[(u64, u64)]) {
@@ -360,6 +372,7 @@ impl Opinions {
                 affinity_site_salvage: None,
                 affinity_work_success: None,
                 affinity_work_refusal: None,
+                affinity_work_failure: None,
                 opposed_action_reaction: None,
                 teaching_reaction: None,
                 confinement_reaction: None,
