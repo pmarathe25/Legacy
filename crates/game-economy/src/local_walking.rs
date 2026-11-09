@@ -5,6 +5,46 @@ use game_lots::{Place, Transaction};
 use rayon::prelude::*;
 use std::collections::HashSet;
 
+type WalkingLeg = (u64, Endpoint, Endpoint, u64);
+
+fn walking_leg(position: &game_economy_local_transport::walking::Position) -> Option<WalkingLeg> {
+    use game_economy_local_transport::walking::Location;
+    match position.location {
+        Location::Walking {
+            region,
+            from,
+            to,
+            remaining,
+        } => Some((region, from, to, remaining)),
+        Location::At { .. } => None,
+    }
+}
+
+/// Stable dense labels for distinct walking positions used by social pairing.
+pub fn social_legs(walking: &Walking) -> Vec<WalkingLeg> {
+    let Some(first) = walking.positions.par_iter().find_map_any(walking_leg) else {
+        return Vec::new();
+    };
+    if walking
+        .positions
+        .par_iter()
+        .all(|position| walking_leg(position).is_none_or(|leg| leg == first))
+    {
+        return vec![first];
+    }
+    let mut legs: Vec<_> = walking
+        .positions
+        .par_iter()
+        .filter_map(walking_leg)
+        .collect();
+    if legs.par_windows(2).any(|pair| pair[0] > pair[1]) {
+        legs.par_sort_unstable();
+    }
+    legs.par_chunk_by(|a, b| a == b)
+        .map(|group| group[0])
+        .collect()
+}
+
 /// Regional co-location alone is insufficient when local walking is enabled.
 pub fn people_together(
     walking: Option<&Walking>,

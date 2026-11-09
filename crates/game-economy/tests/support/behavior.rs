@@ -37160,6 +37160,13 @@ fn traveling_social_benchmark() {
             } else {
                 println!("workers={workers} people={count} ticks=2 elapsed={:.6}", samples[1]);
             }
+            #[cfg(feature = "profile")]
+            if std::env::var_os("LEGACY_PROFILE").is_some() {
+                for (name, measurement) in game_diagnostics::snapshot() {
+                    println!("profile {name} calls={} mean_ms={:.3}", measurement.calls,
+                        measurement.nanoseconds as f64 / measurement.calls as f64 / 1_000_000.0);
+                }
+            }
         });
 }
 
