@@ -2419,6 +2419,7 @@ fn regional_animals_are_not_reachable_from_a_store_and_a_hold_ends_on_departure(
                 assert!(world.release_animal(1, 1).is_err());
                 assert!(world.defend_animal(1, 1).is_err());
                 assert!(world.handle_animal(1, 1).is_err());
+                assert!(world.feed_animal(1, 1, 1, 1).is_err());
                 assert!(world.hunt_animal(1, 1).is_err());
                 assert!(world.collect_animal_product(1, 1, false).is_err());
                 assert_eq!(world.snapshot(), before);

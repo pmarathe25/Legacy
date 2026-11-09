@@ -104,6 +104,8 @@ Individuals can independently choose to release a local held animal, including o
 
 Regional animals currently occupy the regional stock endpoint when local walking is enabled. A person at another endpoint cannot directly interact with them, and a restraint ends when its handler walks away.
 
+Set `LEGACY_ANIMAL_LOCAL=1` on `concentrated_animal_defense_benchmark` to include local-walking reconciliation. For 100,000 people, one and six workers took 29.5 and 14.7 ms with independent holds, and 15.7 and 8.0 ms with one shared animal. Each pair produced matching fingerprints; these isolated workloads scale sublinearly.
+
 Each participant in an opposed release may interpret the other person using their own general or relationship-specific opposed-action reactions. These signed feelings can influence later choices; the outcome creates no automatic approval, hostility, or obligation.
 
 The ignored `concentrated_animal_defense_benchmark` exercises the complete boundary with contested or independent holds. Set `LEGACY_PEOPLE` and `LEGACY_WORKERS` to compare population and worker counts, `LEGACY_SHARED` for one contested animal, `LEGACY_OPPOSED_REACTIONS` to include both participants' relationship updates, and `LEGACY_GRAZING` for competition over a shared food patch. With the shared and reaction flags, `LEGACY_PREEXISTING_EDGES` adds many existing relationships and checks sparse updates. Run it with `cargo test -p game-economy concentrated_animal_defense_benchmark -- --ignored --nocapture`; add `--features profile` and set `LEGACY_PROFILE` for phase timings. Timings depend on the machine and enabled systems.

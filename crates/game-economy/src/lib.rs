@@ -5207,6 +5207,7 @@ impl Economy {
                     | game_economy_interaction::PhysicalChoice::CollectAnimalProduct { .. }
                     | game_economy_interaction::PhysicalChoice::HuntAnimal { .. }
                     | game_economy_interaction::PhysicalChoice::HandleAnimal { .. }
+                    | game_economy_interaction::PhysicalChoice::FeedAnimal { .. }
             ) && !self.local_person_at_stock(choice.person())
         }) {
             return Err("animal interactions require the regional animal endpoint".into());
