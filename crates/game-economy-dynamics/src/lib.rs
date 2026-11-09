@@ -251,7 +251,8 @@ pub struct Clock<'a> {
     pub tick: u64,
     pub travel: Option<&'a game_economy_person::travel::Travel>,
     pub partition: Option<&'a (dyn Fn(u64) -> (u64, u64) + Sync)>,
-    pub local: Option<&'a (dyn Fn(u64) -> (u8, u64) + Sync)>,
+    /// The index is into the opening people slice supplied to `prepare`.
+    pub local: Option<&'a (dyn Fn(usize, u64) -> (u8, u64) + Sync)>,
     pub contact: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub speak: Option<&'a (dyn Fn(u64, u64) -> bool + Sync)>,
     pub opening: Option<&'a OpeningLocator<'a>>,

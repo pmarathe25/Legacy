@@ -30,7 +30,7 @@ impl Locality {
         people: &[Person],
         travel: Option<&Travel>,
         partition: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)>,
-        local: Option<&(dyn Fn(u64) -> (u8, u64) + Sync)>,
+        local: Option<&(dyn Fn(usize, u64) -> (u8, u64) + Sync)>,
     ) -> Option<Self> {
         let journeys = travel.map_or(&[][..], |travel| travel.journeys.as_slice());
         if journeys.is_empty() && partition.is_none() && local.is_none() {
@@ -52,10 +52,11 @@ impl Locality {
         let cell_people: Vec<_> = if partition.is_some() || local.is_some() {
             people
                 .par_iter()
-                .filter_map(|person| {
+                .enumerate()
+                .filter_map(|(index, person)| {
                     let (before, after) =
                         partition.map_or((0, 0), |partition| partition(person.id));
-                    let (kind, endpoint) = local.map_or((0, 0), |local| local(person.id));
+                    let (kind, endpoint) = local.map_or((0, 0), |local| local(index, person.id));
                     (before != 0 || after != 0 || kind != 0)
                         .then_some((person.id, (person.region?, before, after, kind, endpoint)))
                 })

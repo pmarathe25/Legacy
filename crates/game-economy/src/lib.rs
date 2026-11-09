@@ -8341,21 +8341,39 @@ impl Economy {
         };
         #[cfg(feature = "profile")]
         drop(social_legs_phase);
-        let social_endpoint = |id| {
+        #[cfg(feature = "profile")]
+        let social_endpoint_phase =
+            game_diagnostics::span("economy.social.local_position_alignment");
+        let social_walking = self
+            .local_transport
+            .as_ref()
+            .and_then(|owner| owner.walking.as_ref());
+        let walking_aligned = social_enabled
+            && !local_nonstock.is_empty()
+            && social_walking.is_some_and(|walking| {
+                walking.positions.len() == self.people.len()
+                    && walking
+                        .positions
+                        .par_iter()
+                        .zip(self.people.par_iter())
+                        .all(|(position, person)| position.person == person.id)
+            });
+        #[cfg(feature = "profile")]
+        drop(social_endpoint_phase);
+        let social_endpoint = |index, id| {
             use game_economy_local_transport::walking::Location;
-            let Some(walking) = self
-                .local_transport
-                .as_ref()
-                .and_then(|owner| owner.walking.as_ref())
-            else {
+            let Some(walking) = social_walking else {
                 return (0, 0);
             };
-            let Some(position) = walking
-                .positions
-                .binary_search_by_key(&id, |row| row.person)
-                .ok()
-                .map(|index| &walking.positions[index])
-            else {
+            let Some(position) = (if walking_aligned {
+                walking.positions.get(index)
+            } else {
+                walking
+                    .positions
+                    .binary_search_by_key(&id, |row| row.person)
+                    .ok()
+                    .map(|index| &walking.positions[index])
+            }) else {
                 return (0, 0);
             };
             match position.location {
@@ -8383,7 +8401,7 @@ impl Economy {
                 }
             }
         };
-        let social_local: Option<&(dyn Fn(u64) -> (u8, u64) + Sync)> =
+        let social_local: Option<&(dyn Fn(usize, u64) -> (u8, u64) + Sync)> =
             (social_enabled && !local_nonstock.is_empty()).then_some(&social_endpoint);
         let social_speak = |a, b| {
             let a = self
@@ -8410,13 +8428,14 @@ impl Economy {
             })
         };
         let social_opening = |id| {
-            let person = &self.people[self
+            let index = self
                 .people
                 .binary_search_by_key(&id, |person| person.id)
-                .ok()?];
+                .ok()?;
+            let person = &self.people[index];
             let region = person.region?;
             let (before, after) = communication.partition(id);
-            let (kind, endpoint) = social_endpoint(id);
+            let (kind, endpoint) = social_endpoint(index, id);
             if before == 0 && after == 0 {
                 Some((region, kind, endpoint, false))
             } else if before != 0
