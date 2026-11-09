@@ -6,6 +6,8 @@ This composed simulation joins personal work, actual dated goods, food acquisiti
 
 The separate `core_interval` API composes already-admitted physical work, travel, hunger, nutrition, and pending food effects for fractional progress inside one existing quantum. It freezes work rates, saves and resumes the in-flight state, and settles physical and personal effects once at the quantum boundary. It does not run the rest of the economy, select new actions, process commands during the interval, or publish early completions; it is not arbitrary-time advancement of an `Economy`.
 
+`CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. The limited core does not yet publish an early deadline; a completed counter remains pending until settlement.
+
 An incapacitated traveler does not move during the core interval, even if an immortal recovers at its closing boundary. The existing coarse economy path can move such a traveler after recovery in the same boundary, so this case is not equivalent between the two paths.
 
 Work sites can optionally wear with completed production and require real repair materials before they admit more work. An individual may choose to repair an idle site, including under their own fear or felt obligation; competing activity and material consumption are resolved at the physical boundary.

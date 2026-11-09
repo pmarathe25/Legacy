@@ -39,6 +39,23 @@ pub struct CoreInterval {
     nutrition: Option<Nutrition>,
     pending_food: Vec<FoodEffect>,
 }
+/// Observed deadlines relative to the current interval position. Several
+/// causes can share the earliest time; observation does not publish them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoreDeadline {
+    pub after_millis: u64,
+    pub quantum: bool,
+    pub work: bool,
+    pub arrival: bool,
+    pub hunger: bool,
+}
+fn earliest(left: Option<u128>, right: Option<u128>) -> Option<u128> {
+    match (left, right) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        (None, None) => None,
+    }
+}
 impl CoreInterval {
     /// Start a quantum after the caller has selected work and reserved inputs.
     pub fn begin(snapshot: CoreSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -185,6 +202,72 @@ impl CoreInterval {
         self.physical
             .work_interval()
             .map(|interval| interval.elapsed_millis)
+    }
+    /// Inspect the earliest work, travel, or optional hunger threshold. This
+    /// reference core still publishes effects only at its quantum boundary.
+    pub fn next_deadline(&self, hunger_threshold: Option<u32>) -> Result<CoreDeadline, String> {
+        let interval = self
+            .physical
+            .work_interval()
+            .ok_or("no physical interval")?;
+        let quantum = self.physical.tick_millis();
+        let remaining = quantum
+            .checked_sub(interval.elapsed_millis)
+            .ok_or("invalid interval elapsed time")?;
+        let work = interval
+            .rates
+            .par_iter()
+            .map(|&(id, rate)| {
+                let index = self
+                    .physical
+                    .work()
+                    .binary_search_by_key(&id, |row| row.job.id)
+                    .map_err(|_| "missing interval work")?;
+                self.physical.work()[index].completion_after(rate, quantum)
+            })
+            .try_reduce(|| None, |left, right| Ok(earliest(left, right)))
+            .map_err(str::to_owned)?;
+        let arrival = self
+            .travel
+            .as_ref()
+            .map_or(Ok(None), |travel| {
+                travel
+                    .journeys
+                    .par_iter()
+                    .filter(|journey| {
+                        self.people
+                            .binary_search_by_key(&journey.person, |person| person.id)
+                            .ok()
+                            .is_some_and(|i| self.people[i].health > 0)
+                    })
+                    .map(|journey| journey.arrival_after(quantum).map(Some))
+                    .try_reduce(|| None, |left, right| Ok(earliest(left, right)))
+            })
+            .map_err(str::to_owned)?;
+        let hunger = hunger_threshold
+            .map(|threshold| {
+                game_economy_person::next_hunger_threshold(
+                    &self.people,
+                    threshold,
+                    self.rules.hunger_per_tick,
+                    quantum,
+                )
+            })
+            .transpose()
+            .map_err(str::to_owned)?
+            .flatten();
+        let after = [Some(u128::from(remaining)), work, arrival, hunger]
+            .into_iter()
+            .flatten()
+            .min()
+            .expect("quantum deadline");
+        Ok(CoreDeadline {
+            after_millis: after as u64,
+            quantum: after == u128::from(remaining),
+            work: work == Some(after),
+            arrival: arrival == Some(after),
+            hunger: hunger == Some(after),
+        })
     }
     /// Progress without repeating decisions, publishing arrivals, or completing work.
     /// Failed validation leaves all owners unchanged.

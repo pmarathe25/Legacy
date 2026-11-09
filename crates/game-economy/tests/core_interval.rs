@@ -211,6 +211,34 @@ fn composed_core_interval_is_chunk_independent_and_resumable() {
 }
 
 #[test]
+fn core_deadline_reports_earliest_and_tied_causes_without_publishing() {
+    let mut core = CoreInterval::begin(fixture(), &[(1, 2)]).unwrap();
+    let opening = core.snapshot();
+    let deadline = core.next_deadline(Some(3)).unwrap();
+    assert_eq!(deadline.after_millis, 500);
+    assert!(deadline.work);
+    assert!(!deadline.arrival && !deadline.hunger && !deadline.quantum);
+    assert_eq!(core.snapshot(), opening);
+    core.progress(333).unwrap();
+    assert_eq!(core.next_deadline(Some(3)).unwrap().after_millis, 167);
+    core.progress(167).unwrap();
+    let pending = core.next_deadline(Some(3)).unwrap();
+    assert_eq!(pending.after_millis, 0);
+    assert!(pending.work);
+    assert!(core.settle().is_err());
+
+    let mut tied = CoreInterval::begin(fixture(), &[]).unwrap();
+    let deadline = tied.next_deadline(Some(3)).unwrap();
+    assert_eq!(deadline.after_millis, 1000);
+    assert!(deadline.quantum && deadline.arrival && deadline.hunger);
+    assert!(!deadline.work);
+    tied.progress(1000).unwrap();
+    let deadline = tied.next_deadline(Some(3)).unwrap();
+    assert_eq!(deadline.after_millis, 0);
+    assert!(deadline.quantum && deadline.arrival && deadline.hunger);
+}
+
+#[test]
 fn composed_interval_rejects_invalid_reload_without_mutation() {
     let mut dead_worker = fixture();
     dead_worker.people[0].health = 0;
@@ -296,6 +324,8 @@ fn composed_core_progress_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(100_000u64);
+    let deadline = std::env::var_os("LEGACY_CORE_DEADLINE").is_some();
+    let many_jobs = std::env::var_os("LEGACY_CORE_JOBS").is_some();
     assert!(count >= 2 && count.is_multiple_of(2));
     let mut initial = fixture();
     let resident = initial.people[0].clone();
@@ -322,6 +352,52 @@ fn composed_core_progress_benchmark() {
             pending_arrival: false,
         })
         .collect();
+    let rates: Vec<_> = if many_jobs {
+        let stock = initial
+            .physical
+            .custody
+            .containers
+            .iter_mut()
+            .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+            .unwrap();
+        *stock = Container::new(
+            stock.place,
+            count,
+            if count == 2 {
+                vec![]
+            } else {
+                vec![Lot {
+                    item: None,
+                    good: 1,
+                    quantity: count - 2,
+                    expires_at: None,
+                }]
+            },
+        )
+        .unwrap();
+        let mut runtime = Runtime::compile(initial.physical.clone()).unwrap();
+        let starts: Vec<_> = (3..=count)
+            .step_by(2)
+            .map(|id| Start {
+                id,
+                worker: id,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            })
+            .collect();
+        assert!(
+            runtime
+                .start(&starts, initial.seed)
+                .unwrap()
+                .iter()
+                .all(|row| row.1)
+        );
+        initial.physical = runtime.snapshot();
+        (1..=count).step_by(2).map(|id| (id, 2)).collect()
+    } else {
+        vec![(1, 2)]
+    };
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -329,9 +405,13 @@ fn composed_core_progress_benchmark() {
         .install(|| {
             let mut samples = Vec::new();
             for round in 0..4 {
-                let mut interval = CoreInterval::begin(initial.clone(), &[(1, 2)]).unwrap();
+                let mut interval = CoreInterval::begin(initial.clone(), &rates).unwrap();
                 let started = std::time::Instant::now();
-                assert_eq!(interval.progress(500).unwrap(), 500);
+                if deadline {
+                    assert_eq!(interval.next_deadline(Some(3)).unwrap().after_millis, 500);
+                } else {
+                    assert_eq!(interval.progress(500).unwrap(), 500);
+                }
                 let elapsed = started.elapsed().as_secs_f64();
                 if round == 3 {
                     let state = interval.snapshot();
@@ -339,7 +419,7 @@ fn composed_core_progress_benchmark() {
                         state
                             .people
                             .iter()
-                            .all(|person| person.hunger_remainder == 500)
+                            .all(|person| person.hunger_remainder == if deadline { 0 } else { 500 })
                     );
                     assert!(
                         state
@@ -348,7 +428,9 @@ fn composed_core_progress_benchmark() {
                             .unwrap()
                             .journeys
                             .iter()
-                            .all(|journey| journey.progress_millis == 500)
+                            .all(
+                                |journey| journey.progress_millis == if deadline { 0 } else { 500 }
+                            )
                     );
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
                     serde_json::to_vec(&state).unwrap().hash(&mut hash);
@@ -360,8 +442,9 @@ fn composed_core_progress_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} people={count} travelers={} elapsed={:.6}",
+                "workers={workers} people={count} travelers={} jobs={} deadline={deadline} elapsed={:.6}",
                 count / 2,
+                rates.len(),
                 samples[1]
             );
         });
