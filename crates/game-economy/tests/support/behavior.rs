@@ -5711,6 +5711,33 @@ fn local_walking_encounters_require_the_same_leg_and_progress() {
     assert!(manual.meet(1, 3).is_err());
     assert_eq!(manual.snapshot(), before);
     assert!(manual.meet(1, 2).unwrap());
+    let before = manual.snapshot();
+    assert!(manual.give(1, 3, 1, 1).is_err());
+    assert_eq!(manual.snapshot(), before);
+    assert!(manual.give(1, 2, 1, 1).unwrap());
+    let given = manual.snapshot();
+    assert_eq!(
+        given
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::Person(1))
+            .unwrap()
+            .used,
+        0
+    );
+    assert_eq!(
+        given
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::Person(2))
+            .unwrap()
+            .used,
+        1
+    );
 
     let run = |workers| {
         rayon::ThreadPoolBuilder::new()
@@ -37085,6 +37112,7 @@ fn traveling_social_benchmark() {
         .unwrap_or(100_000u64);
     let interval_progress = std::env::var_os("LEGACY_INTERVAL_PROGRESS").is_some();
     let local_walkers = std::env::var_os("LEGACY_LOCAL_WALKERS").is_some();
+    let distributed = local_walkers && std::env::var_os("LEGACY_DISTRIBUTED").is_some();
     assert!(!(interval_progress && local_walkers));
     let mut initial = traveling_social_workload(count);
     if local_walkers {
@@ -37105,7 +37133,7 @@ fn traveling_social_benchmark() {
             region: 1,
             from: LocalEndpoint::Stock,
             to: LocalEndpoint::Store { id: 1 },
-            ticks: 2,
+            ticks: if distributed { 3 } else { 2 },
         }]
         .into();
         walking.positions.iter_mut().for_each(|position| {
@@ -37113,7 +37141,11 @@ fn traveling_social_benchmark() {
                 region: 1,
                 from: LocalEndpoint::Stock,
                 to: LocalEndpoint::Store { id: 1 },
-                remaining: 1,
+                remaining: if distributed && position.person % 2 == 0 {
+                    2
+                } else {
+                    1
+                },
             }
         });
     }
@@ -37146,7 +37178,8 @@ fn traveling_social_benchmark() {
                 let elapsed = started.elapsed().as_secs_f64();
                 if local_walkers {
                     let state = world.snapshot();
-                    assert_eq!(state.dynamics.as_ref().unwrap().social.as_ref().unwrap().events.len(), count as usize / 2);
+                    let expected_events = if distributed { (count / 2) / 2 + (count - count / 2) / 2 } else { count / 2 };
+                    assert_eq!(state.dynamics.as_ref().unwrap().social.as_ref().unwrap().events.len(), expected_events as usize);
                     let fingerprint = serde_json::to_vec(&state).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
                     if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
                 }
@@ -37156,7 +37189,7 @@ fn traveling_social_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             if let Some(fingerprint) = expected {
-                println!("workers={workers} people={count} interval_progress={interval_progress} local_walkers={local_walkers} elapsed={:.6} state_fingerprint={fingerprint:016x}", samples[1]);
+                println!("workers={workers} people={count} interval_progress={interval_progress} local_walkers={local_walkers} distributed={distributed} elapsed={:.6} state_fingerprint={fingerprint:016x}", samples[1]);
             } else {
                 println!("workers={workers} people={count} ticks=2 elapsed={:.6}", samples[1]);
             }

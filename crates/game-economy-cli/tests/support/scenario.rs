@@ -75,6 +75,179 @@ fn local_walking_limits_store_observation_and_physical_pickup() {
 }
 
 #[test]
+fn player_sees_and_gives_only_to_people_at_the_same_local_position() {
+    use game_economy::{Economy, LocalEndpoint, LocalLocation, LocalPosition};
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut initial = scenario(
+        &root.join("content/scenarios/economy-local-walking.toml"),
+        &root.join("content"),
+    )
+    .unwrap()
+    .snapshot();
+    let sites = initial.work_sites.as_mut().unwrap();
+    sites.next_id = 2;
+    sites.sites.push(game_economy::WorkSite {
+        id: 1,
+        region: 1,
+        kind: "workshop".into(),
+        capacity: 1,
+    });
+    let stock = LocalEndpoint::Stock;
+    let store1 = LocalEndpoint::Store { id: 1 };
+    let store2 = LocalEndpoint::Store { id: 2 };
+    let routes = &mut initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .routes;
+    std::sync::Arc::make_mut(routes)
+        .iter_mut()
+        .find(|route| route.from == stock && route.to == store1)
+        .unwrap()
+        .ticks = 3;
+    let walking = |to, remaining| LocalLocation::Walking {
+        region: 1,
+        from: stock,
+        to,
+        remaining,
+    };
+    let make = |a, b| {
+        let mut state = initial.clone();
+        state
+            .local_transport
+            .as_mut()
+            .unwrap()
+            .walking
+            .as_mut()
+            .unwrap()
+            .positions = vec![
+            LocalPosition {
+                person: 1,
+                location: a,
+            },
+            LocalPosition {
+                person: 2,
+                location: b,
+            },
+        ];
+        Economy::compile(state).unwrap()
+    };
+    let mut separated = make(
+        LocalLocation::At {
+            region: 1,
+            endpoint: store1,
+        },
+        LocalLocation::At {
+            region: 1,
+            endpoint: store2,
+        },
+    );
+    let mut player = Player::new(&mut separated);
+    let view = player.view().unwrap();
+    assert!(view.nearby.is_empty());
+    assert!(view.work_sites.is_empty());
+    assert!(player.give(2, view.possessions[0].good, 1).is_err());
+
+    let mut at_stock = make(
+        LocalLocation::At {
+            region: 1,
+            endpoint: stock,
+        },
+        LocalLocation::At {
+            region: 1,
+            endpoint: store2,
+        },
+    );
+    assert_eq!(
+        Player::new(&mut at_stock).view().unwrap().work_sites.len(),
+        1
+    );
+
+    let mut body_state = initial.clone();
+    body_state.people[1].health = 0;
+    body_state
+        .family
+        .as_mut()
+        .unwrap()
+        .members
+        .iter_mut()
+        .find(|member| member.id == 2)
+        .unwrap()
+        .alive = false;
+    body_state
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = vec![
+        LocalPosition {
+            person: 1,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: store1,
+            },
+        },
+        LocalPosition {
+            person: 2,
+            location: LocalLocation::At {
+                region: 1,
+                endpoint: store2,
+            },
+        },
+    ];
+    let mut body_world = Economy::compile(body_state.clone()).unwrap();
+    assert!(
+        Player::new(&mut body_world)
+            .view()
+            .unwrap()
+            .bodies
+            .is_empty()
+    );
+    body_state
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions[1]
+        .location = LocalLocation::At {
+        region: 1,
+        endpoint: store1,
+    };
+    let mut body_world = Economy::compile(body_state).unwrap();
+    assert_eq!(Player::new(&mut body_world).view().unwrap().bodies.len(), 1);
+
+    let mut different_legs = make(walking(store1, 1), walking(store2, 1));
+    assert!(
+        Player::new(&mut different_legs)
+            .view()
+            .unwrap()
+            .nearby
+            .is_empty()
+    );
+    let mut different_progress = make(walking(store1, 1), walking(store1, 2));
+    assert!(
+        Player::new(&mut different_progress)
+            .view()
+            .unwrap()
+            .nearby
+            .is_empty()
+    );
+    let mut together = make(walking(store1, 1), walking(store1, 1));
+    let mut player = Player::new(&mut together);
+    let view = player.view().unwrap();
+    assert_eq!(view.nearby, vec![2]);
+    assert!(player.give(2, view.possessions[0].good, 1).unwrap());
+}
+
+#[test]
 fn authored_local_visit_is_an_independent_personal_choice() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

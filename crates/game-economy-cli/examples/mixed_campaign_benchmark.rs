@@ -33,6 +33,7 @@ fn main() {
     let local_visits = std::env::var_os("LEGACY_LOCAL_VISITS").is_some();
     let market_workload = std::env::var_os("LEGACY_MARKET").is_some();
     let work_requests = std::env::var_os("LEGACY_WORK_REQUESTS").is_some();
+    let player_view = std::env::var_os("LEGACY_PLAYER_VIEW").is_some();
     let inquiry_pursuit =
         taking_inquiries && std::env::var_os("LEGACY_DISABLE_INQUIRY_PURSUIT").is_none();
     assert!(people > 4 && ticks > 0 && sample_count > 0 && reproduction <= 100);
@@ -236,6 +237,9 @@ fn main() {
             taking.policies_mut().iter_mut().for_each(|policy| policy.willing = false);
         }
         let mut samples = Vec::new();
+        let mut view_samples = Vec::new();
+        let mut expected_view = None;
+        let mut visible_people = 0;
         let mut expected = None;
         let mut final_population = 0;
         let mut living_people = 0;
@@ -272,6 +276,18 @@ fn main() {
                 assert!(started_jobs > 0 && delivered_jobs > 0, "mixed visit workload must retain production");
             }
             let elapsed = started.elapsed().as_secs_f64();
+            if player_view {
+                let started = std::time::Instant::now();
+                let view = game_economy_player::Player::new(&mut world).view().unwrap();
+                let view_elapsed = started.elapsed().as_secs_f64();
+                visible_people = view.nearby.len();
+                let bodies: Vec<_> = view.bodies.iter().map(|body| body.person).collect();
+                let sites: Vec<_> = view.work_sites.iter().map(|site| site.site.id).collect();
+                let bytes = serde_json::to_vec(&(view.tick, &view.nearby, bodies, sites)).unwrap();
+                let hash = bytes.iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+                if let Some(expected) = expected_view { assert_eq!(hash, expected); } else { expected_view = Some(hash); }
+                if round > 0 { view_samples.push(view_elapsed); }
+            }
             let state = world.snapshot();
             final_population = state.people.len();
             living_people = state.people.iter().filter(|person| person.health > 0).count();
@@ -314,6 +330,12 @@ fn main() {
         let middle = samples.len() / 2;
         let median = if samples.len() % 2 == 0 { (samples[middle - 1] + samples[middle]) / 2.0 } else { samples[middle] };
         println!("workers={workers} initial_people={people} final_people={final_population} living_people={living_people} history_stress={history_stress} local_visits={local_visits} local_positions={local_positions} market_workload={market_workload} market_offers={market_offers} market_pending={market_pending} work_requests={work_requests} work_requests_created={work_requests_created} reproduction_percent={reproduction} grain_per_person={grain_per_person} ticks={ticks} samples={sample_count} started_jobs={started_jobs} delivered_jobs={delivered_jobs} social_relationships={social_relationships} directed_opinions={directed_opinions} taking_reports={taking_reports} remembered_encounters={remembered_encounters} encounter_statements={encounter_statements} inquiry_pursuit={inquiry_pursuit} inquiry_requests={inquiry_requests} inquiry_decisions={inquiry_decisions} inquiry_accepted={inquiry_accepted} inquiry_declined={inquiry_declined} inquiry_expired={inquiry_expired} inquiry_answers={inquiry_answers} inquiry_assessments={inquiry_assessments} elapsed_min={:.6} elapsed_median={median:.6} elapsed_max={:.6} state_fingerprint={:016x}", samples[0], samples[samples.len()-1], expected.unwrap());
+        if player_view {
+            view_samples.sort_by(f64::total_cmp);
+            let middle = view_samples.len() / 2;
+            let median = if view_samples.len() % 2 == 0 { (view_samples[middle - 1] + view_samples[middle]) / 2.0 } else { view_samples[middle] };
+            println!("player_view_visible_people={visible_people} elapsed_median={median:.6} view_fingerprint={:016x}", expected_view.unwrap());
+        }
         #[cfg(feature = "profile")]
         if std::env::var_os("LEGACY_PROFILE").is_some() {
             for (name, measurement) in game_diagnostics::snapshot() {

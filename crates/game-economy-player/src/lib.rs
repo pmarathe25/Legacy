@@ -214,18 +214,49 @@ impl<'a> Player<'a> {
             })
             .cloned();
         let locations = game_economy::Colocation::new(state.travel);
+        let walking = state
+            .local_transport
+            .and_then(|owner| owner.walking.as_ref());
+        let local_position = person.as_ref().and_then(|actor| {
+            walking
+                .zip(actor.region)
+                .map(|(walking, region)| walking.location(actor.id, region))
+        });
+        let aligned = local_position.is_some()
+            && walking.is_some_and(|walking| {
+                walking.positions.len() == state.people.len()
+                    && walking
+                        .positions
+                        .par_iter()
+                        .zip(state.people.par_iter())
+                        .all(|(position, person)| position.person == person.id)
+            });
+        let locally_visible = |index: usize, person: &game_economy::Person| {
+            local_position.is_none_or(|position| {
+                walking.zip(person.region).is_some_and(|(walking, region)| {
+                    let actual = if aligned {
+                        walking.positions[index].location
+                    } else {
+                        walking.location(person.id, region)
+                    };
+                    actual == position
+                })
+            })
+        };
         let mut nearby: Vec<_> = person.as_ref().map_or_else(Vec::new, |actor| {
             state
                 .people
                 .par_iter()
-                .filter(|p| {
+                .enumerate()
+                .filter(|(index, p)| {
                     p.id != actor.id
                         && p.health > 0
                         && locations
                             .region((actor.id, actor.region), (p.id, p.region))
                             .is_some()
+                        && locally_visible(*index, p)
                 })
-                .map(|p| p.id)
+                .map(|(_, p)| p.id)
                 .collect()
         });
         let journey = current.and_then(|id| {
@@ -277,12 +308,14 @@ impl<'a> Player<'a> {
                 state
                     .people
                     .par_iter()
-                    .filter(|p| {
+                    .enumerate()
+                    .filter(|(index, p)| {
                         p.health == 0
                             && p.region == Some(region)
+                            && locally_visible(*index, p)
                             && state.confinement.is_none_or(|owner| !owner.held(p.id))
                     })
-                    .map(|p| BodyView {
+                    .map(|(_, p)| BodyView {
                         person: p.id,
                         possessions: state
                             .physical
@@ -491,7 +524,7 @@ impl<'a> Player<'a> {
         });
         let fields: Vec<game_economy::Field> = person
             .as_ref()
-            .and_then(|p| p.region)
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
             .and_then(|region| {
                 state.agriculture.map(|a| {
                     a.fields
@@ -504,7 +537,7 @@ impl<'a> Player<'a> {
             .unwrap_or_default();
         let work_sites = person
             .as_ref()
-            .and_then(|p| p.region)
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
             .and_then(|region| {
                 state.work_sites.map(|owner| {
                     use std::collections::{HashMap, HashSet};
@@ -561,7 +594,7 @@ impl<'a> Player<'a> {
             .unwrap_or_default();
         let debris = person
             .as_ref()
-            .and_then(|p| p.region)
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
             .and_then(|region| {
                 state.construction.map(|owner| {
                     owner
@@ -620,21 +653,20 @@ impl<'a> Player<'a> {
                 })
             })
             .unwrap_or_default();
-        let resource_sites =
-            person
-                .as_ref()
-                .and_then(|p| p.region)
-                .map_or_else(Vec::new, |region| {
-                    self.world
-                        .resource_nodes()
-                        .par_iter()
-                        .filter(|node| node.region == region)
-                        .cloned()
-                        .collect()
-                });
+        let resource_sites = person
+            .as_ref()
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
+            .map_or_else(Vec::new, |region| {
+                self.world
+                    .resource_nodes()
+                    .par_iter()
+                    .filter(|node| node.region == region)
+                    .cloned()
+                    .collect()
+            });
         let animals = person
             .as_ref()
-            .and_then(|p| p.region)
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
             .map_or_else(Vec::new, |region| {
                 self.world
                     .animals()
@@ -703,7 +735,7 @@ impl<'a> Player<'a> {
             .unwrap_or_default();
         let vacant_work = person
             .as_ref()
-            .and_then(|p| p.region)
+            .and_then(|p| p.region.filter(|_| local_stock_observed))
             .map_or_else(Vec::new, |region| {
                 state.work_sites.map_or_else(Vec::new, |sites| {
                     state
