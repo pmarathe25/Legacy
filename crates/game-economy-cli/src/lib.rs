@@ -78,6 +78,8 @@ struct Scenario {
     #[serde(default)]
     cultivation: Option<Cultivation>,
     #[serde(default)]
+    soil_amendment: Option<SoilAmendmentConfig>,
+    #[serde(default)]
     irrigation: Option<IrrigationConfig>,
     #[serde(default)]
     dynamics: Option<game_economy::Dynamics>,
@@ -594,6 +596,14 @@ struct Cultivation {
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct SoilAmendmentConfig {
+    good: String,
+    quantity: u64,
+    fertility_gain: u64,
+    choices: Vec<game_economy_agriculture::amendment::Choice>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct IrrigationConfig {
     water: String,
     capacity: u64,
@@ -970,6 +980,25 @@ pub fn scenario_with_options(
                     max_quantity: value.max_quantity,
                 });
         }
+    }
+    if let Some(config) = scenario.soil_amendment {
+        let soil = scenario
+            .cultivation
+            .as_mut()
+            .and_then(|farm| farm.soil.as_mut())
+            .ok_or("soil amendment requires cultivation soil")?;
+        if soil.amendment.is_some() {
+            return Err("duplicate soil amendment".into());
+        }
+        soil.amendment = Some(game_economy_agriculture::amendment::Amendment {
+            good: *goods
+                .get(config.good.as_str())
+                .ok_or_else(|| format!("unknown soil amendment good {}", config.good))?,
+            quantity: config.quantity,
+            fertility_gain: config.fertility_gain,
+            choices: config.choices,
+            events: vec![],
+        });
     }
     if !scenario.work_offer_values.is_empty() {
         let requests = scenario

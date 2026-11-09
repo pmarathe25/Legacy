@@ -38714,6 +38714,136 @@ fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
 }
 
 #[test]
+fn soil_improvement_consumes_real_material_and_arbitrates_competing_people() {
+    use game_economy_agriculture::{
+        amendment::{Amendment, Choice},
+        soil::{FieldSoil, Soil},
+    };
+    let mut initial = field_workload(2);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.policies.iter_mut().for_each(|row| row.willing = false);
+    farm.soil = Some(Soil {
+        capacity: 100,
+        loss_per_harvest: 20,
+        recovery_per_fallow: 0,
+        fields: vec![
+            FieldSoil {
+                field: 1,
+                fertility: 20,
+            },
+            FieldSoil {
+                field: 2,
+                fertility: 20,
+            },
+        ],
+        amendment: Some(Amendment {
+            good: 2,
+            quantity: 1,
+            fertility_gain: 20,
+            choices: vec![
+                Choice {
+                    person: 1,
+                    field: 1,
+                    willing: true,
+                    disregard_claims: false,
+                },
+                Choice {
+                    person: 2,
+                    field: 2,
+                    willing: true,
+                    disregard_claims: false,
+                },
+            ],
+            events: vec![],
+        }),
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let mut reload = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&world.snapshot()).unwrap())
+                        .unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                reload.advance().unwrap();
+                let result = world.snapshot();
+                assert_eq!(result, reload.snapshot());
+                result
+            })
+    };
+    let state = run(initial.clone(), 1);
+    assert_eq!(state, run(initial.clone(), 4));
+    let soil = state.agriculture.as_ref().unwrap().soil.as_ref().unwrap();
+    assert_eq!(soil.fields.iter().map(|row| row.fertility).sum::<u64>(), 60);
+    let events = &soil.amendment.as_ref().unwrap().events;
+    assert_eq!(events.len(), 2);
+    assert_eq!(events.iter().filter(|row| row.accepted).count(), 1);
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+            .unwrap()
+            .lots
+            .iter()
+            .map(|lot| lot.quantity)
+            .sum::<u64>(),
+        0
+    );
+    let mut contested = initial.clone();
+    contested
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .soil
+        .as_mut()
+        .unwrap()
+        .amendment
+        .as_mut()
+        .unwrap()
+        .choices[1]
+        .field = 1;
+    let result = run(contested.clone(), 1);
+    assert_eq!(result, run(contested, 4));
+    let soil = result.agriculture.unwrap().soil.unwrap();
+    assert_eq!(soil.amendment.unwrap().events.len(), 1);
+    assert_eq!(soil.fields[0].fertility, 40);
+    let mut unwilling = initial;
+    unwilling
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .soil
+        .as_mut()
+        .unwrap()
+        .amendment
+        .as_mut()
+        .unwrap()
+        .choices
+        .iter_mut()
+        .for_each(|row| row.willing = false);
+    let state = run(unwilling, 1);
+    assert!(
+        state
+            .agriculture
+            .unwrap()
+            .soil
+            .unwrap()
+            .amendment
+            .unwrap()
+            .events
+            .is_empty()
+    );
+}
+
+#[test]
 fn soil_fertility_changes_real_harvests_and_recovers_while_fallow() {
     use game_economy_agriculture::soil::{FieldSoil, Soil};
     let mut initial = field_workload(2);
@@ -38723,6 +38853,7 @@ fn soil_fertility_changes_real_harvests_and_recovers_while_fallow() {
     farm.crops[0].output_quantity = 10;
     farm.policies[1].willing = false;
     farm.soil = Some(Soil {
+        amendment: None,
         capacity: 100,
         loss_per_harvest: 20,
         recovery_per_fallow: 10,
@@ -39718,6 +39849,7 @@ fn concentrated_field_benchmark() {
     let offers = std::env::var_os("LEGACY_FIELD_OFFERS").is_some();
     let remember = std::env::var_os("LEGACY_FIELD_REMEMBER").is_some();
     let soil = std::env::var_os("LEGACY_FIELD_SOIL").is_some();
+    let amend = std::env::var_os("LEGACY_FIELD_AMEND").is_some();
     let requests = discovery
         || withdrawal
         || offers
@@ -39734,8 +39866,10 @@ fn concentrated_field_benchmark() {
     assert!(!offers || (!discovery && !withdrawal && !feelings && !field_claims));
     assert!(!remember || (!discovery && !withdrawal && !offers && !feelings && !field_claims));
     assert!(!soil || (!requests && !field_claims && count.is_multiple_of(2)));
+    assert!(!amend || (!requests && !field_claims && !soil && count.is_multiple_of(2)));
     if soil {
         initial.agriculture.as_mut().unwrap().soil = Some(game_economy_agriculture::soil::Soil {
+            amendment: None,
             capacity: 100,
             loss_per_harvest: 20,
             recovery_per_fallow: 10,
@@ -39745,6 +39879,39 @@ fn concentrated_field_benchmark() {
                     fertility: 100,
                 })
                 .collect(),
+        });
+    }
+    if amend {
+        use game_economy_agriculture::{
+            amendment::{Amendment, Choice},
+            soil::{FieldSoil, Soil},
+        };
+        let farm = initial.agriculture.as_mut().unwrap();
+        farm.policies.iter_mut().for_each(|row| row.willing = false);
+        farm.soil = Some(Soil {
+            capacity: 100,
+            loss_per_harvest: 20,
+            recovery_per_fallow: 0,
+            fields: (1..=count)
+                .map(|field| FieldSoil {
+                    field,
+                    fertility: 20,
+                })
+                .collect(),
+            amendment: Some(Amendment {
+                good: 2,
+                quantity: 1,
+                fertility_gain: 20,
+                choices: (1..=count)
+                    .map(|person| Choice {
+                        person,
+                        field: person,
+                        willing: true,
+                        disregard_claims: false,
+                    })
+                    .collect(),
+                events: vec![],
+            }),
         });
     }
     if requests {
@@ -40005,11 +40172,25 @@ fn concentrated_field_benchmark() {
                     .filter(|row| row.accepted)
                     .count();
                 if !discovery {
-                    assert_eq!(third, if requests { 0 } else { count as usize / 2 });
+                    assert_eq!(
+                        third,
+                        if requests || amend {
+                            0
+                        } else {
+                            count as usize / 2
+                        }
+                    );
                 }
                 let elapsed = started.elapsed().as_secs_f64();
-                if (requests || field_claims || soil) && round == 3 {
+                if (requests || field_claims || soil || amend) && round == 3 {
                     let state = world.snapshot();
+                    if amend {
+                        let soil = state.agriculture.as_ref().unwrap().soil.as_ref().unwrap();
+                        assert_eq!(
+                            soil.fields.iter().filter(|row| row.fertility == 40).count(),
+                            count as usize / 2
+                        );
+                    }
                     if soil {
                         assert_eq!(
                             state

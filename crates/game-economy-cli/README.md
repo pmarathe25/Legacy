@@ -28,6 +28,8 @@ Run `cargo run -p game-economy-cli -- content/scenarios/economy-project.toml --p
 
 `content/scenarios/economy-cultivation-soil.toml` configures field fertility, harvest depletion, and fallow recovery in content; harvest quantities depend on the field's opening fertility.
 
+`content/scenarios/economy-soil-improvement.toml` adds an individual's inclination to consume actual locally stored material to improve a field. Its `[soil_amendment]` names the material in the content catalog.
+
 `content/scenarios/economy-maintenance.toml` has a workshop that wears out after one completed batch. Local `view` shows its wear, limit, repair good, and quantity; `repair-site 1` spends a boundary and consumes the required carried timber if the physical transaction succeeds. A worn-out site does not admit new jobs, but existing work may finish. Repairs require an idle site and exclude competing demolition and new work during the attempt.
 
 In `content/scenarios/economy-shared-work.toml`, person 3 chooses to assist person 2's workshop job. Use `step 3` and `view` to see a local shared-work receipt. The same job owns its inputs and output throughout.

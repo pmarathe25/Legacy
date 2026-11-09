@@ -1,4 +1,5 @@
 //! Parallel cultivation over real seed and dated harvest custody.
+pub mod amendment;
 pub mod content;
 pub mod irrigation;
 pub mod requests;
@@ -222,6 +223,9 @@ impl Agriculture {
         }
         if let Some(soil) = &self.soil {
             soil.validate(&fields)?;
+            if let Some(amendment) = &soil.amendment {
+                amendment.validate(&ids, &goods, soil)?;
+            }
         }
         Ok(())
     }

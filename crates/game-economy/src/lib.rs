@@ -6024,6 +6024,49 @@ impl Economy {
         action_base = action_base
             .checked_add(farming.as_ref().map_or(0, |p| p.changes.len() as u64))
             .ok_or("action count overflow")?;
+        let amendment_plan = if let Some((agriculture, soil, amendment)) =
+            self.agriculture.as_ref().and_then(|farm| {
+                farm.soil.as_ref().and_then(|soil| {
+                    soil.amendment
+                        .as_ref()
+                        .map(|amendment| (farm, soil, amendment))
+                })
+            }) {
+            let mut nonstock: Vec<_> = local_nonstock.par_iter().copied().collect();
+            nonstock.par_sort_unstable();
+            let mut occupied: Vec<_> = farming
+                .as_ref()
+                .map_or(&[][..], |plan| plan.changes.as_slice())
+                .par_iter()
+                .map(|row| row.0)
+                .collect();
+            occupied.par_sort_unstable();
+            Some(amendment.prepare(
+                game_economy_agriculture::amendment::Context {
+                    soil,
+                    agriculture,
+                    people: &self.people,
+                    busy: &busy,
+                    nonstock: &nonstock,
+                    occupied_fields: &occupied,
+                    claims: claims.as_ref(),
+                    view: &view,
+                    max_hunger: self.rules.max_work_hunger,
+                    seed: self.seed,
+                    tick,
+                },
+                action_base,
+            )?)
+        } else {
+            None
+        };
+        if let Some(plan) = &amendment_plan {
+            action_base = action_base
+                .checked_add(plan.len() as u64)
+                .ok_or("action count overflow")?;
+            game_economy_work::reserve(&mut busy, plan.actors());
+            claim_uses.par_extend(plan.uses());
+        }
         let manual_water = match player_transfer {
             Some(game_economy_interaction::PhysicalChoice::WaterField {
                 person,
@@ -7094,6 +7137,9 @@ impl Economy {
         #[cfg(feature = "profile")]
         let mut work_phase = game_diagnostics::span("economy.work.collect_actions");
         let mut actions: Vec<Transaction> = meals.actions().to_vec();
+        if let Some(plan) = &amendment_plan {
+            actions.par_extend(plan.actions().cloned());
+        }
         if let Some(plan) = &irrigation_plan {
             actions.par_extend(plan.actions().cloned());
         }
@@ -7199,6 +7245,9 @@ impl Economy {
             actions.extend_from_slice(&plan.actions);
         }
         let mut compact = game_economy_agriculture::append_planting(&mut farming, &mut actions);
+        if let Some(plan) = &amendment_plan {
+            compact.par_extend(plan.actions().map(|action| action.id));
+        }
         if let Some(plan) = &irrigation_plan {
             compact.par_extend(plan.actions().map(|action| action.id));
         }
@@ -8397,6 +8446,16 @@ impl Economy {
             self.agriculture.as_ref(),
             physical.events(),
         )?;
+        if let (Some(owner), Some(plan), Some(soil)) = (
+            self.agriculture
+                .as_ref()
+                .and_then(|farm| farm.soil.as_ref())
+                .and_then(|soil| soil.amendment.as_ref()),
+            amendment_plan,
+            agriculture.as_mut().and_then(|farm| farm.soil.as_mut()),
+        ) {
+            owner.publish(soil, plan, physical.events(), tick);
+        }
         let effects = meals.effects(physical.events())?;
         #[cfg(feature = "profile")]
         {

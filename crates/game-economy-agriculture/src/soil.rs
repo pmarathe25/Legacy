@@ -17,6 +17,8 @@ pub struct Soil {
     pub loss_per_harvest: u64,
     pub recovery_per_fallow: u64,
     pub fields: Vec<FieldSoil>,
+    #[serde(default)]
+    pub amendment: Option<crate::amendment::Amendment>,
 }
 impl Clone for Soil {
     fn clone(&self) -> Self {
@@ -25,6 +27,7 @@ impl Clone for Soil {
             loss_per_harvest: self.loss_per_harvest,
             recovery_per_fallow: self.recovery_per_fallow,
             fields: self.fields.par_iter().cloned().collect(),
+            amendment: self.amendment.clone(),
         }
     }
 }
@@ -81,6 +84,7 @@ impl Soil {
             loss_per_harvest: self.loss_per_harvest,
             recovery_per_fallow: self.recovery_per_fallow,
             fields: rows,
+            amendment: self.amendment.clone(),
         }
     }
 }

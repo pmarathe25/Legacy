@@ -6805,6 +6805,37 @@ fn aspiration_help_recognition_is_configurable_and_private_to_the_ruler() {
 }
 
 #[test]
+fn soil_improvement_scenario_consumes_authored_material() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-soil-improvement.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    for _ in 0..3 {
+        world.advance().unwrap();
+    }
+    let state = world.snapshot();
+    let soil = state.agriculture.as_ref().unwrap().soil.as_ref().unwrap();
+    assert_eq!(soil.fields[0].fertility, 85);
+    let amendment = soil.amendment.as_ref().unwrap();
+    assert_eq!(amendment.events.len(), 1);
+    assert!(amendment.events[0].accepted);
+    assert_eq!(
+        state
+            .physical
+            .custody
+            .containers
+            .iter()
+            .flat_map(|container| &container.lots)
+            .filter(|lot| lot.good == amendment.good)
+            .map(|lot| lot.quantity)
+            .sum::<u64>(),
+        0
+    );
+}
+
+#[test]
 fn cultivation_soil_scenario_loads_and_recovers_fertility() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(
