@@ -2445,10 +2445,13 @@ impl Economy {
                 person.id == 0
                     || person.region == Some(0)
                     || person.health > state.rules.max_health
-                    || person
-                        .immortal
-                        .as_ref()
-                        .is_some_and(|kind| kind.recovery_per_tick == 0 || person.hunger != 0)
+                    || person.hunger_remainder >= state.physical.tick_millis
+                    || (person.hunger == u32::MAX && person.hunger_remainder != 0)
+                    || person.immortal.as_ref().is_some_and(|kind| {
+                        kind.recovery_per_tick == 0
+                            || person.hunger != 0
+                            || person.hunger_remainder != 0
+                    })
             })
         {
             return Err("invalid personal economic state".into());

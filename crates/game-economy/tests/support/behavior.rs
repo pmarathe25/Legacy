@@ -105,6 +105,7 @@ fn fixture() -> State {
                 region: Some(1),
                 health: 100,
                 hunger: if id == 1 { 5 } else { 0 },
+                hunger_remainder: 0,
                 immortal: None,
                 willing_to_work: id == 2,
                 seek_meals: id == 1,
@@ -238,6 +239,33 @@ fn fixture() -> State {
         hauling: None,
         local_transport: None,
     }
+}
+
+#[test]
+fn fractional_hunger_survives_boundary_reload_across_workers() {
+    let mut initial = fixture();
+    let quantum = initial.physical.tick_millis;
+    initial.people[0].seek_meals = false;
+    initial.people[0].hunger_remainder = quantum / 2;
+    let mut invalid = initial.clone();
+    invalid.people[0].hunger_remainder = quantum;
+    assert!(Economy::compile(invalid).is_err());
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let saved = serde_json::to_string(&initial).unwrap();
+                let mut world = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state.people[0].hunger_remainder, quantum / 2);
+                Economy::compile(state.clone()).unwrap();
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
 }
 
 #[test]
@@ -1188,6 +1216,7 @@ fn independent_readers(count: u64) -> State {
             region: Some(1),
             health: 100,
             hunger: 0,
+            hunger_remainder: 0,
             immortal: None,
             willing_to_work: false,
             seek_meals: false,
@@ -17581,6 +17610,7 @@ fn embodied_guardian_fixture() -> State {
         region: Some(2),
         health: 100,
         hunger: 0,
+        hunger_remainder: 0,
         immortal: Some(Immortal {
             recovery_per_tick: 1,
         }),
@@ -21631,6 +21661,7 @@ fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
         region: None,
         health: 5,
         hunger: 0,
+        hunger_remainder: 0,
         immortal: Some(Immortal {
             recovery_per_tick: 1,
         }),
@@ -34217,6 +34248,7 @@ fn an_immortal_can_be_incapacitated_in_ordinary_combat_and_recover() {
         region: Some(1),
         health: 2,
         hunger: 0,
+        hunger_remainder: 0,
         immortal: Some(Immortal {
             recovery_per_tick: 1,
         }),
@@ -35505,6 +35537,7 @@ fn concentrated(count: u64) -> State {
             region: Some(1),
             health: 100,
             hunger: if id <= count / 2 { 5 } else { 0 },
+            hunger_remainder: 0,
             immortal: None,
             willing_to_work: id > count / 2,
             seek_meals: id <= count / 2,

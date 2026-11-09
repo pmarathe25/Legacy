@@ -2,6 +2,10 @@
 
 Stages individual hunger, digestion and nutrient reserves for the economic runtime.
 
+Hunger can accumulate fractional progress with an exact saved remainder. Whole-boundary meals retain any fractional hunger left after relief and clear it when relief exceeds the accumulated amount. This owner primitive does not yet advance needs, decisions, or damage at arbitrary world times.
+
+With the remainder present on every person, the mixed campaign benchmark with market, work requests, and local visits took median 392 ms with one worker and 279 ms with six for 10,000 initial people and 12 boundaries in one run; the final fingerprints matched. These timings are workload-specific and show sublinear whole-world scaling.
+
 Meal seekers can choose an actual portion from regional stock or an observed named local store. Store sources are grouped by region and good, so selecting among many stores does not scan every store for every person. Transfers remain subject to physical arbitration.
 
 Directed routes can have authored half-open closure intervals. A valid departure batch resolves physical closures independently, records each traveler's own bounded observations, and leaves already-started journeys unchanged. Observations include their time and are not automatically broadcast. Optional personal routing uses only an individual's reports and their estimated travel times; a route attempt updates whether it is open without replacing that estimate with hidden physical information.

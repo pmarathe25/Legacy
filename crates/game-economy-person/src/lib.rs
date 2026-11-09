@@ -59,8 +59,14 @@ pub fn prepare(
             if person.health > 0 {
                 if person.immortal.is_none() {
                     person.hunger = person.hunger.saturating_add(rules.hunger_per_tick);
+                    if person.hunger == u32::MAX {
+                        person.hunger_remainder = 0;
+                    }
                 }
                 if let Ok(index) = food.binary_search_by_key(&person.id, |row| row.0) {
+                    if food[index].1 > person.hunger {
+                        person.hunger_remainder = 0;
+                    }
                     person.hunger = person.hunger.saturating_sub(food[index].1);
                 }
                 let first = due.partition_point(|row| row.person < person.id);

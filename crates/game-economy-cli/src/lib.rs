@@ -1622,6 +1622,7 @@ pub fn scenario_with_options(
             region: Some(resident.region),
             health: resident.health,
             hunger: resident.hunger,
+            hunger_remainder: 0,
             immortal: resident.immortal,
             willing_to_work: resident.willing_to_work,
             seek_meals: resident.seek_meals,

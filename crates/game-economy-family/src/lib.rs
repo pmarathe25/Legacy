@@ -369,6 +369,7 @@ pub fn advance_validated_with_partition(
             region: birth.region,
             health: birth.health,
             hunger: 0,
+            hunger_remainder: 0,
             immortal: None,
             willing_to_work: willingness,
             seek_meals: newborns_seek_meals,
