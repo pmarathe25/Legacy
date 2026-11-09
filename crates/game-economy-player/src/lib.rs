@@ -136,6 +136,12 @@ pub struct FieldClaimView {
     pub field: u64,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldSoilView {
+    pub field: u64,
+    pub fertility: u64,
+    pub capacity: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub tick: u64,
     pub person: Option<Person>,
@@ -193,6 +199,8 @@ pub struct View {
     pub fields: Vec<game_economy::Field>,
     /// Moisture of local fields, excluding personal watering preferences.
     pub field_moisture: Vec<game_economy::FieldMoisture>,
+    /// Fertility of visible local fields, excluding others' preferences.
+    pub field_soil: Vec<FieldSoilView>,
     pub resource_sites: Vec<game_economy::ResourceNode>,
     pub work_sites: Vec<WorkSiteView>,
     pub debris: Vec<DebrisView>,
@@ -826,6 +834,22 @@ impl<'a> Player<'a> {
                 .cloned()
                 .collect()
         });
+        let field_soil = state
+            .agriculture
+            .and_then(|owner| owner.soil.as_ref())
+            .map_or_else(Vec::new, |soil| {
+                let mut local_fields: Vec<_> = fields.iter().map(|field| field.id).collect();
+                local_fields.sort_unstable();
+                soil.fields
+                    .iter()
+                    .filter(|row| local_fields.binary_search(&row.field).is_ok())
+                    .map(|row| FieldSoilView {
+                        field: row.field,
+                        fertility: row.fertility,
+                        capacity: soil.capacity,
+                    })
+                    .collect()
+            });
         let local_position = person
             .as_ref()
             .and_then(|person| person.region.map(|region| (person.id, region)))
@@ -887,6 +911,7 @@ impl<'a> Player<'a> {
             possessions,
             tools,
             field_moisture,
+            field_soil,
             local_stock,
             local_stock_observed,
             food_reports,
@@ -1177,6 +1202,11 @@ impl<'a> Player<'a> {
     ) -> Result<bool, String> {
         self.world
             .water_field(self.current()?, field, quantity, disregard_claims)
+    }
+    /// Attempt to improve a local field using its configured material.
+    pub fn amend_field(&mut self, field: u64, disregard_claims: bool) -> Result<bool, String> {
+        self.world
+            .amend_field(self.current()?, field, disregard_claims)
     }
     pub fn salvage_site(&mut self, site: u64, good: u32, quantity: u64) -> Result<bool, String> {
         self.world

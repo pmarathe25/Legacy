@@ -623,6 +623,37 @@ impl Economy {
                 .any(|event| event.person == person && event.field == field && event.accepted)
         }))
     }
+    /// Improve a local field using the configured physical soil material.
+    pub fn amend_field(
+        &mut self,
+        person: u64,
+        field: u64,
+        disregard_claims: bool,
+    ) -> Result<bool, String> {
+        game_economy_campaign::preflight!(self);
+        let draft = self.prepare_interaction(
+            None,
+            None,
+            None,
+            Some(game_economy_interaction::PhysicalChoice::AmendField {
+                person,
+                field,
+                disregard_claims,
+            }),
+        )?;
+        self.commit(draft)?;
+        Ok(self
+            .agriculture
+            .as_ref()
+            .and_then(|farm| farm.soil.as_ref())
+            .and_then(|soil| soil.amendment.as_ref())
+            .is_some_and(|owner| {
+                owner
+                    .events
+                    .iter()
+                    .any(|event| event.person == person && event.field == field && event.accepted)
+            }))
+    }
     /// Recover actual material from local debris into this person's custody.
     pub fn salvage_site(
         &mut self,
@@ -3198,6 +3229,7 @@ impl Economy {
                             ..
                         }
                         | game_economy_interaction::PhysicalChoice::WaterField { .. }
+                        | game_economy_interaction::PhysicalChoice::AmendField { .. }
                         | game_economy_interaction::PhysicalChoice::Build { .. }
                         | game_economy_interaction::PhysicalChoice::DestroySite { .. }
                         | game_economy_interaction::PhysicalChoice::RepairSite { .. }
@@ -6024,6 +6056,61 @@ impl Economy {
         action_base = action_base
             .checked_add(farming.as_ref().map_or(0, |p| p.changes.len() as u64))
             .ok_or("action count overflow")?;
+        let manual_amendment = match player_transfer {
+            Some(game_economy_interaction::PhysicalChoice::AmendField {
+                person,
+                field,
+                disregard_claims,
+            }) => {
+                let actor = self
+                    .people
+                    .binary_search_by_key(&person, |row| row.id)
+                    .ok()
+                    .map(|i| &self.people[i])
+                    .ok_or("unknown person")?;
+                let farm = self.agriculture.as_ref().ok_or("cultivation is disabled")?;
+                let soil = farm
+                    .soil
+                    .as_ref()
+                    .filter(|soil| soil.amendment.is_some())
+                    .ok_or("soil improvement is disabled")?;
+                if !actor.controlled
+                    || actor.health == 0
+                    || actor.region.is_none()
+                    || actor.hunger > self.rules.max_work_hunger
+                    || resting.binary_search(&person).is_ok()
+                    || held.binary_search(&person).is_ok()
+                    || self.family.as_ref().is_some_and(|family| {
+                        family.members.iter().any(|member| {
+                            member.id == person && member.age < family.rules.min_work_age
+                        })
+                    })
+                    || self.physical.work().iter().any(|work| {
+                        work.job.worker == person && work.phase == game_lot_runtime::Phase::Working
+                    })
+                    || !farm
+                        .fields
+                        .iter()
+                        .any(|row| row.id == field && Some(row.region) == actor.region)
+                    || soil
+                        .fields
+                        .binary_search_by_key(&field, |row| row.field)
+                        .is_err()
+                {
+                    return Err("person cannot improve that field now".into());
+                }
+                Some(game_economy_agriculture::amendment::Choice {
+                    person,
+                    field,
+                    willing: true,
+                    pressured_by: None,
+                    fear_at_least: None,
+                    obligation_at_least: None,
+                    disregard_claims,
+                })
+            }
+            _ => None,
+        };
         let amendment_plan = if let Some((agriculture, soil, amendment)) =
             self.agriculture.as_ref().and_then(|farm| {
                 farm.soil.as_ref().and_then(|soil| {
@@ -6055,6 +6142,7 @@ impl Economy {
                     max_hunger: self.rules.max_work_hunger,
                     seed: self.seed,
                     tick,
+                    manual: manual_amendment.as_ref(),
                 },
                 action_base,
             )?)

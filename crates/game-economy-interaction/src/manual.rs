@@ -44,6 +44,11 @@ pub enum PhysicalChoice {
         quantity: u64,
         disregard_claims: bool,
     },
+    AmendField {
+        person: u64,
+        field: u64,
+        disregard_claims: bool,
+    },
     Build {
         person: u64,
         blueprint: u32,
@@ -201,6 +206,7 @@ impl PhysicalChoice {
             | Self::RespondCultivation { person, .. }
             | Self::WithdrawCultivation { person, .. }
             | Self::WaterField { person, .. }
+            | Self::AmendField { person, .. }
             | Self::Build { person, .. }
             | Self::DestroySite { person, .. }
             | Self::RepairSite { person, .. }

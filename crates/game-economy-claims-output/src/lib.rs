@@ -88,6 +88,13 @@ macro_rules! prepare_farming {
                     manual,
                     manual_response,
                     manual_withdrawal,
+                    reserved_field: match $choice {
+                        Some(game_economy_interaction::PhysicalChoice::AmendField {
+                            field,
+                            ..
+                        }) => Some(field),
+                        _ => None,
+                    },
                     season: $world.environment.as_ref().and_then(|e| e.season($tick)),
                 }
                 .prepare($base)

@@ -359,6 +359,7 @@ pub struct Context<'a> {
     pub manual: Option<(u64, u64)>,
     pub manual_response: Option<(u64, u64, bool)>,
     pub manual_withdrawal: Option<(u64, u64)>,
+    pub reserved_field: Option<u64>,
     pub season: Option<&'a game_environment::Season>,
 }
 impl Context<'_> {
@@ -460,6 +461,9 @@ impl Context<'_> {
             .par_iter()
             .filter(|field| {
                 if manual.is_some_and(|(chosen, _)| chosen.id == field.id) {
+                    return false;
+                }
+                if self.reserved_field == Some(field.id) {
                     return false;
                 }
                 if requested

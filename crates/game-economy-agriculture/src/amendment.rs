@@ -66,6 +66,7 @@ pub struct Context<'a> {
     pub max_hunger: u32,
     pub seed: u64,
     pub tick: u64,
+    pub manual: Option<&'a Choice>,
 }
 impl Amendment {
     pub fn validate(
@@ -118,6 +119,7 @@ impl Amendment {
             max_hunger,
             seed,
             tick,
+            manual,
         } = context;
         let opinions = opinions
             .filter(|_| {
@@ -133,7 +135,11 @@ impl Amendment {
         let mut rows: Vec<_> = self
             .choices
             .par_iter()
+            .filter(|choice| manual.is_none_or(|selected| selected.person != choice.person))
+            .chain(manual.into_par_iter())
             .filter_map(|choice| {
+                let manually_selected =
+                    manual.is_some_and(|selected| selected.person == choice.person);
                 let person = people.get(
                     people
                         .binary_search_by_key(&choice.person, |row| row.id)
@@ -164,20 +170,21 @@ impl Amendment {
                     && !choice
                         .obligation_at_least
                         .is_some_and(|threshold| obligation >= threshold))
-                    || person.controlled
+                    || (person.controlled && !manually_selected)
                     || person.health == 0
                     || person.hunger > max_hunger
                     || person.region != Some(field.region)
-                    || busy.binary_search(&person.id).is_ok()
+                    || (!manually_selected && busy.binary_search(&person.id).is_ok())
                     || nonstock.binary_search(&person.id).is_ok()
                     || occupied_fields.binary_search(&field.id).is_ok()
                     || fertility.fertility == soil.capacity
-                    || view
-                        .container(Place::Stock {
-                            region: field.region,
-                            good: self.good,
-                        })
-                        .is_none_or(|stock| stock.quantity(self.good) < self.quantity)
+                    || (!manually_selected
+                        && view
+                            .container(Place::Stock {
+                                region: field.region,
+                                good: self.good,
+                            })
+                            .is_none_or(|stock| stock.quantity(self.good) < self.quantity))
                     || (!choice.disregard_claims
                         && claims.is_some_and(|c| {
                             !c.allows_field(person.id, field.id, None)

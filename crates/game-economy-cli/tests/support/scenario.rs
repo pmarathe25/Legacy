@@ -9220,6 +9220,70 @@ fn player_sees_only_carried_tool_conditions_and_can_repair_one() {
 }
 
 #[test]
+fn player_can_improve_soil_through_the_cli() {
+    use game_economy_agriculture::{
+        amendment::Amendment,
+        soil::{FieldSoil, Soil},
+    };
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let world = scenario(
+        &root.join("content/scenarios/economy-player-irrigation.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    let mut state = world.snapshot();
+    let seed = state
+        .physical
+        .goods
+        .iter()
+        .find(|row| row.name == "grain-seed")
+        .unwrap()
+        .id;
+    state.agriculture.as_mut().unwrap().soil = Some(Soil {
+        capacity: 100,
+        loss_per_harvest: 10,
+        recovery_per_fallow: 0,
+        fields: vec![FieldSoil {
+            field: 1,
+            fertility: 20,
+        }],
+        amendment: Some(Amendment {
+            good: seed,
+            quantity: 10,
+            fertility_gain: 20,
+            choices: vec![],
+            events: vec![],
+        }),
+    });
+    let mut world = game_economy::Economy::compile(state).unwrap();
+    assert_eq!(
+        game_economy_player::Player::new(&mut world)
+            .view()
+            .unwrap()
+            .field_soil[0]
+            .fertility,
+        20
+    );
+    assert!(
+        game_economy_cli_commands::player::handle(&mut world, &["amend-field", "1", "respect"])
+            .unwrap()
+    );
+    let state = world.snapshot();
+    assert_eq!(
+        state.agriculture.unwrap().soil.unwrap().fields[0].fertility,
+        40
+    );
+    assert_eq!(
+        game_economy_player::Player::new(&mut world)
+            .view()
+            .unwrap()
+            .field_soil[0]
+            .fertility,
+        40
+    );
+}
+
+#[test]
 fn player_sees_local_moisture_and_waters_using_finite_stock() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let mut world = scenario(

@@ -483,6 +483,7 @@ pub fn prepare(
                     || (unavailable(worker.id) && response.is_none())
                     || (withdrawal_actors.binary_search(&worker.id).is_ok() && response.is_none())
                     || context.manual.is_some_and(|(_, id)| id == f.id)
+                    || context.reserved_field == Some(f.id)
                 {
                     Evaluation::Retained(request.clone())
                 } else if response.is_some() {

@@ -38714,6 +38714,105 @@ fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
 }
 
 #[test]
+fn controlled_person_improves_soil_with_actual_material() {
+    use game_economy_agriculture::{
+        amendment::Amendment,
+        soil::{FieldSoil, Soil},
+    };
+    let mut initial = field_workload(2);
+    initial.people[0].controlled = true;
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.soil = Some(Soil {
+        capacity: 100,
+        loss_per_harvest: 20,
+        recovery_per_fallow: 0,
+        fields: vec![FieldSoil {
+            field: 1,
+            fertility: 20,
+        }],
+        amendment: Some(Amendment {
+            good: 2,
+            quantity: 1,
+            fertility_gain: 20,
+            choices: vec![],
+            events: vec![],
+        }),
+    });
+    let run = |state: State, workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(state).unwrap();
+                let opening = world.snapshot();
+                assert!(world.amend_field(1, 999, false).is_err());
+                assert_eq!(world.snapshot(), opening);
+                let mut reload = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&opening).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(world.amend_field(1, 1, false).unwrap());
+                assert!(reload.amend_field(1, 1, false).unwrap());
+                let state = world.snapshot();
+                assert_eq!(state, reload.snapshot());
+                let farm = state.agriculture.as_ref().unwrap();
+                assert_eq!(farm.fields[0].phase, CropPhase::Fallow);
+                assert_eq!(farm.soil.as_ref().unwrap().fields[0].fertility, 40);
+                assert_eq!(
+                    state
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+                        .unwrap()
+                        .lots
+                        .iter()
+                        .map(|lot| lot.quantity)
+                        .sum::<u64>(),
+                    0
+                );
+                state
+            })
+    };
+    assert_eq!(run(initial.clone(), 1), run(initial.clone(), 4));
+    let mut empty = initial.clone();
+    let stock = empty
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, 4, vec![]).unwrap();
+    let mut empty = Economy::compile(empty).unwrap();
+    assert!(!empty.amend_field(1, 1, false).unwrap());
+    assert_eq!(
+        empty.snapshot().agriculture.unwrap().soil.unwrap().fields[0].fertility,
+        20
+    );
+    let mut claimed = initial;
+    claimed.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(game_economy_claims::Claims {
+            field_claims: vec![game_economy_claims::FieldClaim {
+                field: 1,
+                person: 2,
+            }],
+            ..Default::default()
+        }),
+    });
+    let mut world = Economy::compile(claimed).unwrap();
+    assert!(!world.amend_field(1, 1, false).unwrap());
+    assert!(world.amend_field(1, 1, true).unwrap());
+}
+
+#[test]
 fn soil_improvement_consumes_real_material_and_arbitrates_competing_people() {
     use game_economy_agriculture::{
         amendment::{Amendment, Choice},
