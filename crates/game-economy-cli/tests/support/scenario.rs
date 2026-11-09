@@ -5449,6 +5449,69 @@ fn player_fights_on_the_authored_generated_map() {
 }
 
 #[test]
+fn player_battle_view_hides_fighters_behind_obstacles() {
+    use game_economy_combat::{Obstacle, Point};
+    use game_economy_player::Player;
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let mut world = scenario(
+        &root.join("content/scenarios/economy-campaign.toml"),
+        &root.join("content"),
+    )
+    .unwrap();
+    Player::new(&mut world).attack(2).unwrap();
+    let mut state = world.snapshot();
+    let combat = state.combat.as_mut().unwrap();
+    let region = combat.tactics.battles[0].region;
+    combat
+        .tactics
+        .maps
+        .iter_mut()
+        .find(|map| map.region == region)
+        .unwrap()
+        .obstacles = vec![Obstacle {
+        min: Point { x: 45, y: 10 },
+        max: Point { x: 55, y: 90 },
+    }];
+    for placement in &mut combat.tactics.battles[0].people {
+        placement.position = if placement.person == 1 {
+            Point { x: 20, y: 50 }
+        } else {
+            Point { x: 80, y: 50 }
+        };
+    }
+    let run = |workers, state: game_economy::State| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let saved = serde_json::to_string(&state).unwrap();
+                let mut world =
+                    game_economy::Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                Player::new(&mut world).view().unwrap().battle.unwrap()
+            })
+    };
+    let hidden = run(1, state.clone());
+    assert_eq!(
+        hidden
+            .fighters
+            .iter()
+            .map(|fighter| fighter.person)
+            .collect::<Vec<_>>(),
+        vec![1]
+    );
+    assert_eq!(hidden, run(4, state.clone()));
+    state.combat.as_mut().unwrap().tactics.battles[0]
+        .people
+        .iter_mut()
+        .find(|placement| placement.person == 2)
+        .unwrap()
+        .position = Point { x: 30, y: 50 };
+    let visible = run(4, state);
+    assert!(visible.fighters.iter().any(|fighter| fighter.person == 2));
+}
+
+#[test]
 fn controlled_worker_can_receive_and_independently_respond_to_real_work_requests() {
     use game_economy_player::Player;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");

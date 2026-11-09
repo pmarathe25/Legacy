@@ -428,6 +428,11 @@ impl<'a> Player<'a> {
                 .iter()
                 .find(|m| m.region == fight.region)?
                 .clone();
+            let actor_position = placements
+                .people
+                .iter()
+                .find(|placement| placement.person == id)?
+                .position;
             let mut ordered: Vec<_> = placements.people.par_iter().collect();
             if ordered
                 .par_windows(2)
@@ -461,12 +466,8 @@ impl<'a> Player<'a> {
                             position: ordered[i].position,
                         })
                 })
+                .filter(|fighter| map.visible(actor_position, fighter.position))
                 .collect();
-            let actor_position = placements
-                .people
-                .iter()
-                .find(|placement| placement.person == id)?
-                .position;
             let structures = combat
                 .structures
                 .par_iter()

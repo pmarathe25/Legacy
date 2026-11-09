@@ -40,6 +40,8 @@ In `content/scenarios/economy-intervention.toml`, use `attack 3` and advance the
 
 In `content/scenarios/economy-player-reinforcement.toml`, use `step` to let two other people start a fight, then `reinforce 3 2` to join person 3's side against person 2. Joining selects an open visible entry position without advancing time; subsequent combat rounds interrupt the player's other work and advance the world normally.
 
+The player battle view includes fighter positions and structures only when the tactical map has an unobstructed line of sight from the controlled person.
+
 In `content/scenarios/economy-wounds.toml`, use `attack 3` and advance until the fight ends. `view` shows local wounded people. Use `catalog` to find the healing-herbs good ID, then `treat-other 3 GOOD 1` to consume one carried herb and treat that person's wound, or `treat-wound GOOD 1` to treat your own. Wounds otherwise recover over time; the example wound pauses continuing work but does not prevent movement. `go 2` is unavailable while the player is still fighting and becomes available after the encounter ends.
 
 In `content/scenarios/economy-autonomous-wound-care.toml`, person 3 carries herbs and has an individual preference to treat their own wound. After `attack 3`, advance until the fight ends and then another boundary; their own choice can consume their herbs and clear their wound.
