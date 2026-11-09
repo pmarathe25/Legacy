@@ -164,6 +164,7 @@ pub struct View {
     pub promises: Vec<game_agreements::Contract>,
     pub battle: Option<BattleView>,
     pub pending_work_requests: Vec<game_autowork::requests::Request>,
+    pub cultivation_requests: Vec<game_economy::cultivation_requests::Request>,
     pub food_requests: Vec<game_economy::FoodRequest>,
     pub sharing_learning: Option<game_economy::SharingLearning>,
     pub practices: Option<game_economy::PracticeMind>,
@@ -818,6 +819,23 @@ impl<'a> Player<'a> {
                     .and_then(|owner| owner.walking.as_ref())
                     .map(|walking| walking.location(id, region))
             });
+        let cultivation_requests = current.map_or_else(Vec::new, |id| {
+            state
+                .agriculture
+                .and_then(|owner| owner.requests.as_ref())
+                .map_or_else(Vec::new, |owner| {
+                    owner
+                        .pending
+                        .par_iter()
+                        .filter(|request| {
+                            request.worker == id
+                                || (request.requester == id
+                                    && nearby.binary_search(&request.worker).is_ok())
+                        })
+                        .cloned()
+                        .collect()
+                })
+        });
         Ok(View {
             tick: self.world.tick(),
             held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
@@ -857,6 +875,7 @@ impl<'a> Player<'a> {
             promises,
             battle,
             pending_work_requests,
+            cultivation_requests,
             food_requests: current.map_or_else(Vec::new, |id| {
                 self.world
                     .food_requests()
@@ -1848,6 +1867,14 @@ impl<'a> Player<'a> {
             return Err("field is not local".into());
         }
         self.world.farm_field(self.current()?, field)
+    }
+    pub fn respond_cultivation_request(
+        &mut self,
+        request: u64,
+        accept: bool,
+    ) -> Result<game_economy::cultivation_requests::Outcome, String> {
+        self.world
+            .respond_cultivation_request(self.current()?, request, accept)
     }
     /// Assert a personal claim over a local stock; this does not compel anyone.
     pub fn claim_stock(&mut self, good: u32) -> Result<(), String> {

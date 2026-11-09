@@ -223,6 +223,34 @@ macro_rules! validate_world {
 #[macro_export]
 macro_rules! cultivation_methods {
     () => {
+        /// Personally answer one received request; acceptance attempts the specified action.
+        pub fn respond_cultivation_request(
+            &mut self,
+            person: u64,
+            request: u64,
+            accept: bool,
+        ) -> Result<game_economy_agriculture::requests::Outcome, String> {
+            game_economy_campaign::preflight!(self);
+            let draft = self.prepare_interaction(
+                None,
+                None,
+                None,
+                Some(
+                    game_economy_interaction::PhysicalChoice::RespondCultivation {
+                        person,
+                        request,
+                        accept,
+                    },
+                ),
+            )?;
+            self.commit(draft)?;
+            self.agriculture
+                .as_ref()
+                .and_then(|owner| owner.requests.as_ref())
+                .and_then(|owner| owner.events.iter().find(|event| event.request == request))
+                .map(|event| event.outcome)
+                .ok_or_else(|| "missing cultivation request outcome".into())
+        }
         pub fn set_farming_choice(&mut self, person: u64, willing: bool) -> Result<(), String> {
             let next = self
                 .agriculture
@@ -283,11 +311,13 @@ pub struct Context<'a> {
     pub opinions: Option<&'a Opinions>,
     pub claims: Option<&'a game_economy_claims::Index<'a>>,
     pub busy: &'a [u64],
+    pub contact_blocked: &'a [u64],
     pub goods: &'a [Good],
     pub view: &'a View,
     pub tick_millis: u64,
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
+    pub manual_response: Option<(u64, u64, bool)>,
     pub season: Option<&'a game_environment::Season>,
 }
 impl Context<'_> {
@@ -332,6 +362,9 @@ impl Context<'_> {
             policies.par_sort_unstable_by_key(|p| p.person);
         }
         let opinions = self.opinions.map(Opinions::index);
+        if self.manual_response.is_some() && self.agriculture.requests.is_none() {
+            return Err("cultivation requests are disabled".into());
+        }
         let requested = self
             .agriculture
             .requests

@@ -8,14 +8,41 @@ use rayon::prelude::*;
 
 #[macro_export]
 macro_rules! prepare_farming {
-    ($world:expr, $busy:expr, $view:expr, $tick:expr, $base:expr, $claims:expr, $choice:expr) => {{
+    ($world:expr, $busy:expr, $contact_blocked:expr, $view:expr, $tick:expr, $base:expr, $claims:expr, $choice:expr) => {{
         let manual = match $choice {
             Some(game_economy_interaction::PhysicalChoice::Farm { person, field }) => {
                 Some((person, field))
             }
             _ => None,
         };
+        let manual_response = match $choice {
+            Some(game_economy_interaction::PhysicalChoice::RespondCultivation {
+                person,
+                request,
+                accept,
+            }) => Some((person, request, accept)),
+            _ => None,
+        };
+        if manual_response.is_some() && $world.agriculture.is_none() {
+            return Err("cultivation is disabled".into());
+        }
         if let Some((person, _)) = manual {
+            if $world.agriculture.is_none()
+                || $world.family.as_ref().is_some_and(|f| {
+                    f.members
+                        .iter()
+                        .any(|m| m.id == person && m.age < f.rules.min_work_age)
+                })
+                || $world
+                    .physical
+                    .work()
+                    .iter()
+                    .any(|w| w.job.worker == person && w.phase == game_lot_runtime::Phase::Working)
+            {
+                return Err("person cannot cultivate now".into());
+            }
+        }
+        if let Some((person, _, true)) = manual_response {
             if $world.agriculture.is_none()
                 || $world.family.as_ref().is_some_and(|f| {
                     f.members
@@ -41,11 +68,13 @@ macro_rules! prepare_farming {
                     opinions: $world.opinions.as_ref(),
                     claims: $claims.as_ref(),
                     busy: &$busy,
+                    contact_blocked: &$contact_blocked,
                     goods: $world.physical.goods(),
                     view: &$view,
                     tick_millis: $world.physical.tick_millis(),
                     tick: $tick,
                     manual,
+                    manual_response,
                     season: $world.environment.as_ref().and_then(|e| e.season($tick)),
                 }
                 .prepare($base)

@@ -3132,6 +3132,10 @@ impl Economy {
                     choice,
                     game_economy_interaction::PhysicalChoice::Stock(_)
                         | game_economy_interaction::PhysicalChoice::Farm { .. }
+                        | game_economy_interaction::PhysicalChoice::RespondCultivation {
+                            accept: true,
+                            ..
+                        }
                         | game_economy_interaction::PhysicalChoice::WaterField { .. }
                         | game_economy_interaction::PhysicalChoice::Build { .. }
                         | game_economy_interaction::PhysicalChoice::DestroySite { .. }
@@ -3158,6 +3162,10 @@ impl Economy {
                                 | game_economy_interaction::PhysicalChoice::WriteFood { .. }
                                 | game_economy_interaction::PhysicalChoice::WriteText { .. }
                                 | game_economy_interaction::PhysicalChoice::PracticeWriting { .. }
+                                | game_economy_interaction::PhysicalChoice::RespondCultivation {
+                                    accept: false,
+                                    ..
+                                }
                         ) || matches!(
                             row,
                             game_economy_interaction::PhysicalChoice::AskFood { .. }
@@ -5884,9 +5892,37 @@ impl Economy {
                 .map(|group| group[0])
                 .collect();
         }
+        if matches!(player_transfer, Some(game_economy_interaction::PhysicalChoice::RespondCultivation { person, accept: true, .. }) if resting.binary_search(&person).is_ok())
+        {
+            return Err("person cannot cultivate while resting".into());
+        }
+        let mut farming_contact_blocked = if self
+            .agriculture
+            .as_ref()
+            .is_some_and(|owner| owner.requests.is_some())
+        {
+            local_nonstock.par_iter().copied().collect()
+        } else {
+            Vec::new()
+        };
+        if farming_contact_blocked
+            .par_windows(2)
+            .any(|pair| pair[0] > pair[1])
+        {
+            farming_contact_blocked.par_sort_unstable();
+        }
+        if self
+            .agriculture
+            .as_ref()
+            .is_some_and(|owner| owner.requests.is_some())
+            && !held.is_empty()
+        {
+            game_economy_work::reserve(&mut farming_contact_blocked, held.iter().copied());
+        }
         let (mut farming, mut claim_outputs) = game_economy_claims_output::prepare_farming!(
             self,
             busy,
+            farming_contact_blocked,
             view,
             tick,
             action_base,

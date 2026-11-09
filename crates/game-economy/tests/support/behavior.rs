@@ -37676,6 +37676,42 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
             })
     };
     assert_eq!(run(1), run(4));
+    let mut contested = initial.clone();
+    contested
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .askers[1]
+        .field = 1;
+    let mut contested = Economy::compile(contested).unwrap();
+    contested.advance().unwrap();
+    contested.advance().unwrap();
+    let state = contested.snapshot();
+    let requests = state
+        .agriculture
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap();
+    assert_eq!(requests.events.len(), 1);
+    assert_eq!(requests.events[0].outcome, Outcome::Fulfilled);
+    assert_eq!(requests.pending.len(), 1);
+    contested.advance().unwrap();
+    assert!(
+        contested
+            .snapshot()
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .events
+            .iter()
+            .any(|event| event.outcome == Outcome::Stale)
+    );
     let mut distant = initial.clone();
     distant
         .physical
@@ -37791,6 +37827,71 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
             .all(|field| field.phase == CropPhase::Fallow)
     );
 }
+#[test]
+fn controlled_recipient_can_accept_or_refuse_cultivation_requests() {
+    use crate::cultivation_requests::{Asker, Outcome, Requests};
+    let mut initial = field_workload(2);
+    initial.people[1].controlled = true;
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 1,
+        askers: vec![Asker {
+            person: 1,
+            worker: 2,
+            field: 1,
+            interval: 1,
+            lifetime: 3,
+        }],
+        preferences: vec![],
+        pending: vec![],
+        events: vec![],
+    });
+    let mut world = Economy::compile(initial.clone()).unwrap();
+    world.advance().unwrap();
+    let before = world.snapshot();
+    assert!(world.respond_cultivation_request(2, 999, true).is_err());
+    assert_eq!(before, world.snapshot());
+    let mut missing = before.clone();
+    let stock = missing
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, 4, vec![]).unwrap();
+    let mut missing = Economy::compile(missing).unwrap();
+    assert_eq!(
+        missing.respond_cultivation_request(2, 1, true).unwrap(),
+        Outcome::Failed
+    );
+    assert_eq!(
+        missing.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Fallow
+    );
+    assert_eq!(
+        world.respond_cultivation_request(2, 1, false).unwrap(),
+        Outcome::Refused
+    );
+    assert_eq!(
+        world.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Fallow
+    );
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    assert_eq!(
+        world.respond_cultivation_request(2, 1, true).unwrap(),
+        Outcome::Fulfilled
+    );
+    assert_eq!(
+        world.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Growing
+    );
+}
+
 #[test]
 #[ignore]
 fn concentrated_field_benchmark() {

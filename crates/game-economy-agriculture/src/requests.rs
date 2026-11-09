@@ -157,6 +157,43 @@ pub fn prepare(
         context.busy.binary_search(&id).is_ok()
             || context.manual.is_some_and(|(actor, _)| actor == id)
     };
+    if let Some((actor, id, accept)) = context.manual_response {
+        let request = owner
+            .pending
+            .iter()
+            .find(|request| request.id == id && request.worker == actor)
+            .ok_or("unknown cultivation request")?;
+        let worker = person(actor).ok_or("unknown person")?;
+        let f = field(request.field).ok_or("unknown requested field")?;
+        if !worker.controlled
+            || worker.health == 0
+            || request.created_at >= context.tick
+            || context.tick > request.expires
+        {
+            return Err("person cannot respond to this cultivation request".into());
+        }
+        if accept
+            && (worker.hunger > context.agriculture.max_hunger
+                || worker.region != Some(f.region)
+                || context.season.is_some_and(|s| match f.phase {
+                    Phase::Fallow => !s.planting_allowed,
+                    Phase::Ripe => !s.harvest_allowed,
+                    Phase::Growing => false,
+                })
+                || (f.phase == Phase::Fallow
+                    && context.claims.is_some_and(|claims| {
+                        let crop = context
+                            .agriculture
+                            .crops
+                            .iter()
+                            .find(|crop| crop.id == f.crop)
+                            .expect("validated crop");
+                        !claims.allows(worker.id, f.region, crop.seed)
+                    })))
+        {
+            return Err("person cannot cultivate this field now".into());
+        }
+    }
     enum Evaluation {
         Event(Event),
         Candidate(Request),
@@ -168,10 +205,18 @@ pub fn prepare(
         .map(|request| -> Result<_, String> {
             let f = field(request.field).ok_or("unknown requested field")?;
             let worker = person(request.worker).ok_or("unknown requested worker")?;
+            let response = context
+                .manual_response
+                .filter(|(actor, id, _)| *actor == worker.id && *id == request.id);
             Ok(if context.tick > request.expires {
                 Evaluation::Event(Event {
                     request: request.id,
                     outcome: Outcome::Expired,
+                })
+            } else if response.is_some_and(|(_, _, accept)| !accept) {
+                Evaluation::Event(Event {
+                    request: request.id,
+                    outcome: Outcome::Refused,
                 })
             } else if f.phase != request.phase {
                 Evaluation::Event(Event {
@@ -179,14 +224,16 @@ pub fn prepare(
                     outcome: Outcome::Stale,
                 })
             } else if context.tick <= request.created_at
-                || worker.controlled
+                || (worker.controlled && response.is_none())
                 || worker.health == 0
                 || worker.hunger > context.agriculture.max_hunger
                 || worker.region != Some(f.region)
-                || unavailable(worker.id)
+                || (unavailable(worker.id) && response.is_none())
                 || context.manual.is_some_and(|(_, id)| id == f.id)
             {
                 Evaluation::Retained(request.clone())
+            } else if response.is_some() {
+                Evaluation::Candidate(request.clone())
             } else if let Ok(i) = preferences.binary_search_by_key(&worker.id, |p| p.person) {
                 let p = preferences[i];
                 let (fear, obligation) =
@@ -249,12 +296,13 @@ pub fn prepare(
             _ => None,
         })
         .collect();
-    candidates.par_sort_unstable_by_key(|r| (r.worker, r.id));
+    let manual_id = context.manual_response.map(|(_, id, _)| id);
+    candidates.par_sort_unstable_by_key(|r| (r.worker, Some(r.id) != manual_id, r.id));
     let mut chosen: Vec<_> = candidates
         .par_chunk_by(|a, b| a.worker == b.worker)
         .map(|group| group[0].clone())
         .collect();
-    chosen.par_sort_unstable_by_key(|r| (r.field, r.id));
+    chosen.par_sort_unstable_by_key(|r| (r.field, Some(r.id) != manual_id, r.id));
     let chosen: Vec<_> = chosen
         .par_chunk_by(|a, b| a.field == b.field)
         .map(|group| group[0].clone())
@@ -296,7 +344,8 @@ pub fn prepare(
                 || asker.region != Some(f.region)
                 || worker.region != Some(f.region)
                 || unavailable(a.person)
-                || unavailable(a.worker)
+                || context.contact_blocked.binary_search(&a.worker).is_ok()
+                || (unavailable(a.worker) && !worker.controlled)
                 || reserved.binary_search(&a.person).is_ok()
                 || f.phase == Phase::Growing
             {
