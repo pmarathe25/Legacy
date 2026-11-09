@@ -1133,6 +1133,7 @@ impl<'a> Player<'a> {
                         source: guardian.region,
                         destination: journey.destination,
                         remaining: u64::from(journey.remaining),
+                        progress_millis: 0,
                     }),
                 student: guardian.student,
                 mentorship: guardian.mentorship,

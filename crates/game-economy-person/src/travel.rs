@@ -21,6 +21,36 @@ pub struct Journey {
     pub source: u64,
     pub destination: u64,
     pub remaining: u64,
+    /// Milliseconds already traveled toward the next whole travel tick.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub progress_millis: u64,
+}
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
+impl Journey {
+    /// Time until arrival; the caller publishes arrival and other world effects.
+    pub fn arrival_after(&self, quantum_millis: u64) -> Result<u128, &'static str> {
+        if quantum_millis == 0 || self.progress_millis >= quantum_millis || self.remaining == 0 {
+            return Err("invalid journey progress");
+        }
+        Ok(u128::from(self.remaining) * u128::from(quantum_millis)
+            - u128::from(self.progress_millis))
+    }
+
+    /// Advance the counter only, returning elapsed milliseconds consumed before arrival.
+    pub fn advance_elapsed(
+        &mut self,
+        elapsed: u64,
+        quantum_millis: u64,
+    ) -> Result<u64, &'static str> {
+        let consumed = self.arrival_after(quantum_millis)?.min(u128::from(elapsed)) as u64;
+        let progress = u128::from(self.progress_millis) + u128::from(consumed);
+        self.remaining -= (progress / u128::from(quantum_millis)) as u64;
+        self.progress_millis = (progress % u128::from(quantum_millis)) as u64;
+        Ok(consumed)
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Departure {
@@ -200,7 +230,7 @@ pub fn known_paths(
 }
 /// Coarse routes place people together when their recorded legs and progress match.
 pub struct Colocation {
-    journeys: HashMap<u64, (u64, u64, u64)>,
+    journeys: HashMap<u64, (u64, u64, u64, u64)>,
 }
 impl Colocation {
     pub fn new(travel: Option<&Travel>) -> Self {
@@ -208,7 +238,12 @@ impl Colocation {
             journeys: travel
                 .map_or(&[][..], |t| t.journeys.as_slice())
                 .par_iter()
-                .map(|j| (j.person, (j.source, j.destination, j.remaining)))
+                .map(|j| {
+                    (
+                        j.person,
+                        (j.source, j.destination, j.remaining, j.progress_millis),
+                    )
+                })
                 .collect(),
         }
     }
@@ -253,7 +288,15 @@ pub fn validate_world(
     view: &View,
     work: &[Work],
     tick: u64,
+    quantum_millis: u64,
 ) -> Result<(), String> {
+    if travel
+        .journeys
+        .par_iter()
+        .any(|journey| journey.arrival_after(quantum_millis).is_err())
+    {
+        return Err("invalid journey progress".into());
+    }
     let regions = view
         .containers
         .par_iter()
@@ -418,6 +461,7 @@ impl Travel {
                     source,
                     destination: route.destination,
                     remaining: route.ticks,
+                    progress_millis: 0,
                 })
             })
             .collect::<Result<_, &str>>()
@@ -693,5 +737,105 @@ impl Travel {
                     .is_some_and(|i| people[i].health > 0 || people[i].immortal.is_some())
             })
             .collect();
+    }
+}
+
+#[cfg(test)]
+mod elapsed_tests {
+    use super::*;
+
+    fn journey(person: u64) -> Journey {
+        Journey {
+            person,
+            source: 1,
+            destination: 2,
+            remaining: 2,
+            progress_millis: 0,
+        }
+    }
+
+    #[test]
+    fn split_progress_preserves_arrival_deadline_and_colocation() {
+        let mut first = journey(1);
+        let mut second = journey(2);
+        first.advance_elapsed(333, 1000).unwrap();
+        let travel = Travel {
+            journeys: vec![first.clone(), second.clone()],
+            ..Travel::default()
+        };
+        assert_eq!(
+            Colocation::new(Some(&travel)).region((1, None), (2, None)),
+            None
+        );
+        first.advance_elapsed(667, 1000).unwrap();
+        second.advance_elapsed(1000, 1000).unwrap();
+        assert_eq!(first.arrival_after(1000).unwrap(), 1000);
+        let travel = Travel {
+            journeys: vec![first.clone(), second],
+            ..Travel::default()
+        };
+        assert_eq!(
+            Colocation::new(Some(&travel)).region((1, None), (2, None)),
+            Some(1)
+        );
+        assert_eq!(first.advance_elapsed(1500, 1000).unwrap(), 1000);
+        assert_eq!((first.remaining, first.progress_millis), (0, 0));
+    }
+
+    #[test]
+    fn invalid_progress_is_inert() {
+        let mut row = journey(1);
+        row.progress_millis = 1000;
+        let before = row.clone();
+        assert!(row.advance_elapsed(1, 1000).is_err());
+        assert_eq!(row, before);
+    }
+
+    #[test]
+    fn progress_round_trips_and_old_saves_default_to_zero() {
+        let mut row = journey(1);
+        row.advance_elapsed(123, 1000).unwrap();
+        let saved = serde_json::to_string(&row).unwrap();
+        assert_eq!(serde_json::from_str::<Journey>(&saved).unwrap(), row);
+        let mut old = serde_json::to_value(row).unwrap();
+        old.as_object_mut().unwrap().remove("progress_millis");
+        assert_eq!(
+            serde_json::from_value::<Journey>(old)
+                .unwrap()
+                .progress_millis,
+            0
+        );
+    }
+
+    #[test]
+    fn whole_boundaries_retain_fraction_and_publish_arrival() {
+        let mut row = journey(1);
+        row.advance_elapsed(250, 1000).unwrap();
+        let travel = Travel {
+            journeys: vec![row],
+            ..Travel::default()
+        };
+        let mut people = vec![Person {
+            id: 1,
+            region: None,
+            health: 100,
+            hunger: 0,
+            immortal: None,
+            willing_to_work: false,
+            seek_meals: false,
+            controlled: false,
+        }];
+        let travel = travel.advance(&mut people);
+        assert_eq!(
+            (
+                travel.journeys[0].remaining,
+                travel.journeys[0].progress_millis
+            ),
+            (1, 250)
+        );
+        assert_eq!(people[0].region, None);
+        let travel = travel.advance(&mut people);
+        assert!(travel.journeys.is_empty());
+        assert_eq!(people[0].region, Some(2));
     }
 }

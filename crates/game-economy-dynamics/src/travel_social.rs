@@ -5,7 +5,7 @@ use rayon::prelude::*;
 
 pub struct Locality {
     regions: Vec<u64>,
-    routes: Vec<(u64, u64, u64)>,
+    routes: Vec<(u64, u64, u64, u64)>,
     cells: Vec<(u64, u64, u64, u8, u64)>,
     people: Vec<(u64, usize)>,
 }
@@ -29,7 +29,7 @@ impl Locality {
         regions = regions.par_chunk_by(|a, b| a == b).map(|g| g[0]).collect();
         let mut routes: Vec<_> = journeys
             .par_iter()
-            .map(|j| (j.source, j.destination, j.remaining))
+            .map(|j| (j.source, j.destination, j.remaining, j.progress_millis))
             .collect();
         routes.par_sort_unstable();
         routes = routes.par_chunk_by(|a, b| a == b).map(|g| g[0]).collect();
@@ -55,7 +55,7 @@ impl Locality {
         let mut locations: Vec<_> = journeys
             .par_iter()
             .map(|j| {
-                let key = (j.source, j.destination, j.remaining);
+                let key = (j.source, j.destination, j.remaining, j.progress_millis);
                 (
                     j.person,
                     regions.len() + routes.binary_search(&key).expect("known route"),

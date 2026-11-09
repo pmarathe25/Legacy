@@ -10260,20 +10260,44 @@ fn autonomous_encounters_keep_travelers_separate_from_people_at_the_source() {
             source: 1,
             destination: 2,
             remaining: 3,
+            progress_millis: 0,
         },
         Journey {
             person: 2,
             source: 1,
             destination: 2,
             remaining: 3,
+            progress_millis: 0,
         },
         Journey {
             person: 3,
             source: 1,
             destination: 2,
             remaining: 2,
+            progress_millis: 0,
         },
     ];
+    let mut separated = initial.clone();
+    separated.travel.as_mut().unwrap().journeys[1].progress_millis = 1;
+    let mut separated_world = Economy::compile(separated).unwrap();
+    separated_world.advance().unwrap();
+    let separated_state = separated_world.snapshot();
+    assert!(
+        separated_state
+            .dynamics
+            .as_ref()
+            .unwrap()
+            .social
+            .as_ref()
+            .unwrap()
+            .events
+            .is_empty()
+    );
+    assert_eq!(
+        separated_state.travel.as_ref().unwrap().journeys[1].progress_millis,
+        1
+    );
+    Economy::compile(separated_state).unwrap();
     let mut world = Economy::compile(initial).unwrap();
     world.advance().unwrap();
     let state = world.snapshot();
@@ -19089,6 +19113,7 @@ fn distinct_cells_and_journeys_keep_social_contact_separate() {
                 source: 1,
                 destination: 2,
                 remaining: 10,
+                progress_millis: 0,
             })
             .collect(),
     });
@@ -21631,6 +21656,7 @@ fn immortal_person_recovers_in_place_without_mortal_death_or_metabolism() {
         source: 1,
         destination: 2,
         remaining: 2,
+        progress_millis: 0,
     });
     let nutrition = initial.nutrition.as_mut().unwrap();
     nutrition.rules.metabolism = [1; 6];
@@ -36786,6 +36812,7 @@ fn traveling_fatigue_workload(count: u64) -> State {
                 source: 1,
                 destination: 2,
                 remaining: 10,
+                progress_millis: 0,
             })
             .collect(),
     });

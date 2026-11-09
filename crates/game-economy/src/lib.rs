@@ -2642,6 +2642,7 @@ impl Economy {
                 &view,
                 physical.work(),
                 physical.tick(),
+                physical.tick_millis(),
             )?;
         }
         family::validate_care!(state, physical, ids);
