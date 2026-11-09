@@ -160,3 +160,82 @@ fn many_dated_meals_produce_the_same_personal_effects_on_one_and_four_workers() 
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn pending_food_validation_matches_the_reference_across_workers() {
+    let people: HashSet<_> = (1..=128).collect();
+    let effects: Vec<_> = (1..=128)
+        .map(|person| FoodEffect {
+            person,
+            at: 2,
+            health: 0,
+            nutrients: [1; 6],
+        })
+        .collect();
+    let run = |rows: &[FoodEffect], workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| validate_pending(rows, &people, 1))
+    };
+    assert!(run(&effects, 1).is_ok());
+    assert_eq!(run(&effects, 1), run(&effects, 4));
+    for change in 0..3 {
+        let mut rows = effects.clone();
+        match change {
+            0 => rows[100].at = 1,
+            1 => rows[100].person = 999,
+            _ => rows[100].nutrients = [0; 6],
+        }
+        let expected = game_production_model::FoodEffects {
+            pending: rows.clone(),
+        }
+        .validate(&people, 1)
+        .map_err(str::to_owned);
+        assert_eq!(run(&rows, 1), expected);
+        assert_eq!(run(&rows, 4), expected);
+    }
+}
+
+#[test]
+#[ignore = "manual pending-food validation benchmark"]
+fn pending_food_validation_benchmark() {
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1_000_000u64);
+    let people: HashSet<_> = (1..=count).collect();
+    let effects: Vec<_> = (1..=count)
+        .map(|person| FoodEffect {
+            person,
+            at: 2,
+            health: 1,
+            nutrients: [0; 6],
+        })
+        .collect();
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut samples = Vec::new();
+            for round in 0..6 {
+                let started = std::time::Instant::now();
+                assert!(validate_pending(&effects, &people, 1).is_ok());
+                let elapsed = started.elapsed().as_secs_f64();
+                if round > 0 {
+                    samples.push(elapsed);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            println!(
+                "workers={workers} effects={count} elapsed={:.6}",
+                samples[2]
+            );
+        });
+}

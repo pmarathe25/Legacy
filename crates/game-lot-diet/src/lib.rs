@@ -2,7 +2,7 @@
 use game_lot_runtime::Events;
 use game_lots::{Movement, Place, Transaction};
 use game_nutrition::amounts;
-use game_production_model::{FoodEffect, FoodEffects, Good};
+use game_production_model::{FoodEffect, Good};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
@@ -11,11 +11,14 @@ pub fn validate_pending(
     people: &HashSet<u64>,
     tick: u64,
 ) -> Result<(), String> {
-    FoodEffects {
-        pending: pending.to_vec(),
+    if pending.par_iter().any(|row| {
+        row.at <= tick
+            || (row.health == 0 && row.nutrients == [0; 6])
+            || !people.contains(&row.person)
+    }) {
+        return Err("invalid pending food effect".into());
     }
-    .validate(people, tick)
-    .map_err(str::to_owned)
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug)]
