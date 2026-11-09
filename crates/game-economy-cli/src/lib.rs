@@ -583,6 +583,8 @@ struct Cultivation {
     max_hunger: u32,
     #[serde(default)]
     inherit_births: bool,
+    #[serde(default)]
+    requests: Option<game_economy::cultivation_requests::Requests>,
     fields: Vec<CultivatedField>,
     policies: Vec<FarmPolicy>,
 }
@@ -1471,6 +1473,7 @@ pub fn scenario_with_options(
                 .collect::<Result<Vec<_>, String>>()?;
             Ok(Agriculture {
                 inherit_births: state.inherit_births,
+                requests: state.requests,
                 crops: crops.into_values().collect(),
                 fields,
                 policies: state.policies,

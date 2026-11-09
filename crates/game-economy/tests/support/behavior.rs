@@ -9446,6 +9446,7 @@ fn seasons_gate_planting_and_grow_crops_at_authored_rate() {
     initial.people[1].controlled = true;
     initial.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -13403,6 +13404,7 @@ fn cultivation_retries_another_person_and_observes_claimed_seed_use() {
     });
     initial.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -16797,6 +16799,7 @@ fn newborn_farming_inclinations_are_optional_and_do_not_inherit_pressure() {
     }
     initial.agriculture = Some(Agriculture {
         inherit_births: true,
+        requests: None,
         max_hunger: 100,
         crops: vec![Crop {
             id: 1,
@@ -35591,6 +35594,7 @@ fn crops_consume_seed_grow_without_labor_and_harvest_only_from_personal_choice()
     }];
     initial.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -36009,6 +36013,7 @@ fn field_workload(count: u64) -> State {
     .unwrap();
     initial.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -36625,6 +36630,7 @@ fn farming_and_gathering_share_one_atomic_stock_boundary() {
     }
     initial.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         max_hunger: 20,
         crops: vec![Crop {
             id: 1,
@@ -37557,9 +37563,238 @@ fn concentrated_fields_compete_for_seed_and_publish_only_actual_harvests() {
     };
     assert_eq!(run(1), run(4));
 }
+
+#[test]
+fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
+    use crate::cultivation_requests::{Asker, Outcome, Preference, Requests};
+    let mut initial = field_workload(4);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 1,
+        askers: vec![
+            Asker {
+                person: 1,
+                worker: 2,
+                field: 1,
+                interval: 1,
+                lifetime: 3,
+            },
+            Asker {
+                person: 3,
+                worker: 4,
+                field: 2,
+                interval: 1,
+                lifetime: 3,
+            },
+        ],
+        preferences: vec![2, 4]
+            .into_iter()
+            .map(|person| Preference {
+                person,
+                help_value: 1,
+                effort: 1,
+                affinity_weight: 0,
+                trust_weight: 0,
+                fear_weight: 0,
+                obligation_weight: 0,
+            })
+            .collect(),
+        pending: vec![],
+        events: vec![],
+    });
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        8,
+        vec![Lot {
+            item: None,
+            good: 2,
+            quantity: 1,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let opening = world.snapshot();
+                assert_eq!(
+                    opening
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .len(),
+                    2
+                );
+                let mut reloaded = Economy::compile(opening).unwrap();
+                world.advance().unwrap();
+                reloaded.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, reloaded.snapshot());
+                let events = &state
+                    .agriculture
+                    .as_ref()
+                    .unwrap()
+                    .requests
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), 2);
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| event.outcome == Outcome::Fulfilled)
+                        .count(),
+                    1
+                );
+                assert_eq!(
+                    events
+                        .iter()
+                        .filter(|event| event.outcome == Outcome::Failed)
+                        .count(),
+                    1
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut distant = initial.clone();
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 2,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut distant = Economy::compile(distant).unwrap();
+    distant.advance().unwrap();
+    assert!(
+        distant
+            .snapshot()
+            .agriculture
+            .unwrap()
+            .requests
+            .unwrap()
+            .pending
+            .iter()
+            .all(|request| request.worker != 2)
+    );
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.requests
+        .as_mut()
+        .unwrap()
+        .preferences
+        .iter_mut()
+        .for_each(|preference| preference.help_value = 0);
+    let mut pressured = initial.clone();
+    let mut opinions = fixture().opinions.unwrap();
+    opinions.records = vec![Opinion {
+        observer: 2,
+        target: 1,
+        trust: 0,
+        fear: 1,
+        obligation: 0,
+        affinity: 0,
+    }];
+    pressured.opinions = Some(opinions);
+    pressured
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .requests
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .fear_weight = 1;
+    let mut pressured = Economy::compile(pressured).unwrap();
+    pressured.advance().unwrap();
+    pressured.advance().unwrap();
+    let pressured = pressured.snapshot();
+    let events = &pressured
+        .agriculture
+        .as_ref()
+        .unwrap()
+        .requests
+        .as_ref()
+        .unwrap()
+        .events;
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event.request == 1)
+            .unwrap()
+            .outcome,
+        Outcome::Fulfilled
+    );
+    assert_eq!(
+        events
+            .iter()
+            .find(|event| event.request == 2)
+            .unwrap()
+            .outcome,
+        Outcome::Refused
+    );
+    let mut world = Economy::compile(initial).unwrap();
+    world.advance().unwrap();
+    world.advance().unwrap();
+    let state = world.snapshot();
+    let farm = state.agriculture.unwrap();
+    let events = farm.requests.unwrap().events;
+    assert_eq!(events.len(), 2);
+    assert!(events.iter().all(|event| event.outcome == Outcome::Refused));
+    assert!(
+        farm.fields
+            .iter()
+            .all(|field| field.phase == CropPhase::Fallow)
+    );
+}
 #[test]
 #[ignore]
 fn concentrated_field_benchmark() {
+    use std::hash::{Hash, Hasher};
     let workers = std::env::var("LEGACY_WORKERS")
         .ok()
         .and_then(|v| v.parse().ok())
@@ -37568,7 +37803,41 @@ fn concentrated_field_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = field_workload(count);
+    let mut initial = field_workload(count);
+    let requests = std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
+    if requests {
+        assert!(count >= 2 && count.is_multiple_of(2));
+        use crate::cultivation_requests::{Asker, Preference, Requests};
+        let farm = initial.agriculture.as_mut().unwrap();
+        farm.policies
+            .iter_mut()
+            .for_each(|policy| policy.willing = false);
+        farm.requests = Some(Requests {
+            next_id: 1,
+            askers: (1..=count / 2)
+                .map(|person| Asker {
+                    person,
+                    worker: person + count / 2,
+                    field: person,
+                    interval: 1,
+                    lifetime: 3,
+                })
+                .collect(),
+            preferences: (count / 2 + 1..=count)
+                .map(|person| Preference {
+                    person,
+                    help_value: 1,
+                    effort: 1,
+                    affinity_weight: 0,
+                    trust_weight: 0,
+                    fear_weight: 0,
+                    obligation_weight: 0,
+                })
+                .collect(),
+            pending: vec![],
+            events: vec![],
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -37586,9 +37855,19 @@ fn concentrated_field_benchmark() {
                         .iter()
                         .filter(|row| row.accepted)
                         .count(),
-                    count as usize / 2
+                    if requests { 0 } else { count as usize / 2 }
                 );
-                world.advance().unwrap();
+                let second = world.advance().unwrap();
+                if requests {
+                    assert_eq!(
+                        second
+                            .physical_actions
+                            .iter()
+                            .filter(|row| row.accepted)
+                            .count(),
+                        count as usize / 2
+                    );
+                }
                 assert_eq!(
                     world
                         .advance()
@@ -37597,9 +37876,15 @@ fn concentrated_field_benchmark() {
                         .iter()
                         .filter(|row| row.accepted)
                         .count(),
-                    count as usize / 2
+                    if requests { 0 } else { count as usize / 2 }
                 );
                 let elapsed = started.elapsed().as_secs_f64();
+                if requests && round == 3 {
+                    let bytes = serde_json::to_vec(&world.snapshot()).unwrap();
+                    let mut hash = std::collections::hash_map::DefaultHasher::new();
+                    bytes.hash(&mut hash);
+                    println!("fingerprint={:016x}", hash.finish());
+                }
                 if round > 0 {
                     samples.push(elapsed);
                 }
@@ -54860,6 +55145,7 @@ fn irrigation_fixture() -> State {
     }
     state.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         crops: vec![Crop {
             id: 1,
             seed: 2,
@@ -55027,6 +55313,7 @@ fn irrigation_boundary_benchmark() {
     .unwrap();
     state.agriculture = Some(Agriculture {
         inherit_births: false,
+        requests: None,
         crops: vec![Crop {
             id: 1,
             seed: 2,

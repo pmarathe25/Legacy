@@ -1,6 +1,7 @@
 //! Parallel cultivation over real seed and dated harvest custody.
 pub mod content;
 pub mod irrigation;
+pub mod requests;
 use game_economy_person::Person;
 use game_lot_content::Catalog;
 use game_lot_runtime::Events;
@@ -53,6 +54,9 @@ pub struct Agriculture {
     /// Founders may pass on a personal inclination, not social pressure.
     #[serde(default)]
     pub inherit_births: bool,
+    /// Optional personal requests for specific cultivation actions.
+    #[serde(default)]
+    pub requests: Option<requests::Requests>,
     pub crops: Vec<Crop>,
     pub fields: Vec<Field>,
     pub policies: Vec<Policy>,
@@ -62,6 +66,7 @@ impl Clone for Agriculture {
     fn clone(&self) -> Self {
         Self {
             inherit_births: self.inherit_births,
+            requests: self.requests.clone(),
             crops: self.crops.par_iter().cloned().collect(),
             fields: self.fields.par_iter().cloned().collect(),
             policies: self.policies.par_iter().cloned().collect(),
@@ -201,6 +206,9 @@ impl Agriculture {
         {
             return Err("invalid cultivation state".into());
         }
+        if let Some(requests) = &self.requests {
+            requests.validate(&ids, &fields)?;
+        }
         Ok(())
     }
 }
@@ -234,11 +242,13 @@ macro_rules! cultivation_methods {
 
 pub struct Plan {
     pub actors: Vec<u64>,
+    pub requesters: Vec<u64>,
     pub plant: Vec<Transaction>,
     pub harvest: Vec<Transaction>,
     pub uses: Vec<game_economy_claims::Use>,
     fields: Vec<Field>,
     pub changes: Vec<(u64, u64, Phase, u32)>,
+    requests: Option<requests::Prepared>,
 }
 pub fn append_planting(plan: &mut Option<Plan>, actions: &mut Vec<Transaction>) -> Vec<u64> {
     plan.as_mut().map_or_else(Vec::new, |plan| {
@@ -322,6 +332,12 @@ impl Context<'_> {
             policies.par_sort_unstable_by_key(|p| p.person);
         }
         let opinions = self.opinions.map(Opinions::index);
+        let requested = self
+            .agriculture
+            .requests
+            .as_ref()
+            .map(|owner| requests::prepare(owner, self, opinions.as_ref()))
+            .transpose()?;
         let mut workers: Vec<_> = self
             .people
             .par_iter()
@@ -330,6 +346,9 @@ impl Context<'_> {
                     || person.health == 0
                     || person.hunger > self.agriculture.max_hunger
                     || self.busy.binary_search(&person.id).is_ok()
+                    || requested
+                        .as_ref()
+                        .is_some_and(|plan| plan.reserved.binary_search(&person.id).is_ok())
                 {
                     return None;
                 }
@@ -358,6 +377,12 @@ impl Context<'_> {
             .par_iter()
             .filter(|field| {
                 if manual.is_some_and(|(chosen, _)| chosen.id == field.id) {
+                    return false;
+                }
+                if requested
+                    .as_ref()
+                    .is_some_and(|plan| plan.fields.binary_search(&field.id).is_ok())
+                {
                     return false;
                 }
                 let crop = crops
@@ -422,6 +447,16 @@ impl Context<'_> {
             })
             .collect();
         picked.extend(manual);
+        if let Some(requested) = &requested {
+            let mut fields: Vec<_> = self.agriculture.fields.par_iter().collect();
+            fields.par_sort_unstable_by_key(|field| field.id);
+            picked.par_extend(requested.attempts.par_iter().map(|attempt| {
+                let field = fields[fields
+                    .binary_search_by_key(&attempt.field, |field| field.id)
+                    .expect("validated field")];
+                (field, attempt.worker)
+            }));
+        }
         let count = u64::try_from(picked.len()).map_err(|_| "cultivation action overflow")?;
         base.checked_add(count)
             .ok_or("cultivation action overflow")?;
@@ -535,11 +570,15 @@ impl Context<'_> {
         let (plant, harvest): (Vec<_>, Vec<_>) = outputs.into_par_iter().unzip();
         Ok(Plan {
             actors,
+            requesters: requested
+                .as_ref()
+                .map_or_else(Vec::new, |plan| plan.requesters.clone()),
             plant: plant.into_par_iter().flatten().collect(),
             harvest: harvest.into_par_iter().flatten().collect(),
             uses,
             changes,
             fields,
+            requests: requested,
         })
     }
 }
@@ -598,8 +637,13 @@ impl Plan {
                 Ok(field)
             })
             .collect::<Result<_, _>>()?;
+        let requests = self
+            .requests
+            .map(|prepared| prepared.publish(&changes, &decisions))
+            .transpose()?;
         Ok(Agriculture {
             inherit_births: owner.inherit_births,
+            requests,
             crops: owner.crops.par_iter().cloned().collect(),
             fields: rows,
             policies: owner.policies.par_iter().cloned().collect(),

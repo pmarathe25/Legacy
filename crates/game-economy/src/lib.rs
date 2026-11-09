@@ -165,6 +165,7 @@ use game_autowork::Autowork;
 pub use game_economy_agriculture::irrigation::{
     Choice as WaterChoice, Event as WaterEvent, Irrigation, Moisture as FieldMoisture,
 };
+pub use game_economy_agriculture::requests as cultivation_requests;
 pub use game_economy_agriculture::{
     Agriculture, Crop, Field, Phase as CropPhase, Policy as FarmPolicy,
 };

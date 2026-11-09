@@ -53,6 +53,7 @@ macro_rules! prepare_farming {
             .transpose()?;
         if let Some(plan) = &plan {
             game_economy_work::reserve(&mut $busy, plan.actors.iter().copied());
+            game_economy_work::reserve(&mut $busy, plan.requesters.iter().copied());
         }
         let output = $crate::prepare(
             plan.as_ref(),

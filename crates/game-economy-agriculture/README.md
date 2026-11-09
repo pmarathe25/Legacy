@@ -3,3 +3,30 @@
 People choose field work according to their own preferences and pressures. Planting consumes actual seed; crops grow while the worker is free; harvest creates dated goods only if physical storage admits them. Fields are physical state, not an institution or employer.
 
 When `inherit_births` and family birth enrollment are enabled, a newborn may receive a recorded parent's farming inclination. No pressure is copied, children remain subject to the normal age rules, and each person can change their own inclination.
+
+Optional `requests` describe personal requests for one planting or harvest action on a particular field. An authored asker names a person and field, an interval and a lifetime; a request is made only while both people are available at that field's regional stock endpoint. The recipient's own `help_value`, `effort`, and weights for directed affinity, trust, fear and felt obligation decide whether they accept or refuse. These weights may be zero or negative. A request imposes no obligation and promises no future work or ownership. Busy or controlled recipients can leave requests unanswered until they expire.
+
+Requests become actionable on a later boundary. Each attempted action reserves its worker and field alongside ordinary farming and uses the same actual seed, claims and storage arbitration. Latest-boundary events distinguish refusal, expiry, a changed field, physical failure and fulfillment; only an accepted physical receipt reports fulfillment. Pending requests and personal preferences are saved with agriculture.
+
+For example, scenario content can give person 1 an inclination to ask person 2 to cultivate field 7:
+
+```toml
+[cultivation.requests]
+next_id = 1
+
+[[cultivation.requests.askers]]
+person = 1
+worker = 2
+field = 7
+interval = 5
+lifetime = 3
+
+[[cultivation.requests.preferences]]
+person = 2
+help_value = 0
+effort = 1
+affinity_weight = 1
+fear_weight = 1
+```
+
+Unspecified relationship weights default to zero. The selected action follows the field's current phase when the request is made; it becomes stale if that phase changes before work begins.
