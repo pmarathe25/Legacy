@@ -8329,6 +8329,32 @@ impl Economy {
         let social_partition = |person| communication.partition(person);
         let social_access: Option<&(dyn Fn(u64) -> (u64, u64) + Sync)> =
             (social_enabled && !held.is_empty()).then_some(&social_partition);
+        let mut social_legs: Vec<_> = if social_enabled && !local_nonstock.is_empty() {
+            self.local_transport
+                .as_ref()
+                .and_then(|owner| owner.walking.as_ref())
+                .map_or(&[][..], |walking| walking.positions.as_slice())
+                .par_iter()
+                .filter_map(|position| match position.location {
+                    LocalLocation::Walking {
+                        region,
+                        from,
+                        to,
+                        remaining,
+                    } => Some((region, from, to, remaining)),
+                    LocalLocation::At { .. } => None,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if social_legs.par_windows(2).any(|pair| pair[0] > pair[1]) {
+            social_legs.par_sort_unstable();
+        }
+        social_legs = social_legs
+            .par_chunk_by(|a, b| a == b)
+            .map(|group| group[0])
+            .collect();
         let social_endpoint = |id| {
             use game_economy_local_transport::walking::Location;
             let Some(walking) = self
@@ -8355,7 +8381,20 @@ impl Economy {
                     endpoint: LocalEndpoint::Store { id },
                     ..
                 } => (1, id),
-                Location::Walking { .. } => (2, id),
+                Location::Walking {
+                    region,
+                    from,
+                    to,
+                    remaining,
+                } => {
+                    let index = social_legs
+                        .binary_search(&(region, from, to, remaining))
+                        .expect("known local walking position");
+                    (
+                        2,
+                        u64::try_from(index).expect("walking position index fits u64"),
+                    )
+                }
             }
         };
         let social_local: Option<&(dyn Fn(u64) -> (u8, u64) + Sync)> =

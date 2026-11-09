@@ -5653,6 +5653,98 @@ fn local_encounters_pair_people_only_at_the_same_endpoint() {
 }
 
 #[test]
+fn local_walking_encounters_require_the_same_leg_and_progress() {
+    let mut initial = local_social_fixture();
+    initial.local_transport.as_mut().unwrap().policies.clear();
+    let walking = initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap();
+    std::sync::Arc::make_mut(&mut walking.routes)
+        .iter_mut()
+        .find(|route| {
+            route.from == LocalEndpoint::Stock && route.to == (LocalEndpoint::Store { id: 1 })
+        })
+        .unwrap()
+        .ticks = 3;
+    initial
+        .local_transport
+        .as_mut()
+        .unwrap()
+        .walking
+        .as_mut()
+        .unwrap()
+        .positions = (1..=4)
+        .map(|person| LocalPosition {
+            person,
+            location: LocalLocation::Walking {
+                region: 1,
+                from: LocalEndpoint::Stock,
+                to: LocalEndpoint::Store {
+                    id: if person == 4 { 2 } else { 1 },
+                },
+                remaining: if person == 3 { 2 } else { 1 },
+            },
+        })
+        .collect();
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .social
+        .as_mut()
+        .unwrap()
+        .participants = (1..=4)
+        .map(|person| game_social::Participant {
+            person,
+            willing: true,
+        })
+        .collect();
+
+    let mut controlled = initial.clone();
+    controlled.people[0].controlled = true;
+    let mut manual = Economy::compile(controlled).unwrap();
+    let before = manual.snapshot();
+    assert!(manual.meet(1, 3).is_err());
+    assert_eq!(manual.snapshot(), before);
+    assert!(manual.meet(1, 2).unwrap());
+
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                world.advance().unwrap();
+                let state = world.snapshot();
+                let events = &state
+                    .dynamics
+                    .as_ref()
+                    .unwrap()
+                    .social
+                    .as_ref()
+                    .unwrap()
+                    .events;
+                assert_eq!(events.len(), 1);
+                assert_eq!((events[0].a, events[0].b, events[0].region), (1, 2, 1));
+                let mut restored = Economy::compile(
+                    serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap(),
+                )
+                .unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                assert_eq!(world.snapshot(), restored.snapshot());
+                world.snapshot()
+            })
+    };
+    assert_eq!(run(1), run(4));
+}
+
+#[test]
 fn a_person_can_repair_carried_tools_at_a_store() {
     let mut initial = local_social_fixture();
     initial.local_transport.as_mut().unwrap().policies.clear();
@@ -36991,8 +37083,40 @@ fn traveling_social_benchmark() {
         .ok()
         .and_then(|v| v.parse().ok())
         .unwrap_or(100_000u64);
-    let initial = traveling_social_workload(count);
     let interval_progress = std::env::var_os("LEGACY_INTERVAL_PROGRESS").is_some();
+    let local_walkers = std::env::var_os("LEGACY_LOCAL_WALKERS").is_some();
+    assert!(!(interval_progress && local_walkers));
+    let mut initial = traveling_social_workload(count);
+    if local_walkers {
+        initial.travel = None;
+        initial
+            .people
+            .iter_mut()
+            .for_each(|person| person.region = Some(1));
+        benchmark_people_at_store(&mut initial);
+        let walking = initial
+            .local_transport
+            .as_mut()
+            .unwrap()
+            .walking
+            .as_mut()
+            .unwrap();
+        walking.routes = vec![LocalWalkRoute {
+            region: 1,
+            from: LocalEndpoint::Stock,
+            to: LocalEndpoint::Store { id: 1 },
+            ticks: 2,
+        }]
+        .into();
+        walking.positions.iter_mut().for_each(|position| {
+            position.location = LocalLocation::Walking {
+                region: 1,
+                from: LocalEndpoint::Stock,
+                to: LocalEndpoint::Store { id: 1 },
+                remaining: 1,
+            }
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -37019,13 +37143,20 @@ fn traveling_social_benchmark() {
                 for _ in 0..2 {
                     world.advance().unwrap();
                 }
+                let elapsed = started.elapsed().as_secs_f64();
+                if local_walkers {
+                    let state = world.snapshot();
+                    assert_eq!(state.dynamics.as_ref().unwrap().social.as_ref().unwrap().events.len(), count as usize / 2);
+                    let fingerprint = serde_json::to_vec(&state).unwrap().iter().fold(0xcbf29ce484222325u64, |hash, byte| (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3));
+                    if let Some(expected) = expected { assert_eq!(fingerprint, expected); } else { expected = Some(fingerprint); }
+                }
                 if round > 0 {
-                    samples.push(started.elapsed().as_secs_f64());
+                    samples.push(elapsed);
                 }
             }
             samples.sort_by(f64::total_cmp);
             if let Some(fingerprint) = expected {
-                println!("workers={workers} people={count} interval_progress=true elapsed={:.6} state_fingerprint={fingerprint:016x}", samples[1]);
+                println!("workers={workers} people={count} interval_progress={interval_progress} local_walkers={local_walkers} elapsed={:.6} state_fingerprint={fingerprint:016x}", samples[1]);
             } else {
                 println!("workers={workers} people={count} ticks=2 elapsed={:.6}", samples[1]);
             }

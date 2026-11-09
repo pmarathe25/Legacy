@@ -18,9 +18,7 @@ pub fn people_together(
     if a.id == b.id {
         return matches!(walking.location(a.id, region), Location::At { .. });
     }
-    region == other_region
-        && matches!((walking.location(a.id, region), walking.location(b.id, region)),
-        (Location::At { region: left, endpoint: x }, Location::At { region: right, endpoint: y }) if left == right && x == y)
+    region == other_region && walking.location(a.id, region) == walking.location(b.id, region)
 }
 
 pub struct GoalWalkContext<'a> {
