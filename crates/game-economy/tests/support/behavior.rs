@@ -98,6 +98,7 @@ fn fixture() -> State {
             }],
             tick_millis: 86_400_000,
             work: vec![],
+            work_interval: None,
         },
         people: (1..=4)
             .map(|id| Person {
@@ -266,6 +267,18 @@ fn fractional_hunger_survives_boundary_reload_across_workers() {
             })
     };
     assert_eq!(run(1), run(4));
+}
+
+#[test]
+fn economy_rejects_uncoordinated_physical_work_intervals() {
+    let mut state = fixture();
+    state.physical.work_interval = Some(game_lot_runtime::WorkInterval {
+        tick: state.physical.custody.tick,
+        custody_revision: state.physical.custody.revision,
+        elapsed_millis: 0,
+        rates: vec![],
+    });
+    assert!(Economy::compile(state).is_err());
 }
 
 #[test]

@@ -5,7 +5,7 @@ use game_lot_content::Catalog;
 use game_lot_model::{Container, Movement, Place, Transaction};
 use game_production_model::{Amount, Job, JobPhase, Recipe, Start};
 use rayon::prelude::*;
-pub use state::{Phase, Snapshot, Work, WorkProgress};
+pub use state::{Phase, Snapshot, Work, WorkInterval, WorkProgress};
 use std::collections::HashMap;
 pub use validation::validate;
 

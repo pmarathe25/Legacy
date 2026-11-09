@@ -1640,6 +1640,7 @@ pub fn scenario_with_options(
             recipes: production.recipes,
             tick_millis: scenario.tick_millis,
             work: vec![],
+            work_interval: None,
         },
         people,
         rules: scenario.rules,

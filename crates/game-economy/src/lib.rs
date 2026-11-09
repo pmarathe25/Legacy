@@ -2457,6 +2457,9 @@ impl Economy {
             return Err("invalid personal economic state".into());
         }
         let physical = Runtime::compile(state.physical)?;
+        if physical.work_interval().is_some() {
+            return Err("partial physical work intervals require a world coordinator".into());
+        }
         let people: Vec<_> = state
             .people
             .par_iter()

@@ -241,6 +241,10 @@ impl Store {
     pub fn tick(&self) -> u64 {
         self.state.tick
     }
+    /// Generation of committed custody changes.
+    pub fn revision(&self) -> u64 {
+        self.state.revision
+    }
     /// Borrow the ordered committed custody without copying it.
     pub fn containers(&self) -> &[Container] {
         &self.state.containers

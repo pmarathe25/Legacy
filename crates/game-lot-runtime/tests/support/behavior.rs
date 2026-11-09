@@ -47,6 +47,7 @@ fn runtime() -> Runtime {
         }],
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     })
     .unwrap()
 }
@@ -421,6 +422,130 @@ fn batched_partial_work_accepts_unsorted_independent_rates() {
 }
 
 #[test]
+fn frozen_work_interval_resumes_and_settles_independently_of_chunking() {
+    let run = |workers, chunks: &[u64], reload| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = runtime().snapshot();
+                initial.recipes[0].ticks = 1;
+                let mut world = Runtime::compile(initial).unwrap();
+                world
+                    .start(
+                        &[Start {
+                            id: 1,
+                            worker: 1,
+                            region: 1,
+                            recipe: 1,
+                            units: 1,
+                        }],
+                        1,
+                    )
+                    .unwrap();
+                let stale = world.prepare_advance(&[], &[], 7).unwrap();
+                let before_open = world.snapshot();
+                assert!(world.begin_work_interval(&[(1, 1), (1, 1)]).is_err());
+                assert_eq!(world.snapshot(), before_open);
+                assert!(world.validate_advance(&stale).is_ok());
+                world.begin_work_interval(&[(1, 1)]).unwrap();
+                assert!(world.validate_advance(&stale).is_err());
+                assert!(world.begin_work_interval(&[]).is_err());
+                assert!(world.start(&[], 1).is_err());
+                assert!(world.actions_now(&[], 1).is_err());
+                assert!(world.add_people(&[]).is_err());
+                assert!(world.progress_work(&[(1, 1)], 1).is_err());
+                assert!(world.abandon(1, 1).is_err());
+                assert!(world.advance(&[], 7).is_err());
+                assert!(world.close_work_interval().is_err());
+                assert!(world.settle_work_interval(7).is_err());
+                let quantum = world.tick_millis();
+                for (index, &duration) in chunks.iter().enumerate() {
+                    assert_eq!(world.progress_work_interval(duration).unwrap(), duration);
+                    if reload && index == 0 {
+                        let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                        world = Runtime::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                    }
+                }
+                assert_eq!(world.work_interval().unwrap().elapsed_millis, quantum);
+                assert_eq!(world.progress_work_interval(1).unwrap(), 0);
+                assert_eq!(world.work()[0].job.remaining, 0);
+                assert_eq!(world.custody(Place::JobInput(1)).unwrap().used, 2);
+                assert_eq!(
+                    world
+                        .custody(Place::Stock { region: 1, good: 2 })
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let completed = world.snapshot();
+                let settled = if reload {
+                    world.close_work_interval().unwrap();
+                    world.advance(&[], 7).unwrap()
+                } else {
+                    world.settle_work_interval(7).unwrap()
+                };
+                assert_eq!(settled.finished, vec![1]);
+                (completed, world.snapshot())
+            })
+    };
+    let quantum = runtime().tick_millis();
+    assert_eq!(
+        run(1, &[quantum], false),
+        run(4, &[quantum / 3, quantum - quantum / 3], true)
+    );
+}
+
+#[test]
+fn work_interval_rejects_corruption_and_can_be_interrupted() {
+    let mut world = runtime();
+    world
+        .start(
+            &[Start {
+                id: 1,
+                worker: 1,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            1,
+        )
+        .unwrap();
+    world.begin_work_interval(&[(1, 1)]).unwrap();
+    let elapsed = world.tick_millis() / 2;
+    world.progress_work_interval(elapsed).unwrap();
+    let snapshot = world.snapshot();
+    let mut invalid = snapshot.clone();
+    invalid.work_interval.as_mut().unwrap().custody_revision += 1;
+    assert!(Runtime::compile(invalid).is_err());
+    let mut invalid = snapshot.clone();
+    invalid.work_interval.as_mut().unwrap().elapsed_millis = snapshot.tick_millis + 1;
+    assert!(Runtime::compile(invalid).is_err());
+    let mut invalid = snapshot.clone();
+    invalid.work_interval.as_mut().unwrap().rates.push((1, 2));
+    assert!(Runtime::compile(invalid).is_err());
+    let mut invalid = snapshot.clone();
+    invalid.work_interval.as_mut().unwrap().rates[0].0 = 999;
+    assert!(Runtime::compile(invalid).is_err());
+    assert_eq!(world.cancel_work_interval().unwrap(), elapsed);
+    assert_eq!(world.work()[0].progress_remainder, elapsed);
+    world.abandon(1, 1).unwrap();
+}
+
+#[test]
+fn failed_work_interval_settlement_keeps_the_completed_interval() {
+    let mut initial = runtime().snapshot();
+    initial.custody.tick = u64::MAX;
+    let mut world = Runtime::compile(initial).unwrap();
+    world.begin_work_interval(&[]).unwrap();
+    world.progress_work_interval(world.tick_millis()).unwrap();
+    let before = world.snapshot();
+    assert!(world.settle_work_interval(7).is_err());
+    assert_eq!(world.snapshot(), before);
+}
+
+#[test]
 fn worker_can_abandon_even_when_reserved_material_cannot_yet_fit() {
     let mut runtime = runtime();
     runtime
@@ -566,7 +691,8 @@ fn concentrated_production_benchmark() {
                 .map(|row| (row.0, 1))
                 .collect();
             if interval_progress {
-                runtime.progress_work(&rates, runtime.tick_millis() / 2).unwrap();
+                runtime.begin_work_interval(&rates).unwrap();
+                assert_eq!(runtime.progress_work_interval(runtime.tick_millis() / 2).unwrap(), runtime.tick_millis() / 2);
             } else {
                 let finished = runtime.advance(&rates, 9).unwrap();
                 let delivered = runtime.advance(&[], 9).unwrap();
@@ -1869,6 +1995,7 @@ fn authored_recipe_produces_real_dated_food_and_it_expires_after_transport_and_r
         recipes: production.recipes,
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     })
     .unwrap();
     runtime.add_people(&[(1, 100_000)]).unwrap();

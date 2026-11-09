@@ -219,6 +219,7 @@ impl Runtime {
         &self,
         transfers: &[SimpleTransfer],
     ) -> Result<Option<AdvanceDraft>, String> {
+        self.ensure_no_work_interval()?;
         if !self.work.is_empty() {
             return Ok(None);
         }
@@ -317,6 +318,7 @@ impl Runtime {
         transfers: &[SimpleTransfer],
         seed: u64,
     ) -> Result<Option<AdvanceDraft>, String> {
+        self.ensure_no_work_interval()?;
         if !self.work.is_empty() {
             return Ok(None);
         }
@@ -510,6 +512,7 @@ impl Runtime {
         identified: Option<crate::IdentifiedProduction<'_>>,
         transitions: WorkTransitions<'_>,
     ) -> Result<AdvanceDraft, String> {
+        self.ensure_no_work_interval()?;
         #[cfg(feature = "profile")]
         let mut profile_phase = game_diagnostics::span("physical.validate_and_plan");
         let mut owners: Vec<_> = custody
@@ -1031,6 +1034,7 @@ impl Runtime {
     }
     /// Check before publishing other owners in the same generation.
     pub fn validate_advance(&self, draft: &AdvanceDraft) -> Result<(), String> {
+        self.ensure_no_work_interval()?;
         if self.epoch != draft.epoch {
             return Err("stale physical work draft".into());
         }

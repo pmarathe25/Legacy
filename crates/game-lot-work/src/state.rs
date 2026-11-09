@@ -89,6 +89,16 @@ impl Work {
         })
     }
 }
+/// Frozen rates and elapsed time for one physical production interval.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkInterval {
+    pub tick: u64,
+    pub custody_revision: u64,
+    pub elapsed_millis: u64,
+    pub rates: Vec<(u64, u64)>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Snapshot {
@@ -97,6 +107,8 @@ pub struct Snapshot {
     pub recipes: Vec<Recipe>,
     pub tick_millis: u64,
     pub work: Vec<Work>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub work_interval: Option<WorkInterval>,
 }
 
 #[cfg(test)]

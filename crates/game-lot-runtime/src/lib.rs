@@ -5,7 +5,7 @@ mod receipts;
 pub use advance::{Adoption, AdvanceDraft, Events, Suspension, WorkTransitions};
 use game_lot_content::Catalog;
 pub use game_lot_content::{Growth, WritingPage};
-pub use game_lot_work::{Phase, Snapshot, Work};
+pub use game_lot_work::{Phase, Snapshot, Work, WorkInterval};
 use game_lots::{Outcome, Place, Spoilage, Store, Transaction, TransactionOutcome};
 use game_production_model::{Good, JobPhase, Recipe, Start};
 pub use identified_output::{IdentifiedProduction, ProducedItem};
@@ -27,9 +27,18 @@ pub struct Runtime {
     recipes: Vec<Recipe>,
     tick_millis: u64,
     work: Vec<Work>,
+    work_interval: Option<WorkInterval>,
     epoch: u64,
 }
 impl Runtime {
+    fn ensure_no_work_interval(&self) -> Result<(), String> {
+        if self.work_interval.is_some() {
+            Err("physical work interval is active".into())
+        } else {
+            Ok(())
+        }
+    }
+
     pub fn compile(mut state: Snapshot) -> Result<Self, String> {
         let catalog = Catalog::from_tick_millis(&state.goods, state.tick_millis)?;
         state.work.par_sort_unstable_by_key(|row| row.job.id);
@@ -77,6 +86,7 @@ impl Runtime {
             recipes: state.recipes,
             tick_millis: state.tick_millis,
             work: state.work,
+            work_interval: state.work_interval,
             epoch: 0,
         })
     }
@@ -112,10 +122,12 @@ impl Runtime {
             recipes: self.recipes.clone(),
             tick_millis: self.tick_millis,
             work: self.work.clone(),
+            work_interval: self.work_interval.clone(),
         }
     }
     /// Register real people as independent physical holders.
     pub fn add_people(&mut self, people: &[(u64, u64)]) -> Result<(), String> {
+        self.ensure_no_work_interval()?;
         let containers = people
             .par_iter()
             .map(|&(person, capacity)| {
@@ -135,10 +147,120 @@ impl Runtime {
     }
     /// Possessions remain in custody until physically removed.
     pub fn retire_person(&mut self, person: u64) -> Result<(), String> {
+        self.ensure_no_work_interval()?;
         self.store.remove_empty(vec![Place::Person(person)])
     }
     pub fn work(&self) -> &[Work] {
         &self.work
+    }
+    pub fn work_interval(&self) -> Option<&WorkInterval> {
+        self.work_interval.as_ref()
+    }
+
+    /// Freeze one boundary's work rates. Custody and other work mutations are
+    /// blocked until this interval is closed or cancelled.
+    pub fn begin_work_interval(&mut self, rates: &[(u64, u64)]) -> Result<(), String> {
+        self.ensure_no_work_interval()?;
+        let rates = self.checked_work_rates(rates)?;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        self.work_interval = Some(WorkInterval {
+            tick: self.tick(),
+            custody_revision: self.store.revision(),
+            elapsed_millis: 0,
+            rates,
+        });
+        self.epoch = epoch;
+        Ok(())
+    }
+
+    /// Consume at most the remaining interval and retain progress for saving.
+    pub fn progress_work_interval(&mut self, requested_millis: u64) -> Result<u64, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis > self.tick_millis
+        {
+            return Err("stale physical work interval".into());
+        }
+        let consumed = requested_millis.min(self.tick_millis - interval.elapsed_millis);
+        if consumed == 0 {
+            return Ok(0);
+        }
+        let mut interval = self.work_interval.take().expect("checked interval");
+        let result = self.apply_work_progress(&interval.rates, consumed);
+        if result.is_ok() {
+            interval.elapsed_millis += consumed;
+        }
+        self.work_interval = Some(interval);
+        result.map(|()| consumed)
+    }
+
+    /// Release the interval lock after the full quantum has elapsed. The
+    /// caller must then settle completion with no additional work rates.
+    pub fn close_work_interval(&mut self) -> Result<(), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis != self.tick_millis
+        {
+            return Err("physical work interval is not complete".into());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        self.work_interval = None;
+        self.epoch = epoch;
+        Ok(())
+    }
+
+    /// Settle a completed physical-only interval without applying work twice.
+    /// If settlement fails, the completed interval remains available to retry.
+    pub fn settle_work_interval(&mut self, seed: u64) -> Result<Events, String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis != self.tick_millis
+        {
+            return Err("physical work interval is not complete".into());
+        }
+        let interval = self.work_interval.take().expect("checked interval");
+        match self.advance(&[], seed) {
+            Ok(events) => Ok(events),
+            Err(error) => {
+                self.work_interval = Some(interval);
+                Err(error)
+            }
+        }
+    }
+
+    /// Release the lock after interruption, retaining completed work. The
+    /// caller must account for the returned elapsed time before rescheduling.
+    pub fn cancel_work_interval(&mut self) -> Result<u64, String> {
+        let elapsed = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?
+            .elapsed_millis;
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        self.work_interval = None;
+        self.epoch = epoch;
+        Ok(elapsed)
     }
     /// Advance reserved work counters without publishing completion or advancing
     /// the boundary. The caller owns interval admission, frozen rates and time.
@@ -148,6 +270,12 @@ impl Runtime {
         rates: &[(u64, u64)],
         elapsed_millis: u64,
     ) -> Result<(), String> {
+        self.ensure_no_work_interval()?;
+        let rates = self.checked_work_rates(rates)?;
+        self.apply_work_progress(&rates, elapsed_millis)
+    }
+
+    fn checked_work_rates(&self, rates: &[(u64, u64)]) -> Result<Vec<(u64, u64)>, String> {
         let mut rates = rates.to_vec();
         if rates.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
             rates.par_sort_unstable_by_key(|row| row.0);
@@ -163,6 +291,15 @@ impl Runtime {
         {
             return Err("invalid work rate".into());
         }
+        Ok(rates)
+    }
+
+    // Rates are checked on direct entry or when an interval is opened or loaded.
+    fn apply_work_progress(
+        &mut self,
+        rates: &[(u64, u64)],
+        elapsed_millis: u64,
+    ) -> Result<(), String> {
         if rates.is_empty() || elapsed_millis == 0 {
             return Ok(());
         }
@@ -182,6 +319,7 @@ impl Runtime {
     }
     /// Reserve physical materials at the current time, after the caller's actor checks.
     pub fn start(&mut self, requests: &[Start], seed: u64) -> Result<Vec<(u64, bool)>, String> {
+        self.ensure_no_work_interval()?;
         game_lot_work::validate_starts(&self.work, requests)?;
         let plan = game_lot_work::start(requests, &self.recipes)?;
         let mut draft =
@@ -230,6 +368,7 @@ impl Runtime {
         actions: &[Transaction],
         seed: u64,
     ) -> Result<PhysicalOutcomes, String> {
+        self.ensure_no_work_interval()?;
         game_lot_work::validate_actions(&self.catalog, actions)?;
         let draft = self.store.prepare_transactions_now(seed, actions)?;
         let decisions = draft.transactions().to_vec();
@@ -243,6 +382,7 @@ impl Runtime {
     }
     /// A worker may stop without requiring a successful materials return.
     pub fn abandon(&mut self, job: u64, worker: u64) -> Result<(), String> {
+        self.ensure_no_work_interval()?;
         let index = self
             .work
             .binary_search_by_key(&job, |row| row.job.id)

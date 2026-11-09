@@ -45,6 +45,27 @@ fn multiplier(actual: &[Amount], recipe: &[Amount]) -> Option<u64> {
         .then_some(units)
 }
 pub fn validate(state: &Snapshot, catalog: &Catalog) -> Result<(), String> {
+    if let Some(interval) = &state.work_interval {
+        let work: HashMap<_, _> = state
+            .work
+            .par_iter()
+            .map(|row| (row.job.id, row.phase))
+            .collect();
+        if interval.tick != state.custody.tick
+            || interval.custody_revision != state.custody.revision
+            || interval.elapsed_millis > state.tick_millis
+            || interval
+                .rates
+                .par_windows(2)
+                .any(|pair| pair[0].0 >= pair[1].0)
+            || interval
+                .rates
+                .par_iter()
+                .any(|(job, rate)| *rate == 0 || work.get(job) != Some(&Phase::Working))
+        {
+            return Err("invalid saved work interval".into());
+        }
+    }
     let goods: HashSet<_> = state.goods.iter().map(|row| row.id).collect();
     if state.recipes.par_iter().any(|recipe| {
         recipe.id == 0

@@ -95,6 +95,7 @@ fn runtime(capacity: u64, stock: u64) -> Runtime {
         recipes: vec![],
         tick_millis: 1000,
         work: vec![],
+        work_interval: None,
     })
     .unwrap()
 }

@@ -64,6 +64,7 @@ fn personal_work_decisions_use_expiry_aware_projection_and_physical_admission() 
         recipes: recipes.clone(),
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     })
     .unwrap();
     let view = runtime.view(1).unwrap();
@@ -157,6 +158,7 @@ fn fear_can_motivate_cooperation_but_only_actual_transfer_resolves_the_offer() {
         recipes: vec![],
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     };
     let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
     let mut market = Market {
@@ -307,6 +309,7 @@ fn promises_do_not_compel_delivery_but_fear_can_change_a_personal_choice() {
         recipes: vec![],
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     };
     let mut runtime = Runtime::compile(snapshot.clone()).unwrap();
     let mut agreements = Agreements {
@@ -457,6 +460,7 @@ fn many_individual_promises_can_deliver_to_one_busy_recipient() {
         recipes: vec![],
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     };
     let agreements = Agreements {
         offering: vec![],
@@ -574,6 +578,7 @@ fn concentrated_promise_delivery_benchmark() {
         recipes: vec![],
         tick_millis: 86_400_000,
         work: vec![],
+        work_interval: None,
     };
     let agreements = Agreements {
         offering: vec![],
