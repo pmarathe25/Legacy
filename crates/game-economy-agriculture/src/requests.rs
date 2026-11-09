@@ -51,6 +51,16 @@ pub struct OfferValue {
     pub max_quantity: u64,
 }
 
+/// Latest personally witnessed requested cultivation for one outcome.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkMemory {
+    pub observer: u64,
+    pub worker: u64,
+    pub success: bool,
+    pub tick: u64,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preference {
@@ -112,6 +122,8 @@ pub struct Requests {
     #[serde(default)]
     pub offer_values: Vec<OfferValue>,
     #[serde(default)]
+    pub work_memories: Vec<WorkMemory>,
+    #[serde(default)]
     pub preferences: Vec<Preference>,
     #[serde(default)]
     pub pending: Vec<Request>,
@@ -140,12 +152,18 @@ impl Requests {
             .map(|row| row.person)
             .collect();
         let mut offer_values: Vec<_> = self.offer_values.par_iter().map(|row| row.person).collect();
+        let mut work_memories: Vec<_> = self
+            .work_memories
+            .par_iter()
+            .map(|row| (row.observer, row.success))
+            .collect();
         let mut ids: Vec<_> = self.pending.par_iter().map(|r| r.id).collect();
         askers.par_sort_unstable();
         preferences.par_sort_unstable();
         withdrawal_preferences.par_sort_unstable();
         retry_backoffs.par_sort_unstable();
         offer_values.par_sort_unstable();
+        work_memories.par_sort_unstable();
         ids.par_sort_unstable();
         if self.next_id == 0
             || ids.last().is_some_and(|id| *id >= self.next_id)
@@ -156,6 +174,13 @@ impl Requests {
             || withdrawal_preferences.par_windows(2).any(|p| p[0] == p[1])
             || retry_backoffs.par_windows(2).any(|p| p[0] == p[1])
             || offer_values.par_windows(2).any(|p| p[0] == p[1])
+            || work_memories.par_windows(2).any(|p| p[0] == p[1])
+            || self.work_memories.par_iter().any(|row| {
+                row.observer == row.worker
+                    || !people.contains(&row.observer)
+                    || !people.contains(&row.worker)
+                    || row.tick == 0
+            })
             || self
                 .offer_values
                 .par_iter()
@@ -708,6 +733,7 @@ pub fn prepare(
             withdrawal_preferences: owner.withdrawal_preferences.par_iter().cloned().collect(),
             retry_backoffs,
             offer_values: owner.offer_values.par_iter().cloned().collect(),
+            work_memories: owner.work_memories.par_iter().cloned().collect(),
             preferences: owner.preferences.par_iter().cloned().collect(),
             pending: retained,
             events,

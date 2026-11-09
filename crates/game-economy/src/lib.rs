@@ -4790,6 +4790,26 @@ impl Economy {
                 game_economy_work::reserve(&mut rows, treatment.actors.iter().copied());
                 rows
             });
+        let cultivation_memories: Vec<_> = if self
+            .agreements
+            .as_ref()
+            .is_some_and(|owner| !owner.work_offering.is_empty())
+        {
+            self.agriculture
+                .as_ref()
+                .and_then(|farm| farm.requests.as_ref())
+                .map_or(&[][..], |requests| requests.work_memories.as_slice())
+                .par_iter()
+                .map(|memory| game_economy_promises::offers::CultivationMemory {
+                    observer: memory.observer,
+                    worker: memory.worker,
+                    success: memory.success,
+                    tick: memory.tick,
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let promise_offers =
             game_economy_promises::offers::prepare(game_economy_promises::offers::Context {
                 owner: self.agreements.as_ref(),
@@ -4800,6 +4820,7 @@ impl Economy {
                     .as_ref()
                     .and_then(|auto| auto.requests.as_ref()),
                 help_memories: &help_memories,
+                cultivation_memories: &cultivation_memories,
                 locations: &locations,
                 together: &|a, b| self.local_people_together(a, b),
                 busy: local_offer_busy.as_deref().unwrap_or(&busy),
@@ -9594,6 +9615,85 @@ impl Economy {
                 .collect();
             opinions.learn_work_affinity(&completed);
             opinions.learn_work_failure_affinity(&failed);
+        }
+        if let (Some(policies), Some(previous), Some(current)) = (
+            self.agreements
+                .as_ref()
+                .map(|owner| &owner.work_offering)
+                .filter(|rows| !rows.is_empty()),
+            self.agriculture
+                .as_ref()
+                .and_then(|owner| owner.requests.as_ref()),
+            agriculture
+                .as_mut()
+                .and_then(|owner| owner.requests.as_mut()),
+        ) && !current.events.is_empty()
+        {
+            let mut observers: Vec<_> = policies.par_iter().map(|row| row.person).collect();
+            observers.par_sort_unstable();
+            let mut pending: Vec<_> = previous.pending.par_iter().collect();
+            pending.par_sort_unstable_by_key(|row| row.id);
+            let witnessed: Vec<_> = current
+                .events
+                .par_iter()
+                .filter_map(|event| {
+                    let success = match event.outcome {
+                        cultivation_requests::Outcome::Fulfilled => true,
+                        cultivation_requests::Outcome::Refused => false,
+                        _ => return None,
+                    };
+                    let request = pending.get(
+                        pending
+                            .binary_search_by_key(&event.request, |row| row.id)
+                            .ok()?,
+                    )?;
+                    if observers.binary_search(&request.requester).is_err() {
+                        return None;
+                    }
+                    let requester = self.people.get(
+                        self.people
+                            .binary_search_by_key(&request.requester, |row| row.id)
+                            .ok()?,
+                    )?;
+                    let worker = self.people.get(
+                        self.people
+                            .binary_search_by_key(&request.worker, |row| row.id)
+                            .ok()?,
+                    )?;
+                    (requester.health > 0
+                        && worker.health > 0
+                        && requester.region.is_some()
+                        && requester.region == worker.region
+                        && self.local_people_together(requester.id, worker.id)
+                        && self
+                            .confinement
+                            .as_ref()
+                            .is_none_or(|owner| owner.can_communicate(requester.id, worker.id))
+                        && next_confinement
+                            .as_ref()
+                            .is_none_or(|owner| owner.can_communicate(requester.id, worker.id)))
+                    .then_some(cultivation_requests::WorkMemory {
+                        observer: requester.id,
+                        worker: worker.id,
+                        success,
+                        tick,
+                    })
+                })
+                .collect();
+            current.work_memories.par_extend(witnessed);
+            current.work_memories.par_sort_unstable_by_key(|row| {
+                (
+                    row.observer,
+                    row.success,
+                    std::cmp::Reverse(row.tick),
+                    row.worker,
+                )
+            });
+            current.work_memories = current
+                .work_memories
+                .par_chunk_by(|a, b| (a.observer, a.success) == (b.observer, b.success))
+                .map(|group| group[0].clone())
+                .collect();
         }
         let mut report_changes = Vec::new();
         if let (Some(previous), Some(owner)) = (&self.taking, &mut next_taking) {

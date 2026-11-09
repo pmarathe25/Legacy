@@ -28,6 +28,8 @@ pub struct Context<'a> {
     pub requests: Option<&'a Requests>,
     /// The recipient's own bounded memories of actual food received previously.
     pub help_memories: &'a [HelpMemory],
+    /// Personally witnessed requested cultivation, bounded by each observer.
+    pub cultivation_memories: &'a [CultivationMemory],
     pub locations: &'a Colocation,
     pub together: &'a (dyn Fn(u64, u64) -> bool + Sync),
     pub busy: &'a [u64],
@@ -40,6 +42,13 @@ pub struct HelpMemory {
     pub helper: u64,
     pub received_at: u64,
 }
+#[derive(Clone, Copy)]
+pub struct CultivationMemory {
+    pub observer: u64,
+    pub worker: u64,
+    pub success: bool,
+    pub tick: u64,
+}
 pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
     let Context {
         owner,
@@ -47,6 +56,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
         opinions,
         requests,
         help_memories,
+        cultivation_memories,
         locations,
         together,
         busy,
@@ -133,6 +143,8 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
     }) {
         work_memories.par_sort_unstable_by_key(|m| (m.observer, m.worker, m.recipe));
     }
+    let mut cultivation_memories: Vec<_> = cultivation_memories.par_iter().collect();
+    cultivation_memories.par_sort_unstable_by_key(|memory| (memory.observer, memory.worker));
     let mut choices: Vec<_> = owner
         .offering
         .par_iter()
@@ -246,7 +258,7 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
             }
             let start = work_memories.partition_point(|m| m.observer < policy.person);
             let end = work_memories.partition_point(|m| m.observer <= policy.person);
-            let (completed, recipient, _) = work_memories[start..end]
+            let ordinary = work_memories[start..end]
                 .iter()
                 .filter_map(|memory| {
                     let completed = if policy.after_refusal {
@@ -293,7 +305,62 @@ pub fn prepare(context: Context<'_>) -> Result<Plan, String> {
                         std::cmp::Reverse(recipient),
                         std::cmp::Reverse(recipe),
                     )
-                })?;
+                });
+            let farm_start = cultivation_memories.partition_point(|m| m.observer < policy.person);
+            let farm_end = cultivation_memories.partition_point(|m| m.observer <= policy.person);
+            let farm = cultivation_memories[farm_start..farm_end]
+                .iter()
+                .filter_map(|memory| {
+                    if memory.success == policy.after_refusal
+                        || policy
+                            .last_work_offer_at
+                            .is_some_and(|old| old >= memory.tick)
+                        || pending.contains(&(actor.id, memory.worker, policy.good))
+                    {
+                        return None;
+                    }
+                    let recipient = find_person(memory.worker)?;
+                    if recipient.health == 0
+                        || !together(actor.id, recipient.id)
+                        || locations
+                            .region((actor.id, actor.region), (recipient.id, recipient.region))
+                            .is_none()
+                    {
+                        return None;
+                    }
+                    let pressured = policy.pressure_threshold.is_some_and(|threshold| {
+                        opinions.as_ref().is_some_and(|index| {
+                            let (fear, obligation) = index.feelings(actor.id, recipient.id);
+                            fear.saturating_add(obligation) >= threshold
+                        })
+                    });
+                    let trusts = policy.minimum_trust.is_none_or(|threshold| {
+                        opinions
+                            .as_ref()
+                            .is_some_and(|index| index.trust(actor.id, recipient.id) >= threshold)
+                    });
+                    (pressured || (policy.willing && trusts)).then_some((
+                        memory.tick,
+                        recipient.id,
+                        0,
+                    ))
+                })
+                .max_by_key(|&(completed, recipient, recipe)| {
+                    (
+                        completed,
+                        std::cmp::Reverse(recipient),
+                        std::cmp::Reverse(recipe),
+                    )
+                });
+            let (completed, recipient, _) = ordinary.into_iter().chain(farm).max_by_key(
+                |&(completed, recipient, recipe)| {
+                    (
+                        completed,
+                        std::cmp::Reverse(recipient),
+                        std::cmp::Reverse(recipe),
+                    )
+                },
+            )?;
             Some((policy, completed, recipient))
         })
         .collect();

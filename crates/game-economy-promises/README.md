@@ -12,3 +12,8 @@ person may refuse to offer, the recipient may decline, and an accepted promise
 can still be withdrawn, fulfilled, or defaulted according to later choices.
 This is a personal inclination; it does not create a loan institution, debt,
 or compulsory repayment.
+
+A person's existing inclination to offer after witnessed requested work can
+also respond to a personally witnessed cultivation fulfillment or refusal.
+The remembered outcome selects a possible recipient; the person may still
+decline to offer, and any resulting promise remains independently revocable.

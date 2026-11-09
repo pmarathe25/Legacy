@@ -16,6 +16,8 @@ An optional `[[cultivation.requests.offer_values]]` entry lets a recipient assig
 
 A requester who personally witnesses fulfillment, refusal, or failed physical work may interpret each through their own work-affinity sensitivities. Failure has its own optional signed reaction and is not a refusal; an unwitnessed outcome does not change the requester's feelings. No obligation is created by the request.
 
+When a requester has a personal work-offering inclination, they can also remember their latest personally witnessed fulfillment and refusal of cultivation requests. On a later boundary that inclination may lead them to offer the observed worker a future delivery. The two bounded memories survive saving; a failed physical attempt or an unseen outcome does not count as fulfillment. The offer and any later delivery remain separate personal choices.
+
 For example, scenario content can give person 1 an inclination to ask person 2 to cultivate field 7:
 
 ```toml
