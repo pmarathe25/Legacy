@@ -4,6 +4,8 @@ People may make competing assertions over regional stock. Each person chooses wh
 
 An observer may independently interpret witnessed stock use with a signed personal affinity change, including a relationship-specific override; this does not create an obligation.
 
+When local walking is enabled, witnesses must be at the regional stock endpoint. Other claimants remain claimants but do not learn the use from a different store. The optional `LEGACY_CLAIMS_LOCAL=1` mode of `concentrated_claims_benchmark` places half of the claimants elsewhere. For 100,000 people, one and six workers took 75.6 and 33.2 ms with matching state fingerprints and only local witnesses; this isolated workload scales sublinearly.
+
 People can also assert conflicting claims about physical work sites. Site use and demolition consult each actor's own choice; assertions do not evict existing work. Up to four physically present claimants can observe each actual use or destruction. An assertion may remain after a site is destroyed and can be withdrawn; site identities are not reused. Observers may interpret events through optional signed personal affinity preferences; no reaction is imposed.
 
 Each person's separate `assert_built_sites` preference can lead them to claim a site only after their own construction physically succeeds. Building does not automatically imply a claim; people may change this preference.
