@@ -10,6 +10,32 @@ use game_production_model::FoodEffect;
 pub use model::{Immortal, Person, Rules};
 use rayon::prelude::*;
 
+/// Find the first personal hunger threshold without serially scanning people.
+/// The caller decides what the threshold means and when to publish effects.
+pub fn next_hunger_threshold(
+    people: &[Person],
+    threshold: u32,
+    rate: u32,
+    quantum_millis: u64,
+) -> Result<Option<u128>, &'static str> {
+    if quantum_millis == 0 {
+        return Err("invalid fractional hunger batch");
+    }
+    people
+        .par_iter()
+        .map(|person| person.hunger_threshold_after(threshold, rate, quantum_millis))
+        .try_reduce(
+            || None,
+            |left, right| {
+                Ok(match (left, right) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) | (None, Some(a)) => Some(a),
+                    (None, None) => None,
+                })
+            },
+        )
+}
+
 /// Progress individual hunger without applying meals, damage or decisions.
 /// The enclosing coordinator owns world time and draft invalidation.
 pub fn progress_hunger(

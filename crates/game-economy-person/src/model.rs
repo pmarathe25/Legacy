@@ -35,6 +35,33 @@ impl Person {
             && (self.immortal.is_none() || (self.hunger == 0 && self.hunger_remainder == 0))
     }
 
+    /// Earliest whole millisecond at which this person's hunger reaches a
+    /// threshold. No threshold is scheduled for a dead or immortal person,
+    /// or for a zero rate below the threshold.
+    pub fn hunger_threshold_after(
+        &self,
+        threshold: u32,
+        rate: u32,
+        quantum_millis: u64,
+    ) -> Result<Option<u128>, &'static str> {
+        if !self.valid_hunger_progress(quantum_millis) {
+            return Err("invalid fractional hunger");
+        }
+        if self.health == 0 || self.immortal.is_some() {
+            return Ok(None);
+        }
+        if self.hunger >= threshold {
+            return Ok(Some(0));
+        }
+        if rate == 0 {
+            return Ok(None);
+        }
+        let quantum = u128::from(quantum_millis);
+        let remaining = u128::from(threshold) * quantum
+            - (u128::from(self.hunger) * quantum + u128::from(self.hunger_remainder));
+        Ok(Some(remaining.div_ceil(u128::from(rate))))
+    }
+
     /// Advance hunger alone; callers retain responsibility for meals, damage,
     /// decisions and publishing the resulting state.
     pub fn advance_hunger(
@@ -107,6 +134,98 @@ mod tests {
                 .hunger_remainder,
             0
         );
+    }
+
+    #[test]
+    fn hunger_threshold_deadlines_are_exact_and_individual() {
+        let mut p = person();
+        p.hunger = 2;
+        p.hunger_remainder = 250;
+        assert_eq!(p.hunger_threshold_after(4, 3, 1000).unwrap(), Some(584));
+        let mut before = p.clone();
+        before.advance_hunger(3, 583, 1000).unwrap();
+        assert_eq!(before.hunger, 3);
+        before.advance_hunger(3, 1, 1000).unwrap();
+        assert_eq!(before.hunger, 4);
+        assert_eq!(p.hunger_threshold_after(2, 0, 1000).unwrap(), Some(0));
+        assert_eq!(p.hunger_threshold_after(4, 0, 1000).unwrap(), None);
+        assert!(p.hunger_threshold_after(4, 3, 0).is_err());
+        p.health = 0;
+        assert_eq!(p.hunger_threshold_after(4, 3, 1000).unwrap(), None);
+        p.health = 100;
+        p.hunger = 0;
+        p.hunger_remainder = 0;
+        p.immortal = Some(Immortal {
+            recovery_per_tick: 1,
+        });
+        assert_eq!(p.hunger_threshold_after(4, 3, 1000).unwrap(), None);
+    }
+
+    #[test]
+    fn hunger_deadline_reduction_is_deterministic_and_validates_every_person() {
+        let mut people: Vec<_> = (1..=4096)
+            .map(|id| {
+                let mut p = person();
+                p.id = id;
+                p.hunger = (id % 10) as u32;
+                p
+            })
+            .collect();
+        let run = |people: &[Person], workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| crate::next_hunger_threshold(people, 10, 3, 1000))
+        };
+        assert_eq!(run(&people, 1), Ok(Some(334)));
+        assert_eq!(run(&people, 4), Ok(Some(334)));
+        people[100].hunger_remainder = 1000;
+        assert!(run(&people, 4).is_err());
+        assert!(crate::next_hunger_threshold(&[], 10, 3, 0).is_err());
+        assert_eq!(crate::next_hunger_threshold(&[], 10, 3, 1000), Ok(None));
+    }
+
+    #[test]
+    #[ignore = "manual parallel deadline benchmark"]
+    fn hunger_deadline_benchmark() {
+        let workers = std::env::var("LEGACY_WORKERS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1);
+        let count = std::env::var("LEGACY_PEOPLE")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(1_000_000u64);
+        let people: Vec<_> = (1..=count)
+            .map(|id| {
+                let mut p = person();
+                p.id = id;
+                p.hunger = (id % 10) as u32;
+                p
+            })
+            .collect();
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut samples = Vec::new();
+                for round in 0..6 {
+                    let started = std::time::Instant::now();
+                    let deadline = crate::next_hunger_threshold(&people, 10, 3, 1000).unwrap();
+                    let elapsed = started.elapsed().as_secs_f64();
+                    assert_eq!(deadline, Some(334));
+                    if round > 0 {
+                        samples.push(elapsed);
+                    }
+                }
+                samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} people={count} deadline_ms=334 elapsed={:.6}",
+                    samples[2]
+                );
+            });
     }
 
     #[test]
