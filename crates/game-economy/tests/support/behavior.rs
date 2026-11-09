@@ -13188,6 +13188,8 @@ fn hunger_can_change_one_persons_claim_choice_after_open_food_is_considered() {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 1,
                 region: 1,
@@ -13198,6 +13200,7 @@ fn hunger_can_change_one_persons_claim_choice_after_open_food_is_considered() {
                 disregard_others: false,
                 assert_outputs: false,
                 assert_built_sites: false,
+                assert_cultivated_fields: false,
                 desperate_hunger: Some(7),
             }],
             events: vec![],
@@ -14948,6 +14951,8 @@ fn hauling_respects_claims_and_does_not_deliver_spoiled_cargo() {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 1,
                 region: 1,
@@ -17283,6 +17288,7 @@ fn newborn_claim_preferences_do_not_inherit_assertions_or_feelings() {
                 disregard_others: true,
                 assert_outputs: true,
                 assert_built_sites: true,
+                assert_cultivated_fields: true,
                 desperate_hunger: Some(20),
             }],
             site_claims: vec![SiteClaim { person: 1, site: 7 }],
@@ -17315,6 +17321,7 @@ fn newborn_claim_preferences_do_not_inherit_assertions_or_feelings() {
                 let claims = state.dynamics.as_ref().unwrap().claims.as_ref().unwrap();
                 assert!(claims.claims.iter().all(|claim| claim.person != 5));
                 assert!(claims.site_claims.iter().all(|claim| claim.person != 5));
+                assert!(claims.field_claims.iter().all(|claim| claim.person != 5));
                 assert!(
                     state
                         .opinions
@@ -17334,6 +17341,7 @@ fn newborn_claim_preferences_do_not_inherit_assertions_or_feelings() {
                         preference.disregard_others
                             && preference.assert_outputs
                             && preference.assert_built_sites
+                            && preference.assert_cultivated_fields
                     );
                     assert_eq!(preference.desperate_hunger, Some(20));
                     world.set_claim_choice(5, false).unwrap();
@@ -22679,6 +22687,8 @@ fn controlled_transfers_obey_physical_custody_and_generate_observed_claim_use() 
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 2,
                 region: 1,
@@ -24736,6 +24746,8 @@ fn claim_workload(count: u64) -> State {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: (count / 2 + 1..=count)
                 .map(|person| Claim {
                     person,
@@ -24749,6 +24761,7 @@ fn claim_workload(count: u64) -> State {
                     disregard_others: true,
                     assert_outputs: false,
                     assert_built_sites: false,
+                    assert_cultivated_fields: false,
                     desperate_hunger: None,
                 })
                 .collect(),
@@ -36820,12 +36833,15 @@ fn gathering_claims_workload(count: u64) -> State {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             preferences: (1..=count)
                 .map(|person| Preference {
                     person,
                     disregard_others: false,
                     assert_outputs: true,
                     assert_built_sites: false,
+                    assert_cultivated_fields: false,
                     desperate_hunger: None,
                 })
                 .collect(),
@@ -37830,6 +37846,359 @@ fn cultivation_requests_follow_personal_choices_and_real_seed_receipts() {
     );
 }
 #[test]
+fn field_claims_are_personal_and_follow_actual_cultivation() {
+    use crate::cultivation_requests::{
+        Outcome, Preference as RequestPreference, Request, Requests,
+    };
+    use game_economy_claims::{Claim, Claims, FieldClaim, Preference as ClaimPreference};
+    let mut initial = field_workload(4);
+    let farm = initial.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = false);
+    farm.requests = Some(Requests {
+        next_id: 2,
+        askers: vec![],
+        discoverers: vec![],
+        preferences: vec![RequestPreference {
+            person: 2,
+            help_value: 1,
+            effort: 1,
+            affinity_weight: 0,
+            trust_weight: 0,
+            fear_weight: 0,
+            obligation_weight: 0,
+        }],
+        pending: vec![Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            field: 1,
+            phase: CropPhase::Fallow,
+            created_at: 0,
+            expires: 5,
+        }],
+        events: vec![],
+    });
+    initial.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            field_claims: vec![FieldClaim {
+                person: 1,
+                field: 1,
+            }],
+            preferences: vec![ClaimPreference {
+                person: 2,
+                disregard_others: false,
+                assert_outputs: false,
+                assert_built_sites: false,
+                assert_cultivated_fields: true,
+                desperate_hunger: None,
+            }],
+            ..Default::default()
+        }),
+    });
+    let mut old_save = serde_json::to_value(&initial).unwrap();
+    let old_claims = old_save["dynamics"]["claims"].as_object_mut().unwrap();
+    old_claims.remove("field_claims");
+    old_claims.remove("field_events");
+    old_claims["preferences"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("assert_cultivated_fields");
+    let restored = Economy::compile(serde_json::from_value(old_save).unwrap())
+        .unwrap()
+        .snapshot();
+    assert!(
+        restored
+            .dynamics
+            .unwrap()
+            .claims
+            .unwrap()
+            .field_claims
+            .is_empty()
+    );
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let stale = world.prepare().unwrap();
+                let before = world.snapshot();
+                assert!(world.claim_field(1, 1).is_err());
+                assert_eq!(before, world.snapshot());
+                world.claim_field(3, 1).unwrap();
+                assert!(world.commit(stale).is_err());
+                world.advance().unwrap();
+                let blocked = world.snapshot();
+                let claims = blocked.dynamics.as_ref().unwrap().claims.as_ref().unwrap();
+                assert!(claims.field_events.is_empty());
+                assert_eq!(
+                    blocked.agriculture.as_ref().unwrap().fields[0].phase,
+                    CropPhase::Fallow
+                );
+                assert_eq!(
+                    blocked
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .pending
+                        .len(),
+                    1
+                );
+                world.withdraw_field_claim(3, 1).unwrap();
+                let saved = serde_json::to_string(&world.snapshot()).unwrap();
+                let mut restored = Economy::compile(serde_json::from_str(&saved).unwrap()).unwrap();
+                world.advance().unwrap();
+                restored.advance().unwrap();
+                let state = world.snapshot();
+                assert_eq!(state, restored.snapshot());
+                let claims = state.dynamics.as_ref().unwrap().claims.as_ref().unwrap();
+                assert_eq!(
+                    state
+                        .agriculture
+                        .as_ref()
+                        .unwrap()
+                        .requests
+                        .as_ref()
+                        .unwrap()
+                        .events[0]
+                        .outcome,
+                    Outcome::Fulfilled
+                );
+                assert_eq!(claims.field_events.len(), 1);
+                assert_eq!(
+                    (
+                        claims.field_events[0].claimant,
+                        claims.field_events[0].person,
+                        claims.field_events[0].field
+                    ),
+                    (1, 2, 1)
+                );
+                assert!(
+                    claims
+                        .field_claims
+                        .iter()
+                        .any(|claim| claim.person == 2 && claim.field == 1)
+                );
+                state
+            })
+    };
+    assert_eq!(run(1), run(4));
+    let mut claimed_seed = initial.clone();
+    claimed_seed
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .claims
+        .as_mut()
+        .unwrap()
+        .claims
+        .push(Claim {
+            person: 3,
+            region: 1,
+            good: 2,
+        });
+    let mut claimed_seed = Economy::compile(claimed_seed).unwrap();
+    claimed_seed.advance().unwrap();
+    assert_eq!(
+        claimed_seed.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Fallow
+    );
+    let mut failed = initial.clone();
+    let stock = failed
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 2 })
+        .unwrap();
+    *stock = Container::new(stock.place, 8, vec![]).unwrap();
+    let mut failed = Economy::compile(failed).unwrap();
+    failed.advance().unwrap();
+    let state = failed.snapshot();
+    let claims = state.dynamics.unwrap().claims.unwrap();
+    assert!(claims.field_events.is_empty());
+    assert_eq!(claims.field_claims.len(), 1);
+    let mut spontaneous = initial.clone();
+    spontaneous.agriculture.as_mut().unwrap().requests = None;
+    spontaneous.agriculture.as_mut().unwrap().policies[1].willing = true;
+    let mut respectful = Economy::compile(spontaneous.clone()).unwrap();
+    respectful.advance().unwrap();
+    assert_eq!(
+        respectful.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Fallow
+    );
+    spontaneous
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .claims
+        .as_mut()
+        .unwrap()
+        .preferences[0]
+        .disregard_others = true;
+    let mut ignoring = Economy::compile(spontaneous).unwrap();
+    ignoring.advance().unwrap();
+    assert_eq!(
+        ignoring.snapshot().agriculture.unwrap().fields[0].phase,
+        CropPhase::Growing
+    );
+    let mut disregard = initial;
+    let claims = disregard
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .claims
+        .as_mut()
+        .unwrap();
+    claims.field_claims.push(FieldClaim {
+        person: 3,
+        field: 1,
+    });
+    claims.preferences[0].disregard_others = true;
+    let mut confined = disregard.clone();
+    let mut another_field = confined.agriculture.as_ref().unwrap().fields[0].clone();
+    another_field.id = 2;
+    confined
+        .agriculture
+        .as_mut()
+        .unwrap()
+        .fields
+        .push(another_field);
+    confined.work_sites = Some(WorkSites {
+        next_id: 2,
+        sites: vec![WorkSite {
+            id: 1,
+            region: 1,
+            kind: "cell".into(),
+            capacity: 1,
+        }],
+        requirements: vec![],
+        bindings: vec![],
+    });
+    confined.confinement = Some(Confinement {
+        default_effort: 1,
+        cells: vec![ConfinementCell {
+            site: 1,
+            resistance: 10,
+            allow_supplies: false,
+        }],
+        cell_kinds: vec![],
+        holds: vec![ConfinementHold {
+            person: 3,
+            site: 1,
+            born_inside: false,
+        }],
+        escape: vec![],
+        capture_responses: vec![],
+        capture_policies: vec![],
+        guard_policies: vec![],
+        release_policies: vec![],
+        events: vec![],
+    });
+    let mut confined = Economy::compile(confined).unwrap();
+    assert!(confined.claim_field(3, 2).is_err());
+    confined.advance().unwrap();
+    let state = confined.snapshot();
+    let claims = state.dynamics.unwrap().claims.unwrap();
+    assert_eq!(claims.field_events.len(), 1);
+    assert_eq!(claims.field_events[0].claimant, 1);
+    let mut distant = disregard.clone();
+    distant
+        .physical
+        .custody
+        .containers
+        .push(Container::new(Place::Inventory(1), 1, vec![]).unwrap());
+    distant
+        .physical
+        .custody
+        .containers
+        .sort_unstable_by_key(|row| row.place);
+    distant.local_transport = Some(LocalTransport {
+        stores: vec![LocalStore {
+            id: 1,
+            region: 1,
+            name: "store".into(),
+        }],
+        policies: vec![],
+        goal_fetchers: vec![],
+        events: vec![],
+        walking: Some(LocalWalking {
+            routes: vec![].into(),
+            preferences: vec![].into(),
+            events: vec![],
+            positions: vec![LocalPosition {
+                person: 3,
+                location: LocalLocation::At {
+                    region: 1,
+                    endpoint: LocalEndpoint::Store { id: 1 },
+                },
+            }],
+        }),
+    });
+    let mut distant = Economy::compile(distant).unwrap();
+    distant.advance().unwrap();
+    let state = distant.snapshot();
+    let claims = state.dynamics.unwrap().claims.unwrap();
+    assert_eq!(claims.field_events.len(), 1);
+    assert_eq!(claims.field_events[0].claimant, 1);
+    let mut disregard = Economy::compile(disregard).unwrap();
+    disregard.advance().unwrap();
+    let state = disregard.snapshot();
+    let claims = state.dynamics.unwrap().claims.unwrap();
+    assert_eq!(claims.field_events.len(), 2);
+    let mut crowded = field_workload(128);
+    let farm = crowded.agriculture.as_mut().unwrap();
+    farm.fields.truncate(1);
+    farm.policies
+        .iter_mut()
+        .for_each(|policy| policy.willing = policy.person == 128);
+    crowded.dynamics = Some(Dynamics {
+        personality: None,
+        social: None,
+        disease: None,
+        treatment: vec![],
+        claims: Some(Claims {
+            field_claims: (1..128)
+                .map(|person| FieldClaim { person, field: 1 })
+                .collect(),
+            preferences: vec![ClaimPreference {
+                person: 128,
+                disregard_others: true,
+                assert_outputs: false,
+                assert_built_sites: false,
+                assert_cultivated_fields: false,
+                desperate_hunger: None,
+            }],
+            ..Default::default()
+        }),
+    });
+    let mut crowded = Economy::compile(crowded).unwrap();
+    crowded.advance().unwrap();
+    assert_eq!(
+        crowded
+            .snapshot()
+            .dynamics
+            .unwrap()
+            .claims
+            .unwrap()
+            .field_events
+            .len(),
+        4
+    );
+}
+
+#[test]
 fn cultivation_outcomes_change_only_witnesses_personal_affinity() {
     use crate::cultivation_requests::{Outcome, Preference, Request, Requests};
     use game_opinions::AffinityRules;
@@ -38195,8 +38564,11 @@ fn concentrated_field_benchmark() {
     let requests = discovery || std::env::var_os("LEGACY_FIELD_REQUESTS").is_some();
     let feelings = std::env::var_os("LEGACY_FIELD_FEELINGS").is_some();
     let failures = std::env::var_os("LEGACY_FIELD_FAILURES").is_some();
+    let field_claims = std::env::var_os("LEGACY_FIELD_CLAIMS").is_some();
     assert!(!feelings || requests);
     assert!(!failures || (feelings && !discovery && count.is_multiple_of(4)));
+    assert!(!field_claims || !requests);
+    assert!(!field_claims || count >= 2);
     if requests {
         assert!(count >= 2 && count.is_multiple_of(2));
         use crate::cultivation_requests::{Asker, Discoverer, Preference, Requests};
@@ -38282,6 +38654,34 @@ fn concentrated_field_benchmark() {
         )
         .unwrap();
     }
+    if field_claims {
+        use game_economy_claims::{Claims, FieldClaim, Preference};
+        initial.dynamics = Some(Dynamics {
+            personality: None,
+            social: None,
+            disease: None,
+            treatment: vec![],
+            claims: Some(Claims {
+                field_claims: (1..=count)
+                    .map(|field| FieldClaim {
+                        field,
+                        person: field % count + 1,
+                    })
+                    .collect(),
+                preferences: (1..=count)
+                    .map(|person| Preference {
+                        person,
+                        disregard_others: true,
+                        assert_outputs: false,
+                        assert_built_sites: false,
+                        assert_cultivated_fields: false,
+                        desperate_hunger: None,
+                    })
+                    .collect(),
+                ..Default::default()
+            }),
+        });
+    }
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -38325,8 +38725,22 @@ fn concentrated_field_benchmark() {
                     assert_eq!(third, if requests { 0 } else { count as usize / 2 });
                 }
                 let elapsed = started.elapsed().as_secs_f64();
-                if requests && round == 3 {
+                if (requests || field_claims) && round == 3 {
                     let state = world.snapshot();
+                    if field_claims {
+                        assert_eq!(
+                            state
+                                .dynamics
+                                .as_ref()
+                                .unwrap()
+                                .claims
+                                .as_ref()
+                                .unwrap()
+                                .field_events
+                                .len(),
+                            count as usize / 2
+                        );
+                    }
                     if feelings && !discovery {
                         assert_eq!(
                             state
@@ -46753,6 +47167,8 @@ fn autonomous_workers_obtain_tools_from_real_stock_and_respect_personal_claims()
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 1,
                 region: 1,
@@ -47201,6 +47617,8 @@ fn fear_can_motivate_a_worker_to_replace_a_tool_without_general_willingness() {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 1,
                 region: 1,
@@ -51545,6 +51963,7 @@ fn concentrated_built_site_claims(count: u64) -> State {
                     disregard_others: false,
                     assert_outputs: false,
                     assert_built_sites: true,
+                    assert_cultivated_fields: false,
                     desperate_hunger: None,
                 })
                 .collect(),
@@ -52004,6 +52423,8 @@ fn construction_respects_personal_claims_and_expiring_materials() {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 1,
                 region: 1,
@@ -52124,6 +52545,8 @@ fn controlled_construction_uses_carried_kits_without_taking_claimed_stock() {
             inherit_births: false,
             site_claims: vec![],
             site_events: vec![],
+            field_claims: vec![],
+            field_events: vec![],
             claims: vec![Claim {
                 person: 2,
                 region: 1,

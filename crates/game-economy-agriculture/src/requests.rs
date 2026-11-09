@@ -271,7 +271,9 @@ pub fn prepare(
                         request: request.id,
                         outcome: Outcome::Refused,
                     })
-                } else if context.season.is_some_and(|s| match f.phase {
+                } else if context.claims.is_some_and(|claims| {
+                    !claims.allows_field(worker.id, f.id, Some(request.requester))
+                }) || context.season.is_some_and(|s| match f.phase {
                     Phase::Fallow => !s.planting_allowed,
                     Phase::Ripe => !s.harvest_allowed,
                     Phase::Growing => true,

@@ -33,6 +33,9 @@ hunger = 0
 willing_to_work = true
 seek_meals = false
 
+[dynamics.claims]
+field_claims = [{ person = 1, field = 1 }]
+
 [cultivation]
 max_hunger = 20
 policies = []

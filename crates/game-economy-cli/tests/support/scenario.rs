@@ -93,6 +93,53 @@ fn player_sees_and_gives_only_to_people_at_the_same_local_position() {
         kind: "workshop".into(),
         capacity: 1,
     });
+    let seed = initial
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "grain-seed")
+        .unwrap()
+        .id;
+    let output = initial
+        .physical
+        .goods
+        .iter()
+        .find(|good| good.name == "grain")
+        .unwrap()
+        .id;
+    initial.agriculture = Some(game_economy::Agriculture {
+        inherit_births: false,
+        requests: None,
+        max_hunger: 100,
+        crops: vec![game_economy::Crop {
+            id: 1,
+            seed,
+            seed_quantity: 1,
+            output,
+            output_quantity: 1,
+            growth_ticks: 1,
+        }],
+        fields: vec![game_economy::Field {
+            id: 1,
+            region: 1,
+            crop: 1,
+            phase: game_economy::CropPhase::Fallow,
+            remaining: 0,
+        }],
+        policies: vec![],
+    });
+    initial
+        .dynamics
+        .as_mut()
+        .unwrap()
+        .claims
+        .as_mut()
+        .unwrap()
+        .field_claims
+        .push(game_economy_dynamics::claims::FieldClaim {
+            person: 2,
+            field: 1,
+        });
     let stock = LocalEndpoint::Stock;
     let store1 = LocalEndpoint::Store { id: 1 };
     let store2 = LocalEndpoint::Store { id: 2 };
@@ -150,6 +197,7 @@ fn player_sees_and_gives_only_to_people_at_the_same_local_position() {
     let view = player.view().unwrap();
     assert!(view.nearby.is_empty());
     assert!(view.work_sites.is_empty());
+    assert!(view.local_field_claims.is_empty());
     assert!(player.give(2, view.possessions[0].good, 1).is_err());
 
     let mut at_stock = make(
@@ -165,6 +213,15 @@ fn player_sees_and_gives_only_to_people_at_the_same_local_position() {
     assert_eq!(
         Player::new(&mut at_stock).view().unwrap().work_sites.len(),
         1
+    );
+    let view = Player::new(&mut at_stock).view().unwrap();
+    assert_eq!(view.local_field_claims.len(), 1);
+    assert_eq!(
+        (
+            view.local_field_claims[0].person,
+            view.local_field_claims[0].field
+        ),
+        (2, 1)
     );
 
     let mut body_state = initial.clone();

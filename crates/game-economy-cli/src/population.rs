@@ -66,6 +66,8 @@ struct ClaimProfile {
     #[serde(default)]
     assert_built_sites_percent: u8,
     #[serde(default)]
+    assert_cultivated_fields_percent: u8,
+    #[serde(default)]
     desperate_hunger: Option<u32>,
 }
 
@@ -343,6 +345,7 @@ pub fn claims(
         if rule.assert_outputs_percent > 100
             || rule.disregard_percent > 100
             || rule.assert_built_sites_percent > 100
+            || rule.assert_cultivated_fields_percent > 100
         {
             return Err("invalid generated claim preference".into());
         }
@@ -361,6 +364,8 @@ pub fn claims(
                     assert_outputs: random(1) % 100 < u64::from(rule.assert_outputs_percent),
                     assert_built_sites: random(2) % 100
                         < u64::from(rule.assert_built_sites_percent),
+                    assert_cultivated_fields: random(3) % 100
+                        < u64::from(rule.assert_cultivated_fields_percent),
                     desperate_hunger: rule.desperate_hunger,
                 }
             })
@@ -819,6 +824,7 @@ mod tests {
             assert_outputs_percent: 101,
             disregard_percent: 0,
             assert_built_sites_percent: 0,
+            assert_cultivated_fields_percent: 0,
             desperate_hunger: None,
         });
         assert!(claims(1, &[people]).is_err());

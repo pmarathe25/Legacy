@@ -2748,6 +2748,25 @@ impl Economy {
         {
             return Err("invalid personal site claim".into());
         }
+        if let Some(claims) = state.dynamics.as_ref().and_then(|d| d.claims.as_ref())
+            && (!claims.field_claims.is_empty() || !claims.field_events.is_empty())
+        {
+            let mut fields: Vec<_> = state.agriculture.as_ref().map_or_else(Vec::new, |owner| {
+                owner.fields.par_iter().map(|field| field.id).collect()
+            });
+            fields.par_sort_unstable();
+            if claims
+                .field_claims
+                .par_iter()
+                .any(|claim| fields.binary_search(&claim.field).is_err())
+                || claims
+                    .field_events
+                    .par_iter()
+                    .any(|event| fields.binary_search(&event.field).is_err())
+            {
+                return Err("invalid personal field claim".into());
+            }
+        }
         if let Some(owner) = &mut state.construction {
             owner.normalize();
             let sites = state
@@ -8264,6 +8283,43 @@ impl Economy {
         } else {
             None
         };
+        let field_interest = farming.is_some()
+            && self
+                .dynamics
+                .as_ref()
+                .and_then(|owner| owner.claims.as_ref())
+                .is_some_and(|claims| {
+                    !claims.field_claims.is_empty()
+                        || claims
+                            .preferences
+                            .par_iter()
+                            .any(|policy| policy.assert_cultivated_fields)
+                });
+        let field_uses: Vec<_> = if field_interest {
+            let mut outcomes: Vec<_> = physical.events().physical_actions.par_iter().collect();
+            if outcomes.par_windows(2).any(|pair| pair[0].id > pair[1].id) {
+                outcomes.par_sort_unstable_by_key(|row| row.id);
+            }
+            farming.as_ref().map_or_else(Vec::new, |plan| {
+                plan.actors
+                    .par_iter()
+                    .zip(plan.changes.par_iter())
+                    .filter_map(|(&person, &(field, action, phase, _))| {
+                        outcomes
+                            .binary_search_by_key(&action, |row| row.id)
+                            .ok()
+                            .filter(|&i| outcomes[i].accepted)
+                            .map(|_| game_economy_claims::FieldUse {
+                                person,
+                                field,
+                                harvest: phase == CropPhase::Fallow,
+                            })
+                    })
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
         let mut agriculture = game_economy_agriculture::publish_optional(
             farming,
             self.agriculture.as_ref(),
@@ -9219,6 +9275,40 @@ impl Economy {
                 tick,
                 claimant_presence,
             );
+            let mut fields: Vec<_> = if field_uses.is_empty() {
+                Vec::new()
+            } else {
+                self.agriculture.as_ref().map_or_else(Vec::new, |owner| {
+                    owner
+                        .fields
+                        .par_iter()
+                        .map(|field| (field.id, field.region))
+                        .collect()
+                })
+            };
+            if fields.par_windows(2).any(|pair| pair[0].0 > pair[1].0) {
+                fields.par_sort_unstable_by_key(|row| row.0);
+            }
+            let field_contact = |claimant, actor| {
+                self.confinement
+                    .as_ref()
+                    .is_none_or(|owner| owner.can_communicate(claimant, actor))
+                    && next_confinement
+                        .as_ref()
+                        .is_none_or(|owner| owner.can_communicate(claimant, actor))
+            };
+            let field_contact = (self.confinement.is_some() || next_confinement.is_some())
+                .then_some(&field_contact as &(dyn Fn(u64, u64) -> bool + Sync));
+            game_economy_claims::publish_field_uses(
+                owner,
+                &field_uses,
+                &fields,
+                &self.people,
+                tick,
+                claimant_presence,
+                field_contact,
+            );
+            game_economy_claims::publish_cultivated_field_claims(owner, &field_uses);
         }
         game_economy_combat::finish_world!(combat, person);
         if let Some((combat, selected)) = combat.as_mut().zip(intervention.as_ref()) {

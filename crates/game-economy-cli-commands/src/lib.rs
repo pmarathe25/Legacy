@@ -417,6 +417,22 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
             region.parse().map_err(|_| "invalid region")?,
             good.parse().map_err(|_| "invalid good")?,
         )?,
+        ["claim-field", person, field] => world.claim_field(
+            person.parse().map_err(|_| "invalid person")?,
+            field.parse().map_err(|_| "invalid field")?,
+        )?,
+        ["unclaim-field", person, field] => world.withdraw_field_claim(
+            person.parse().map_err(|_| "invalid person")?,
+            field.parse().map_err(|_| "invalid field")?,
+        )?,
+        ["claim-cultivated-fields", person, choice] => world.set_cultivated_field_claim_choice(
+            person.parse().map_err(|_| "invalid person")?,
+            match *choice {
+                "on" => true,
+                "off" => false,
+                _ => return Err("expected on or off".into()),
+            },
+        )?,
         ["unclaim", person, region, good] => world.withdraw_claim(
             person.parse().map_err(|_| "invalid person")?,
             region.parse().map_err(|_| "invalid region")?,

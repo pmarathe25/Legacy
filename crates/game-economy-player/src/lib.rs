@@ -124,6 +124,18 @@ pub struct SiteObservation {
     pub salvaged: bool,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldObservation {
+    pub tick: u64,
+    pub person: u64,
+    pub field: u64,
+    pub harvest: bool,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FieldClaimView {
+    pub person: u64,
+    pub field: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct View {
     pub tick: u64,
     pub person: Option<Person>,
@@ -147,6 +159,10 @@ pub struct View {
     pub site_claims: Vec<u64>,
     pub claim_built_sites: Option<bool>,
     pub site_observations: Vec<SiteObservation>,
+    pub field_claims: Vec<u64>,
+    pub local_field_claims: Vec<FieldClaimView>,
+    pub claim_cultivated_fields: Option<bool>,
+    pub field_observations: Vec<FieldObservation>,
     pub food_reports: Vec<Record>,
     /// Only route observations made by the controlled person.
     pub route_observations: Vec<game_economy::RouteObservation>,
@@ -836,6 +852,28 @@ impl<'a> Player<'a> {
                         .collect()
                 })
         });
+        let local_field_claims = if fields.is_empty() {
+            Vec::new()
+        } else {
+            let mut local_fields: Vec<_> = fields.par_iter().map(|field| field.id).collect();
+            local_fields.par_sort_unstable();
+            state
+                .dynamics
+                .and_then(|owner| owner.claims.as_ref())
+                .map_or_else(Vec::new, |owner| {
+                    let mut claims: Vec<_> = owner
+                        .field_claims
+                        .par_iter()
+                        .filter(|claim| local_fields.binary_search(&claim.field).is_ok())
+                        .map(|claim| FieldClaimView {
+                            person: claim.person,
+                            field: claim.field,
+                        })
+                        .collect();
+                    claims.par_sort_unstable_by_key(|claim| (claim.field, claim.person));
+                    claims
+                })
+        };
         Ok(View {
             tick: self.world.tick(),
             held: current.is_some_and(|id| state.confinement.is_some_and(|owner| owner.held(id))),
@@ -941,6 +979,49 @@ impl<'a> Player<'a> {
                                 site: event.site,
                                 destroyed: event.destroyed,
                                 salvaged: event.salvaged,
+                            })
+                            .collect()
+                    })
+            }),
+            field_claims: current.map_or_else(Vec::new, |id| {
+                state
+                    .dynamics
+                    .and_then(|d| d.claims.as_ref())
+                    .map_or_else(Vec::new, |owner| {
+                        let mut fields: Vec<_> = owner
+                            .field_claims
+                            .par_iter()
+                            .filter(|claim| claim.person == id)
+                            .map(|claim| claim.field)
+                            .collect();
+                        fields.par_sort_unstable();
+                        fields
+                    })
+            }),
+            local_field_claims,
+            claim_cultivated_fields: current.and_then(|id| {
+                state.dynamics.and_then(|d| d.claims.as_ref()).map(|owner| {
+                    owner
+                        .preferences
+                        .par_iter()
+                        .find_any(|policy| policy.person == id)
+                        .is_some_and(|policy| policy.assert_cultivated_fields)
+                })
+            }),
+            field_observations: current.map_or_else(Vec::new, |id| {
+                state
+                    .dynamics
+                    .and_then(|d| d.claims.as_ref())
+                    .map_or_else(Vec::new, |owner| {
+                        owner
+                            .field_events
+                            .par_iter()
+                            .filter(|event| event.claimant == id)
+                            .map(|event| FieldObservation {
+                                tick: event.tick,
+                                person: event.person,
+                                field: event.field,
+                                harvest: event.harvest,
                             })
                             .collect()
                     })
@@ -1889,6 +1970,16 @@ impl<'a> Player<'a> {
     /// Assert a personal claim to a local physical site.
     pub fn claim_site(&mut self, site: u64) -> Result<(), String> {
         self.world.claim_site(self.current()?, site)
+    }
+    pub fn claim_field(&mut self, field: u64) -> Result<(), String> {
+        self.world.claim_field(self.current()?, field)
+    }
+    pub fn withdraw_field_claim(&mut self, field: u64) -> Result<(), String> {
+        self.world.withdraw_field_claim(self.current()?, field)
+    }
+    pub fn set_cultivated_field_claim_choice(&mut self, enabled: bool) -> Result<(), String> {
+        self.world
+            .set_cultivated_field_claim_choice(self.current()?, enabled)
     }
     /// Withdraw this person's site assertion, even if the site no longer exists.
     pub fn withdraw_site_claim(&mut self, site: u64) -> Result<(), String> {

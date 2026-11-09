@@ -11,6 +11,120 @@ use std::sync::atomic::{AtomicBool, Ordering};
 #[macro_export]
 macro_rules! claim_methods {
     () => {
+        /// Make a personal assertion over a locally visible field.
+        pub fn claim_field(&mut self, person: u64, field: u64) -> Result<(), String> {
+            let target = self
+                .agriculture
+                .as_ref()
+                .and_then(|owner| owner.fields.iter().find(|row| row.id == field))
+                .ok_or("unknown field")?;
+            if !self.local_person_at_stock(person)
+                || self
+                    .confinement
+                    .as_ref()
+                    .is_some_and(|owner| owner.held(person))
+                || self
+                    .people
+                    .binary_search_by_key(&person, |row| row.id)
+                    .ok()
+                    .is_none_or(|i| {
+                        self.people[i].health == 0 || self.people[i].region != Some(target.region)
+                    })
+            {
+                return Err("person and field must be local and alive".into());
+            }
+            let claims = self
+                .dynamics
+                .as_mut()
+                .and_then(|owner| owner.claims.as_mut())
+                .ok_or("claims are disabled")?;
+            if claims
+                .field_claims
+                .iter()
+                .any(|claim| claim.person == person && claim.field == field)
+            {
+                return Err("duplicate personal field claim".into());
+            }
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            claims
+                .field_claims
+                .push($crate::FieldClaim { person, field });
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Withdraw only this person's assertion, even if other claims remain.
+        pub fn withdraw_field_claim(&mut self, person: u64, field: u64) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be alive".into());
+            }
+            let claims = self
+                .dynamics
+                .as_mut()
+                .and_then(|owner| owner.claims.as_mut())
+                .ok_or("claims are disabled")?;
+            let index = claims
+                .field_claims
+                .iter()
+                .position(|claim| claim.person == person && claim.field == field)
+                .ok_or("unknown personal field claim")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            claims.field_claims.remove(index);
+            self.epoch = epoch;
+            Ok(())
+        }
+        /// Choose whether to assert fields after one's own actual cultivation.
+        pub fn set_cultivated_field_claim_choice(
+            &mut self,
+            person: u64,
+            enabled: bool,
+        ) -> Result<(), String> {
+            if self
+                .people
+                .binary_search_by_key(&person, |row| row.id)
+                .ok()
+                .is_none_or(|i| self.people[i].health == 0)
+            {
+                return Err("person must be alive".into());
+            }
+            let claims = self
+                .dynamics
+                .as_mut()
+                .and_then(|owner| owner.claims.as_mut())
+                .ok_or("claims are disabled")?;
+            let epoch = self
+                .epoch
+                .checked_add(1)
+                .ok_or("economic generation overflow")?;
+            if let Some(policy) = claims
+                .preferences
+                .iter_mut()
+                .find(|policy| policy.person == person)
+            {
+                policy.assert_cultivated_fields = enabled;
+            } else {
+                claims.preferences.push($crate::Preference {
+                    person,
+                    disregard_others: false,
+                    assert_outputs: false,
+                    assert_built_sites: false,
+                    assert_cultivated_fields: enabled,
+                    desperate_hunger: None,
+                });
+            }
+            self.epoch = epoch;
+            Ok(())
+        }
         /// Assert a personal claim to a local physical site; this grants no authority.
         pub fn claim_site(&mut self, person: u64, site: u64) -> Result<(), String> {
             let sites = self.work_sites.as_ref().ok_or("work sites are disabled")?;
@@ -169,6 +283,7 @@ macro_rules! claim_methods {
                     disregard_others,
                     assert_outputs: false,
                     assert_built_sites: false,
+                    assert_cultivated_fields: false,
                     desperate_hunger: None,
                 });
             }
@@ -201,6 +316,7 @@ macro_rules! claim_methods {
                     disregard_others: false,
                     assert_outputs: enabled,
                     assert_built_sites: false,
+                    assert_cultivated_fields: false,
                     desperate_hunger: None,
                 });
             }
@@ -233,6 +349,7 @@ macro_rules! claim_methods {
                     disregard_others: false,
                     assert_outputs: false,
                     assert_built_sites: enabled,
+                    assert_cultivated_fields: false,
                     desperate_hunger: None,
                 });
             }
@@ -265,6 +382,7 @@ macro_rules! claim_methods {
                     disregard_others: false,
                     assert_outputs: false,
                     assert_built_sites: false,
+                    assert_cultivated_fields: false,
                     desperate_hunger: hunger,
                 });
             }
@@ -373,7 +491,11 @@ macro_rules! prepare_index {
             .dynamics
             .as_ref()
             .and_then(|d| d.claims.as_ref())
-            .filter(|claims| !claims.claims.is_empty() || !claims.site_claims.is_empty())
+            .filter(|claims| {
+                !claims.claims.is_empty()
+                    || !claims.site_claims.is_empty()
+                    || !claims.field_claims.is_empty()
+            })
             .map(|claims| claims.index())
     };
 }
@@ -429,6 +551,13 @@ pub struct SiteClaim {
     pub person: u64,
     pub site: u64,
 }
+/// A personal assertion over a cultivated field, not an enforced title.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldClaim {
+    pub person: u64,
+    pub field: u64,
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Preference {
@@ -440,6 +569,9 @@ pub struct Preference {
     /// This person's own preference about asserting newly built physical sites.
     #[serde(default)]
     pub assert_built_sites: bool,
+    /// Whether this person asserts a field after their own successful cultivation.
+    #[serde(default)]
+    pub assert_cultivated_fields: bool,
     /// At this hunger, this individual may take claimed food after considering open food.
     #[serde(default)]
     pub desperate_hunger: Option<u32>,
@@ -473,6 +605,21 @@ pub struct SiteUse {
     pub destroyed: bool,
     pub salvaged: bool,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldUseEvent {
+    pub tick: u64,
+    pub person: u64,
+    pub claimant: u64,
+    pub field: u64,
+    pub harvest: bool,
+}
+#[derive(Clone, Copy)]
+pub struct FieldUse {
+    pub person: u64,
+    pub field: u64,
+    pub harvest: bool,
+}
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Claims {
@@ -489,6 +636,10 @@ pub struct Claims {
     pub site_claims: Vec<SiteClaim>,
     #[serde(default)]
     pub site_events: Vec<SiteUseEvent>,
+    #[serde(default)]
+    pub field_claims: Vec<FieldClaim>,
+    #[serde(default)]
+    pub field_events: Vec<FieldUseEvent>,
 }
 impl Clone for Claims {
     fn clone(&self) -> Self {
@@ -499,6 +650,8 @@ impl Clone for Claims {
             events: self.events.par_iter().cloned().collect(),
             site_claims: self.site_claims.par_iter().cloned().collect(),
             site_events: self.site_events.par_iter().cloned().collect(),
+            field_claims: self.field_claims.par_iter().cloned().collect(),
+            field_events: self.field_events.par_iter().cloned().collect(),
         }
     }
 }
@@ -541,6 +694,7 @@ pub fn enroll(owner: Option<&mut Claims>, family: Option<&game_families::Familie
                 disregard_others: parent.disregard_others,
                 assert_outputs: parent.assert_outputs,
                 assert_built_sites: parent.assert_built_sites,
+                assert_cultivated_fields: parent.assert_cultivated_fields,
                 desperate_hunger: parent.desperate_hunger,
             })
         })
@@ -564,7 +718,25 @@ impl Claims {
             .map(|c| (c.site, c.person))
             .collect();
         site_keys.par_sort_unstable();
+        let mut field_keys: Vec<_> = self
+            .field_claims
+            .par_iter()
+            .map(|claim| (claim.field, claim.person))
+            .collect();
+        field_keys.par_sort_unstable();
         if site_keys.par_windows(2).any(|p| p[0] == p[1])
+            || field_keys.par_windows(2).any(|pair| pair[0] == pair[1])
+            || self
+                .field_claims
+                .par_iter()
+                .any(|claim| claim.field == 0 || !people.contains(&claim.person))
+            || self.field_events.par_iter().any(|event| {
+                event.tick > tick
+                    || event.field == 0
+                    || event.person == event.claimant
+                    || !people.contains(&event.person)
+                    || !people.contains(&event.claimant)
+            })
             || self
                 .site_claims
                 .par_iter()
@@ -614,10 +786,13 @@ impl Claims {
         preferences.par_sort_unstable_by_key(|p| p.person);
         let mut site_claims: Vec<_> = self.site_claims.par_iter().collect();
         site_claims.par_sort_unstable_by_key(|c| (c.site, c.person));
+        let mut field_claims: Vec<_> = self.field_claims.par_iter().collect();
+        field_claims.par_sort_unstable_by_key(|c| (c.field, c.person));
         Index {
             claims,
             preferences,
             site_claims,
+            field_claims,
         }
     }
 }
@@ -625,8 +800,25 @@ pub struct Index<'a> {
     claims: Vec<&'a Claim>,
     preferences: Vec<&'a Preference>,
     site_claims: Vec<&'a SiteClaim>,
+    field_claims: Vec<&'a FieldClaim>,
 }
 impl Index<'_> {
+    /// A claimant's particular request may be treated as a signal for that action.
+    pub fn allows_field(&self, actor: u64, field: u64, requester: Option<u64>) -> bool {
+        if self.disregards(actor) {
+            return true;
+        }
+        let start = self
+            .field_claims
+            .partition_point(|claim| claim.field < field);
+        let end = self
+            .field_claims
+            .partition_point(|claim| claim.field <= field);
+        end - start <= 2
+            && self.field_claims[start..end]
+                .iter()
+                .all(|claim| claim.person == actor || Some(claim.person) == requester)
+    }
     pub fn has_stock_claims(&self) -> bool {
         !self.claims.is_empty()
     }
@@ -786,6 +978,112 @@ pub struct Use {
     pub good: u32,
     pub quantity: u64,
     pub job: bool,
+}
+/// Record a bounded set of present claimants who witnessed actual cultivation.
+pub fn publish_field_uses(
+    claims: &mut Claims,
+    uses: &[FieldUse],
+    fields: &[(u64, u64)],
+    people: &[Person],
+    tick: u64,
+    present: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
+    contact: Option<&(dyn Fn(u64, u64) -> bool + Sync)>,
+) {
+    if claims.field_claims.is_empty() || uses.is_empty() {
+        claims.field_events.clear();
+        return;
+    }
+    let mut observers: Vec<_> = claims
+        .field_claims
+        .par_iter()
+        .filter(|claim| {
+            let Some(region) = fields
+                .binary_search_by_key(&claim.field, |row| row.0)
+                .ok()
+                .map(|i| fields[i].1)
+            else {
+                return false;
+            };
+            people
+                .binary_search_by_key(&claim.person, |person| person.id)
+                .ok()
+                .is_some_and(|i| people[i].health > 0 && people[i].region == Some(region))
+                && present.is_none_or(|check| check(claim.person, region))
+        })
+        .collect();
+    observers.par_sort_unstable_by_key(|claim| (claim.field, claim.person));
+    let observers = &observers;
+    let mut events: Vec<_> = uses
+        .par_iter()
+        .flat_map_iter(|action| {
+            let first = observers.partition_point(|claim| claim.field < action.field);
+            let end = observers.partition_point(|claim| claim.field <= action.field);
+            let count = end - first;
+            let offset = if count == 0 {
+                0
+            } else {
+                (tick.wrapping_add(action.person) % count as u64) as usize
+            };
+            (0..count.min(5))
+                .map(move |n| observers[first + (offset + n) % count])
+                .filter(move |claim| {
+                    claim.person != action.person
+                        && contact.is_none_or(|check| check(claim.person, action.person))
+                })
+                .take(4)
+                .map(move |claim| FieldUseEvent {
+                    tick,
+                    person: action.person,
+                    claimant: claim.person,
+                    field: action.field,
+                    harvest: action.harvest,
+                })
+        })
+        .collect();
+    events.par_sort_unstable_by_key(|event| {
+        (event.claimant, event.person, event.field, event.harvest)
+    });
+    claims.field_events = events;
+}
+
+/// A person may assert a field after their own accepted cultivation, not an attempt.
+pub fn publish_cultivated_field_claims(claims: &mut Claims, uses: &[FieldUse]) {
+    if uses.is_empty()
+        || !claims
+            .preferences
+            .par_iter()
+            .any(|policy| policy.assert_cultivated_fields)
+    {
+        return;
+    }
+    let mut willing: Vec<_> = claims
+        .preferences
+        .par_iter()
+        .filter(|policy| policy.assert_cultivated_fields)
+        .map(|policy| policy.person)
+        .collect();
+    willing.par_sort_unstable();
+    let mut existing: Vec<_> = claims
+        .field_claims
+        .par_iter()
+        .map(|claim| (claim.field, claim.person))
+        .collect();
+    existing.par_sort_unstable();
+    let mut added: Vec<_> = uses
+        .par_iter()
+        .filter_map(|row| {
+            (willing.binary_search(&row.person).is_ok()
+                && existing.binary_search(&(row.field, row.person)).is_err())
+            .then_some((row.field, row.person))
+        })
+        .collect();
+    added.par_sort_unstable();
+    added.dedup();
+    claims.field_claims.par_extend(
+        added
+            .into_par_iter()
+            .map(|(field, person)| FieldClaim { person, field }),
+    );
 }
 /// Record only actual uses witnessed locally by a claimant, bounded per use.
 pub fn publish_site_uses(

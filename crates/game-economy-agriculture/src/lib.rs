@@ -457,6 +457,9 @@ impl Context<'_> {
                         group,
                         &workers[first..last],
                         |field, worker| {
+                            if !claims.allows_field(worker.1, field.id, None) {
+                                return false;
+                            }
                             if field.phase != Phase::Fallow {
                                 return true;
                             }
