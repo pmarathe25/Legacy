@@ -1311,8 +1311,14 @@ pub fn handle(world: &mut Economy, words: &[&str]) -> Result<bool, String> {
         ),
         ["step"] => player.advance()?,
         ["step", count] => {
-            for _ in 0..count.parse::<u64>().map_err(|_| "invalid tick count")? {
-                player.advance()?;
+            let requested = count.parse::<u64>().map_err(|_| "invalid tick count")?;
+            let progress =
+                player.advance_boundaries(requested, |_| std::ops::ControlFlow::Continue(()));
+            if let game_economy::BoundaryStop::Blocked { message, .. } = progress.stop {
+                return Err(format!(
+                    "advanced {} of {} boundaries: {message}",
+                    progress.completed, progress.requested
+                ));
             }
         }
         _ => return Err("unknown command or invalid arguments; enter help".into()),

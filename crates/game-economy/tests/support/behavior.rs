@@ -240,6 +240,70 @@ fn fixture() -> State {
     }
 }
 
+#[test]
+fn boundary_batches_preserve_events_state_reload_and_yield() {
+    use std::ops::ControlFlow;
+    let initial = fixture();
+    let run = |workers, chunks: &[u64], reload: bool| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut world = Economy::compile(initial.clone()).unwrap();
+                let before = world.snapshot();
+                let zero =
+                    world.advance_boundaries(0, |_| panic!("zero boundaries have no events"));
+                assert_eq!(zero.stop, BoundaryStop::Completed);
+                assert_eq!(world.snapshot(), before);
+                let mut events = Vec::new();
+                for &count in chunks {
+                    let progress = world.advance_boundaries(count, |event| {
+                        events.push(format!("{event:?}"));
+                        ControlFlow::Continue(())
+                    });
+                    assert_eq!(progress.stop, BoundaryStop::Completed);
+                    assert_eq!(progress.completed, count);
+                    assert_eq!(
+                        progress.end.elapsed_millis,
+                        u128::from(progress.end.tick) * u128::from(progress.end.quantum_millis)
+                    );
+                    if reload {
+                        world = Economy::compile(
+                            serde_json::from_str(
+                                &serde_json::to_string(&world.snapshot()).unwrap(),
+                            )
+                            .unwrap(),
+                        )
+                        .unwrap();
+                    }
+                }
+                (world.snapshot(), events)
+            })
+    };
+    let expected = run(1, &[5], false);
+    assert_eq!(expected, run(1, &[1, 2, 2], true));
+    assert_eq!(expected, run(4, &[2, 1, 2], true));
+    let mut world = Economy::compile(initial).unwrap();
+    let mut observed = 0;
+    let progress = world.advance_boundaries(5, |_| {
+        observed += 1;
+        if observed == 2 {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
+        }
+    });
+    assert_eq!(progress.stop, BoundaryStop::Yielded);
+    assert_eq!(
+        (progress.completed, progress.start.tick, progress.end.tick),
+        (2, 0, 2)
+    );
+    let progress = world.advance_boundaries(3, |_| ControlFlow::Continue(()));
+    assert_eq!(progress.stop, BoundaryStop::Completed);
+    assert_eq!(world.snapshot(), expected.0);
+}
+
 fn independent_written_journeys(count: u64) -> State {
     let mut state = independent_written_circulation(count);
     for person in &mut state.people {
@@ -21751,6 +21815,34 @@ fn invocation_warnings_pause_the_world_and_accepted_loss_releases_control() {
             .install(|| {
                 let mut world = Economy::compile(initial.clone()).unwrap();
                 world.invoke_lives(&[4]).unwrap();
+                let mut batched = Economy::compile(initial.clone()).unwrap();
+                batched.invoke_lives(&[4]).unwrap();
+                let blocked = batched
+                    .advance_boundaries(3, |_| panic!("warning precedes the first boundary"));
+                assert_eq!(blocked.completed, 0);
+                let BoundaryStop::Blocked {
+                    warning: Some(warning),
+                    ..
+                } = blocked.stop
+                else {
+                    panic!("missing warning")
+                };
+                assert_eq!(warning.kind, InvocationWarningKind::Strain);
+                batched.accept_invocation_warning(warning.revision).unwrap();
+                let mut seen = 0;
+                let partial = batched.advance_boundaries(3, |_| {
+                    seen += 1;
+                    std::ops::ControlFlow::Continue(())
+                });
+                assert_eq!((partial.completed, seen), (1, 1));
+                let BoundaryStop::Blocked {
+                    warning: Some(warning),
+                    ..
+                } = partial.stop
+                else {
+                    panic!("missing control warning")
+                };
+                assert_eq!(warning.kind, InvocationWarningKind::ControlLoss);
                 let before = world.snapshot();
                 assert!(world.advance().is_err());
                 let paused = world.snapshot();
@@ -21783,6 +21875,7 @@ fn invocation_warnings_pause_the_world_and_accepted_loss_releases_control() {
                 assert!(world.advance().is_err());
                 assert!(restored.advance().is_err());
                 let paused = world.snapshot();
+                assert_eq!(paused, batched.snapshot());
                 let warning = paused
                     .campaign
                     .as_ref()

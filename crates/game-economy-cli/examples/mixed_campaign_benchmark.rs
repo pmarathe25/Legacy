@@ -262,11 +262,12 @@ fn main() {
             let started = std::time::Instant::now();
             started_jobs = 0;
             delivered_jobs = 0;
-            for _ in 0..ticks {
-                let events = world.advance().unwrap();
+            let progress = world.advance_boundaries(ticks as u64, |events| {
                 started_jobs += events.started.len();
                 delivered_jobs += events.delivered.len();
-            }
+                std::ops::ControlFlow::Continue(())
+            });
+            assert_eq!(progress.stop, game_economy::BoundaryStop::Completed);
             if local_visits && ticks >= 3 {
                 assert!(started_jobs > 0 && delivered_jobs > 0, "mixed visit workload must retain production");
             }

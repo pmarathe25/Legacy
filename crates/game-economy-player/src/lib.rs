@@ -2194,4 +2194,13 @@ impl<'a> Player<'a> {
         self.world.advance()?;
         Ok(())
     }
+
+    /// Advance whole boundaries, allowing a client to yield after each commit.
+    pub fn advance_boundaries(
+        &mut self,
+        requested: u64,
+        observe: impl FnMut(&game_lot_runtime::Events) -> std::ops::ControlFlow<()>,
+    ) -> game_economy::BoundaryAdvance {
+        self.world.advance_boundaries(requested, observe)
+    }
 }

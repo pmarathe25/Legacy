@@ -1,4 +1,5 @@
 //! Person-driven economic activity over authoritative dated physical goods.
+mod time;
 pub use game_agreements::OfferPolicy as PromiseOfferPolicy;
 pub use game_agreements::WorkOfferPolicy as WorkPromiseOfferPolicy;
 pub use game_autowork::requests::OfferValue as WorkOfferValue;
@@ -92,6 +93,7 @@ pub use game_practices::{
     ReportAttitude as PracticeReportAttitude, Reporting as PracticeReporting,
     ValueLearning as PracticeValueLearning,
 };
+pub use time::{BoundaryAdvance, BoundaryStop, BoundaryTime};
 mod animal_care;
 mod animal_feelings;
 mod animal_handling;
