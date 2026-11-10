@@ -1473,6 +1473,7 @@ fn mixed_atomic_action_benchmark() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(0);
     let idle_expiry = std::env::var_os("LEGACY_IDLE_EXPIRY").is_some();
+    let reverse_transfers = std::env::var_os("LEGACY_REVERSE_TRANSFERS").is_some();
     let additions = if with_additions {
         vec![container(Place::Inventory(1), 10, vec![])]
     } else {
@@ -1506,6 +1507,9 @@ fn mixed_atomic_action_benchmark() {
                 vec![]
             },
         ));
+    }
+    if reverse_transfers {
+        actions.reverse();
     }
     actions.push(Transaction {
         id: count + 1,
@@ -1560,7 +1564,7 @@ fn mixed_atomic_action_benchmark() {
                 }
                 samples.sort_by(f64::total_cmp);
                 println!(
-                    "workers={workers} transfers={count} idle_holders={idle} idle_expiry={idle_expiry} additions={with_additions} mode={mode} prepare={:.6}",
+                    "workers={workers} transfers={count} idle_holders={idle} idle_expiry={idle_expiry} reverse_transfers={reverse_transfers} additions={with_additions} mode={mode} prepare={:.6}",
                     samples[2]
                 );
             }

@@ -30,6 +30,8 @@ Add `LEGACY_IDLE_EXPIRY=1` to make idle custody expire at the boundary. In a 5,0
 
 Reusing one expiring-container list for spoilage and materialization reduced general preparation in a 5,000-transfer, 500,000-idle-holder run from 11.2 to 8.9 ms on one worker and from 5.2 to 4.7 ms on six. The expiry-heavy run showed similar timings before and after; these measurements are isolated workloads.
 
+Set `LEGACY_REVERSE_TRANSFERS=1` to exercise nonordered endpoints in the mixed atomic benchmark. Reusing the partitioner's validation reduced partitioned preparation of 100,000 reversed transfers from 89–91 to 84–85 ms on one worker and from 34.9–35.7 to 33.4–33.6 ms on six in repeated runs. Receipts matched the general arbiter.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

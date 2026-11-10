@@ -111,6 +111,7 @@ pub fn prepare(
         },
         advance,
         true,
+        false,
     )
 }
 
@@ -124,14 +125,24 @@ pub fn prepare_flat(
     prepare_flat_impl(state, instance, transfers, advance, true)
 }
 
-/// The general partition publishes all global expiry and spoilage.
+/// The partitioner has validated action and movement identities, movement
+/// shape, and exclusive endpoints. The general partition owns global expiry.
 pub(crate) fn prepare_flat_endpoints(
     state: &State,
     instance: u64,
     transfers: &[SimpleTransfer],
     advance: bool,
 ) -> Result<Option<Draft>, String> {
-    prepare_flat_impl(state, instance, transfers, advance, false)
+    debug_assert!(transfers.len() >= 128);
+    prepare_rows(
+        state,
+        instance,
+        transfers.len(),
+        |index| (transfers[index].action, transfers[index].movement),
+        advance,
+        false,
+        true,
+    )
 }
 
 fn prepare_flat_impl(
@@ -166,6 +177,7 @@ fn prepare_flat_impl(
         |index| (transfers[index].action, transfers[index].movement),
         advance,
         global_expiry,
+        false,
     )
 }
 
@@ -176,7 +188,9 @@ fn prepare_rows(
     action: impl Fn(usize) -> (u64, Movement) + Sync,
     advance: bool,
     global_expiry: bool,
+    classified: bool,
 ) -> Result<Option<Draft>, String> {
+    debug_assert!(!classified || !global_expiry);
     let next = if advance {
         state.tick.checked_add(1).ok_or("lot tick overflow")?
     } else {
@@ -190,14 +204,15 @@ fn prepare_rows(
     // before locating endpoints; another planner validates and resolves it.
     let first = action(0).1;
     let second = action(1).1;
-    if (first.to == second.to
-        && (2..length)
-            .into_par_iter()
-            .all(|index| action(index).1.to == first.to))
-        || (first.from == second.from
+    if !classified
+        && ((first.to == second.to
             && (2..length)
                 .into_par_iter()
-                .all(|index| action(index).1.from == first.from))
+                .all(|index| action(index).1.to == first.to))
+            || (first.from == second.from
+                && (2..length)
+                    .into_par_iter()
+                    .all(|index| action(index).1.from == first.from)))
     {
         return Ok(None);
     }
@@ -256,9 +271,9 @@ fn prepare_rows(
             })
             .then_some(source_first)
     });
-    let endpoints = if separated.is_some() {
-        // Both columns are sorted and disjoint already. Keep them in place
-        // instead of allocating a second copy of every endpoint.
+    let endpoints = if separated.is_some() || classified {
+        // Sorted disjoint columns, or the partitioner's exclusivity proof,
+        // avoid allocating and sorting another copy of every endpoint.
         None
     } else {
         let mut endpoints: Vec<_> = rows
@@ -271,12 +286,14 @@ fn prepare_rows(
         }
         Some(endpoints)
     };
-    let mut movement_ids: Vec<_> = rows.par_iter().map(|r| r.movement.id).collect();
-    if movement_ids.par_windows(2).any(|p| p[0] > p[1]) {
-        movement_ids.par_sort_unstable();
-    }
-    if movement_ids.par_windows(2).any(|p| p[0] == p[1]) {
-        return Ok(None);
+    if !classified {
+        let mut movement_ids: Vec<_> = rows.par_iter().map(|r| r.movement.id).collect();
+        if movement_ids.par_windows(2).any(|p| p[0] > p[1]) {
+            movement_ids.par_sort_unstable();
+        }
+        if movement_ids.par_windows(2).any(|p| p[0] == p[1]) {
+            return Ok(None);
+        }
     }
 
     #[cfg(feature = "profile")]
