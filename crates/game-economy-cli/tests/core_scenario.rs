@@ -1103,3 +1103,24 @@ fn authored_written_claim_can_misstate_a_memory() {
     }
     assert_eq!(run(1), run(6));
 }
+
+#[test]
+fn authored_local_carrying_moves_goods_through_personal_custody() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(||{
+            let root=root();let mut host=game_economy_cli::core_scenario(&root.join("content/scenarios/economy-core-local-carry.toml"),&root.join("content")).unwrap();
+            let result=host.advance_scheduled(0,&[]).unwrap();assert_eq!(result.failure,None);
+            assert!(result.events.iter().any(|event|matches!(event,game_economy::core_interval::CoreRunEvent::LocalCarries(rows) if rows.iter().any(|row|row.person==1 && row.moved))));
+            let state=host.snapshot();let local=state.local_transport.as_ref().unwrap();assert_eq!(local.events.len(),1);
+            let person=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Person(1)).unwrap();
+            assert_eq!(person.lots.iter().map(|lot|lot.quantity).sum::<u64>(),2);
+            let mut restored=game_economy::core_interval::CoreHost::resume(serde_json::from_str(&serde_json::to_string(&state).unwrap()).unwrap()).unwrap();
+            assert_eq!(host.advance_continuous(900000,&[]).unwrap(),restored.advance_continuous(900000,&[]).unwrap());
+            let state=host.snapshot();assert_eq!(state,restored.snapshot());
+            let store=state.core.physical.custody.containers.iter().find(|row|row.place==game_lots::Place::Inventory(1)).unwrap();
+            assert_eq!(store.lots.iter().map(|lot|lot.quantity).sum::<u64>(),2);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
+}

@@ -463,3 +463,7 @@ With `LEGACY_WRITING_PRACTICE=1 LEGACY_PEOPLE=50000`, `core_host_text_writing_be
 With `LEGACY_WRITTEN_CLAIMS=1 LEGACY_PEOPLE=50000`, `core_host_text_writing_benchmark` measures 49,999 claim writes in 119.7, 73.4, 58.7, and 45.6 ms at one, two, four, and six workers. Adding `LEGACY_TEXT_READING=1` measures claim reading and reception in 12.1, 7.1, 4.8, and 4.5 ms. Fingerprints matched within each workload and setup was excluded; these single samples show sublinear scaling.
 
 With `LEGACY_PEOPLE=50000`, the ignored `core_host_written_page_consumption_benchmark` completes 50,000 jobs consuming identified pages in 125.9, 78.4, 56.5, and 51.4 ms at one, two, four, and six workers. Fingerprints matched and job setup was excluded; this single sample shows sublinear scaling.
+
+People may independently carry goods between regional stock and named local stores in two separate actions: first taking goods into personal custody, then delivering them. The choice can be voluntary or motivated by personal fear or obligation, and contention is settled against actual inventory and capacity. Local walking and goal-directed carrying are not yet supported by the interval host.
+
+With `LEGACY_PEOPLE=50000`, the ignored `core_host_local_carrying_benchmark` measures 49,999 independent pickups in 57.0, 36.0, 24.3, and 21.8 ms at one, two, four, and six workers. With `LEGACY_LOCAL_CONTEST=1`, pickups share one regional stock and take 48.1, 31.0, 20.4, and 17.2 ms. Fingerprints matched within each workload and setup was excluded; these single samples show sublinear scaling.

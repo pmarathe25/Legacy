@@ -18,6 +18,7 @@ mod gathering;
 mod giving;
 mod goals;
 mod hunting;
+mod local_transport;
 mod market;
 mod medical;
 mod offers;
@@ -36,6 +37,7 @@ mod treatment;
 mod writing;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use giving::CorePracticeWorkEvidence;
+pub use local_transport::CoreLocalTransportResults;
 pub use market::CoreMarketResults;
 pub use offers::CoreSocialResults;
 pub use purpose::CorePurpose;
@@ -132,6 +134,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub writing: Option<crate::Writing>,
     #[serde(default)]
+    pub local_transport: Option<game_economy_local_transport::LocalTransport>,
+    #[serde(default)]
     pub goal_setbacks: Vec<(u64, u32)>,
     #[serde(default)]
     pub agreements: Option<game_agreements::Agreements>,
@@ -190,6 +194,7 @@ pub struct CoreHost {
     shared_work: Option<CoreSharedWork>,
     market: Option<game_market::Market>,
     writing: Option<crate::Writing>,
+    local_transport: Option<game_economy_local_transport::LocalTransport>,
     agreements: Option<game_agreements::Agreements>,
     sites: Option<CoreSites>,
     schedule: Option<CoreSchedule>,
@@ -233,6 +238,7 @@ struct CoreRuntimeOptions {
     shared_work: Option<CoreSharedWork>,
     market: Option<game_market::Market>,
     writing: Option<crate::Writing>,
+    local_transport: Option<game_economy_local_transport::LocalTransport>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -278,6 +284,7 @@ impl CoreHost {
             shared_work,
             market,
             writing,
+            local_transport,
             agreements,
             sites,
             schedule,
@@ -299,6 +306,7 @@ impl CoreHost {
                 shared_work,
                 market,
                 writing,
+                local_transport,
                 sites,
                 schedule,
                 tool_requirements,
@@ -379,6 +387,7 @@ impl CoreHost {
             shared_work,
             market,
             writing,
+            local_transport,
             agreements,
             sites,
             schedule,
@@ -396,6 +405,7 @@ impl CoreHost {
                 shared_work,
                 market,
                 writing,
+                local_transport,
                 sites,
                 schedule,
                 tool_requirements,
@@ -447,6 +457,7 @@ impl CoreHost {
             shared_work,
             market,
             mut writing,
+            mut local_transport,
             mut sites,
             schedule,
             tool_requirements,
@@ -978,6 +989,18 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &mut local_transport {
+            if owner.walking.is_some() || !owner.goal_fetchers.is_empty() {
+                return Err(
+                    "local walking and goal-directed carrying are not yet supported".into(),
+                );
+            }
+            owner.normalize();
+            let people: HashSet<_> = core.people.par_iter().map(|p| p.id).collect();
+            let goods: HashSet<_> = core.physical.goods().par_iter().map(|g| g.id).collect();
+            let view = core.physical.view(core.physical.tick())?;
+            owner.validate(&people, &goods, &view, core.physical.tick())?;
+        }
         if let Some(owner) = &mut writing {
             if (!owner.authors.is_empty()
                 || owner.pages.par_iter().any(|page| page.claim.is_some()))
@@ -1122,6 +1145,7 @@ impl CoreHost {
             shared_work,
             market,
             writing,
+            local_transport,
             agreements,
             sites,
             schedule,
@@ -1170,6 +1194,7 @@ impl CoreHost {
             shared_work: self.shared_work.clone(),
             market: self.market.clone(),
             writing: self.writing.clone(),
+            local_transport: self.local_transport.clone(),
             agreements: self.agreements.clone(),
             sites: self.sites.clone(),
             schedule: self.schedule.clone(),
@@ -2201,6 +2226,9 @@ impl CoreHost {
         });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
+        if let Some(owner) = &mut self.local_transport {
+            owner.events.clear();
+        }
         self.goal_setbacks.clear();
         self.practice_work_asks.clear();
         self.practice_work_evidence = CorePracticeWorkEvidence::default();

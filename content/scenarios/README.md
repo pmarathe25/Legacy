@@ -97,3 +97,5 @@ policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 `economy-core-writing.toml` demonstrates a personal text author, a reader, script knowledge, text retention preferences, and physical paper and ink. Writing creates an identified page in the author's custody; reading depends on a person's own script knowledge and possession. Another person independently practices the known script using their own supplies.
 
 `economy-core-written-claim.toml` demonstrates an author writing a deliberately altered food report while retaining the original personal memory.
+
+`economy-core-local-carry.toml` demonstrates a person carrying named goods from regional stock to a local store, with pickup into personal custody before the later delivery.

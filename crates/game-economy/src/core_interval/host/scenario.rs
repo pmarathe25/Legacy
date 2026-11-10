@@ -17,7 +17,6 @@ impl CoreHostSnapshot {
             ("campaign", state.campaign.is_some()),
             ("combat", state.combat.is_some()),
             ("hauling", state.hauling.is_some()),
-            ("local_transport", state.local_transport.is_some()),
         ] {
             if present {
                 unsupported.push(name);
@@ -140,6 +139,7 @@ impl CoreHostSnapshot {
             dreams: state.dreams,
             market: state.market,
             writing: state.writing,
+            local_transport: state.local_transport,
             shared_work: state.shared_work.map(|owner| CoreSharedWork {
                 owner,
                 sessions: vec![],
