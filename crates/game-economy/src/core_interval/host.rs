@@ -5,6 +5,7 @@ use game_economy_work::tool_wear::ToolWear;
 mod agriculture;
 mod claims;
 mod fatigue;
+mod fauna;
 mod food_search;
 mod gathering;
 mod offers;
@@ -58,6 +59,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub gathering: Option<crate::Gathering>,
     #[serde(default)]
+    pub fauna: Option<game_fauna::Fauna>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -87,6 +90,7 @@ pub struct CoreHost {
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
     gathering: Option<crate::Gathering>,
+    fauna: Option<game_fauna::Fauna>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -111,6 +115,7 @@ struct CoreRuntimeOptions {
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
     gathering: Option<crate::Gathering>,
+    fauna: Option<game_fauna::Fauna>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -131,6 +136,7 @@ impl CoreHost {
             irrigation,
             environment,
             gathering,
+            fauna,
             opinions,
             goals,
             agreements,
@@ -161,6 +167,7 @@ impl CoreHost {
                 irrigation,
                 environment,
                 gathering,
+                fauna,
             },
         )
     }
@@ -182,6 +189,7 @@ impl CoreHost {
             irrigation,
             environment,
             gathering,
+            fauna,
             opinions,
             goals,
             agreements,
@@ -212,6 +220,7 @@ impl CoreHost {
                 irrigation,
                 environment,
                 gathering,
+                fauna,
             },
         )
     }
@@ -240,6 +249,7 @@ impl CoreHost {
             irrigation,
             environment,
             gathering,
+            fauna,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -460,6 +470,26 @@ impl CoreHost {
             let view = core.physical.view(core.physical.tick())?;
             owner.validate(&people, &goods, &view)?;
         }
+        if let Some(owner) = &fauna {
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            let view = core.physical.view(core.physical.tick())?;
+            let regions: HashSet<_> = view
+                .containers
+                .par_iter()
+                .filter_map(|row| match row.place {
+                    game_lots::Place::Stock { region, .. } => Some(region),
+                    _ => None,
+                })
+                .collect();
+            owner
+                .validate(&regions, &goods, core.physical.tick())
+                .map_err(str::to_owned)?;
+        }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let recipes: HashSet<_> = core
@@ -510,6 +540,7 @@ impl CoreHost {
             irrigation,
             environment,
             gathering,
+            fauna,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -537,6 +568,7 @@ impl CoreHost {
             irrigation: self.irrigation.clone(),
             environment: self.environment.clone(),
             gathering: self.gathering.clone(),
+            fauna: self.fauna.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -919,7 +951,7 @@ impl CoreHost {
             .zip(irrigation_plan)
             .map(|(owner, plan)| owner.advance(plan, draft.events(), draft.events().tick));
         let (agriculture, claims) = self.stage_cultivation(cultivation, draft.events())?;
-        let gathering = gathering
+        let mut gathering = gathering
             .map(|(plan, _)| {
                 plan.publish(
                     self.gathering.as_ref().expect("gathering owner"),
@@ -930,6 +962,7 @@ impl CoreHost {
                 )
             })
             .transpose()?;
+        let fauna = self.stage_fauna(&mut gathering, draft.events().tick)?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
@@ -1013,6 +1046,7 @@ impl CoreHost {
         if let Some(owner) = gathering {
             self.gathering = Some(owner);
         }
+        self.publish_fauna(fauna);
         if let Some((owner, opinions)) = claims {
             self.claims = Some(owner);
             self.opinions = opinions;

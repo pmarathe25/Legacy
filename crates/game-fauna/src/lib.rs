@@ -138,13 +138,23 @@ pub struct Feeding {
     pub quantity: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Fauna {
     pub species: Vec<Species>,
     pub animals: Vec<Animal>,
     pub next_id: u64,
     pub last_tick: u64,
+}
+impl Clone for Fauna {
+    fn clone(&self) -> Self {
+        Self {
+            species: self.species.par_iter().cloned().collect(),
+            animals: self.animals.par_iter().cloned().collect(),
+            next_id: self.next_id,
+            last_tick: self.last_tick,
+        }
+    }
 }
 
 /// Detached results; the host must atomically apply both animal and patch changes.
