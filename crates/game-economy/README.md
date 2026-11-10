@@ -14,6 +14,8 @@ Chosen people can start a journey at a partial offset. Existing work and caller-
 
 In the limited `CoreHost`, optional `Travel.destinations` records each person's enabled destination preference. At scheduled decisions, eligible uncontrolled people pursue a directly connected destination after their work choices; they do not leave while resting, working, or otherwise occupied. A closed route is attempted and personally observed. This is a direct-route preference, not a general itinerary planner, and the separate whole-boundary `Economy` runner does not yet schedule these preferences.
 
+Optional `CoreFoodSearch` adds the existing personal food-search preferences and bounded knowledge to the limited host. At decisions, available people observe local stock, then hungry people may travel based on their own remembered reports and route knowledge, including stale or false reports. Observations, route attempts, retry state, and memory use are staged together. After arrival, a later decision can replace an outdated report with the person's own observation. This slice does not yet apply personal stock claims, social reporting, or local food acquisition; the enclosing host must exclude actors occupied by other owners.
+
 Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
 
 The host can also stage autonomous meal choices at an offset: hungry people with `seek_meals` select an unexpired portion from their own custody. Controlled people are excluded, and the host supplies people occupied by other activities. This does not yet schedule the rest of their decisions or food acquisition.
@@ -75,6 +77,8 @@ With `LEGACY_FATIGUE=1`, the site benchmark times progress, completion, site wea
 The ignored `core_host_departure_benchmark` times 49,999 chosen departures, their travel, fatigue, and boundary settlement. One run took 19.3, 12.6, 9.1, and 8.0 ms at one, two, four, and six workers, with matching saved-state fingerprints. Setup is excluded, and the timings are sublinear.
 
 Setting `LEGACY_AUTO_TRAVEL=1` includes selection from 49,999 personal destination preferences. One run took 23.7, 14.6, 9.5, and 10.5 ms at those worker counts, with matching fingerprints. Setup is excluded.
+
+Setting `LEGACY_FOOD_SEARCH=1` instead includes 49,999 people observing local stock, consulting remembered reports, choosing a route, traveling, and settling fatigue. One run took 57.2, 37.6, 25.4, and 22.0 ms at those worker counts, with matching fingerprints; setup is excluded.
 
 The ignored `core_host_site_repair_benchmark` measures 49,999 people repairing separate sites using carried materials. One run took 47.3, 31.2, 24.5, and 26.2 ms at the same worker counts, with matching fingerprints and setup excluded.
 

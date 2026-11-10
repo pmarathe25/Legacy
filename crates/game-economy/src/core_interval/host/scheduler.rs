@@ -13,6 +13,7 @@ pub enum DecisionPhase {
     Asking { meal_people: Vec<u64> },
     Requests { meal_people: Vec<u64> },
     Work { meal_people: Vec<u64> },
+    FoodSearch { meal_people: Vec<u64> },
     Travel { meal_people: Vec<u64> },
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -58,6 +59,7 @@ impl CoreSchedule {
         | DecisionPhase::Asking { meal_people }
         | DecisionPhase::Requests { meal_people }
         | DecisionPhase::Work { meal_people }
+        | DecisionPhase::FoodSearch { meal_people }
         | DecisionPhase::Travel { meal_people } = &self.phase
             && (self.next_decision_millis != Some(u128::from(offset))
                 || offset == quantum
@@ -86,6 +88,7 @@ pub enum CoreRunEvent {
     Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
     Departures(Vec<travel::DepartureOutcome>),
+    FoodSearch(Vec<travel::DepartureOutcome>),
     Boundary(Box<Events>),
 }
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -431,6 +434,21 @@ impl CoreHost {
                             attempt!('run, self.start_autonomous_work(&busy, schedule.work_rate));
                         if !starts.is_empty() {
                             run.events.push(CoreRunEvent::Starts(starts));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::FoodSearch { meal_people };
+                    }
+                    DecisionPhase::FoodSearch { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let departures = attempt!('run, self.seek_food_autonomously(&busy));
+                        if !departures.is_empty() {
+                            meal_people.extend(departures.iter().map(|row| row.person));
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            run.events.push(CoreRunEvent::FoodSearch(departures));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
                             DecisionPhase::Travel { meal_people };

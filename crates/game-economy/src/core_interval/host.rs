@@ -3,11 +3,13 @@ use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
 mod fatigue;
+mod food_search;
 mod offers;
 mod requests;
 mod scheduler;
 mod sites;
 mod tools;
+pub use food_search::CoreFoodSearch;
 pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
@@ -31,6 +33,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub activity: Vec<game_economy_fatigue::TimedActivity>,
     #[serde(default)]
+    pub food_search: Option<CoreFoodSearch>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -51,6 +55,7 @@ pub struct CoreHost {
     paused_work_rates: Vec<(u64, u64)>,
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
+    food_search: Option<CoreFoodSearch>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -66,6 +71,7 @@ struct CoreRuntimeOptions {
     paused_work_rates: Vec<(u64, u64)>,
     fatigue: Option<game_economy_fatigue::TimedFatigue>,
     activity: Vec<game_economy_fatigue::TimedActivity>,
+    food_search: Option<CoreFoodSearch>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -77,6 +83,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             activity,
+            food_search,
             opinions,
             goals,
             agreements,
@@ -98,6 +105,7 @@ impl CoreHost {
                 paused_work_rates,
                 fatigue,
                 activity,
+                food_search,
             },
         )
     }
@@ -110,6 +118,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             activity,
+            food_search,
             opinions,
             goals,
             agreements,
@@ -131,6 +140,7 @@ impl CoreHost {
                 paused_work_rates,
                 fatigue,
                 activity,
+                food_search,
             },
         )
     }
@@ -150,6 +160,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             mut activity,
+            food_search,
         } = options;
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
@@ -253,6 +264,19 @@ impl CoreHost {
                 .validate(&people, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &food_search {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let view = core.physical.view(core.physical.tick())?;
+            game_economy_knowledge::validate(
+                Some(&owner.knowledge),
+                &people,
+                &view,
+                core.physical.tick(),
+            )?;
+            owner
+                .search
+                .validate(&people, Some(&owner.knowledge), core.travel.as_ref())?;
+        }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let recipes: HashSet<_> = core
@@ -294,6 +318,7 @@ impl CoreHost {
             paused_work_rates,
             fatigue,
             activity,
+            food_search,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -312,6 +337,7 @@ impl CoreHost {
             paused_work_rates: self.paused_work_rates.clone(),
             fatigue: self.fatigue.clone(),
             activity: self.activity.clone(),
+            food_search: self.food_search.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),

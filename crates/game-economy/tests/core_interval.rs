@@ -186,6 +186,7 @@ fn timed_fatigue_tracks_early_completion_across_save_and_workers() {
                     paused_work_rates: vec![],
                     fatigue: Some(timed_fatigue()),
                     activity: vec![],
+                    food_search: None,
                     opinions: None,
                     goals: None,
                     agreements: None,
@@ -229,6 +230,7 @@ fn timed_fatigue_rest_pauses_and_resumes_unfinished_work() {
         paused_work_rates: vec![],
         fatigue: Some(timed_fatigue()),
         activity: vec![],
+        food_search: None,
         opinions: None,
         goals: None,
         agreements: None,
@@ -286,6 +288,7 @@ fn external_occupation_does_not_count_as_rest() {
         paused_work_rates: vec![],
         fatigue: Some(timed_fatigue()),
         activity: vec![],
+        food_search: None,
         opinions: None,
         goals: None,
         agreements: None,
@@ -338,6 +341,7 @@ fn chosen_departure_progresses_from_its_offset_and_survives_reload() {
                     paused_work_rates: vec![],
                     fatigue: Some(timed_fatigue()),
                     activity: vec![],
+                    food_search: None,
                     opinions: None,
                     goals: None,
                     agreements: None,
@@ -401,6 +405,8 @@ fn core_host_departure_benchmark() {
         .unwrap_or(1);
     assert!(count > 1);
     let automatic = std::env::var_os("LEGACY_AUTO_TRAVEL").is_some();
+    let food_search = std::env::var_os("LEGACY_FOOD_SEARCH").is_some();
+    assert!(!(automatic && food_search));
     let mut initial = fixture();
     let template = initial.people[0].clone();
     initial.people = (1..=count)
@@ -422,6 +428,66 @@ fn core_host_departure_benchmark() {
     }
     initial.nutrition = None;
     initial.pending_food.clear();
+    let search = food_search.then(|| {
+        initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+            portion: 1,
+            hunger_relief: 1,
+            nutrients: Default::default(),
+            health_effect: 0,
+            shelf_days: None,
+        });
+        initial.people.iter_mut().skip(1).for_each(|person| {
+            person.hunger = 5;
+            person.seek_meals = true;
+        });
+        initial.physical.custody.containers.extend(
+            (2..=count).map(|person| Container::new(Place::Person(person), 10, vec![]).unwrap()),
+        );
+        initial
+            .physical
+            .custody
+            .containers
+            .sort_by_key(|row| row.place);
+        game_economy::core_interval::CoreFoodSearch {
+            search: game_economy::FoodSearch {
+                min_hunger: 5,
+                min_report_food: 1,
+                max_report_age: 20,
+                retry_ticks: 3,
+                inherit_births: false,
+                people: (2..=count)
+                    .map(|person| game_economy::FoodSearchPreference {
+                        person,
+                        enabled: true,
+                        next_review: 0,
+                        target: None,
+                    })
+                    .collect(),
+            },
+            knowledge: game_economy_knowledge::Knowledge {
+                    max_records: 2,
+                retention: vec![],
+                minds: (2..=count)
+                    .map(|person| game_economy_knowledge::Mind {
+                        person,
+                        remember_people: false,
+                        people_seen: vec![],
+                        people_reporting: None,
+                        people_reports: vec![],
+                        reporting: None,
+                        misreport: None,
+                        records: vec![game_economy_knowledge::Record {
+                            region: 2,
+                            food: 10,
+                            observed_at: 0,
+                            witness: 1,
+                            learned_from: Some(1),
+                        }],
+                    })
+                    .collect(),
+            },
+        }
+    });
     let snapshot = CoreHostSnapshot {
         core: initial,
         autowork: None,
@@ -430,6 +496,7 @@ fn core_host_departure_benchmark() {
         paused_work_rates: vec![],
         fatigue: Some(timed_fatigue()),
         activity: vec![],
+        food_search: search,
         opinions: None,
         goals: None,
         agreements: None,
@@ -449,7 +516,9 @@ fn core_host_departure_benchmark() {
         .install(|| {
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
-            let outcomes = if automatic {
+            let outcomes = if food_search {
+                host.seek_food_autonomously(&[]).unwrap()
+            } else if automatic {
                 host.depart_autonomously(&[]).unwrap()
             } else {
                 host.depart(&choices, &[]).unwrap()
@@ -492,6 +561,7 @@ fn closed_route_is_observed_without_moving_or_consuming_time() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         opinions: None,
         goals: None,
         agreements: None,
@@ -539,7 +609,7 @@ fn scheduled_personal_destinations_respect_work_rest_and_control() {
         fatigue.fatigue.people.push(game_economy_fatigue::FatiguePerson { id: 6, fatigue: 2, resting: true });
         let snapshot = CoreHostSnapshot {
             core: initial, autowork: None, tool_wear: None, tool_requirements: vec![],
-            paused_work_rates: vec![], fatigue: Some(fatigue), activity: vec![],
+            paused_work_rates: vec![], fatigue: Some(fatigue), activity: vec![], food_search: None,
             opinions: None, goals: None, agreements: None, sites: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -552,6 +622,70 @@ fn scheduled_personal_destinations_respect_work_rest_and_control() {
         let saved = serde_json::to_string(&state).unwrap();
         assert_eq!(CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap().snapshot(), state);
         state
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn food_search_follows_personal_report_even_when_it_is_stale() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[1].region = Some(1);
+        initial.people[1].hunger = 5;
+        initial.people[1].seek_meals = true;
+        initial.travel.as_mut().unwrap().journeys.clear();
+        initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+            portion: 1, hunger_relief: 1, nutrients: Default::default(), health_effect: 0, shelf_days: None,
+        });
+        initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![]).unwrap());
+        initial.physical.custody.containers.sort_by_key(|row| row.place);
+        let knowledge = game_economy_knowledge::Knowledge {
+            max_records: 4, retention: vec![], minds: vec![game_economy_knowledge::Mind {
+                person: 2, remember_people: false, people_seen: vec![], people_reporting: None,
+                people_reports: vec![], reporting: None, misreport: None,
+                records: vec![game_economy_knowledge::Record {region: 2, food: 10, observed_at: 0, witness: 1, learned_from: Some(1)}],
+            }],
+        };
+        let search = game_economy::FoodSearch {
+            min_hunger: 5, min_report_food: 1, max_report_age: 20, retry_ticks: 3,
+            inherit_births: false, people: vec![game_economy::FoodSearchPreference {
+                person: 2, enabled: true, next_review: 0, target: None,
+            }],
+        };
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![], paused_work_rates: vec![],
+            fatigue: None, activity: vec![], food_search: Some(game_economy::core_interval::CoreFoodSearch {search, knowledge}),
+            opinions: None, goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut failing = snapshot.clone();
+        failing.core.physical.custody.tick = 1;
+        failing.core.pending_food.clear();
+        failing.food_search.as_mut().unwrap().search.retry_ticks = u64::MAX;
+        let mut failed_host = CoreHost::begin(failing, &[(1, 1)]).unwrap();
+        let before = failed_host.snapshot();
+        assert!(failed_host.seek_food_autonomously(&[]).is_err());
+        assert_eq!(failed_host.snapshot(), before);
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        let run = host.advance_continuous(500, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        assert!(run.events.iter().any(|event| matches!(event, game_economy::core_interval::CoreRunEvent::FoodSearch(rows) if rows.len() == 1 && rows[0].person == 2 && rows[0].departed)));
+        let state = host.snapshot();
+        assert_eq!(state.core.travel.as_ref().unwrap().journeys[0].progress_millis, 500);
+        assert_eq!(state.food_search.as_ref().unwrap().search.people[0].target, Some(2));
+        let saved = serde_json::to_string(&state).unwrap();
+        let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(restored.snapshot(), state);
+        assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
+        assert_eq!(restored.advance_continuous(1000, &[]).unwrap().failure, None);
+        let result = host.snapshot();
+        assert_eq!(restored.snapshot(), result);
+        assert_eq!(result.core.people[1].region, Some(2));
+        let records = &result.food_search.as_ref().unwrap().knowledge.minds[0].records;
+        assert_eq!(records.iter().find(|row| row.region == 2).unwrap().food, 0);
+        result
     })
     };
     assert_eq!(run(1), run(6));
@@ -904,6 +1038,7 @@ fn core_host_autonomous_work_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: 2,
@@ -1126,6 +1261,7 @@ fn core_host_work_requests_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -1947,6 +2083,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                     paused_work_rates: vec![],
                     fatigue: None,
                     activity: vec![],
+                    food_search: None,
                     schedule: None,
                     autowork: Some(game_autowork::Autowork {
                         next_id: 2,
@@ -2074,6 +2211,7 @@ fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2213,7 +2351,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     sites: None,
                     tool_requirements: vec![],
                     paused_work_rates: vec![],
-                    fatigue: None, activity: vec![], schedule: None,
+                    fatigue: None, activity: vec![], food_search: None, schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
                 host.enable_schedule(500, 1).unwrap();
@@ -2345,6 +2483,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2447,6 +2586,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                         paused_work_rates: vec![],
                         fatigue: None,
                         activity: vec![],
+                        food_search: None,
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -2540,6 +2680,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2610,6 +2751,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2660,7 +2802,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
                 pending: vec![], events: vec![],
             };
             let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
-            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None };
+            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None };
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.enable_schedule(1000, 1).unwrap();
             let run = host.advance_continuous(1000, &[]).unwrap();
@@ -2765,6 +2907,7 @@ fn core_host_goal_asking_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     let pool = rayon::ThreadPoolBuilder::new()
@@ -2846,6 +2989,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2941,6 +3085,7 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     let mut without_offer = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
@@ -3043,6 +3188,7 @@ fn voluntary_deliveries_record_only_successful_physical_transfers() {
                         paused_work_rates: vec![],
                         fatigue: None,
                         activity: vec![],
+                        food_search: None,
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -3158,7 +3304,7 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
         let policy: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":2,"honor":false,"fear_honor_threshold":5})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 2, policies: vec![policy], offering: vec![], work_offering: vec![], bulk_debtors: vec![], contracts: vec![game_agreements::Contract { id: 1, debtor: 2, creditor: 1, good: 1, quantity: 1, delivered: 0, due: 5, status: game_agreements::Status::Active }], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":1,"trust":0,"fear":fear}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let saved = serde_json::to_string(&host.snapshot()).unwrap();
@@ -3193,7 +3339,7 @@ fn people_can_propose_and_accept_unfunded_promises_without_enforcement() {
         let accept: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":3,"accept":true})).unwrap();
         let agreements = game_agreements::Agreements { next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
         let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"obligation":0}]})).unwrap();
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(1000, 1).unwrap();
         let run = host.advance_scheduled(0, &[]).unwrap();
@@ -3249,6 +3395,7 @@ fn manually_making_a_promise_uses_the_makers_own_obligation_disposition() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -3369,7 +3516,7 @@ fn completed_work_wears_a_site_and_real_repairs_reopen_it() {
                         facilities,
                         maintenance: Some(maintenance),
                     }),
-                    tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None,
+                    tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
                 host.progress(500).unwrap();
@@ -3463,7 +3610,7 @@ fn scheduled_tool_repair_consumes_material_and_preserves_identity() {
         initial.physical.custody.containers.push(Container::new(Place::Person(2), 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }, Lot { item: None, good: 2, quantity: 1, expires_at: None }]).unwrap());
         initial.physical.custody.containers.sort_by_key(|row| row.place);
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 11, rules: vec![game_economy_work::tool_wear::Rule { good: 1, durability: 10, wear: 1, repair_good: 2, repair_quantity: 1 }], conditions: vec![game_economy_work::tool_wear::Condition { item: 10, good: 1, damage: 4 }], repairs: vec![game_economy_work::tool_wear::RepairChoice { person: 2, item: 10, willing: true }], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None };
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None };
         let mut no_material = snapshot.clone();
         let bag = no_material.core.physical.custody.containers.iter_mut().find(|row| row.place == Place::Person(2)).unwrap();
         *bag = Container::new(bag.place, 10, vec![Lot { item: Some(10), good: 1, quantity: 1, expires_at: None }]).unwrap();
@@ -3568,6 +3715,7 @@ fn work_requires_carried_tools_and_wears_only_physically_started_jobs() {
                     paused_work_rates: vec![],
                     fatigue: None,
                     activity: vec![],
+                    food_search: None,
                     schedule: None,
                 };
                 let start = (
@@ -3771,6 +3919,7 @@ fn work_pauses_when_a_required_tool_moves_and_resumes_after_its_return() {
                     sites: None,
                     fatigue: None,
                     activity: vec![],
+                    food_search: None,
                     schedule: None,
                 };
                 let scheduled_snapshot = snapshot.clone();
@@ -4024,6 +4173,7 @@ fn core_host_tool_repair_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -4228,6 +4378,7 @@ fn core_host_site_admission_benchmark() {
         paused_work_rates: vec![],
         fatigue: fatigue.then(timed_fatigue),
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -4434,6 +4585,7 @@ fn core_host_site_repair_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -4537,6 +4689,7 @@ fn core_host_offer_choices_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -4670,6 +4823,7 @@ fn core_host_agreement_delivery_benchmark() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -4758,6 +4912,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -4834,6 +4989,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 2)],
@@ -4858,7 +5014,7 @@ fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
         let snapshot = CoreHostSnapshot {
             core: initial,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
-            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None,
+            tool_wear: None, opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
         host.progress(100).unwrap();
@@ -4958,6 +5114,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: u64::MAX,
@@ -5087,6 +5244,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 2), (2, 2)],
@@ -5122,7 +5280,7 @@ fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
             rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
             conditions: vec![], repairs: vec![], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], schedule: None,
+        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, sites: None, tool_requirements: vec![], paused_work_rates: vec![], fatigue: None, activity: vec![], food_search: None, schedule: None,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }) };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(500, 1).unwrap();
@@ -5174,6 +5332,7 @@ fn long_decision_period_survives_save_and_crosses_a_boundary() {
         paused_work_rates: vec![],
         fatigue: None,
         activity: vec![],
+        food_search: None,
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -5218,6 +5377,7 @@ fn continuous_host_carries_long_work_rate_and_fractional_progress() {
                 paused_work_rates: vec![],
                 fatigue: None,
                 activity: vec![],
+                food_search: None,
                 schedule: None,
             },
             &[(1, 1)],
@@ -5270,6 +5430,7 @@ fn continuous_host_retains_rate_for_work_paused_at_a_boundary() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -5325,6 +5486,7 @@ fn continuous_host_keeps_completed_interval_after_boundary_failure() {
             paused_work_rates: vec![],
             fatigue: None,
             activity: vec![],
+            food_search: None,
             schedule: None,
         },
         &[(1, 1)],
