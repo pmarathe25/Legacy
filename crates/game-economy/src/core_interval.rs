@@ -575,6 +575,25 @@ impl CoreInterval {
             pending_food,
         }))
     }
+    /// Stage meals independently chosen by hungry people from their own food.
+    /// The host supplies sorted, unique people occupied by other activities.
+    pub fn prepare_autonomous_meals(
+        &self,
+        blocked: &[u64],
+    ) -> Result<Option<(Vec<game_lot_diet::Meal>, CoreMealDraft)>, String> {
+        let offset = self.elapsed_millis().ok_or("no physical interval")?;
+        let meals = game_economy_person::meal::choose_now(
+            &self.people,
+            &self.rules,
+            self.physical.goods(),
+            &self.physical,
+            blocked,
+        )?;
+        let Some(draft) = self.prepare_meals(self.physical.tick(), offset, &meals)? else {
+            return Ok(None);
+        };
+        Ok(Some((meals, draft)))
+    }
     pub fn validate_meals(&self, draft: &CoreMealDraft) -> Result<(), String> {
         if self.generation != draft.generation {
             return Err("stale meal draft".into());

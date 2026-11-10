@@ -12,6 +12,8 @@ The core can also commit transfers between people in the same region, or between
 
 Chosen living people can eat food they actually carry at a partial offset. Only accepted consumption reduces hunger immediately; health and nutrition effects are retained for the next boundary. Failed consumption and invalid batches do not grant effects, and a resumed interval preserves both the custody and pending effects.
 
+The host can also stage autonomous meal choices at an offset: hungry people with `seek_meals` select an unexpired portion from their own custody. Controlled people are excluded, and the host supplies people occupied by other activities. This does not yet schedule the rest of their decisions or food acquisition.
+
 When a meal consumes identified property, the host uses `prepare_meals` to stage its item-owner changes before committing the physical and physiological effects. The `eat` convenience method rejects identified consumption. Likewise, ordinary early-work and boundary convenience calls reject identified input consumption; the host must use their staged forms to update item owners.
 
 `CoreInterval::next_deadline` observes the earliest work completion, traveler arrival, optional hunger threshold, or quantum boundary, including ties. `progress_to_deadline` stops at that time. The core can publish nonperishable work and arrivals at the offset; other early deadlines remain pending until settlement.
@@ -45,6 +47,8 @@ The ignored `interval_shared_transfer_benchmark` measures transfers from one sto
 The ignored `interval_identified_meals_benchmark` measures identified consumption and tool-condition cleanup. One 50,000-person run took 64.9, 43.6, 34.5, and 30.7 ms at one, two, four, and six workers, with matching combined fingerprints. Setup is excluded and scaling is sublinear.
 
 Set `LEGACY_MEALS=1` to time the same people consuming their received food after the transfer. One 50,000-meal run took 63.8, 39.9, 31.2, and 28.4 ms at one, two, four, and six workers, with matching fingerprints. This excludes the earlier transfer and remains sublinear.
+
+Set `LEGACY_AUTO_MEALS=1` to include autonomous personal meal selection and consumption. A 50,000-person run took 61.6, 39.2, 27.1, and 28.6 ms at one, two, four, and six workers, with matching fingerprints; earlier transfers are excluded.
 
 At 200,000 meals, a separate run took 283, 176, 139, and 151 ms at those worker counts, with matching fingerprints; six workers were slower than four on that run.
 

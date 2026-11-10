@@ -163,7 +163,8 @@ fn interval_shared_transfer_benchmark() {
         .unwrap_or(1);
     assert!(count > 0);
     let mut initial = fixture();
-    let eat = std::env::var_os("LEGACY_MEALS").is_some();
+    let autonomous = std::env::var_os("LEGACY_AUTO_MEALS").is_some();
+    let eat = autonomous || std::env::var_os("LEGACY_MEALS").is_some();
     if eat {
         initial.physical.goods[0].food = Some(game_production_model::FoodProfile {
             portion: 1,
@@ -178,6 +179,7 @@ fn interval_shared_transfer_benchmark() {
         .map(|id| {
             let mut p = person.clone();
             p.id = id;
+            p.seek_meals = autonomous;
             p
         })
         .collect();
@@ -256,7 +258,13 @@ fn interval_shared_transfer_benchmark() {
                 );
                 if eat {
                     let start = std::time::Instant::now();
-                    let outcomes = core.eat(0, 300, &meals).unwrap();
+                    let outcomes = if autonomous {
+                        let (chosen, draft) = core.prepare_autonomous_meals(&[]).unwrap().unwrap();
+                        assert_eq!(chosen.len(), count as usize);
+                        core.commit_meals(draft).unwrap()
+                    } else {
+                        core.eat(0, 300, &meals).unwrap()
+                    };
                     let elapsed = start.elapsed().as_secs_f64();
                     assert_eq!(
                         outcomes
@@ -289,7 +297,7 @@ fn interval_shared_transfer_benchmark() {
             if eat {
                 meal_samples.sort_by(f64::total_cmp);
                 println!(
-                    "workers={workers} meals={count} elapsed={:.6}",
+                    "workers={workers} meals={count} autonomous={autonomous} elapsed={:.6}",
                     meal_samples[1]
                 );
             }
@@ -760,6 +768,8 @@ fn identified_meals_stage_item_removal_with_hunger_and_later_production() {
             .unwrap()
             .install(|| {
                 let mut initial = fixture();
+                initial.people[0].seek_meals = true;
+                initial.rules.meal_threshold = 2;
                 initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
                     portion: 1,
                     hunger_relief: 1,
@@ -813,7 +823,11 @@ fn identified_meals_stage_item_removal_with_hunger_and_later_production() {
                 assert!(core.eat(0, 400, &meal).is_err());
                 assert_eq!(core.snapshot(), before);
                 let stale = core.prepare_meals(0, 400, &meal).unwrap().unwrap();
-                let draft = core.prepare_meals(0, 400, &meal).unwrap().unwrap();
+                let (chosen, draft) = core.prepare_autonomous_meals(&[]).unwrap().unwrap();
+                assert_eq!(
+                    chosen.iter().map(|meal| meal.person).collect::<Vec<_>>(),
+                    vec![1]
+                );
                 assert_eq!(draft.item_updates(), &[(10, None)]);
                 let next_owner = owner
                     .stage_identified_outputs(&[], owner.next_item, draft.item_updates())
@@ -859,6 +873,96 @@ fn identified_meals_stage_item_removal_with_hunger_and_later_production() {
                     )
                     .unwrap();
                 (result, owner)
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn autonomous_interval_meals_follow_personal_preferences_and_occupancy() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                initial.rules.meal_threshold = 2;
+                initial.physical.goods[1].food = Some(game_production_model::FoodProfile {
+                    portion: 2,
+                    hunger_relief: 1,
+                    nutrients: Default::default(),
+                    health_effect: 0,
+                    shelf_days: None,
+                });
+                let mut people: Vec<_> = (1..=5)
+                    .map(|id| {
+                        let mut p = initial.people[0].clone();
+                        p.id = id;
+                        p.seek_meals = true;
+                        p
+                    })
+                    .collect();
+                people[1].controlled = true;
+                people[2].seek_meals = false;
+                people[3].hunger = 0;
+                initial.people = people;
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .extend((1..=5).map(|id| {
+                        Container::new(
+                            Place::Person(id),
+                            2,
+                            vec![
+                                Lot {
+                                    item: None,
+                                    good: 2,
+                                    quantity: 1,
+                                    expires_at: Some(1),
+                                },
+                                Lot {
+                                    item: None,
+                                    good: 2,
+                                    quantity: 1,
+                                    expires_at: Some(3),
+                                },
+                            ],
+                        )
+                        .unwrap()
+                    }));
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let mut core = CoreInterval::begin(initial, &[(1, 1)]).unwrap();
+                core.progress(400).unwrap();
+                let before = core.snapshot();
+                assert!(core.prepare_autonomous_meals(&[2, 1]).is_err());
+                assert_eq!(core.snapshot(), before);
+                let (meals, draft) = core.prepare_autonomous_meals(&[1]).unwrap().unwrap();
+                assert_eq!(
+                    meals
+                        .iter()
+                        .map(|meal| (meal.person, meal.good))
+                        .collect::<Vec<_>>(),
+                    vec![(5, 2)]
+                );
+                assert!(draft.item_updates().is_empty());
+                assert!(core.commit_meals(draft).unwrap().transactions[0].accepted);
+                let after = core.snapshot();
+                assert_eq!(after.people[4].hunger, 1);
+                assert_eq!(after.people[0].hunger, 2);
+                assert!(core.prepare_autonomous_meals(&[1]).unwrap().is_none());
+                let saved = serde_json::to_string(&after).unwrap();
+                let resumed = CoreInterval::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                assert!(resumed.prepare_autonomous_meals(&[1]).unwrap().is_none());
+                resumed.snapshot()
             })
     };
     assert_eq!(run(1), run(6));

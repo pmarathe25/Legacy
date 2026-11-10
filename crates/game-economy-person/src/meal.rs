@@ -12,6 +12,57 @@ pub struct Choice {
     pub good: u32,
 }
 
+/// Select one carried meal per hungry, autonomous person at the current
+/// instant. The host supplies people unavailable for another activity.
+pub fn choose_now(
+    people: &[Person],
+    rules: &Rules,
+    goods: &[Good],
+    physical: &game_lot_runtime::Runtime,
+    blocked: &[u64],
+) -> Result<Vec<Meal>, String> {
+    if people.par_windows(2).any(|rows| rows[0].id >= rows[1].id)
+        || blocked.par_windows(2).any(|rows| rows[0] >= rows[1])
+    {
+        return Err("meal people and exclusions must be ordered and unique".into());
+    }
+    let edible: HashMap<_, _> = goods
+        .iter()
+        .filter_map(|good| good.food.as_ref().map(|food| (good.id, food.portion)))
+        .collect();
+    Ok(people
+        .par_iter()
+        .filter_map(|person| {
+            if person.controlled
+                || !person.seek_meals
+                || person.health == 0
+                || person.hunger < rules.meal_threshold
+                || blocked.binary_search(&person.id).is_ok()
+            {
+                return None;
+            }
+            let holder = physical.custody(Place::Person(person.id))?;
+            let good = holder
+                .lots
+                .chunk_by(|a, b| a.good == b.good)
+                .find_map(|lots| {
+                    let portion = edible.get(&lots[0].good)?;
+                    let available: u128 = lots
+                        .iter()
+                        .filter(|lot| lot.expires_at.is_none_or(|at| at > physical.tick()))
+                        .map(|lot| u128::from(lot.quantity))
+                        .sum();
+                    (*portion > 0 && available >= u128::from(*portion)).then_some(lots[0].good)
+                })?;
+            Some(Meal {
+                action: person.id,
+                person: person.id,
+                good,
+            })
+        })
+        .collect())
+}
+
 pub fn prepare(
     people: &[Person],
     rules: &Rules,

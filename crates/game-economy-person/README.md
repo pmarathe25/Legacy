@@ -6,6 +6,8 @@ Hunger can accumulate fractional progress with an exact saved remainder. Whole-b
 
 `progress_hunger` validates the complete batch before applying independent updates in parallel. It does not apply meals, starvation damage or decisions; `settle_elapsed` applies boundary effects without adding hunger again. The caller owns world time, decisions and draft invalidation.
 
+`meal::choose_now` selects carried, unexpired food at the current instant for autonomous hungry people who seek meals. It excludes controlled and host-blocked people; the host stages physical consumption and any affected item owners separately.
+
 `hunger_threshold_after` computes an individual's exact earliest whole-millisecond threshold from their saved remainder. `next_hunger_threshold` reduces the earliest deadline across people in parallel and validates every record. These are scheduling inputs; they do not themselves publish damage or introduce new world boundaries.
 
 With the remainder present on every person, the mixed campaign benchmark with market, work requests, and local visits took median 392 ms with one worker and 279 ms with six for 10,000 initial people and 12 boundaries in one run; the final fingerprints matched. These timings are workload-specific and show sublinear whole-world scaling.
