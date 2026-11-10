@@ -63,7 +63,7 @@ pub fn grant_destinations(
     mut rows: Vec<Destination>,
     outgoing: &[(u64, usize, u128)],
     containers: &[&Container],
-    used: &[u64],
+    used: impl Fn(usize) -> u64 + Sync,
     accepted: &[AtomicBool],
 ) {
     rows.par_sort_unstable_by_key(|row| (row.place, row.rank, row.transaction, row.id));
@@ -74,7 +74,7 @@ pub fn grant_destinations(
         .par_chunk_by(|a, b| a[0].place == b[0].place)
         .for_each(|groups| {
             let place = groups[0][0].place;
-            let available = u128::from(containers[place].capacity - used[place]);
+            let available = u128::from(containers[place].capacity - used(place));
             // A destination used by only one action needs neither a prefix scan nor
             // temporary vectors. Most job-input containers are private in this way.
             if groups.len() == 1 {

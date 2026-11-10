@@ -210,21 +210,6 @@ pub fn prepare(
                 .ok_or_else(|| "missing output custody".to_string())
         })
         .collect::<Result<_, _>>()?;
-    let used: Vec<_> = containers
-        .par_iter()
-        .map(|container| {
-            if container.next_expiry.is_some_and(|at| at <= next) {
-                container
-                    .lots
-                    .par_iter()
-                    .filter(|lot| live(lot, next))
-                    .map(|lot| lot.quantity)
-                    .sum()
-            } else {
-                container.used
-            }
-        })
-        .collect();
     let mut spoiled: Vec<_> = containers
         .par_iter()
         .filter(|container| container.next_expiry.is_some_and(|at| at <= next))
@@ -421,7 +406,25 @@ pub fn prepare(
             quantity: creation.lot.quantity,
         }
     }));
-    allocation::grant_destinations(destinations, &outgoing, &containers, &used, &accepted);
+    allocation::grant_destinations(
+        destinations,
+        &outgoing,
+        &containers,
+        |index| {
+            let container = containers[index];
+            if container.next_expiry.is_some_and(|at| at <= next) {
+                container
+                    .lots
+                    .par_iter()
+                    .filter(|lot| live(lot, next))
+                    .map(|lot| lot.quantity)
+                    .sum()
+            } else {
+                container.used
+            }
+        },
+        &accepted,
+    );
     let mut transaction_outcomes = Vec::new();
     if let Some(batch) = &batch {
         let original_positions: Vec<_> = (0..claims.len())

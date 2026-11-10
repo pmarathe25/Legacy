@@ -1466,6 +1466,10 @@ fn mixed_atomic_action_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     let with_additions = std::env::var_os("LEGACY_ADDITIONS").is_some();
+    let idle = std::env::var("LEGACY_IDLE_HOLDERS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     let additions = if with_additions {
         vec![container(Place::Inventory(1), 10, vec![])]
     } else {
@@ -1488,6 +1492,9 @@ fn mixed_atomic_action_benchmark() {
             }],
             creations: vec![],
         });
+    }
+    for id in 1..=idle {
+        holders.push(container(Place::Person(count * 2 + id), 10, vec![]));
     }
     actions.push(Transaction {
         id: count + 1,
@@ -1541,7 +1548,7 @@ fn mixed_atomic_action_benchmark() {
                 }
                 samples.sort_by(f64::total_cmp);
                 println!(
-                    "workers={workers} transfers={count} additions={with_additions} mode={mode} prepare={:.6}",
+                    "workers={workers} transfers={count} idle_holders={idle} additions={with_additions} mode={mode} prepare={:.6}",
                     samples[2]
                 );
             }

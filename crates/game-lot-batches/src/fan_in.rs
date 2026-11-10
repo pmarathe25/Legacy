@@ -249,7 +249,7 @@ fn prepare_rows(
             .collect();
         // Sources never overlap destinations in this path, so no action has an
         // outgoing credit at a contested destination.
-        game_lot_allocation::grant_destinations(candidates, &[], &containers, &used, &flags);
+        game_lot_allocation::grant_destinations(candidates, &[], &containers, |i| used[i], &flags);
         flags
             .into_par_iter()
             .map(|flag| flag.load(Ordering::Relaxed))
