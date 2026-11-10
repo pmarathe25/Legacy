@@ -301,7 +301,7 @@ impl Disease {
             .par_windows(2)
             .any(|pair| (pair[0].person, pair[0].strain) == (pair[1].person, pair[1].strain))
             || cases.par_iter().any(|case| {
-                case.infected_at > now
+                case.infected_at > next
                     || find_person(case.person).is_none()
                     || find_strain(case.strain).is_none()
             })
@@ -342,7 +342,9 @@ impl Disease {
                 .ok()
                 .and_then(|index| {
                     let case = person_cases(id)[index];
-                    (now - case.infected_at < find_strain(strain)?.end()?).then_some(case)
+                    (case.infected_at > now
+                        || now - case.infected_at < find_strain(strain)?.end()?)
+                    .then_some(case)
                 })
         };
         let ordinary_can_transmit = !cases.is_empty()
@@ -381,7 +383,8 @@ impl Disease {
                                 strain.transmission_per_million
                             };
                             let route_seed = if combat { seed ^ 0x636f6d626174 } else { seed };
-                            if !strain.contagious(now - case.infected_at)
+                            if case.infected_at > now
+                                || !strain.contagious(now - case.infected_at)
                                 || active(target, strain.id).is_some()
                                 || find_person(source)?.health == 0
                                 || find_person(target)?.health == 0
@@ -430,7 +433,7 @@ impl Disease {
                 }
                 let amount = group.iter().fold(0u32, |total, case| {
                     let strain = find_strain(case.strain).expect("validated strain");
-                    if strain.contagious(now - case.infected_at) {
+                    if case.infected_at <= now && strain.contagious(now - case.infected_at) {
                         total.saturating_add(strain.damage_per_tick)
                     } else {
                         total
@@ -443,7 +446,8 @@ impl Disease {
             .par_iter()
             .filter_map(|case| {
                 let strain = find_strain(case.strain)?;
-                (now - case.infected_at == strain.incubation + strain.infectious_ticks
+                (case.infected_at <= now
+                    && now - case.infected_at == strain.incubation + strain.infectious_ticks
                     && find_person(case.person)?.health > 0)
                     .then_some(Event {
                         tick: next,
@@ -453,6 +457,18 @@ impl Disease {
                         kind: EventKind::Recovered,
                     })
             })
+            .chain(
+                cases
+                    .par_iter()
+                    .filter(|case| case.infected_at == next)
+                    .map(|case| Event {
+                        tick: next,
+                        person: case.person,
+                        strain: case.strain,
+                        source: case.source,
+                        kind: EventKind::Infected,
+                    }),
+            )
             .chain(infection.par_iter().map(|case| Event {
                 tick: next,
                 person: case.person,
@@ -483,7 +499,7 @@ impl Disease {
             .par_iter()
             .filter(|case| {
                 let strain = find_strain(case.strain).unwrap();
-                now - case.infected_at < strain.end().unwrap()
+                (case.infected_at > now || now - case.infected_at < strain.end().unwrap())
                     && find_person(case.person).is_some_and(|person| person.health > 0)
             })
             .map(|case| (*case).clone())
@@ -542,6 +558,56 @@ mod tests {
             pressured: None,
             also_pressured: None,
         }
+    }
+    #[test]
+    fn staged_birth_infections_do_not_transmit_or_take_damage_in_their_birth_generation() {
+        let mut previous = state();
+        previous.strains[0].incubation = 0;
+        previous.strains[0].birth_transmission_per_million = 1_000_000;
+        let mut staged = previous.clone();
+        staged.admit_births_validated(&previous, &[(2, 1)], 7, 1);
+        let run = |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    staged
+                        .prepare_validated(
+                            &[
+                                Person { id: 1, health: 100 },
+                                Person { id: 2, health: 100 },
+                                Person { id: 3, health: 100 },
+                            ],
+                            &[pair(1, 1, 2), pair(1, 2, 3)],
+                            7,
+                            0,
+                        )
+                        .unwrap()
+                })
+        };
+        let one = run(1);
+        let many = run(6);
+        assert_eq!(one.state, many.state);
+        assert_eq!(one.damage, many.damage);
+        assert_eq!(
+            one.damage,
+            vec![Damage {
+                person: 1,
+                amount: 3
+            }]
+        );
+        assert_eq!(one.state.cases.len(), 2);
+        assert_eq!(one.state.cases[1].source, Some(1));
+        assert_eq!(
+            one.state
+                .events
+                .iter()
+                .filter(|event| event.person == 2)
+                .count(),
+            1
+        );
+        assert!(one.state.events.iter().all(|event| event.person != 3));
     }
     #[test]
     fn birth_exposure_uses_only_contagious_prior_cases() {

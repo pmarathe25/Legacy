@@ -4651,7 +4651,8 @@ fn core_host_cultivation_benchmark() {
     assert!(count > 1);
     let dependent = std::env::var_os("LEGACY_DEPENDENT_CARE").is_some();
     assert!(!dependent || count.is_multiple_of(3));
-    let births = std::env::var_os("LEGACY_FAMILY_BIRTHS").is_some();
+    let birth_disease = std::env::var_os("LEGACY_BIRTH_DISEASE").is_some();
+    let births = std::env::var_os("LEGACY_FAMILY_BIRTHS").is_some() || birth_disease;
     let family_mode = std::env::var_os("LEGACY_FAMILY").is_some() || births || dependent;
     assert!(!(births && dependent));
     assert!(!births || count.is_multiple_of(2));
@@ -5019,7 +5020,17 @@ fn core_host_cultivation_benchmark() {
                 })
                 .collect(),
         }),
-        health: None,
+        health: birth_disease.then(|| game_economy::core_interval::CoreHealth {
+            owner: game_disease::Disease {
+                strains: vec![game_disease::Strain { id: 1, name: "fever".into(), incubation: 0,
+                    infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 1,
+                    transmission_per_million: 0, combat_transmission_per_million: 0,
+                    birth_transmission_per_million: 1_000_000 }],
+                treatments: vec![], cases: (2..=count).step_by(2).map(|person| game_disease::Case {
+                    person, strain: 1, infected_at: 0, source: None,
+                }).collect(), events: vec![],
+            }, treatment: vec![], last_tick: None,
+        }),
         social: None,
         knowledge: None,
         claims: None,
@@ -5068,6 +5079,11 @@ fn core_host_cultivation_benchmark() {
             if family_mode {
                 let family = state.family.as_ref().unwrap();
                 assert_eq!(family.totals.births, if births { count / 2 } else { 0 });
+                if birth_disease {
+                    let health = &state.health.as_ref().unwrap().owner;
+                    assert_eq!(health.cases.len(), count as usize);
+                    assert_eq!(health.events.len(), (count / 2) as usize);
+                }
                 assert_eq!(
                     state.core.people.len(),
                     (count + if births { count / 2 } else { 0 }) as usize
@@ -10206,6 +10222,27 @@ fn family_birth_custody_and_worker_death_commit_atomically() {
             let neglected = run_care(false, false);
             assert_eq!(neglected.dependent_care.as_ref().unwrap().events[0].caregiver, None);
             assert_eq!(neglected.core.people.iter().find(|person| person.id == 3).unwrap().health, 45);
+            let mut infected = snapshot.clone();
+            infected.health = Some(game_economy::core_interval::CoreHealth {
+                owner: game_disease::Disease {
+                    strains: vec![game_disease::Strain { id: 1, name: "fever".into(),
+                        incubation: 0, infectious_ticks: 3, immunity_ticks: 0, damage_per_tick: 4,
+                        transmission_per_million: 1_000_000, combat_transmission_per_million: 0,
+                        birth_transmission_per_million: 1_000_000 }],
+                    treatments: vec![], cases: vec![game_disease::Case {
+                        person: 2, strain: 1, infected_at: 0, source: None,
+                    }], events: vec![],
+                }, treatment: vec![], last_tick: None,
+            });
+            let mut infected = CoreHost::begin(infected, &[(1, 1)]).unwrap();
+            infected.progress(1000).unwrap(); infected.settle().unwrap();
+            let state = infected.snapshot();
+            assert!(state.health.as_ref().unwrap().owner.cases.iter().any(|case| case.person == 3 && case.source == Some(2) && case.infected_at == 1));
+            let saved = serde_json::to_string(&state).unwrap();
+            let mut infected = CoreHost::begin(serde_json::from_str(&saved).unwrap(), &[]).unwrap();
+            let events = infected.advance_dynamics_autonomously(&[]).unwrap();
+            assert_eq!(events.disease_events.iter().filter(|event| event.person == 3 && event.kind == game_disease::EventKind::Infected).count(), 1);
+            assert_eq!(infected.snapshot().core.people.iter().find(|person| person.id == 3).unwrap().health, 50);
             let mut traveling = snapshot.clone();
             traveling.core.people[1].region = None;
             let mut travel = fixture().travel.unwrap();

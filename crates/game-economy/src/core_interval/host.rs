@@ -1172,6 +1172,7 @@ impl CoreHost {
             );
         }
         let family = self.stage_family(&mut draft)?;
+        let birth_health = self.stage_birth_health(family.as_ref(), draft.events().tick);
         let irrigation = self
             .irrigation
             .as_ref()
@@ -1285,11 +1286,14 @@ impl CoreHost {
         if let Some(owner) = gathering {
             self.gathering = Some(owner);
         }
-        if let Some((owner, newborns)) = family {
+        if let Some(family) = family {
             if let Some(care) = &mut self.dependent_care {
-                game_economy_work::care::inherit(care, &owner, &newborns);
+                game_economy_work::care::inherit(care, &family.owner, &family.newborns);
             }
-            self.family = Some(owner);
+            self.family = Some(family.owner);
+        }
+        if let Some(health) = birth_health {
+            self.health = Some(health);
         }
         if let Some(plan) = dependent {
             plan.publish(self.dependent_care.as_mut().expect("care owner"));
