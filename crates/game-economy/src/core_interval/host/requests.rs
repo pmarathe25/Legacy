@@ -73,6 +73,92 @@ impl CoreHost {
         Ok(())
     }
 
+    /// Carry out personally chosen deliveries from actual personal custody.
+    /// Each delivery can fail independently; only physically accepted ones
+    /// advance their corresponding agreement.
+    pub fn deliver_agreements(
+        &mut self,
+        deliveries: &[game_agreements::Delivery],
+    ) -> Result<Vec<game_lots::TransactionOutcome>, String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset == 0
+            || offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before delivering".into());
+        }
+        if deliveries.is_empty() {
+            return Ok(Vec::new());
+        }
+        let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
+        let mut ordered = deliveries.to_vec();
+        ordered.par_sort_unstable_by_key(|delivery| delivery.contract);
+        let staged = owner.deliver(&ordered, tick).map_err(str::to_owned)?;
+        if staged.transfers.par_iter().any(|transfer| {
+            self.core
+                .people
+                .binary_search_by_key(&transfer.debtor, |person| person.id)
+                .ok()
+                .and_then(|index| self.core.people[index].region)
+                .is_none_or(|region| {
+                    !together(
+                        &self.core.people,
+                        transfer.debtor,
+                        transfer.creditor,
+                        region,
+                    )
+                })
+        }) {
+            return Err("agreement delivery requires local living people".into());
+        }
+        let actions: Vec<_> = ordered
+            .par_iter()
+            .zip(staged.transfers.par_iter())
+            .map(|(delivery, transfer)| game_lots::Transaction {
+                id: delivery.contract,
+                movements: vec![game_lots::Movement {
+                    id: delivery.contract,
+                    from: game_lots::Place::Person(transfer.debtor),
+                    to: Some(game_lots::Place::Person(transfer.creditor)),
+                    good: transfer.good,
+                    quantity: transfer.quantity,
+                    item: None,
+                }],
+                creations: vec![],
+            })
+            .collect();
+        let physical = self
+            .core
+            .physical
+            .prepare_interval_transfer(&actions, self.core.seed)?;
+        let outcomes = physical.transactions().to_vec();
+        let mut accepted: Vec<_> = outcomes
+            .par_iter()
+            .filter(|row| row.accepted)
+            .map(|row| row.id)
+            .collect();
+        if accepted.is_empty() {
+            return Ok(outcomes);
+        }
+        accepted.par_sort_unstable();
+        let successful: Vec<_> = ordered
+            .par_iter()
+            .copied()
+            .filter(|delivery| accepted.binary_search(&delivery.contract).is_ok())
+            .collect();
+        let next = owner
+            .deliver(&successful, tick)
+            .map_err(str::to_owned)?
+            .state;
+        self.core
+            .physical
+            .validate_interval_consumption(&physical)?;
+        self.core.physical.commit_interval_consumption(physical)?;
+        self.agreements = Some(next);
+        Ok(outcomes)
+    }
+
     /// Let people with active personal goals address local requests.
     pub fn ask_for_work(&mut self, blocked: &[u64]) -> Result<Vec<u64>, String> {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {

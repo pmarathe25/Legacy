@@ -59,8 +59,8 @@ pub struct EarlyWorkDraft {
     produced_items: Vec<crate::ProducedItem>,
     next_produced_item: Option<u64>,
 }
-/// Unpublished personal consumption; callers must validate their own effects
-/// before committing it at the same interval offset.
+/// Unpublished interval custody changes; callers must validate their own
+/// effects before committing them at the same interval offset.
 pub struct IntervalConsumptionDraft {
     epoch: u64,
     tick: u64,
@@ -184,7 +184,7 @@ impl Runtime {
         })
     }
 
-    /// Validate a consumption draft before another owner publishes metadata.
+    /// Validate a staged interval custody draft before another owner publishes metadata.
     pub fn validate_interval_consumption(
         &self,
         draft: &IntervalConsumptionDraft,
@@ -207,7 +207,7 @@ impl Runtime {
         Ok(())
     }
 
-    /// Commit only if neither the physical generation nor its time has changed.
+    /// Commit a staged consumption or transfer if the generation and time have not changed.
     pub fn commit_interval_consumption(
         &mut self,
         draft: IntervalConsumptionDraft,
@@ -237,6 +237,34 @@ impl Runtime {
         actions: &[Transaction],
         seed: u64,
     ) -> Result<PhysicalOutcomes, String> {
+        if actions.is_empty() {
+            let interval = self
+                .work_interval
+                .as_ref()
+                .ok_or("no physical work interval")?;
+            if interval.tick != self.tick()
+                || interval.custody_revision != self.store.revision()
+                || interval.elapsed_millis == 0
+                || interval.elapsed_millis >= self.tick_millis
+            {
+                return Err("transfer requires a valid partial interval".into());
+            }
+            return Ok(PhysicalOutcomes {
+                transactions: vec![],
+                movements: vec![],
+                spoiled: vec![],
+            });
+        }
+        let draft = self.prepare_interval_transfer(actions, seed)?;
+        self.commit_interval_consumption(draft)
+    }
+
+    /// Stage local custody transfers for coordination with other owners.
+    pub fn prepare_interval_transfer(
+        &self,
+        actions: &[Transaction],
+        seed: u64,
+    ) -> Result<IntervalConsumptionDraft, String> {
         let interval = self
             .work_interval
             .as_ref()
@@ -257,33 +285,18 @@ impl Runtime {
         }) {
             return Err("interval transfers cannot consume goods or move job custody".into());
         }
-        if actions.is_empty() {
-            return Ok(PhysicalOutcomes {
-                transactions: vec![],
-                movements: vec![],
-                spoiled: vec![],
-            });
-        }
-        let epoch = self
-            .epoch
+        self.epoch
             .checked_add(1)
             .ok_or("physical work revision overflow")?;
-        let draft = self.store.prepare_transactions_now(seed, actions)?;
-        if !draft.spoiled().is_empty() {
+        let custody = self.store.prepare_transactions_now(seed, actions)?;
+        if !custody.spoiled().is_empty() {
             return Err("interval transfers cannot publish pending spoilage".into());
         }
-        let transactions = draft.transactions().to_vec();
-        self.store.validate_commit(&draft)?;
-        let (movements, spoiled) = self.store.commit(draft)?;
-        self.work_interval
-            .as_mut()
-            .expect("checked interval")
-            .custody_revision = self.store.revision();
-        self.epoch = epoch;
-        Ok(PhysicalOutcomes {
-            transactions,
-            movements,
-            spoiled,
+        Ok(IntervalConsumptionDraft {
+            epoch: self.epoch,
+            tick: interval.tick,
+            offset_millis: interval.elapsed_millis,
+            custody,
         })
     }
     /// Stop chosen jobs at this offset. Their surviving inputs remain in job

@@ -2507,6 +2507,267 @@ fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
 }
 
 #[test]
+fn voluntary_deliveries_record_only_successful_physical_transfers() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let mut initial = fixture();
+                initial.people[1].region = Some(1);
+                let mut third = initial.people[1].clone();
+                third.id = 3;
+                initial.people.push(third);
+                initial.travel = None;
+                initial.nutrition = None;
+                initial.pending_food.clear();
+                initial.physical.custody.containers.extend([
+                    Container::new(
+                        Place::Person(1),
+                        10,
+                        vec![Lot {
+                            item: None,
+                            good: 1,
+                            quantity: 1,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap(),
+                    Container::new(Place::Person(2), 10, vec![]).unwrap(),
+                    Container::new(Place::Person(3), 10, vec![]).unwrap(),
+                ]);
+                initial
+                    .physical
+                    .custody
+                    .containers
+                    .sort_by_key(|row| row.place);
+                let agreements = game_agreements::Agreements {
+                    next_id: 1,
+                    policies: vec![],
+                    offering: vec![],
+                    work_offering: vec![],
+                    bulk_debtors: vec![],
+                    contracts: vec![],
+                    events: vec![],
+                };
+                let mut host = CoreHost::begin(
+                    CoreHostSnapshot {
+                        core: initial,
+                        autowork: None,
+                        tool_wear: None,
+                        opinions: None,
+                        goals: None,
+                        agreements: Some(agreements),
+                        schedule: None,
+                    },
+                    &[(1, 1)],
+                )
+                .unwrap();
+                let proposals: Vec<_> = (2..=3)
+                    .map(|creditor| game_agreements::Proposal {
+                        debtor: 1,
+                        creditor,
+                        good: 1,
+                        quantity: 1,
+                        due: 2,
+                    })
+                    .collect();
+                assert_eq!(host.propose_agreements(&proposals).unwrap(), vec![1, 2]);
+                let decisions: Vec<_> = (2..=3)
+                    .map(|actor| game_agreements::Decision {
+                        contract: actor - 1,
+                        actor,
+                        accept: true,
+                    })
+                    .collect();
+                host.decide_agreements(&decisions).unwrap();
+                host.progress(1).unwrap();
+                let before = host.snapshot();
+                assert!(
+                    host.deliver_agreements(&[game_agreements::Delivery {
+                        contract: 1,
+                        actor: 2,
+                        quantity: 1
+                    }])
+                    .is_err()
+                );
+                assert_eq!(host.snapshot(), before);
+                let saved = serde_json::to_string(&before).unwrap();
+                let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+                let deliveries: Vec<_> = (1..=2)
+                    .map(|contract| game_agreements::Delivery {
+                        contract,
+                        actor: 1,
+                        quantity: 1,
+                    })
+                    .collect();
+                let outcomes = host.deliver_agreements(&deliveries).unwrap();
+                assert_eq!(
+                    outcomes.iter().filter(|outcome| outcome.accepted).count(),
+                    1
+                );
+                let rejected = outcomes
+                    .iter()
+                    .find(|outcome| !outcome.accepted)
+                    .unwrap()
+                    .id;
+                let state = host.snapshot();
+                for outcome in outcomes {
+                    let contract = state
+                        .agreements
+                        .as_ref()
+                        .unwrap()
+                        .contracts
+                        .iter()
+                        .find(|contract| contract.id == outcome.id)
+                        .unwrap();
+                    assert_eq!(contract.delivered, u64::from(outcome.accepted));
+                    assert_eq!(
+                        contract.status == game_agreements::Status::Fulfilled,
+                        outcome.accepted
+                    );
+                }
+                assert_eq!(
+                    state
+                        .core
+                        .physical
+                        .custody
+                        .containers
+                        .iter()
+                        .find(|row| row.place == Place::Person(1))
+                        .unwrap()
+                        .used,
+                    0
+                );
+                let unavailable = host
+                    .deliver_agreements(&[game_agreements::Delivery {
+                        contract: rejected,
+                        actor: 1,
+                        quantity: 1,
+                    }])
+                    .unwrap();
+                assert!(!unavailable[0].accepted);
+                assert_eq!(host.snapshot(), state);
+                state
+            })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+#[ignore = "manual voluntary agreement delivery scaling benchmark"]
+fn core_host_agreement_delivery_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    assert!(count >= 4 && count.is_multiple_of(2));
+    let mut initial = fixture();
+    let template = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut person = template.clone();
+            person.id = id;
+            person
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    initial
+        .physical
+        .custody
+        .containers
+        .extend((1..=count).map(|person| {
+            Container::new(
+                Place::Person(person),
+                10,
+                if !person.is_multiple_of(2) {
+                    vec![Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 1,
+                        expires_at: None,
+                    }]
+                } else {
+                    vec![]
+                },
+            )
+            .unwrap()
+        }));
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let agreements = game_agreements::Agreements {
+        next_id: count / 2 + 1,
+        policies: vec![],
+        offering: vec![],
+        work_offering: vec![],
+        bulk_debtors: vec![],
+        contracts: (1..=count / 2)
+            .map(|id| game_agreements::Contract {
+                id,
+                debtor: id * 2 - 1,
+                creditor: id * 2,
+                good: 1,
+                quantity: 1,
+                delivered: 0,
+                due: 5,
+                status: game_agreements::Status::Active,
+            })
+            .collect(),
+        events: vec![],
+    };
+    let deliveries: Vec<_> = (1..=count / 2)
+        .map(|contract| game_agreements::Delivery {
+            contract,
+            actor: contract * 2 - 1,
+            quantity: 1,
+        })
+        .collect();
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: None,
+        tool_wear: None,
+        opinions: None,
+        goals: None,
+        agreements: Some(agreements),
+        schedule: None,
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            host.progress(1).unwrap();
+            let start = std::time::Instant::now();
+            let outcomes = host.deliver_agreements(&deliveries).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(outcomes.len(), count as usize / 2);
+            assert!(outcomes.iter().all(|row| row.accepted));
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&host.snapshot())
+                .unwrap()
+                .hash(&mut hash);
+            println!("fingerprint={:016x}", hash.finish());
+            println!(
+                "workers={workers} deliveries={} elapsed={:.6}",
+                outcomes.len(),
+                elapsed.as_secs_f64()
+            );
+        });
+}
+
+#[test]
 fn core_host_physical_taking_preserves_item_identity_without_implied_permission() {
     let mut initial = fixture();
     initial.people[1].region = Some(1);
