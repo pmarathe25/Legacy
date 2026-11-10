@@ -18,7 +18,7 @@ mod host;
 pub use host::{
     CoreDeliveryResults, CoreFoodProvision, CoreFoodSearch, CoreHost, CoreHostSnapshot,
     CoreRepairResults, CoreRequestResults, CoreRun, CoreRunEvent, CoreSchedule, CoreSites,
-    CoreSocialResults, CoreToolRepairResults, DecisionPhase,
+    CoreSocial, CoreSocialResults, CoreToolRepairResults, DecisionPhase,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

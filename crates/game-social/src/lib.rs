@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 pub use wellbeing::{Need, NeedRules, Needs};
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Social {
     pub rules: Rules,
@@ -22,6 +22,21 @@ pub struct Social {
     pub events: Vec<Encounter>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub needs: Option<Needs>,
+}
+impl Clone for Social {
+    fn clone(&self) -> Self {
+        Self {
+            rules: self.rules.clone(),
+            participants: self.participants.par_iter().cloned().collect(),
+            pressures: self.pressures.par_iter().cloned().collect(),
+            relationships: self.relationships.par_iter().cloned().collect(),
+            events: self.events.par_iter().cloned().collect(),
+            needs: self.needs.as_ref().map(|needs| Needs {
+                rules: needs.rules.clone(),
+                people: needs.people.par_iter().cloned().collect(),
+            }),
+        }
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]

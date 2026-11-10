@@ -5,7 +5,9 @@ use super::*;
 #[serde(deny_unknown_fields)]
 pub struct CoreFoodSearch {
     pub search: crate::FoodSearch,
-    pub knowledge: game_economy_knowledge::Knowledge,
+    /// Reads saves written before knowledge became an independent owner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub knowledge: Option<game_economy_knowledge::Knowledge>,
     /// Reads saves written before claims became an independent owner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub claims: Option<game_economy_claims::Claims>,
@@ -22,11 +24,14 @@ impl Clone for CoreFoodSearch {
         Self {
             search: self.search.clone(),
             claims: self.claims.clone(),
-            knowledge: game_economy_knowledge::Knowledge {
-                max_records: self.knowledge.max_records,
-                minds: self.knowledge.minds.par_iter().cloned().collect(),
-                retention: self.knowledge.retention.par_iter().cloned().collect(),
-            },
+            knowledge: self
+                .knowledge
+                .as_ref()
+                .map(|knowledge| game_economy_knowledge::Knowledge {
+                    max_records: knowledge.max_records,
+                    minds: knowledge.minds.par_iter().cloned().collect(),
+                    retention: knowledge.retention.par_iter().cloned().collect(),
+                }),
         }
     }
 }
@@ -146,6 +151,10 @@ impl CoreHost {
         let Some(owner) = &self.food_search else {
             return Ok(Vec::new());
         };
+        let old_knowledge = self
+            .knowledge
+            .as_ref()
+            .ok_or("food search needs knowledge")?;
         let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
         if offset >= self.core.physical.tick_millis()
             || self.core.next_deadline(None)?.after_millis == 0
@@ -172,8 +181,8 @@ impl CoreHost {
         busy.par_sort_unstable();
         busy.dedup();
         let view = self.core.physical.view(tick)?;
-        let knowledge = game_economy_knowledge::advance(
-            Some(&owner.knowledge),
+        let mut knowledge = game_economy_knowledge::advance(
+            Some(old_knowledge),
             &self.core.people,
             self.core.physical.goods(),
             &view,
@@ -187,13 +196,13 @@ impl CoreHost {
         .ok_or("food search needs knowledge")?;
         let mut next_owner = CoreFoodSearch {
             search: owner.search.clone(),
-            knowledge,
+            knowledge: None,
             claims: None,
         };
         let claims = self.claims.as_ref().map(game_economy_claims::Claims::index);
         let mut plan = crate::food_search::Context {
             owner: &next_owner.search,
-            knowledge: &next_owner.knowledge,
+            knowledge: &knowledge,
             travel,
             people: &self.core.people,
             goods: self.core.physical.goods(),
@@ -213,6 +222,7 @@ impl CoreHost {
         )?;
         if plan.departures.is_empty() {
             self.food_search = Some(next_owner);
+            self.knowledge = Some(knowledge);
             return Ok(Vec::new());
         }
         let generation = self
@@ -234,12 +244,12 @@ impl CoreHost {
                 .into_par_iter()
                 .filter(|row| departed.binary_search(&row.0).is_ok())
                 .collect();
-            next_owner
-                .knowledge
+            knowledge
                 .reinforce_uses(&uses, tick)
                 .map_err(str::to_owned)?;
         }
         self.food_search = Some(next_owner);
+        self.knowledge = Some(knowledge);
         self.core.travel = Some(next_travel);
         self.core.people = people;
         self.core.generation = generation;

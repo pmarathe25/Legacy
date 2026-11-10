@@ -9,12 +9,14 @@ mod offers;
 mod requests;
 mod scheduler;
 mod sites;
+mod social;
 mod tools;
 pub use food_search::{CoreFoodProvision, CoreFoodSearch};
 pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 pub use sites::{CoreRepairResults, CoreSites};
+pub use social::CoreSocial;
 pub use tools::CoreToolRepairResults;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +40,10 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub claims: Option<game_economy_claims::Claims>,
     #[serde(default)]
+    pub social: Option<CoreSocial>,
+    #[serde(default)]
+    pub knowledge: Option<game_economy_knowledge::Knowledge>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -60,6 +66,8 @@ pub struct CoreHost {
     activity: Vec<game_economy_fatigue::TimedActivity>,
     food_search: Option<CoreFoodSearch>,
     claims: Option<game_economy_claims::Claims>,
+    social: Option<CoreSocial>,
+    knowledge: Option<game_economy_knowledge::Knowledge>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -77,6 +85,8 @@ struct CoreRuntimeOptions {
     activity: Vec<game_economy_fatigue::TimedActivity>,
     food_search: Option<CoreFoodSearch>,
     claims: Option<game_economy_claims::Claims>,
+    social: Option<CoreSocial>,
+    knowledge: Option<game_economy_knowledge::Knowledge>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -90,6 +100,8 @@ impl CoreHost {
             activity,
             food_search,
             claims,
+            social,
+            knowledge,
             opinions,
             goals,
             agreements,
@@ -113,6 +125,8 @@ impl CoreHost {
                 activity,
                 food_search,
                 claims,
+                social,
+                knowledge,
             },
         )
     }
@@ -127,6 +141,8 @@ impl CoreHost {
             activity,
             food_search,
             claims,
+            social,
+            knowledge,
             opinions,
             goals,
             agreements,
@@ -150,6 +166,8 @@ impl CoreHost {
                 activity,
                 food_search,
                 claims,
+                social,
+                knowledge,
             },
         )
     }
@@ -171,12 +189,23 @@ impl CoreHost {
             mut activity,
             mut food_search,
             mut claims,
+            social,
+            mut knowledge,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
                 return Err("duplicate personal claim owners".into());
             }
             claims = Some(legacy);
+        }
+        if let Some(legacy) = food_search
+            .as_mut()
+            .and_then(|owner| owner.knowledge.take())
+        {
+            if knowledge.is_some() {
+                return Err("duplicate personal knowledge owners".into());
+            }
+            knowledge = Some(legacy);
         }
         if let Some(owner) = &autowork {
             let people: Vec<_> = core
@@ -280,23 +309,39 @@ impl CoreHost {
                 .validate(&people, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
-        if let Some(owner) = &food_search {
+        if let Some(owner) = &knowledge {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let view = core.physical.view(core.physical.tick())?;
-            game_economy_knowledge::validate(
-                Some(&owner.knowledge),
-                &people,
-                &view,
-                core.physical.tick(),
-            )?;
+            game_economy_knowledge::validate(Some(owner), &people, &view, core.physical.tick())?;
+        }
+        if let Some(owner) = &food_search {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             owner
                 .search
-                .validate(&people, Some(&owner.knowledge), core.travel.as_ref())?;
+                .validate(&people, knowledge.as_ref(), core.travel.as_ref())?;
         }
         if let Some(claims) = &claims {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let view = core.physical.view(core.physical.tick())?;
             claims.validate(&people, &view, core.physical.tick())?;
+        }
+        if let Some(social) = &social {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            social
+                .owner
+                .validate(&people, core.physical.tick())
+                .map_err(str::to_owned)?;
+            if social
+                .last_tick
+                .is_some_and(|tick| tick == 0 || tick > core.physical.tick())
+                || social
+                    .owner
+                    .events
+                    .par_iter()
+                    .any(|event| Some(event.tick) != social.last_tick)
+            {
+                return Err("invalid social decision time".into());
+            }
         }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
@@ -341,6 +386,8 @@ impl CoreHost {
             activity,
             food_search,
             claims,
+            social,
+            knowledge,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -361,6 +408,8 @@ impl CoreHost {
             activity: self.activity.clone(),
             food_search: self.food_search.clone(),
             claims: self.claims.clone(),
+            social: self.social.clone(),
+            knowledge: self.knowledge.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),

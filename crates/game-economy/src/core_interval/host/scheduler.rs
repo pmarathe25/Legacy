@@ -6,6 +6,7 @@ use super::*;
 pub enum DecisionPhase {
     Meals,
     Provision { meal_people: Vec<u64> },
+    Social { meal_people: Vec<u64> },
     Maintenance { meal_people: Vec<u64> },
     ToolMaintenance { meal_people: Vec<u64> },
     Delivery { meal_people: Vec<u64> },
@@ -53,6 +54,7 @@ impl CoreSchedule {
             return Err("invalid core decision schedule".into());
         }
         if let DecisionPhase::Provision { meal_people }
+        | DecisionPhase::Social { meal_people }
         | DecisionPhase::Maintenance { meal_people }
         | DecisionPhase::ToolMaintenance { meal_people }
         | DecisionPhase::Delivery { meal_people }
@@ -82,6 +84,7 @@ pub enum CoreRunEvent {
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
     Provisions(Vec<game_lots::TransactionOutcome>),
+    Meetings(Vec<game_social::Encounter>),
     Repairs(Vec<game_economy_building::maintenance::Event>),
     ToolRepairs(Vec<game_economy_work::tool_wear::RepairEvent>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
@@ -105,6 +108,13 @@ pub struct CoreRun {
     pub failure: Option<String>,
 }
 impl CoreHost {
+    fn after_provision(&self, meal_people: Vec<u64>) -> DecisionPhase {
+        if self.social.is_some() {
+            DecisionPhase::Social { meal_people }
+        } else {
+            self.after_food(meal_people)
+        }
+    }
     fn after_food(&self, meal_people: Vec<u64>) -> DecisionPhase {
         if self.sites.is_some() {
             DecisionPhase::Maintenance { meal_people }
@@ -285,7 +295,7 @@ impl CoreHost {
                                 meal_people: people,
                             }
                         } else {
-                            self.after_food(people)
+                            self.after_provision(people)
                         };
                         self.schedule.as_mut().expect("active schedule").phase = next;
                     }
@@ -300,6 +310,25 @@ impl CoreHost {
                         meal_people.dedup();
                         if !result.outcomes.is_empty() {
                             run.events.push(CoreRunEvent::Provisions(result.outcomes));
+                        }
+                        let next = self.after_provision(meal_people);
+                        self.schedule.as_mut().expect("active schedule").phase = next;
+                    }
+                    DecisionPhase::Social { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let meetings = attempt!('run, self.meet_autonomously(&busy));
+                        if !meetings.is_empty() {
+                            meal_people.par_extend(
+                                meetings
+                                    .par_iter()
+                                    .flat_map_iter(|event| [event.a, event.b]),
+                            );
+                            meal_people.par_sort_unstable();
+                            meal_people.dedup();
+                            run.events.push(CoreRunEvent::Meetings(meetings));
                         }
                         let next = self.after_food(meal_people);
                         self.schedule.as_mut().expect("active schedule").phase = next;
