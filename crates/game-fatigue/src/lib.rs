@@ -2,6 +2,8 @@
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
+mod timed;
+pub use timed::{TimedActivity, TimedDraft, TimedFatigue};
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
