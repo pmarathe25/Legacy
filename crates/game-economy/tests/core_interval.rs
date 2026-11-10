@@ -1596,6 +1596,7 @@ fn core_host_autonomous_work_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
+    let skilled = std::env::var_os("LEGACY_SKILLED_AUTOWORK").is_some();
     let goal_planning = std::env::var_os("LEGACY_GOAL_PLANNING").is_some();
     let goal_setbacks = std::env::var_os("LEGACY_GOAL_SETBACKS").is_some() || goal_planning;
     let scheduled = std::env::var_os("LEGACY_SCHEDULED").is_some();
@@ -1707,7 +1708,11 @@ fn core_host_autonomous_work_benchmark() {
         giving: None,
         practice_work_asks: vec![],
         practice_work_evidence: Default::default(),
-        skills: None,
+        skills: skilled.then(|| game_economy::core_interval::CoreSkills {
+            owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None,
+                records: (2..=count).map(|person| serde_json::from_value(serde_json::json!({"person":person,"recipe":1,"completions":1,"credited_jobs":[{"job":person,"finished_at":0}]})).unwrap()).collect(),
+                events: vec![], lessons: vec![], teachers: vec![], inherit_teachers: false }, practiced: vec![], completed: vec![],
+        }),
         taking: None,
         medical: None,
         goal_setbacks: vec![],
@@ -1801,6 +1806,7 @@ fn core_host_autonomous_work_benchmark() {
                     outcomes.iter().filter(|row| row.1).count(),
                     if goal_setbacks && !goal_planning { 0 } else { (count - 1) as usize }
                 );
+                if skilled && !goal_setbacks && !scheduled && !continuous { assert_eq!(host.snapshot().core.physical.work_interval.as_ref().unwrap().rates.iter().filter(|row| row.1 == 2).count(), (count - 1) as usize); }
                 if goal_setbacks { assert_eq!(host.snapshot().goal_setbacks.len(), if goal_planning { 0 } else { (count - 1) as usize }); }
                 if round == 3 {
                     let mut hash = std::collections::hash_map::DefaultHasher::new();
@@ -5407,7 +5413,9 @@ fn core_host_cultivation_benchmark() {
     let dependent_disease = std::env::var_os("LEGACY_DEPENDENT_DISEASE").is_some();
     let dependent = std::env::var_os("LEGACY_DEPENDENT_CARE").is_some() || dependent_disease;
     assert!(!dependent || count.is_multiple_of(3));
-    let inheritance = std::env::var_os("LEGACY_BIRTH_INHERITANCE").is_some();
+    let teaching_inheritance = std::env::var_os("LEGACY_TEACHING_INHERITANCE").is_some();
+    let inheritance =
+        std::env::var_os("LEGACY_BIRTH_INHERITANCE").is_some() || teaching_inheritance;
     let birth_disease = std::env::var_os("LEGACY_BIRTH_DISEASE").is_some();
     let births = std::env::var_os("LEGACY_FAMILY_BIRTHS").is_some() || birth_disease || inheritance;
     let family_mode = std::env::var_os("LEGACY_FAMILY").is_some() || births || dependent;
@@ -5680,7 +5688,9 @@ fn core_host_cultivation_benchmark() {
         tool_requirements: vec![],
         paused_work_rates: vec![],
         fatigue: None,
-        activity: vec![], practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: None, taking: taking.then(|| game_economy_taking::Taking {
+        activity: vec![], practice_work_asks: vec![], practice_work_evidence: Default::default(), skills: teaching_inheritance.then(|| game_economy::core_interval::CoreSkills {
+            owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None, records: vec![], events: vec![], lessons: vec![], teachers: (1..=count).map(|person| game_economy_skills::TeacherPolicy { person, recipe: 1, enabled: true, eligible_at: 0 }).collect(), inherit_teachers: true }, practiced: vec![], completed: vec![],
+        }), taking: taking.then(|| game_economy_taking::Taking {
             policies: (2..=count / 2).map(|person| game_economy_taking::Policy {
                 person, target: if taking_contested { count / 2 + 1 } else { person + count / 2 },
                 good: 1, quantity: 1, willing: true, interval: 1, recover_incapacitated: false,
@@ -6096,6 +6106,9 @@ fn core_host_cultivation_benchmark() {
                     }
                 );
             }
+            if teaching_inheritance {
+                assert_eq!(state.skills.as_ref().unwrap().owner.teachers.len(), (count + count / 2) as usize);
+            }
             if family_mode {
                 let family = state.family.as_ref().unwrap();
                 assert_eq!(family.totals.births, if births { count / 2 } else { 0 });
@@ -6388,6 +6401,7 @@ fn core_host_social_benchmark() {
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
     assert!(count > 2);
+    let teaching_mode = std::env::var_os("LEGACY_TEACHING").is_some();
     let taking_inquiries = std::env::var_os("LEGACY_TAKING_INQUIRIES").is_some();
     let taking_reports = std::env::var_os("LEGACY_TAKING_REPORTS").is_some() || taking_inquiries;
     let treatment = std::env::var_os("LEGACY_TREATMENT").is_some();
@@ -6657,6 +6671,15 @@ fn core_host_social_benchmark() {
                     ..Default::default()
                 });
             }
+            if teaching_mode {
+                let mut probe = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+                let pairs = probe.meet_autonomously(&[]).unwrap();
+                let records: Vec<game_economy_skills::Record> = pairs.iter().map(|event| serde_json::from_value(serde_json::json!({"person":event.a,"recipe":1,"completions":1,"credited_jobs":[{"job":event.a,"finished_at":0}]})).unwrap()).collect();
+                let teachers: Vec<_> = pairs.iter().map(|event| game_economy_skills::TeacherPolicy { person: event.a, recipe: 1, enabled: true, eligible_at: 0 }).collect();
+                snapshot.skills = Some(game_economy::core_interval::CoreSkills {
+                    owner: game_economy_skills::Skills { rules: vec![game_economy_skills::Rule { recipe: 1, completions_per_level: 1, max_level: 5, work_per_level: 1, practice_each_tick: false }], aliases: vec![], catalog_training: None, records, events: vec![], lessons: vec![], teachers, inherit_teachers: false }, practiced: vec![], completed: vec![],
+                });
+            }
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
             if treatment {
@@ -6688,6 +6711,7 @@ fn core_host_social_benchmark() {
             let meetings = host.meet_autonomously(&[]).unwrap();
             let elapsed = start.elapsed();
             assert_eq!(meetings.len(), ((count - 1) / 2) as usize);
+            if teaching_mode { assert_eq!(host.snapshot().skills.unwrap().owner.lessons.len(), meetings.len()); }
             if taking_reports {
                 let taking = host.snapshot().taking.unwrap();
                 assert_eq!(taking.reports.len(), meetings.len());
@@ -12567,4 +12591,86 @@ fn idle_work_does_not_create_practice_credit() {
     assert_eq!(host.progress(1000).unwrap(), 1000);
     host.settle().unwrap();
     assert!(host.snapshot().skills.unwrap().owner.records.is_empty());
+}
+
+#[test]
+fn personal_teaching_follows_willingness_pressure_and_subjective_reactions() {
+    fn run(workers: usize, willing: bool, pressured: bool) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut initial = fixture();
+            initial.physical.custody.tick = 1;
+            initial.people[1].region = Some(1);
+            let mut student = initial.people[1].clone(); student.id = 3; initial.people.push(student);
+            initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
+            let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            let social = game_economy::core_interval::CoreSocial {
+                owner: game_social::Social {
+                    rules: game_social::Rules { interval: 1, min_health: 1, max_hunger: 10, familiarity_gain: 1, familiarity_max: 10, relationship_retention: None },
+                    participants: vec![game_social::Participant { person: 2, willing: true }, game_social::Participant { person: 3, willing: true }],
+                    pressures: if pressured { vec![game_social::PressurePolicy { person: 2, fear_at_least: Some(1), obligation_at_least: None, enabled: true }] } else { vec![] },
+                    relationships: vec![], events: vec![], needs: None,
+                }, last_tick: None,
+            };
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core":initial,"social":social,
+                "skills":{"owner":{"rules":[{"recipe":1,"completions_per_level":1,"max_level":5,"work_per_level":2}],
+                    "records":[{"person":2,"recipe":1,"completions":1,"credited_jobs":[{"job":99,"finished_at":0}]}],
+                    "teachers":[{"person":2,"recipe":1,"enabled":willing}]}},
+                "opinions":{"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1,"affinity":{"limit":10}},
+                    "records":if pressured { vec![serde_json::json!({"observer":2,"target":3,"trust":0,"fear":2})] } else { vec![] },
+                    "sensitivities":[{"person":2,"teaching_reaction":{"given":{"affinity":-2}}},{"person":3,"teaching_reaction":{"received":{"affinity":3}}}]}
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            assert_eq!(host.meet_autonomously(&[]).unwrap().len(), 1);
+            let state = host.snapshot();
+            let taught = willing || pressured;
+            assert_eq!(state.skills.as_ref().unwrap().owner.lessons.len(), usize::from(taught));
+            let saved = serde_json::to_string(&state).unwrap();
+            let mut restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert!(restored.meet_autonomously(&[]).unwrap().is_empty());
+            assert_eq!(restored.snapshot(), state);
+            if taught {
+                let opinions = state.opinions.as_ref().unwrap();
+                assert_eq!(opinions.records.iter().find(|row| row.observer == 2 && row.target == 3).unwrap().affinity, -2);
+                assert_eq!(opinions.records.iter().find(|row| row.observer == 3 && row.target == 2).unwrap().affinity, 3);
+            }
+            let start = Start { id: 2, worker: 3, region: 1, recipe: 1, units: 1 };
+            assert_eq!(host.start_chosen_work(&[(start, 1)]).unwrap(), vec![(2, true)]);
+            let result = host.snapshot();
+            let rate = result.core.physical.work_interval.as_ref().unwrap().rates.iter().find(|row| row.0 == 2).unwrap().1;
+            assert_eq!(rate, if taught { 3 } else { 1 });
+            serde_json::to_value(result).unwrap()
+        })
+    }
+    for (willing, pressured) in [(true, false), (false, false), (false, true)] {
+        assert_eq!(run(1, willing, pressured), run(6, willing, pressured));
+    }
+}
+
+#[test]
+fn autonomous_work_uses_the_workers_learned_skill_rate() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+            let mut initial = fixture();
+            initial.people[1].region = Some(1); initial.people[1].willing_to_work = true;
+            initial.travel = None; initial.nutrition = None; initial.pending_food.clear();
+            let stock = initial.physical.custody.containers.iter_mut().find(|row| row.place == Place::Stock { region: 1, good: 1 }).unwrap();
+            *stock = Container::new(stock.place, 10, vec![Lot { item: None, good: 1, quantity: 2, expires_at: None }]).unwrap();
+            let snapshot: CoreHostSnapshot = serde_json::from_value(serde_json::json!({
+                "core":initial,"autowork":{"next_id":2,"policies":[{"person":2,"recipe":1,"enabled":true}]},
+                "skills":{"owner":{"rules":[{"recipe":1,"completions_per_level":1,"max_level":5,"work_per_level":2}],
+                    "records":[{"person":2,"recipe":1,"completions":1,"credited_jobs":[{"job":99,"finished_at":0}]}]}}
+            })).unwrap();
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            assert_eq!(host.start_autonomous_work(&[], 1).unwrap(), vec![(2, true)]);
+            let state = host.snapshot();
+            assert_eq!(state.core.physical.work_interval.as_ref().unwrap().rates.iter().find(|row| row.0 == 2).unwrap().1, 3);
+            let saved = serde_json::to_string(&state).unwrap();
+            let restored = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+            assert_eq!(restored.snapshot(), state);
+            serde_json::to_value(state).unwrap()
+        })
+    }
+    assert_eq!(run(1), run(6));
 }

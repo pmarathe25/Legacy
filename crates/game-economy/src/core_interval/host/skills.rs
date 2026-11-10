@@ -21,7 +21,30 @@ pub struct CoreSkills {
     pub completed: Vec<CoreSkillCredit>,
 }
 
+pub(super) struct TeachingFrame {
+    pub skills: CoreSkills,
+    pub lessons: Vec<(u64, u64)>,
+    pub rate_changed: bool,
+}
+
 impl CoreSkills {
+    fn parallel_copy(&self) -> Self {
+        let original = &self.owner;
+        Self {
+            owner: game_economy_skills::Skills {
+                rules: original.rules.clone(),
+                aliases: original.aliases.clone(),
+                catalog_training: original.catalog_training.clone(),
+                records: original.records.par_iter().cloned().collect(),
+                events: original.events.par_iter().cloned().collect(),
+                lessons: original.lessons.par_iter().cloned().collect(),
+                teachers: original.teachers.par_iter().cloned().collect(),
+                inherit_teachers: original.inherit_teachers,
+            },
+            practiced: self.practiced.par_iter().copied().collect(),
+            completed: self.completed.par_iter().copied().collect(),
+        }
+    }
     pub(super) fn initial_rates(
         &self,
         core: &CoreSnapshot,
@@ -36,9 +59,6 @@ impl CoreSkills {
             .collect();
         self.owner
             .validate(&people, &recipes, core.physical.custody.tick)?;
-        if !self.owner.teachers.is_empty() || self.owner.inherit_teachers {
-            return Err("personal teaching is not yet supported by the interval host".into());
-        }
         let index = self.owner.index();
         rates
             .par_iter()
@@ -89,9 +109,6 @@ impl CoreSkills {
             .collect();
         self.owner
             .validate(&people, &recipes, core.physical.tick())?;
-        if !self.owner.teachers.is_empty() || self.owner.inherit_teachers {
-            return Err("personal teaching is not yet supported by the interval host".into());
-        }
         for rows in [&self.practiced, &self.completed] {
             if rows.par_windows(2).any(|pair| pair[0].job >= pair[1].job)
                 || rows.par_iter().any(|row| {
@@ -240,5 +257,134 @@ impl CoreHost {
             practiced: vec![],
             completed: vec![],
         })
+    }
+    /// A real meeting can become a lesson only through a person's own choice.
+    pub(super) fn stage_skill_teaching(
+        &self,
+        social: &game_social::Social,
+        tick: u64,
+    ) -> Option<TeachingFrame> {
+        let owner = self.skills.as_ref()?;
+        if owner.owner.teachers.is_empty() || social.events.is_empty() {
+            return None;
+        }
+        let pairs: Vec<_> = social
+            .events
+            .par_iter()
+            .filter(|event| {
+                [event.a, event.b].into_iter().all(|person| {
+                    self.core
+                        .people
+                        .binary_search_by_key(&person, |row| row.id)
+                        .ok()
+                        .is_some_and(|index| {
+                            !self.core.people[index].controlled
+                                && self.core.people[index].health > 0
+                        })
+                })
+            })
+            .map(|event| (event.a, event.b))
+            .collect();
+        if pairs.is_empty() {
+            return None;
+        }
+        let mut pressured: Vec<_> = social
+            .events
+            .par_iter()
+            .flat_map_iter(|event| {
+                event
+                    .pressured_people()
+                    .map(|person| (event.a, event.b, person))
+            })
+            .collect();
+        if let Some(opinions) = self
+            .opinions
+            .as_ref()
+            .filter(|_| social.pressures.par_iter().any(|policy| policy.enabled))
+        {
+            let mut policies: Vec<_> = social
+                .pressures
+                .par_iter()
+                .filter(|policy| policy.enabled)
+                .collect();
+            policies.par_sort_unstable_by_key(|policy| policy.person);
+            let feelings = opinions.index();
+            pressured.par_extend(
+                pairs
+                    .par_iter()
+                    .flat_map_iter(|&(a, b)| [(a, b), (b, a)])
+                    .filter_map(|(teacher, student)| {
+                        let policy = policies
+                            .binary_search_by_key(&teacher, |policy| policy.person)
+                            .ok()
+                            .map(|index| policies[index])?;
+                        let (fear, obligation) = feelings.feelings(teacher, student);
+                        policy.responds(fear, obligation).then_some((
+                            teacher.min(student),
+                            teacher.max(student),
+                            teacher,
+                        ))
+                    }),
+            );
+        }
+        pressured.par_sort_unstable();
+        pressured.dedup();
+        let plan = owner.owner.plan_teaching_with_index(
+            &pairs,
+            None,
+            tick,
+            self.skill_rates.as_ref()?,
+            |teacher, student, enabled| {
+                enabled
+                    || pressured
+                        .binary_search(&(teacher.min(student), teacher.max(student), teacher))
+                        .is_ok()
+            },
+        )?;
+        let mut next = owner.parallel_copy();
+        next.owner.events = owner
+            .owner
+            .events
+            .par_iter()
+            .filter(|event| event.tick == tick)
+            .cloned()
+            .collect();
+        let previous = next.owner.lessons.len();
+        let previous_events = next.owner.events.len();
+        plan.commit(&mut next.owner);
+        let rate_changed = next.owner.events.len() != previous_events;
+        let learned = next.owner.lessons[previous..]
+            .par_iter()
+            .map(|lesson| (lesson.teacher, lesson.student))
+            .collect();
+        Some(TeachingFrame {
+            skills: next,
+            lessons: learned,
+            rate_changed,
+        })
+    }
+    pub(super) fn stage_skill_births(
+        &self,
+        staged: Option<CoreSkills>,
+        family: Option<&super::family::FamilyFrame>,
+        tick: u64,
+    ) -> Result<Option<CoreSkills>, String> {
+        let Some(family) =
+            family.filter(|family| family.owner.rules.enroll_births && !family.newborns.is_empty())
+        else {
+            return Ok(staged);
+        };
+        let Some(original) = self
+            .skills
+            .as_ref()
+            .filter(|owner| owner.owner.inherit_teachers)
+        else {
+            return Ok(staged);
+        };
+        let mut next = staged.unwrap_or_else(|| original.parallel_copy());
+        let mut owner = Some(next.owner);
+        game_economy_skills::inherit(&mut owner, &family.owner, &family.newborns, tick)?;
+        next.owner = owner.expect("staged skill owner");
+        Ok(Some(next))
     }
 }

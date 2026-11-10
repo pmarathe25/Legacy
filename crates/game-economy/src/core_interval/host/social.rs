@@ -191,6 +191,21 @@ impl CoreHost {
                 }
                 owner
             });
+        let teaching = next
+            .social
+            .as_ref()
+            .and_then(|social| self.stage_skill_teaching(social, tick));
+        if let Some(frame) = &teaching
+            && self
+                .opinions
+                .as_ref()
+                .is_some_and(|owner| owner.tracks_teaching_reactions())
+        {
+            let current = opinions.get_or_insert_with(|| self.opinions.clone());
+            if let Some(opinions) = current {
+                crate::teaching::interpret(opinions, &frame.lessons, tick);
+            }
+        }
         let route_reports = self
             .core
             .travel
@@ -246,6 +261,12 @@ impl CoreHost {
         }
         if let Some(taking) = taking {
             self.taking = Some(taking);
+        }
+        if let Some(frame) = teaching {
+            if frame.rate_changed {
+                self.skill_rates = Some(frame.skills.owner.index());
+            }
+            self.skills = Some(frame.skills);
         }
         if let Some(knowledge) = knowledge {
             self.knowledge = Some(knowledge);

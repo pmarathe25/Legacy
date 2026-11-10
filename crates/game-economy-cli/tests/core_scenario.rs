@@ -846,3 +846,55 @@ fn authored_skill_catalog_loads_into_the_interval_host() {
             || skills.aliases.iter().any(|alias| alias.recipe == recipe)
     );
 }
+
+#[test]
+fn newborn_inherits_teaching_inclination_without_skill() {
+    fn run(workers: usize) -> serde_json::Value {
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .unwrap()
+            .install(|| {
+                let root = root();
+                let initial = game_economy_cli::core_scenario(
+                    &root.join("content/scenarios/economy-core-skills.toml"),
+                    &root.join("content"),
+                )
+                .unwrap();
+                let mut snapshot = initial.snapshot();
+                let owner = &mut snapshot.skills.as_mut().unwrap().owner;
+                let recipe = owner.rules[0].recipe;
+                owner.inherit_teachers = true;
+                owner.teachers.push(game_economy_skills::TeacherPolicy {
+                    person: 1,
+                    recipe,
+                    enabled: true,
+                    eligible_at: 0,
+                });
+                let mut host = game_economy::core_interval::CoreHost::resume(snapshot).unwrap();
+                assert_eq!(
+                    host.advance_continuous(3_600_000, &[]).unwrap().failure,
+                    None
+                );
+                let state = host.snapshot();
+                let skills = &state.skills.as_ref().unwrap().owner;
+                let inherited = skills
+                    .teachers
+                    .iter()
+                    .find(|teacher| teacher.person == 3 && teacher.recipe == recipe)
+                    .unwrap();
+                assert!(inherited.enabled);
+                assert_eq!(inherited.eligible_at, 13);
+                assert!(skills.records.iter().all(|record| record.person != 3));
+                assert!(skills.lessons.iter().all(|lesson| lesson.student != 3));
+                let saved = serde_json::to_string(&state).unwrap();
+                let restored = game_economy::core_interval::CoreHost::resume(
+                    serde_json::from_str(&saved).unwrap(),
+                )
+                .unwrap();
+                assert_eq!(restored.snapshot(), state);
+                serde_json::to_value(state).unwrap()
+            })
+    }
+    assert_eq!(run(1), run(6));
+}

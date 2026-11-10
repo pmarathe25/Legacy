@@ -72,6 +72,27 @@ impl Skills {
         {
             return None;
         }
+        let index = self.index();
+        self.plan_teaching_with_index(pairs, controlled, tick, &index, willing)
+    }
+    /// Use an existing tick-start skill index for repeated decisions.
+    pub fn plan_teaching_with_index(
+        &self,
+        pairs: &[(u64, u64)],
+        controlled: Option<u64>,
+        tick: u64,
+        index: &crate::Index,
+        willing: impl Fn(u64, u64, bool) -> bool + Sync,
+    ) -> Option<TeachingDraft> {
+        if (self.records.is_empty() && self.lessons.is_empty())
+            || pairs.is_empty()
+            || self
+                .teachers
+                .par_iter()
+                .all(|policy| policy.eligible_at > tick)
+        {
+            return None;
+        }
         let mut participants: Vec<_> = pairs.par_iter().flat_map_iter(|&(a, b)| [a, b]).collect();
         participants.par_sort_unstable();
         if participants.par_windows(2).any(|pair| pair[0] == pair[1]) {
@@ -96,7 +117,6 @@ impl Skills {
             .filter(|lesson| lesson.tick == tick)
             .map(|lesson| (lesson.teacher, lesson.student, lesson.recipe))
             .collect();
-        let index = self.index();
         let mut results: Vec<_> = pairs
             .par_iter()
             .filter_map(|&(a, b)| {

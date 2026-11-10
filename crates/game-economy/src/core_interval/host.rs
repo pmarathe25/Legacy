@@ -1395,7 +1395,7 @@ impl CoreHost {
         if let Some(result) = self.start_claim_aware_work(blocked, rate, effective.as_deref())? {
             return Ok(result);
         }
-        if self.sites.is_some() || !self.tool_requirements.is_empty() {
+        if self.sites.is_some() || !self.tool_requirements.is_empty() || self.skills.is_some() {
             let Some(owner) = &self.autowork else {
                 return Ok(Vec::new());
             };
@@ -1725,6 +1725,7 @@ impl CoreHost {
         }
         let skills = self.stage_skills(&draft.events().finished, draft.events().tick);
         let family = self.stage_family(&mut draft)?;
+        let skills = self.stage_skill_births(skills, family.as_ref(), draft.events().tick)?;
         crate::purpose::enroll(
             purpose.as_mut().map(|owner| &mut owner.owner),
             family.as_ref().map(|frame| &frame.owner),
