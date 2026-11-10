@@ -15,6 +15,7 @@ mod gathering;
 mod hunting;
 mod offers;
 mod requests;
+mod scenario;
 mod scheduler;
 mod sites;
 mod social;

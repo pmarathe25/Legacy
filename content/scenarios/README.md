@@ -81,3 +81,5 @@ requirements = [{ recipe = "fixture-tool", kind = "workshop", slots = 1 }]
 blueprints = [{ id = 1, name = "workshop", kind = "workshop", capacity = 2, kit = "tool", quantity = 1 }]
 policies = [{ person = 2, blueprint = 1, target_sites = 1, willing = true }]
 ```
+
+`economy-core.toml` is a small authored interval-host scenario loaded through `game_economy_cli::core_scenario`. It combines an imminent birth, dependent care, gathering, and a wild grazer. The interval host currently rejects scenarios containing unsupported owners rather than ignoring them.

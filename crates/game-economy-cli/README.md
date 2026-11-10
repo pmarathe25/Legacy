@@ -297,3 +297,5 @@ After grouping social encounters by local endpoint, two repeat runs of the same 
 `economy-goal-search` demonstrates a personal project with a bounded search of a known store; `economy-goal-multistore` searches an ordered sequence of two stores. The administrative runner can change that person's inclination with `search-goal PERSON on|off`.
 
 `economy-local-food-search` demonstrates a hungry person choosing to visit a known store and then acquiring and eating actual food. The existing local visit choice can be changed with `visit-local PERSON on|off`.
+
+The interval host can load fresh authored scenarios through `game_economy_cli::core_scenario` (or `core_scenario_with_options` for seed and population overlays). `content/scenarios/economy-core.toml` exercises family birth, dependent care, gathering, and wildlife. Import currently rejects scenario owners the host does not implement, naming them in the error; it does not silently discard those owners. The existing command-line runner still uses the whole-boundary host and is not yet connected to this API.

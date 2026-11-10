@@ -671,6 +671,30 @@ pub fn scenario(path: &Path, content: &Path) -> Result<Economy, String> {
     scenario_with_seed(path, content, None)
 }
 
+/// Load a fresh authored scenario into the interval host and its default schedule.
+/// Unsupported owners are reported rather than silently discarded.
+pub fn core_scenario(
+    path: &Path,
+    content: &Path,
+) -> Result<game_economy::core_interval::CoreHost, String> {
+    core_scenario_with_options(path, content, None, None)
+}
+
+pub fn core_scenario_with_options(
+    path: &Path,
+    content: &Path,
+    seed: Option<u64>,
+    population_path: Option<&Path>,
+) -> Result<game_economy::core_interval::CoreHost, String> {
+    let scenario = scenario_with_options(path, content, seed, population_path)?;
+    let snapshot =
+        game_economy::core_interval::CoreHostSnapshot::from_scenario(scenario.snapshot())?;
+    let period = snapshot.core.physical.tick_millis;
+    let mut host = game_economy::core_interval::CoreHost::begin(snapshot, &[])?;
+    host.enable_schedule(period, 1)?;
+    Ok(host)
+}
+
 /// Override the scenario seed for both generation and subsequent simulation choices.
 pub fn scenario_with_seed(
     path: &Path,
