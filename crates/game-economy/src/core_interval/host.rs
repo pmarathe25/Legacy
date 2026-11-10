@@ -111,6 +111,31 @@ impl CoreHost {
     pub fn defer_work(&mut self, tick: u64, offset: u64, jobs: &[u64]) -> Result<(), String> {
         self.core.defer_work(tick, offset, jobs)
     }
+    /// Admit actions selected by an enclosing owner, including work motivated
+    /// by pressure rather than willingness. Physical eligibility still applies.
+    pub fn start_chosen_work(
+        &mut self,
+        requests: &[(game_production_model::Start, u64)],
+    ) -> Result<Vec<(u64, bool)>, String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        self.core.start_work(tick, offset, requests)
+    }
+    /// A worker may independently stop work; inputs return at the boundary.
+    pub fn abandon_work(&mut self, requests: &[(u64, u64)]) -> Result<(), String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        self.core.abandon_work(tick, offset, requests)
+    }
+    /// Physical transfers do not imply any social consent or ownership rule.
+    pub fn transfer_goods(
+        &mut self,
+        actions: &[game_lots::Transaction],
+    ) -> Result<game_lot_runtime::PhysicalOutcomes, String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        self.core.transfer_goods(tick, offset, actions)
+    }
 
     fn stage_tools(
         &self,

@@ -445,7 +445,14 @@ fn core_host_autonomous_work_benchmark() {
         .unwrap_or(1);
     let scheduled = std::env::var_os("LEGACY_SCHEDULED").is_some();
     let continuous = std::env::var_os("LEGACY_CONTINUOUS").is_some();
-    assert!(!(scheduled && continuous));
+    let chosen = std::env::var_os("LEGACY_CHOSEN").is_some();
+    assert!(
+        [scheduled, continuous, chosen]
+            .iter()
+            .filter(|&&value| value)
+            .count()
+            <= 1
+    );
     assert!(count > 1);
     let mut initial = fixture();
     let person = initial.people[0].clone();
@@ -453,7 +460,7 @@ fn core_host_autonomous_work_benchmark() {
         .map(|id| {
             let mut row = person.clone();
             row.id = id;
-            row.willing_to_work = true;
+            row.willing_to_work = !chosen;
             row
         })
         .collect();
@@ -495,6 +502,20 @@ fn core_host_autonomous_work_benchmark() {
             requests: None,
         }),
     };
+    let chosen_requests: Vec<_> = (2..=count)
+        .map(|id| {
+            (
+                Start {
+                    id,
+                    worker: id,
+                    region: 1,
+                    recipe: 1,
+                    units: 1,
+                },
+                1,
+            )
+        })
+        .collect();
     rayon::ThreadPoolBuilder::new()
         .num_threads(workers)
         .build()
@@ -527,6 +548,8 @@ fn core_host_autonomous_work_benchmark() {
                             _ => None,
                         })
                         .unwrap()
+                } else if chosen {
+                    host.start_chosen_work(&chosen_requests).unwrap()
                 } else {
                     host.start_autonomous_work(&[], 1).unwrap()
                 };
@@ -548,7 +571,7 @@ fn core_host_autonomous_work_benchmark() {
             }
             samples.sort_by(f64::total_cmp);
             println!(
-                "workers={workers} host_autonomous_starts={} scheduled={scheduled} continuous={continuous} elapsed={:.6}",
+                "workers={workers} host_autonomous_starts={} scheduled={scheduled} continuous={continuous} chosen={chosen} elapsed={:.6}",
                 count - 1,
                 samples[1]
             );
@@ -1398,6 +1421,170 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
             })
     };
     assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    initial.people[1].willing_to_work = false;
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let owner = game_autowork::Autowork {
+        next_id: 2,
+        policies: vec![game_autowork::Policy {
+            person: 2,
+            recipe: 1,
+            enabled: true,
+            disregard_claims: false,
+        }],
+        requests: None,
+    };
+    let mut host = CoreHost::begin(
+        CoreHostSnapshot {
+            core: initial,
+            autowork: Some(owner),
+            tool_wear: None,
+            schedule: None,
+        },
+        &[(1, 1)],
+    )
+    .unwrap();
+    host.progress(300).unwrap();
+    assert!(host.start_autonomous_work(&[], 1).unwrap().is_empty());
+    let request = Start {
+        id: 2,
+        worker: 2,
+        region: 1,
+        recipe: 1,
+        units: 1,
+    };
+    assert_eq!(
+        host.start_chosen_work(&[(request, 1)]).unwrap(),
+        vec![(2, true)]
+    );
+    host.abandon_work(&[(2, 2)]).unwrap();
+    let saved = serde_json::to_string(&host.snapshot()).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    host.progress(700).unwrap();
+    let events = host.settle().unwrap();
+    assert_eq!(events.returned, vec![2]);
+    assert!(!events.finished.contains(&2));
+    let snapshot = host.snapshot();
+    assert_eq!(
+        snapshot
+            .core
+            .physical
+            .custody
+            .containers
+            .iter()
+            .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+            .unwrap()
+            .used,
+        2
+    );
+}
+
+#[test]
+fn core_host_physical_taking_preserves_item_identity_without_implied_permission() {
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    initial.people[1].health = 0;
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    initial.physical.custody.containers.extend([
+        Container::new(Place::Person(1), 2, vec![]).unwrap(),
+        Container::new(
+            Place::Person(2),
+            2,
+            vec![Lot {
+                item: Some(10),
+                good: 1,
+                quantity: 1,
+                expires_at: None,
+            }],
+        )
+        .unwrap(),
+    ]);
+    initial
+        .physical
+        .custody
+        .containers
+        .sort_by_key(|row| row.place);
+    let owner = game_economy_work::tool_wear::ToolWear {
+        next_item: 11,
+        rules: vec![game_economy_work::tool_wear::Rule {
+            good: 1,
+            durability: 10,
+            wear: 1,
+            repair_good: 2,
+            repair_quantity: 1,
+        }],
+        conditions: vec![game_economy_work::tool_wear::Condition {
+            item: 10,
+            good: 1,
+            damage: 2,
+        }],
+        repairs: vec![],
+        events: vec![],
+    };
+    let mut host = CoreHost::begin(
+        CoreHostSnapshot {
+            core: initial,
+            autowork: None,
+            tool_wear: Some(owner),
+            schedule: None,
+        },
+        &[(1, 1)],
+    )
+    .unwrap();
+    host.progress(100).unwrap();
+    let action = game_lots::Transaction {
+        id: 1,
+        movements: vec![game_lots::Movement {
+            id: 1,
+            from: Place::Person(2),
+            to: Some(Place::Person(1)),
+            good: 1,
+            quantity: 1,
+            item: Some(10),
+        }],
+        creations: vec![],
+    };
+    assert!(host.transfer_goods(&[action]).unwrap().transactions[0].accepted);
+    let snapshot = host.snapshot();
+    let physical = Runtime::compile(snapshot.core.physical.clone()).unwrap();
+    assert_eq!(physical.item_place(10), Some(Place::Person(1)));
+    let owner = snapshot.tool_wear.unwrap();
+    assert_eq!(owner.conditions[0].damage, 2);
+    owner
+        .validate(
+            &physical,
+            &[1, 2].into_iter().collect(),
+            &[1, 2].into_iter().collect(),
+            0,
+        )
+        .unwrap();
 }
 
 #[test]

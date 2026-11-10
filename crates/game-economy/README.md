@@ -28,6 +28,8 @@ The same host can use `prepare_early_work` to stage nonperishable identified out
 
 `CoreHost` saves the limited core together with optional autonomous-work policies and tool conditions. It coordinates carried-food choices, work admission, early production, and boundary settlement with those owners; identified consumption with no matching tool owner is rejected. The enclosing host must still supply exclusions for other activities, sites, tools, and claims, and must handle other world owners. Use `resume` for an in-flight snapshot and `begin` with new work rates after a completed boundary.
 
+The host also accepts work chosen by an enclosing social owner without requiring the worker's willingness flag. Physical eligibility and input custody still apply, and the worker can abandon the job. Physical transfers likewise do not establish consent or permission.
+
 A host can enable a periodic decision schedule and call `advance_scheduled`. The runner publishes tied arrivals and nonperishable work, defers perishable completions to the boundary, and then stages carried meals and autonomous work. Decision phase and timing survive save/load. `advance_scheduled` stops at the boundary for an explicit `settle`; `advance_continuous` settles and opens subsequent intervals, preserving decision timing and retained work rates. At a boundary, externally blocked or unable workers pause; their retained rate can resume at a later boundary. If an action fails, the result reports the failure and earlier events remain committed. The host supplies consistent external activity exclusions across split advances. Hunger decisions are periodic, not a complete world action scheduler.
 
 The ignored `core_host_autonomous_work_benchmark` measures policy selection and reservation through this saved host. One 49,999-start run took 61.7, 42.3, 29.1, and 27.3 ms at one, two, four, and six workers, with matching saved-state fingerprints. It does not measure the complete campaign.
@@ -35,6 +37,8 @@ The ignored `core_host_autonomous_work_benchmark` measures policy selection and 
 Set `LEGACY_SCHEDULED=1` on that benchmark to include 500 ms of scheduled advancement and three decision points. A 50,000-person run took 113, 73, 50, and 40 ms at those worker counts, with matching fingerprints. This is a limited-core workload and remains sublinear.
 
 Set `LEGACY_CONTINUOUS=1` instead to include 1,500 ms, eight decision points, a settled boundary, and early work completion. A 50,000-person run took 329, 204, 139, and 120 ms at those worker counts, with matching fingerprints. Setup is excluded; this does not run the complete economy.
+
+Set `LEGACY_CHOSEN=1` to measure explicit chosen work for people whose willingness flag is false. A 49,999-start run took 57.4, 35.5, 24.4, and 22.4 ms at the same worker counts, with matching fingerprints; social decision-making is not included.
 
 The ignored `composed_core_progress_benchmark` with `LEGACY_CORE_ARRIVALS=1` measures publication of 50,000 arrivals among 100,000 people. One run took 5.87, 2.86, 1.58, and 1.25 ms with one, two, four, and six workers, with matching fingerprints. This measures only arrival publication in the limited core.
 
