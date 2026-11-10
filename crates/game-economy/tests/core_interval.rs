@@ -929,6 +929,18 @@ fn local_interval_transfer_moves_real_custody_and_preserves_inflight_work() {
                 let mut invalid = action.clone();
                 invalid.movements[0].to = None;
                 assert!(core.transfer_goods(0, 300, &[invalid]).is_err());
+                let mut invalid = action.clone();
+                invalid.creations.push(game_lots::Creation {
+                    id: 2,
+                    to: Place::Person(2),
+                    lot: Lot {
+                        item: None,
+                        good: 1,
+                        quantity: 1,
+                        expires_at: None,
+                    },
+                });
+                assert!(core.transfer_goods(0, 300, &[invalid]).is_err());
                 assert_eq!(core.snapshot(), before);
                 assert!(
                     core.transfer_goods(0, 300, std::slice::from_ref(&action))
@@ -2690,6 +2702,187 @@ fn scheduled_delivery_is_a_personal_choice_that_fear_can_motivate() {
     };
     assert_eq!(run(1, 10), run(6, 10));
     assert_eq!(run(1, 0), run(6, 0));
+}
+
+#[test]
+fn people_can_propose_and_accept_unfunded_promises_without_enforcement() {
+    use game_economy::core_interval::CoreRunEvent;
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        initial.people[1].region = Some(1);
+        let mut third = initial.people[1].clone();
+        third.id = 3;
+        initial.people.push(third);
+        initial.travel = None;
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let offer: game_agreements::OfferPolicy = serde_json::from_value(serde_json::json!({"person":2,"recipient":3,"good":2,"quantity":99,"due_after":2,"retry_ticks":10,"willing":true})).unwrap();
+        let accept: game_agreements::Policy = serde_json::from_value(serde_json::json!({"person":3,"accept":true})).unwrap();
+        let agreements = game_agreements::Agreements { next_id: 1, policies: vec![accept], offering: vec![offer], work_offering: vec![], bulk_debtors: vec![], contracts: vec![], events: vec![] };
+        let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({"rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},"records":[{"observer":2,"target":3,"trust":0,"obligation":0}]})).unwrap();
+        let snapshot = CoreHostSnapshot { core: initial, autowork: None, tool_wear: None, opinions: Some(opinions.clone()), goals: None, agreements: Some(agreements), schedule: None };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        let run = host.advance_scheduled(0, &[]).unwrap();
+        assert_eq!(run.failure, None);
+        assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::Offers(ids) if ids == &[1])));
+        assert!(run.events.iter().any(|event| matches!(event, CoreRunEvent::Acceptances(ids) if ids == &[1])));
+        let started = host.snapshot();
+        assert_eq!(started.agreements.as_ref().unwrap().contracts[0].status, game_agreements::Status::Active);
+        assert_eq!(started.opinions, Some(opinions));
+        let saved = serde_json::to_string(&started).unwrap();
+        let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+        assert_eq!(host.advance_continuous(3000, &[]).unwrap().failure, None);
+        let state = host.snapshot();
+        let contract = &state.agreements.as_ref().unwrap().contracts[0];
+        assert_eq!((contract.status, contract.delivered), (game_agreements::Status::Defaulted, 0));
+        state
+    })
+    };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
+fn manually_making_a_promise_uses_the_makers_own_obligation_disposition() {
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let opinions: game_opinions::Opinions = serde_json::from_value(serde_json::json!({
+        "rules":{"minimum":-10,"maximum":10,"initial":0,"fulfilled_gain":1,"default_loss":1},
+        "sensitivities":[{"person":2,"promise_obligation_gain":3}],
+        "records":[{"observer":2,"target":1,"trust":0,"obligation":0}]
+    }))
+    .unwrap();
+    let agreements = game_agreements::Agreements {
+        next_id: 1,
+        policies: vec![],
+        offering: vec![],
+        work_offering: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![],
+        events: vec![],
+    };
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: None,
+        tool_wear: None,
+        opinions: Some(opinions),
+        goals: None,
+        agreements: Some(agreements),
+        schedule: None,
+    };
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    host.propose_agreements(&[game_agreements::Proposal {
+        debtor: 2,
+        creditor: 1,
+        good: 2,
+        quantity: 99,
+        due: 2,
+    }])
+    .unwrap();
+    assert_eq!(host.snapshot().opinions.unwrap().records[0].obligation, 3);
+}
+
+#[test]
+#[ignore = "manual personal proposal and acceptance scaling benchmark"]
+fn core_host_offer_choices_benchmark() {
+    use std::hash::{Hash, Hasher};
+    let count = std::env::var("LEGACY_PEOPLE")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(50_000);
+    let workers = std::env::var("LEGACY_WORKERS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(1);
+    assert!(count >= 4 && count.is_multiple_of(2));
+    let mut initial = fixture();
+    let template = initial.people[0].clone();
+    initial.people = (1..=count)
+        .map(|id| {
+            let mut person = template.clone();
+            person.id = id;
+            person
+        })
+        .collect();
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let offering = (1..=count / 2)
+        .map(|id| game_agreements::OfferPolicy {
+            person: id * 2 - 1,
+            recipient: id * 2,
+            good: 2,
+            quantity: 1,
+            due_after: 2,
+            retry_ticks: 3,
+            willing: true,
+            recipient_hunger_at_least: 0,
+            minimum_trust: None,
+            pressure_threshold: None,
+            next_review: 0,
+            after_work_recipe: None,
+            last_work_offer_at: None,
+            after_help: false,
+            last_help_offer_at: None,
+        })
+        .collect();
+    let policies = (1..=count / 2)
+        .map(|id| game_agreements::Policy {
+            person: id * 2,
+            honor: false,
+            accept: true,
+            minimum_trust: None,
+            minimum_honor_trust: None,
+            fear_honor_threshold: None,
+            obligation_honor_threshold: None,
+            accept_pressure_threshold: None,
+        })
+        .collect();
+    let agreements = game_agreements::Agreements {
+        next_id: 1,
+        policies,
+        offering,
+        work_offering: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![],
+        events: vec![],
+    };
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: None,
+        tool_wear: None,
+        opinions: None,
+        goals: None,
+        agreements: Some(agreements),
+        schedule: None,
+    };
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .unwrap()
+        .install(|| {
+            let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+            let start = std::time::Instant::now();
+            let offers = host.propose_agreements_autonomously(&[]).unwrap();
+            let accepted = host.accept_agreements_autonomously(&offers.actors).unwrap();
+            let elapsed = start.elapsed();
+            assert_eq!(offers.agreements.len(), count as usize / 2 - 1);
+            assert_eq!(accepted.agreements.len(), offers.agreements.len());
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            serde_json::to_vec(&host.snapshot())
+                .unwrap()
+                .hash(&mut hash);
+            println!("fingerprint={:016x}", hash.finish());
+            println!(
+                "workers={workers} offers={} elapsed={:.6}",
+                offers.agreements.len(),
+                elapsed.as_secs_f64()
+            );
+        });
 }
 
 #[test]

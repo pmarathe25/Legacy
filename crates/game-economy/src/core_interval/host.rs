@@ -2,8 +2,10 @@
 use super::*;
 use game_autowork::Autowork;
 use game_economy_work::tool_wear::ToolWear;
+mod offers;
 mod requests;
 mod scheduler;
+pub use offers::CoreSocialResults;
 pub use requests::{CoreDeliveryResults, CoreRequestResults};
 pub use scheduler::{CoreRun, CoreRunEvent, CoreSchedule, DecisionPhase};
 

@@ -6,6 +6,8 @@ use super::*;
 pub enum DecisionPhase {
     Meals,
     Delivery { meal_people: Vec<u64> },
+    Offers { meal_people: Vec<u64> },
+    Acceptance { meal_people: Vec<u64> },
     Asking { meal_people: Vec<u64> },
     Requests { meal_people: Vec<u64> },
     Work { meal_people: Vec<u64> },
@@ -46,6 +48,8 @@ impl CoreSchedule {
             return Err("invalid core decision schedule".into());
         }
         if let DecisionPhase::Delivery { meal_people }
+        | DecisionPhase::Offers { meal_people }
+        | DecisionPhase::Acceptance { meal_people }
         | DecisionPhase::Asking { meal_people }
         | DecisionPhase::Requests { meal_people }
         | DecisionPhase::Work { meal_people } = &self.phase
@@ -68,6 +72,8 @@ pub enum CoreRunEvent {
     Work(game_lot_runtime::EarlyWorkEvents),
     Meals(Vec<(u64, u32)>),
     Deliveries(Vec<game_lots::TransactionOutcome>),
+    Offers(Vec<u64>),
+    Acceptances(Vec<u64>),
     Asks(Vec<u64>),
     Requests(Vec<game_autowork::requests::Event>),
     Starts(Vec<(u64, bool)>),
@@ -226,8 +232,22 @@ impl CoreHost {
                             ));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
-                            DecisionPhase::Delivery {
-                                meal_people: people,
+                            if self.agreements.is_some() {
+                                DecisionPhase::Delivery {
+                                    meal_people: people,
+                                }
+                            } else if self
+                                .autowork
+                                .as_ref()
+                                .is_some_and(|owner| owner.requests.is_some())
+                            {
+                                DecisionPhase::Asking {
+                                    meal_people: people,
+                                }
+                            } else {
+                                DecisionPhase::Work {
+                                    meal_people: people,
+                                }
                             };
                     }
                     DecisionPhase::Delivery { mut meal_people } => {
@@ -243,7 +263,45 @@ impl CoreHost {
                             run.events.push(CoreRunEvent::Deliveries(result.outcomes));
                         }
                         self.schedule.as_mut().expect("active schedule").phase =
-                            DecisionPhase::Asking { meal_people };
+                            DecisionPhase::Offers { meal_people };
+                    }
+                    DecisionPhase::Offers { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.propose_agreements_autonomously(&busy));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.agreements.is_empty() {
+                            run.events.push(CoreRunEvent::Offers(result.agreements));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase =
+                            DecisionPhase::Acceptance { meal_people };
+                    }
+                    DecisionPhase::Acceptance { mut meal_people } => {
+                        let mut busy = blocked.to_vec();
+                        busy.extend(meal_people.iter().copied());
+                        busy.par_sort_unstable();
+                        busy.dedup();
+                        let result = attempt!('run, self.accept_agreements_autonomously(&busy));
+                        meal_people.extend(result.actors);
+                        meal_people.par_sort_unstable();
+                        meal_people.dedup();
+                        if !result.agreements.is_empty() {
+                            run.events
+                                .push(CoreRunEvent::Acceptances(result.agreements));
+                        }
+                        self.schedule.as_mut().expect("active schedule").phase = if self
+                            .autowork
+                            .as_ref()
+                            .is_some_and(|owner| owner.requests.is_some())
+                        {
+                            DecisionPhase::Asking { meal_people }
+                        } else {
+                            DecisionPhase::Work { meal_people }
+                        };
                     }
                     DecisionPhase::Asking { mut meal_people } => {
                         let mut busy = blocked.to_vec();

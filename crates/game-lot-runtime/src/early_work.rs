@@ -285,10 +285,11 @@ impl Runtime {
         }
         game_lot_work::validate_actions(&self.catalog, actions)?;
         if actions.par_iter().any(|action| {
-            action.movements.iter().any(|movement| {
-                matches!(movement.from, Place::JobInput(_) | Place::JobOutput(_))
-                    || movement.to.is_none()
-            })
+            !action.creations.is_empty()
+                || action.movements.iter().any(|movement| {
+                    matches!(movement.from, Place::JobInput(_) | Place::JobOutput(_))
+                        || movement.to.is_none()
+                })
         }) {
             return Err("interval transfers cannot consume goods or move job custody".into());
         }

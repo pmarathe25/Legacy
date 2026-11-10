@@ -37,13 +37,6 @@ impl CoreHost {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
             return Err("invalid occupied people".into());
         }
-        let tick = self.core.physical.tick();
-        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
-        if offset >= self.core.physical.tick_millis()
-            || self.core.next_deadline(None)?.after_millis == 0
-        {
-            return Err("publish pending interval events before delivering".into());
-        }
         let Some(owner) = self.agreements.as_ref().filter(|owner| {
             !owner.contracts.is_empty()
                 && owner.policies.par_iter().any(|policy| {
@@ -54,6 +47,13 @@ impl CoreHost {
         }) else {
             return Ok(CoreDeliveryResults::default());
         };
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before delivering".into());
+        }
         let mut busy = blocked.to_vec();
         busy.par_extend(
             self.core
@@ -127,7 +127,16 @@ impl CoreHost {
         let (next, ids) = owner
             .propose(proposals, &people, &goods, tick)
             .map_err(str::to_owned)?;
+        let mut opinions = self
+            .opinions
+            .as_ref()
+            .filter(|owner| owner.tracks_promise_obligation())
+            .cloned();
+        game_economy_promises::learn_promises(opinions.as_mut(), proposals);
         self.agreements = Some(next);
+        if let Some(opinions) = opinions {
+            self.opinions = Some(opinions);
+        }
         Ok(ids)
     }
 
