@@ -354,6 +354,7 @@ fn independent_written_journeys(count: u64) -> State {
         }
     }
     state.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -2658,6 +2659,7 @@ fn a_departing_handler_leaves_the_animal_at_its_real_location() {
         .containers
         .sort_unstable_by_key(|container| container.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -6500,6 +6502,7 @@ fn controlled_local_walking_blocks_remote_store_stock_and_regional_departure() {
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -9770,6 +9773,7 @@ fn travelers_are_exposed_even_when_shelter_is_available() {
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -9924,6 +9928,7 @@ fn travelers_eat_only_their_own_unexpired_supplies_while_the_journey_advances() 
         .containers
         .sort_unstable_by_key(|c| c.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -13914,6 +13919,7 @@ fn personal_expedition_travels_and_returns_with_real_custody_and_can_be_cancelle
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -14592,6 +14598,7 @@ fn hauling_workload(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|c| c.place);
     state.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -15090,6 +15097,7 @@ fn expedition_fixture() -> State {
         .containers
         .sort_unstable_by_key(|row| row.place);
     state.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -19317,6 +19325,7 @@ fn distinct_cells_and_journeys_keep_social_contact_separate() {
         .containers
         .sort_unstable_by_key(|c| c.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -23463,6 +23472,7 @@ fn expedition_workload(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|row| row.place);
     state.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -28954,6 +28964,7 @@ fn journeys_keep_possessions_and_expiry_and_resume_without_teleporting() {
         .containers
         .sort_unstable_by_key(|row| row.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -29046,6 +29057,7 @@ fn hungry_person_travels_on_their_own_stale_report_and_learns_on_arrival() {
         .containers
         .sort_unstable_by_key(|c| c.place);
     initial.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -29217,6 +29229,7 @@ fn food_search_workload(count: u64) -> State {
         .containers
         .sort_unstable_by_key(|c| c.place);
     state.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -37036,6 +37049,7 @@ fn traveling_fatigue_workload(count: u64) -> State {
         p.region = None;
     }
     state.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,
@@ -44037,6 +44051,7 @@ fn people_can_invent_a_reciprocal_offer_from_their_own_experience() {
     learning.experiences = 1;
     learning.last_helper = Some(1);
     remote.travel = Some(Travel {
+        destinations: vec![],
         closures: vec![],
         observations: vec![],
         observation_limit: 8,

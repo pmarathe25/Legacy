@@ -360,6 +360,68 @@ impl CoreHost {
         self.work_checked_revision = None;
         Ok(outcomes)
     }
+    /// Let each eligible person pursue their own configured destination.
+    pub fn depart_autonomously(
+        &mut self,
+        occupied: &[u64],
+    ) -> Result<Vec<travel::DepartureOutcome>, String> {
+        if occupied.par_windows(2).any(|pair| pair[0] >= pair[1]) {
+            return Err("invalid occupied people".into());
+        }
+        let Some(travel) = &self.core.travel else {
+            return Ok(Vec::new());
+        };
+        if travel.destinations.is_empty() {
+            return Ok(Vec::new());
+        }
+        let occupied_rest = self.blocked_with_rest(occupied);
+        let occupied = occupied_rest.as_deref().unwrap_or(occupied);
+        let mut busy = occupied.to_vec();
+        busy.par_extend(
+            self.core
+                .physical
+                .work()
+                .par_iter()
+                .filter(|row| row.phase == game_lot_runtime::Phase::Working)
+                .map(|row| row.job.worker),
+        );
+        busy.par_sort_unstable();
+        busy.dedup();
+        let mut routes: Vec<_> = travel
+            .routes
+            .par_iter()
+            .map(|r| (r.source, r.destination))
+            .collect();
+        routes.par_sort_unstable();
+        let mut requests: Vec<_> = travel
+            .destinations
+            .par_iter()
+            .filter_map(|choice| {
+                if !choice.enabled || busy.binary_search(&choice.person).is_ok() {
+                    return None;
+                }
+                let person = self
+                    .core
+                    .people
+                    .binary_search_by_key(&choice.person, |p| p.id)
+                    .ok()
+                    .map(|i| &self.core.people[i])?;
+                let source = person.region?;
+                (person.health > 0
+                    && !person.controlled
+                    && routes.binary_search(&(source, choice.destination)).is_ok())
+                .then_some(travel::Departure {
+                    person: choice.person,
+                    destination: choice.destination,
+                })
+            })
+            .collect();
+        requests.par_sort_unstable_by_key(|choice| choice.person);
+        if requests.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.depart(&requests, occupied)
+    }
     pub fn defer_work(&mut self, tick: u64, offset: u64, jobs: &[u64]) -> Result<(), String> {
         self.core.defer_work(tick, offset, jobs)
     }

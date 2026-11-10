@@ -400,6 +400,7 @@ fn core_host_departure_benchmark() {
         .and_then(|v| v.parse().ok())
         .unwrap_or(1);
     assert!(count > 1);
+    let automatic = std::env::var_os("LEGACY_AUTO_TRAVEL").is_some();
     let mut initial = fixture();
     let template = initial.people[0].clone();
     initial.people = (1..=count)
@@ -410,6 +411,15 @@ fn core_host_departure_benchmark() {
         })
         .collect();
     initial.travel.as_mut().unwrap().journeys.clear();
+    if automatic {
+        initial.travel.as_mut().unwrap().destinations = (2..=count)
+            .map(|person| game_economy_person::travel::DestinationChoice {
+                person,
+                destination: 2,
+                enabled: true,
+            })
+            .collect();
+    }
     initial.nutrition = None;
     initial.pending_food.clear();
     let snapshot = CoreHostSnapshot {
@@ -439,7 +449,11 @@ fn core_host_departure_benchmark() {
         .install(|| {
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             let start = std::time::Instant::now();
-            let outcomes = host.depart(&choices, &[]).unwrap();
+            let outcomes = if automatic {
+                host.depart_autonomously(&[]).unwrap()
+            } else {
+                host.depart(&choices, &[]).unwrap()
+            };
             host.progress(1000).unwrap();
             host.settle().unwrap();
             let elapsed = start.elapsed();
@@ -505,6 +519,42 @@ fn closed_route_is_observed_without_moving_or_consuming_time() {
         result.core.physical.work_interval.unwrap().elapsed_millis,
         0
     );
+}
+
+#[test]
+fn scheduled_personal_destinations_respect_work_rest_and_control() {
+    let run = |workers| {
+        rayon::ThreadPoolBuilder::new().num_threads(workers).build().unwrap().install(|| {
+        let mut initial = fixture();
+        let template = initial.people[0].clone();
+        initial.people = (1..=6).map(|id| { let mut p = template.clone(); p.id = id; p.controlled = id == 3; p }).collect();
+        initial.nutrition = None;
+        initial.pending_food.clear();
+        let travel = initial.travel.as_mut().unwrap();
+        travel.journeys.clear();
+        travel.destinations = (1..=6).map(|person| game_economy_person::travel::DestinationChoice {
+            person, destination: 2, enabled: person != 5,
+        }).collect();
+        let mut fatigue = timed_fatigue();
+        fatigue.fatigue.people.push(game_economy_fatigue::FatiguePerson { id: 6, fatigue: 2, resting: true });
+        let snapshot = CoreHostSnapshot {
+            core: initial, autowork: None, tool_wear: None, tool_requirements: vec![],
+            paused_work_rates: vec![], fatigue: Some(fatigue), activity: vec![],
+            opinions: None, goals: None, agreements: None, sites: None, schedule: None,
+        };
+        let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+        host.enable_schedule(1000, 1).unwrap();
+        let result = host.advance_scheduled(0, &[4]).unwrap();
+        assert_eq!(result.failure, None);
+        assert!(result.events.iter().any(|e| matches!(e, game_economy::core_interval::CoreRunEvent::Departures(rows) if rows.len() == 1 && rows[0].person == 2 && rows[0].departed)));
+        let state = host.snapshot();
+        assert_eq!(state.core.travel.as_ref().unwrap().journeys.iter().map(|j| j.person).collect::<Vec<_>>(), vec![2]);
+        let saved = serde_json::to_string(&state).unwrap();
+        assert_eq!(CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap().snapshot(), state);
+        state
+    })
+    };
+    assert_eq!(run(1), run(6));
 }
 
 #[test]

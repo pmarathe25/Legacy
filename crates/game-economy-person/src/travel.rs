@@ -68,6 +68,18 @@ pub struct Departure {
     pub person: u64,
     pub destination: u64,
 }
+/// A personal preference to reach one destination, reconsidered at decisions.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DestinationChoice {
+    pub person: u64,
+    pub destination: u64,
+    #[serde(default = "choice_enabled")]
+    pub enabled: bool,
+}
+fn choice_enabled() -> bool {
+    true
+}
 /// A directed route is physically impassable during the half-open interval.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -139,6 +151,8 @@ pub struct Travel {
     pub personal_routing: bool,
     #[serde(default)]
     pub sharing: Vec<RouteSharing>,
+    #[serde(default)]
+    pub destinations: Vec<DestinationChoice>,
 }
 fn default_observation_limit() -> usize {
     8
@@ -153,6 +167,7 @@ impl Default for Travel {
             observation_limit: default_observation_limit(),
             personal_routing: false,
             sharing: Vec::new(),
+            destinations: Vec::new(),
         }
     }
 }
@@ -280,6 +295,7 @@ impl Clone for Travel {
             observation_limit: self.observation_limit,
             personal_routing: self.personal_routing,
             sharing: self.sharing.par_iter().cloned().collect(),
+            destinations: self.destinations.par_iter().cloned().collect(),
         }
     }
 }
@@ -393,12 +409,25 @@ impl Travel {
             .map(|policy| policy.person)
             .collect();
         speakers.par_sort_unstable();
+        let mut choosers: Vec<_> = self
+            .destinations
+            .par_iter()
+            .map(|choice| choice.person)
+            .collect();
+        choosers.par_sort_unstable();
         if routes
             .par_windows(2)
             .any(|r| (r[0].source, r[0].destination) == (r[1].source, r[1].destination))
             || journeys.par_windows(2).any(|r| r[0] == r[1])
             || observations.par_windows(2).any(|pair| pair[0] == pair[1])
             || speakers.par_windows(2).any(|pair| pair[0] == pair[1])
+            || choosers.par_windows(2).any(|pair| pair[0] == pair[1])
+            || self.destinations.par_iter().any(|choice| {
+                people
+                    .binary_search_by_key(&choice.person, |person| person.id)
+                    .is_err()
+                    || !regions.contains(&choice.destination)
+            })
             || self.sharing.par_iter().any(|policy| {
                 people
                     .binary_search_by_key(&policy.person, |person| person.id)
@@ -804,6 +833,7 @@ impl Travel {
             observation_limit: self.observation_limit,
             personal_routing: self.personal_routing,
             sharing: self.sharing.par_iter().cloned().collect(),
+            destinations: self.destinations.par_iter().cloned().collect(),
         }
     }
     /// Stop travelers who died in a later lifecycle phase of this boundary.

@@ -1750,6 +1750,7 @@ pub fn scenario_with_options(
             observation_limit: 8,
             personal_routing: scenario.personal_route_planning,
             sharing: scenario.route_sharing,
+            destinations: vec![],
             routes: scenario.routes,
             journeys: vec![],
         }),
