@@ -63,6 +63,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub environment: Option<game_environment::Environment>,
     #[serde(default)]
+    pub recovery: Option<crate::RecoveryRules>,
+    #[serde(default)]
     pub gathering: Option<crate::Gathering>,
     #[serde(default)]
     pub fauna: Option<game_fauna::Fauna>,
@@ -107,6 +109,7 @@ pub struct CoreHost {
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
+    recovery: Option<crate::RecoveryRules>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
@@ -138,6 +141,7 @@ struct CoreRuntimeOptions {
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
+    recovery: Option<crate::RecoveryRules>,
     gathering: Option<crate::Gathering>,
     fauna: Option<game_fauna::Fauna>,
     hunting: Option<crate::Hunting>,
@@ -165,6 +169,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            recovery,
             gathering,
             fauna,
             hunting,
@@ -202,6 +207,7 @@ impl CoreHost {
                 agriculture,
                 irrigation,
                 environment,
+                recovery,
                 gathering,
                 fauna,
                 hunting,
@@ -230,6 +236,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            recovery,
             gathering,
             fauna,
             hunting,
@@ -267,6 +274,7 @@ impl CoreHost {
                 agriculture,
                 irrigation,
                 environment,
+                recovery,
                 gathering,
                 fauna,
                 hunting,
@@ -302,6 +310,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            recovery,
             gathering,
             fauna,
             hunting,
@@ -623,6 +632,9 @@ impl CoreHost {
                 .validate(&people, &goods, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if recovery.as_ref().is_some_and(|rules| rules.interval == 0) {
+            return Err("invalid recovery rules".into());
+        }
         if let Some(owner) = &mut sites {
             owner.validate(&core)?;
             if let Some(maintenance) = &mut owner.maintenance {
@@ -648,6 +660,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            recovery,
             gathering,
             fauna,
             hunting,
@@ -682,6 +695,7 @@ impl CoreHost {
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
             environment: self.environment.clone(),
+            recovery: self.recovery.clone(),
             gathering: self.gathering.clone(),
             fauna: self.fauna.clone(),
             hunting: self.hunting.clone(),
@@ -1161,6 +1175,29 @@ impl CoreHost {
                 &mut draft.people.people,
                 tick,
             );
+        }
+        if let Some(rules) = self
+            .recovery
+            .as_ref()
+            .filter(|rules| draft.events().tick.is_multiple_of(rules.interval))
+        {
+            let quantum = self.core.physical.tick_millis();
+            draft.people.people.par_iter_mut().for_each(|person| {
+                if person.health == 0 || person.hunger > rules.max_hunger {
+                    return;
+                }
+                let rest = self
+                    .activity
+                    .binary_search_by_key(&person.id, |row| row.id)
+                    .ok()
+                    .map_or(0, |index| self.activity[index].rest_millis);
+                let bonus = ((u128::from(rules.rest_bonus) * u128::from(rest))
+                    / u128::from(quantum)) as u32;
+                person.health = person
+                    .health
+                    .saturating_add(rules.health_per_interval.saturating_add(bonus))
+                    .min(self.core.rules.max_health);
+            });
         }
         if let Some(plan) = &dependent {
             plan.apply_health(

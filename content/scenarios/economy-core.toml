@@ -20,7 +20,7 @@ stock = { grain = 100, bread = 20 }
 [[people]]
 id = 1
 region = 1
-health = 100
+health = 90
 hunger = 0
 willing_to_work = false
 seek_meals = false
@@ -118,3 +118,9 @@ age = 2
 health = 10
 hunger = 1
 genome = { sex = "Male", alleles = [[300,300], [300,300], [300,300], [300,300]] }
+
+[recovery]
+interval = 1
+health_per_interval = 2
+rest_bonus = 4
+max_hunger = 20

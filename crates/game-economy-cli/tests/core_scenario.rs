@@ -22,6 +22,7 @@ fn run_scenario(workers: usize) -> serde_json::Value {
             );
             let snapshot = host.snapshot();
             assert_eq!(snapshot.core.people.len(), 3);
+            assert_eq!(snapshot.core.people[0].health, 94);
             assert_eq!(snapshot.family.as_ref().unwrap().totals.births, 1);
             assert!(
                 snapshot
