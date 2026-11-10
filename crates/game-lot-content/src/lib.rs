@@ -18,6 +18,50 @@ pub struct Growth<'a> {
     /// Domain-validated writing consumes materials to create an identified page.
     pub writing: &'a [WritingPage],
     pub compact_consumption: &'a [u64],
+    /// Domain-validated gathering into personal custody.
+    pub gathered: &'a [Gathered],
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gathered {
+    pub action: u64,
+    pub person: u64,
+    pub good: u32,
+    pub quantity: u64,
+}
+
+/// Generate one fresh personal output per independently admitted gatherer.
+pub fn prepare_gathered(
+    catalog: &Catalog,
+    outputs: &[Gathered],
+    tick: u64,
+) -> Result<Vec<Transaction>, String> {
+    let mut people: Vec<_> = outputs.par_iter().map(|row| row.person).collect();
+    let mut actions: Vec<_> = outputs.par_iter().map(|row| row.action).collect();
+    people.par_sort_unstable();
+    actions.par_sort_unstable();
+    if people.first() == Some(&0)
+        || actions.first() == Some(&0)
+        || people.par_windows(2).any(|rows| rows[0] == rows[1])
+        || actions.par_windows(2).any(|rows| rows[0] == rows[1])
+    {
+        return Err("invalid gathering output identity".into());
+    }
+    outputs
+        .par_iter()
+        .map(|row| {
+            Ok(Transaction {
+                id: row.action,
+                movements: vec![],
+                creations: vec![catalog.creation(
+                    row.action,
+                    Place::Person(row.person),
+                    row.good,
+                    row.quantity,
+                    tick,
+                )?],
+            })
+        })
+        .collect()
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WritingPage {

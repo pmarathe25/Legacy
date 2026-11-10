@@ -6,6 +6,7 @@ mod agriculture;
 mod claims;
 mod fatigue;
 mod food_search;
+mod gathering;
 mod offers;
 mod requests;
 mod scheduler;
@@ -55,6 +56,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub environment: Option<game_environment::Environment>,
     #[serde(default)]
+    pub gathering: Option<crate::Gathering>,
+    #[serde(default)]
     pub opinions: Option<game_opinions::Opinions>,
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
@@ -83,6 +86,7 @@ pub struct CoreHost {
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
+    gathering: Option<crate::Gathering>,
     work_checked_revision: Option<u64>,
     work_checked_blocked: Vec<u64>,
     opinions: Option<game_opinions::Opinions>,
@@ -106,6 +110,7 @@ struct CoreRuntimeOptions {
     agriculture: Option<game_economy_agriculture::Agriculture>,
     irrigation: Option<game_economy_agriculture::irrigation::Irrigation>,
     environment: Option<game_environment::Environment>,
+    gathering: Option<crate::Gathering>,
 }
 impl CoreHost {
     pub fn begin(snapshot: CoreHostSnapshot, rates: &[(u64, u64)]) -> Result<Self, String> {
@@ -125,6 +130,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            gathering,
             opinions,
             goals,
             agreements,
@@ -154,6 +160,7 @@ impl CoreHost {
                 agriculture,
                 irrigation,
                 environment,
+                gathering,
             },
         )
     }
@@ -174,6 +181,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            gathering,
             opinions,
             goals,
             agreements,
@@ -203,6 +211,7 @@ impl CoreHost {
                 agriculture,
                 irrigation,
                 environment,
+                gathering,
             },
         )
     }
@@ -230,6 +239,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            gathering,
         } = options;
         if let Some(legacy) = food_search.as_mut().and_then(|owner| owner.claims.take()) {
             if claims.is_some() {
@@ -439,6 +449,17 @@ impl CoreHost {
             let view = core.physical.view(core.physical.tick())?;
             crate::environment::validate(environment.as_ref(), &view, &goods)?;
         }
+        if let Some(owner) = &gathering {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            let view = core.physical.view(core.physical.tick())?;
+            owner.validate(&people, &goods, &view)?;
+        }
         if let Some(owner) = &goals {
             let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
             let recipes: HashSet<_> = core
@@ -488,6 +509,7 @@ impl CoreHost {
             agriculture,
             irrigation,
             environment,
+            gathering,
             work_checked_revision: None,
             work_checked_blocked: Vec::new(),
             opinions,
@@ -514,6 +536,7 @@ impl CoreHost {
             agriculture: self.agriculture.clone(),
             irrigation: self.irrigation.clone(),
             environment: self.environment.clone(),
+            gathering: self.gathering.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
             agreements: self.agreements.clone(),
@@ -855,6 +878,8 @@ impl CoreHost {
         let mut actions = Vec::new();
         let compact = game_economy_agriculture::append_planting(&mut cultivation, &mut actions);
         let irrigation_plan = self.plan_irrigation(occupied, &mut cultivation, &mut actions)?;
+        let gathering =
+            self.plan_gathering(occupied, cultivation.as_ref(), irrigation_plan.as_ref())?;
         let goods: Vec<_> = self.tool_wear.as_ref().map_or_else(Vec::new, |owner| {
             owner.rules.iter().map(|rule| rule.good).collect()
         });
@@ -865,7 +890,10 @@ impl CoreHost {
                 goods: &goods,
                 next_item: owner.next_item,
             });
-        let growth = game_economy_agriculture::physical_growth(cultivation.as_ref(), &compact);
+        let mut growth = game_economy_agriculture::physical_growth(cultivation.as_ref(), &compact);
+        growth.gathered = gathering
+            .as_ref()
+            .map_or(&[], |(_, outputs)| outputs.as_slice());
         let mut draft = self
             .core
             .prepare_settlement_with_growth(&actions, growth, config)?;
@@ -891,6 +919,17 @@ impl CoreHost {
             .zip(irrigation_plan)
             .map(|(owner, plan)| owner.advance(plan, draft.events(), draft.events().tick));
         let (agriculture, claims) = self.stage_cultivation(cultivation, draft.events())?;
+        let gathering = gathering
+            .map(|(plan, _)| {
+                plan.publish(
+                    self.gathering.as_ref().expect("gathering owner"),
+                    draft.events(),
+                    self.environment
+                        .as_ref()
+                        .and_then(|owner| owner.season(draft.events().tick)),
+                )
+            })
+            .transpose()?;
         let mut tools = self.stage_tools(
             draft.produced_items(),
             draft.next_produced_item(),
@@ -970,6 +1009,9 @@ impl CoreHost {
         }
         if let Some(owner) = irrigation {
             self.irrigation = Some(owner);
+        }
+        if let Some(owner) = gathering {
+            self.gathering = Some(owner);
         }
         if let Some((owner, opinions)) = claims {
             self.claims = Some(owner);

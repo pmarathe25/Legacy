@@ -22,6 +22,48 @@ fn goods() -> Vec<Good> {
         },
     ]
 }
+
+#[test]
+fn personal_gathering_outputs_are_fresh_and_require_unique_actors() {
+    let catalog = Catalog::compile(&goods(), 10).unwrap();
+    let output = Gathered {
+        action: 1,
+        person: 2,
+        good: 1,
+        quantity: 1,
+    };
+    let rows = prepare_gathered(&catalog, &[output], 7).unwrap();
+    assert_eq!(rows[0].creations[0].to, Place::Person(2));
+    assert_eq!(rows[0].creations[0].lot.expires_at, Some(27));
+    assert!(
+        prepare_gathered(
+            &catalog,
+            &[
+                output,
+                Gathered {
+                    action: 2,
+                    ..output
+                }
+            ],
+            7
+        )
+        .is_err()
+    );
+    assert!(
+        prepare_gathered(
+            &catalog,
+            &[
+                output,
+                Gathered {
+                    person: 3,
+                    ..output
+                }
+            ],
+            7
+        )
+        .is_err()
+    );
+}
 #[test]
 fn fresh_goods_use_authored_life_and_stock_capacity() {
     let catalog = Catalog::compile(&goods(), 10).unwrap();

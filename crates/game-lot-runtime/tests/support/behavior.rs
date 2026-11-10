@@ -81,6 +81,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                     animal_yield: &[],
                     animal_products: &[],
                     writing: &[],
+                    gathered: &[],
                     compact_consumption: &[]
                 },
                 1
@@ -99,6 +100,7 @@ fn environmental_outputs_compete_for_real_capacity_and_must_be_fresh() {
                 animal_yield: &[],
                 animal_products: &[],
                 writing: &[],
+                gathered: &[],
                 compact_consumption: &[],
             },
             1,
@@ -161,6 +163,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                     animal_yield: &[yield_, invalid],
                     animal_products: &[],
                     writing: &[],
+                    gathered: &[],
                     compact_consumption: &[]
                 },
                 7
@@ -179,6 +182,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                 animal_yield: &[yield_],
                 animal_products: &[],
                 writing: &[],
+                gathered: &[],
                 compact_consumption: &[],
             },
             7,
@@ -219,6 +223,7 @@ fn animal_yields_are_unique_canonical_and_subject_to_person_capacity() {
                 animal_yield: &[next],
                 animal_products: &[],
                 writing: &[],
+                gathered: &[],
                 compact_consumption: &[],
             },
             7,
@@ -1113,6 +1118,7 @@ fn external_receipts_keep_original_ids_across_parallel_chunks_and_compact_action
                             animal_yield: &[],
                             animal_products: &[],
                             writing: &[],
+                            gathered: &[],
                             compact_consumption: &compact,
                         },
                         19,
@@ -2154,6 +2160,7 @@ fn renewable_products_and_hunts_use_distinct_atomic_animal_claims() {
                         animal_yield: &[hunt],
                         animal_products: &[invalid],
                         writing: &[],
+                        gathered: &[],
                         compact_consumption: &[]
                     },
                     7
@@ -2173,6 +2180,7 @@ fn renewable_products_and_hunts_use_distinct_atomic_animal_claims() {
                 animal_yield: &[hunt],
                 animal_products: &[product],
                 writing: &[],
+                gathered: &[],
                 compact_consumption: &[],
             },
             7,

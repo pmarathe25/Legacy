@@ -6282,6 +6282,7 @@ impl Economy {
                     seed: self.seed,
                     tick,
                     manual: manual_gather,
+                    personal_output: false,
                 }
                 .prepare(action_base)
             })
@@ -7994,6 +7995,7 @@ impl Economy {
                         animal_yield: &hunting_plan.yields,
                         animal_products: &product_plan.yields,
                         writing: &writing_output,
+                        gathered: &[],
                         compact_consumption: &compact,
                     },
                     staged_custody,

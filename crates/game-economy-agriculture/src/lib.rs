@@ -333,6 +333,7 @@ pub fn physical_growth<'a>(
         animal_yield: &[],
         animal_products: &[],
         writing: &[],
+        gathered: &[],
         compact_consumption: compact,
     }
 }

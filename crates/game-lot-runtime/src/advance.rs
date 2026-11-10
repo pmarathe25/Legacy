@@ -579,6 +579,11 @@ impl Runtime {
             growth.writing,
             next_tick,
         )?);
+        animal_yield.extend(game_lot_content::prepare_gathered(
+            &self.catalog,
+            growth.gathered,
+            next_tick,
+        )?);
         let direct_external = external;
         let combined = game_lot_content::combine_growth(external, growth.harvest, &animal_yield);
         let external = combined.as_deref().unwrap_or(external);

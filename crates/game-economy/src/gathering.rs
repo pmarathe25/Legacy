@@ -142,6 +142,8 @@ pub struct Context<'a> {
     pub seed: u64,
     pub tick: u64,
     pub manual: Option<(u64, u64)>,
+    /// Place outputs in the gatherer's own custody instead of regional stock.
+    pub personal_output: bool,
 }
 impl Context<'_> {
     pub fn prepare(&self, base: u64) -> Result<Plan, String> {
@@ -169,8 +171,15 @@ impl Context<'_> {
                     region: resource.region,
                     good: resource.good,
                 })?;
+                let capacity = if self.personal_output {
+                    self.view
+                        .container(Place::Person(person.id))
+                        .map_or(0, |holding| holding.capacity.saturating_sub(holding.used))
+                } else {
+                    stock.capacity.saturating_sub(stock.used)
+                };
                 if resource.available < resource.yield_per_action
-                    || stock.capacity.saturating_sub(stock.used) < resource.yield_per_action
+                    || capacity < resource.yield_per_action
                 {
                     return None;
                 }
@@ -231,30 +240,38 @@ impl Context<'_> {
             .collect();
         let count = u64::try_from(selected.len()).map_err(|_| "gathering action overflow")?;
         base.checked_add(count).ok_or("gathering action overflow")?;
-        let catalog = Catalog::from_tick_millis(self.goods, self.tick_millis)?;
+        let catalog = (!self.personal_output)
+            .then(|| Catalog::from_tick_millis(self.goods, self.tick_millis))
+            .transpose()?;
         let results: Vec<_> = selected
             .par_iter()
             .enumerate()
             .map(|(i, (resource, actor))| -> Result<_, String> {
                 let id = base + i as u64;
-                let action = Transaction {
-                    id,
-                    movements: vec![],
-                    creations: vec![catalog.creation(
-                        id,
-                        Place::Stock {
-                            region: resource.region,
-                            good: resource.good,
-                        },
-                        resource.good,
-                        resource.yield_per_action,
-                        self.tick,
-                    )?],
-                };
+                let action = catalog
+                    .as_ref()
+                    .map(|catalog| -> Result<_, String> {
+                        Ok(Transaction {
+                            id,
+                            movements: vec![],
+                            creations: vec![catalog.creation(
+                                id,
+                                Place::Stock {
+                                    region: resource.region,
+                                    good: resource.good,
+                                },
+                                resource.good,
+                                resource.yield_per_action,
+                                self.tick,
+                            )?],
+                        })
+                    })
+                    .transpose()?;
                 Ok(((resource.id, id, resource.yield_per_action, *actor), action))
             })
             .collect::<Result<_, _>>()?;
-        let (records, actions) = results.into_par_iter().unzip();
+        let records = results.par_iter().map(|row| row.0).collect();
+        let actions = results.into_par_iter().filter_map(|row| row.1).collect();
         Ok(Plan {
             actors,
             actions,
@@ -263,6 +280,22 @@ impl Context<'_> {
     }
 }
 impl Plan {
+    pub fn carried_outputs(&self, owner: &Gathering) -> Vec<game_lot_runtime::Gathered> {
+        let mut nodes: Vec<_> = owner.nodes.par_iter().collect();
+        nodes.par_sort_unstable_by_key(|node| node.id);
+        self.records
+            .par_iter()
+            .filter_map(|&(id, action, quantity, person)| {
+                let index = nodes.binary_search_by_key(&id, |node| node.id).ok()?;
+                Some(game_lot_runtime::Gathered {
+                    action,
+                    person,
+                    good: nodes[index].good,
+                    quantity,
+                })
+            })
+            .collect()
+    }
     pub fn outputs(&self, owner: &Gathering) -> Vec<(u64, u64, u64, u32)> {
         let mut nodes: Vec<_> = owner.nodes.par_iter().collect();
         nodes.par_sort_unstable_by_key(|n| n.id);
