@@ -22,6 +22,57 @@ fn together(people: &[Person], requester: u64, worker: u64, region: u64) -> bool
 }
 
 impl CoreHost {
+    /// Record personally chosen offers without reserving the promised goods.
+    pub fn propose_agreements(
+        &mut self,
+        proposals: &[game_agreements::Proposal],
+    ) -> Result<Vec<u64>, String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before offering".into());
+        }
+        let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
+        let people: HashSet<_> = self
+            .core
+            .people
+            .par_iter()
+            .map(|person| person.id)
+            .collect();
+        let goods: HashSet<_> = self
+            .core
+            .physical
+            .goods()
+            .par_iter()
+            .map(|good| good.id)
+            .collect();
+        let (next, ids) = owner
+            .propose(proposals, &people, &goods, tick)
+            .map_err(str::to_owned)?;
+        self.agreements = Some(next);
+        Ok(ids)
+    }
+
+    /// Apply each person's own acceptance, refusal, or withdrawal decision.
+    pub fn decide_agreements(
+        &mut self,
+        decisions: &[game_agreements::Decision],
+    ) -> Result<(), String> {
+        let tick = self.core.physical.tick();
+        let offset = self.core.elapsed_millis().ok_or("no physical interval")?;
+        if offset >= self.core.physical.tick_millis()
+            || self.core.next_deadline(None)?.after_millis == 0
+        {
+            return Err("publish pending interval events before deciding".into());
+        }
+        let owner = self.agreements.as_ref().ok_or("no agreement owner")?;
+        let next = owner.decide(decisions, tick).map_err(str::to_owned)?;
+        self.agreements = Some(next);
+        Ok(())
+    }
+
     /// Let people with active personal goals address local requests.
     pub fn ask_for_work(&mut self, blocked: &[u64]) -> Result<Vec<u64>, String> {
         if blocked.par_windows(2).any(|rows| rows[0] >= rows[1]) {
@@ -72,9 +123,16 @@ impl CoreHost {
             .par_iter()
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
-        let Some(draft) =
-            game_work_asking::prepare(owner, self.goals.as_ref(), &people, &busy, None, tick)
-                .map_err(str::to_owned)?
+        let offers = owner.offer_index(self.agreements.as_ref(), tick);
+        let Some(draft) = game_work_asking::prepare(
+            owner,
+            self.goals.as_ref(),
+            &people,
+            &busy,
+            offers.as_ref(),
+            tick,
+        )
+        .map_err(str::to_owned)?
         else {
             return Ok(Vec::new());
         };
@@ -204,11 +262,12 @@ impl CoreHost {
             .par_iter()
             .map(|person| (person.id, person.region, person.health, person.hunger))
             .collect();
+        let offers = requests.offer_index(self.agreements.as_ref(), tick);
         let draft = requests.prepare_filtered(
             &people,
             self.opinions.as_ref(),
             &busy,
-            None,
+            offers.as_ref(),
             tick,
             |request| {
                 request.created_at <= tick

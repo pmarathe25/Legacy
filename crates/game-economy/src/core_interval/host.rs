@@ -20,6 +20,8 @@ pub struct CoreHostSnapshot {
     #[serde(default)]
     pub goals: Option<game_goals::Goals>,
     #[serde(default)]
+    pub agreements: Option<game_agreements::Agreements>,
+    #[serde(default)]
     pub schedule: Option<CoreSchedule>,
 }
 
@@ -30,6 +32,7 @@ pub struct CoreHost {
     tool_wear: Option<ToolWear>,
     opinions: Option<game_opinions::Opinions>,
     goals: Option<game_goals::Goals>,
+    agreements: Option<game_agreements::Agreements>,
     schedule: Option<CoreSchedule>,
 }
 impl CoreHost {
@@ -40,10 +43,13 @@ impl CoreHost {
             tool_wear,
             opinions,
             goals,
+            agreements,
             schedule,
         } = snapshot;
         let core = CoreInterval::begin(core, rates)?;
-        Self::compile(core, autowork, tool_wear, opinions, goals, schedule)
+        Self::compile(
+            core, autowork, tool_wear, opinions, goals, agreements, schedule,
+        )
     }
     pub fn resume(snapshot: CoreHostSnapshot) -> Result<Self, String> {
         let CoreHostSnapshot {
@@ -52,10 +58,13 @@ impl CoreHost {
             tool_wear,
             opinions,
             goals,
+            agreements,
             schedule,
         } = snapshot;
         let core = CoreInterval::resume(core)?;
-        Self::compile(core, autowork, tool_wear, opinions, goals, schedule)
+        Self::compile(
+            core, autowork, tool_wear, opinions, goals, agreements, schedule,
+        )
     }
     fn compile(
         core: CoreInterval,
@@ -63,6 +72,7 @@ impl CoreHost {
         tool_wear: Option<ToolWear>,
         opinions: Option<game_opinions::Opinions>,
         goals: Option<game_goals::Goals>,
+        agreements: Option<game_agreements::Agreements>,
         schedule: Option<CoreSchedule>,
     ) -> Result<Self, String> {
         if let Some(owner) = &autowork {
@@ -107,6 +117,18 @@ impl CoreHost {
                 .validate(&people, &recipes, core.physical.tick())
                 .map_err(str::to_owned)?;
         }
+        if let Some(owner) = &agreements {
+            let people: HashSet<_> = core.people.par_iter().map(|person| person.id).collect();
+            let goods: HashSet<_> = core
+                .physical
+                .goods()
+                .par_iter()
+                .map(|good| good.id)
+                .collect();
+            owner
+                .validate(&people, &goods, core.physical.tick())
+                .map_err(str::to_owned)?;
+        }
         if let Some(schedule) = &schedule {
             schedule.validate(&core)?;
         }
@@ -116,6 +138,7 @@ impl CoreHost {
             tool_wear,
             opinions,
             goals,
+            agreements,
             schedule,
         })
     }
@@ -126,6 +149,7 @@ impl CoreHost {
             tool_wear: self.tool_wear.clone(),
             opinions: self.opinions.clone(),
             goals: self.goals.clone(),
+            agreements: self.agreements.clone(),
             schedule: self.schedule.clone(),
         }
     }
@@ -363,6 +387,17 @@ impl CoreHost {
             &draft.people.people,
             true,
         )?;
+        let agreements = self.agreements.as_ref().and_then(|owner| {
+            (!owner.events.is_empty()
+                || owner.contracts.par_iter().any(|contract| {
+                    contract.due < draft.events().tick
+                        && matches!(
+                            contract.status,
+                            game_agreements::Status::Active | game_agreements::Status::Proposed
+                        )
+                }))
+            .then(|| owner.advance(draft.events().tick))
+        });
         self.core.validate_settlement(&draft)?;
         let events = self.core.commit_settlement(draft)?;
         if let Some(tools) = tools {
@@ -371,6 +406,9 @@ impl CoreHost {
         self.publish_request_resolution(requests);
         if let Some(goals) = goals {
             self.goals = Some(goals);
+        }
+        if let Some(agreements) = agreements {
+            self.agreements = Some(agreements);
         }
         self.schedule = None;
         Ok(events)

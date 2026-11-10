@@ -490,6 +490,7 @@ fn core_host_autonomous_work_benchmark() {
         tool_wear: None,
         opinions: None,
         goals: None,
+        agreements: None,
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: 2,
@@ -583,7 +584,7 @@ fn core_host_autonomous_work_benchmark() {
 #[test]
 #[ignore = "manual scheduled personal work-request scaling benchmark"]
 fn core_host_work_requests_benchmark() {
-    use game_autowork::requests::{Preference, Request, Requests};
+    use game_autowork::requests::{OfferValue, Preference, Request, Requests};
     use std::hash::{Hash, Hasher};
     let count = std::env::var("LEGACY_PEOPLE")
         .ok()
@@ -593,6 +594,7 @@ fn core_host_work_requests_benchmark() {
         .ok()
         .and_then(|value| value.parse().ok())
         .unwrap_or(1);
+    let use_offers = std::env::var_os("LEGACY_OFFERS").is_some();
     assert!(count > 1);
     let mut initial = fixture();
     let person = initial.people[0].clone();
@@ -638,7 +640,11 @@ fn core_host_work_requests_benchmark() {
                 help_value: 0,
                 affinity_weight: 0,
                 trust_weight: 0,
-                offer_value: None,
+                offer_value: use_offers.then_some(OfferValue {
+                    good: 2,
+                    value_per_unit: 1,
+                    max_quantity: 1,
+                }),
                 disregard_claims: false,
             })
             .collect(),
@@ -680,8 +686,28 @@ fn core_host_work_requests_benchmark() {
             requests: Some(requests),
         }),
         tool_wear: None,
-        opinions: Some(opinions),
+        opinions: (!use_offers).then_some(opinions),
         goals: None,
+        agreements: use_offers.then(|| game_agreements::Agreements {
+            next_id: count,
+            policies: vec![],
+            offering: vec![],
+            work_offering: vec![],
+            bulk_debtors: vec![],
+            contracts: (2..=count)
+                .map(|creditor| game_agreements::Contract {
+                    id: creditor - 1,
+                    debtor: 1,
+                    creditor,
+                    good: 2,
+                    quantity: 1,
+                    delivered: 0,
+                    due: 5,
+                    status: game_agreements::Status::Proposed,
+                })
+                .collect(),
+            events: vec![],
+        }),
         schedule: None,
     };
     rayon::ThreadPoolBuilder::new()
@@ -1485,6 +1511,7 @@ fn saved_core_host_coordinates_personal_work_meals_and_tool_ownership() {
                     core: initial,
                     opinions: None,
                     goals: None,
+                    agreements: None,
                     schedule: None,
                     autowork: Some(game_autowork::Autowork {
                         next_id: 2,
@@ -1606,6 +1633,7 @@ fn externally_chosen_work_does_not_require_willingness_and_can_be_abandoned() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -1740,6 +1768,7 @@ fn scheduled_requests_use_directed_fear_and_obligation_without_binding_work() {
                     tool_wear: None,
                     opinions: Some(opinions.clone()),
                     goals: None,
+                    agreements: None,
                     schedule: None,
                 };
                 let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -1866,6 +1895,7 @@ fn willing_request_response_with_missing_stock_remains_pending() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -1962,6 +1992,7 @@ fn contested_request_reservations_do_not_turn_shortage_into_refusal() {
                         tool_wear: None,
                         opinions: None,
                         goals: None,
+                        agreements: None,
                         schedule: None,
                     },
                     &[(1, 1)],
@@ -2049,6 +2080,7 @@ fn future_request_does_not_hide_an_existing_local_request() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2113,6 +2145,7 @@ fn core_host_clears_old_request_events_at_the_boundary() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2163,7 +2196,7 @@ fn scheduled_personal_goals_create_requests_and_count_only_witnessed_help() {
                 pending: vec![], events: vec![],
             };
             let goals = game_goals::Goals { retry_interval: 3, plan_inputs: false, people: vec![game_goals::Goal { person: 2, recipe: 1, priority: 1, target: 1, progress: 0, next_review: 0, enabled: true, recognize_help: true }], events: vec![] };
-            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), schedule: None };
+            let snapshot = CoreHostSnapshot { core: initial, autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![], requests: Some(requests) }), tool_wear: None, opinions: None, goals: Some(goals), agreements: None, schedule: None };
             let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
             host.enable_schedule(1000, 1).unwrap();
             let run = host.advance_continuous(1000, &[]).unwrap();
@@ -2262,6 +2295,7 @@ fn core_host_goal_asking_benchmark() {
         tool_wear: None,
         opinions: None,
         goals: Some(goals),
+        agreements: None,
         schedule: None,
     };
     let pool = rayon::ThreadPoolBuilder::new()
@@ -2337,6 +2371,7 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
         tool_wear: None,
         opinions: None,
         goals: Some(goals),
+        agreements: None,
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2348,6 +2383,127 @@ fn personal_goal_selects_work_and_advances_only_after_completion() {
     );
     assert_eq!(host.advance_continuous(1000, &[]).unwrap().failure, None);
     assert_eq!(host.snapshot().goals.unwrap().people[0].progress, 1);
+}
+
+#[test]
+fn an_unfunded_offer_can_motivate_work_without_forcing_delivery() {
+    use game_autowork::requests::{OfferValue, Outcome, Preference, Request, Requests};
+    let mut initial = fixture();
+    initial.people[1].region = Some(1);
+    initial.travel = None;
+    initial.nutrition = None;
+    initial.pending_food.clear();
+    let stock = initial
+        .physical
+        .custody
+        .containers
+        .iter_mut()
+        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+        .unwrap();
+    *stock = Container::new(
+        stock.place,
+        10,
+        vec![Lot {
+            item: None,
+            good: 1,
+            quantity: 2,
+            expires_at: None,
+        }],
+    )
+    .unwrap();
+    let requests = Requests {
+        next_id: 2,
+        inherit_births: false,
+        memory_limit: 4,
+        work_links: vec![],
+        memories: vec![],
+        preferences: vec![Preference {
+            person: 2,
+            effort: 5,
+            help_value: 0,
+            affinity_weight: 0,
+            trust_weight: 0,
+            offer_value: Some(OfferValue {
+                good: 2,
+                value_per_unit: 1,
+                max_quantity: 10,
+            }),
+            disregard_claims: false,
+        }],
+        askers: vec![],
+        pending: vec![Request {
+            id: 1,
+            requester: 1,
+            worker: 2,
+            region: 1,
+            recipe: 1,
+            created_at: 0,
+            expires: 4,
+        }],
+        events: vec![],
+    };
+    let agreements = game_agreements::Agreements {
+        next_id: 1,
+        policies: vec![],
+        offering: vec![],
+        work_offering: vec![],
+        bulk_debtors: vec![],
+        contracts: vec![],
+        events: vec![],
+    };
+    let snapshot = CoreHostSnapshot {
+        core: initial,
+        autowork: Some(game_autowork::Autowork {
+            next_id: 2,
+            policies: vec![],
+            requests: Some(requests),
+        }),
+        tool_wear: None,
+        opinions: None,
+        goals: None,
+        agreements: Some(agreements),
+        schedule: None,
+    };
+    let mut without_offer = CoreHost::begin(snapshot.clone(), &[(1, 1)]).unwrap();
+    assert_eq!(
+        without_offer
+            .respond_to_work_requests(&[], 1)
+            .unwrap()
+            .events[0]
+            .outcome,
+        Outcome::Refused
+    );
+    let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
+    let physical_before = host.snapshot().core;
+    let ids = host
+        .propose_agreements(&[game_agreements::Proposal {
+            debtor: 1,
+            creditor: 2,
+            good: 2,
+            quantity: 99,
+            due: 1,
+        }])
+        .unwrap();
+    assert_eq!(ids, vec![1]);
+    assert_eq!(host.snapshot().core, physical_before);
+    let saved = serde_json::to_string(&host.snapshot()).unwrap();
+    let mut host = CoreHost::resume(serde_json::from_str(&saved).unwrap()).unwrap();
+    assert_eq!(
+        host.respond_to_work_requests(&[], 1).unwrap().events[0].outcome,
+        Outcome::Started { job: 2 }
+    );
+    host.decide_agreements(&[game_agreements::Decision {
+        contract: 1,
+        actor: 2,
+        accept: true,
+    }])
+    .unwrap();
+    host.enable_schedule(1000, 1).unwrap();
+    assert_eq!(host.advance_continuous(2000, &[]).unwrap().failure, None);
+    let snapshot = host.snapshot();
+    let contract = &snapshot.agreements.as_ref().unwrap().contracts[0];
+    assert_eq!(contract.status, game_agreements::Status::Defaulted);
+    assert_eq!(contract.delivered, 0);
 }
 
 #[test]
@@ -2401,6 +2557,7 @@ fn core_host_physical_taking_preserves_item_identity_without_implied_permission(
             tool_wear: Some(owner),
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2471,6 +2628,7 @@ fn core_host_rejects_unowned_identified_consumption_without_mutation() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 2)],
@@ -2495,7 +2653,7 @@ fn scheduled_core_host_is_partition_independent_at_tied_deadlines() {
         let snapshot = CoreHostSnapshot {
             core: initial,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }),
-            tool_wear: None, opinions: None, goals: None, schedule: None,
+            tool_wear: None, opinions: None, goals: None, agreements: None, schedule: None,
         };
         let mut host = CoreHost::begin(snapshot, &[(1, 2)]).unwrap();
         host.progress(100).unwrap();
@@ -2589,6 +2747,7 @@ fn scheduled_decision_resumes_after_work_failure_without_repeating_meal() {
         tool_wear: None,
         opinions: None,
         goals: None,
+        agreements: None,
         schedule: None,
         autowork: Some(game_autowork::Autowork {
             next_id: u64::MAX,
@@ -2712,6 +2871,7 @@ fn scheduled_runner_defers_perishable_work_and_publishes_other_completion() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 2), (2, 2)],
@@ -2747,7 +2907,7 @@ fn continuous_core_host_crosses_boundaries_without_partition_or_reload_drift() {
         let tool_wear = game_economy_work::tool_wear::ToolWear { next_item: 10,
             rules: vec![game_economy_work::tool_wear::Rule { good: 2, durability: 10, wear: 1, repair_good: 1, repair_quantity: 1 }],
             conditions: vec![], repairs: vec![], events: vec![] };
-        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, schedule: None,
+        let snapshot = CoreHostSnapshot { core: initial, tool_wear: Some(tool_wear), opinions: None, goals: None, agreements: None, schedule: None,
             autowork: Some(game_autowork::Autowork { next_id: 2, policies: vec![game_autowork::Policy { person: 2, recipe: 1, enabled: true, disregard_claims: false }], requests: None }) };
         let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
         host.enable_schedule(500, 1).unwrap();
@@ -2793,6 +2953,7 @@ fn long_decision_period_survives_save_and_crosses_a_boundary() {
         tool_wear: None,
         opinions: None,
         goals: None,
+        agreements: None,
         schedule: None,
     };
     let mut host = CoreHost::begin(snapshot, &[(1, 1)]).unwrap();
@@ -2831,6 +2992,7 @@ fn continuous_host_carries_long_work_rate_and_fractional_progress() {
                 tool_wear: None,
                 opinions: None,
                 goals: None,
+                agreements: None,
                 schedule: None,
             },
             &[(1, 1)],
@@ -2877,6 +3039,7 @@ fn continuous_host_retains_rate_for_work_paused_at_a_boundary() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
@@ -2926,6 +3089,7 @@ fn continuous_host_keeps_completed_interval_after_boundary_failure() {
             tool_wear: None,
             opinions: None,
             goals: None,
+            agreements: None,
             schedule: None,
         },
         &[(1, 1)],
