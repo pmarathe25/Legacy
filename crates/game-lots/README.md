@@ -32,6 +32,8 @@ Reusing one expiring-container list for spoilage and materialization reduced gen
 
 Set `LEGACY_REVERSE_TRANSFERS=1` to exercise nonordered endpoints in the mixed atomic benchmark. Reusing the partitioner's validation reduced partitioned preparation of 100,000 reversed transfers from 89–91 to 84–85 ms on one worker and from 34.9–35.7 to 33.4–33.6 ms on six in repeated runs. Receipts matched the general arbiter.
 
+`LEGACY_COMPLEX_STRIDE=3` makes every third transaction multi-leg. For 100,000 reversed actions, borrowing the general partition instead of cloning its transactions reduced preparation from 194–198 to 187–189 ms on one worker in repeated runs; six-worker results overlapped at roughly 56–59 ms. Untouched identified items are preserved when the custody owner validates the batch.
+
 Independent transfers keep moved cohorts in immutable chunk-owned receipt arenas. Each outcome exposes only its own exact slice, and serialized outcomes retain their ordinary flat lot arrays. Copies of a receipt remain valid after the source draft is dropped.
 
 Independent transfers merge already ordered dated cohorts in linear time. Work is divided into fixed logical chunks that also expose parallelism in smaller, cohort-heavy batches. The ignored `many_cohort_transfer_benchmark` accepts `LEGACY_ATTEMPTS`, `LEGACY_COHORTS`, and `LEGACY_WORKERS` to measure this path.

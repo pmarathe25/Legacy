@@ -2,6 +2,7 @@
 use game_lot_model::{Container, SimpleTransfer, State, Transaction};
 use game_lot_planning::{Batch, Draft, prefixes};
 use rayon::prelude::*;
+use std::borrow::Borrow;
 mod compact_shared;
 mod disjoint_transform;
 mod fan_in;
@@ -335,43 +336,66 @@ fn prepare_impl(
         return Ok((draft, additions));
     }
     #[cfg(feature = "profile")]
-    {
-        drop(phase);
-        phase = game_diagnostics::span("physical.batches.flatten");
-    }
+    drop(phase);
+    let draft = prepare_general(
+        state,
+        instance,
+        seed,
+        transactions,
+        advance,
+        &additions,
+        &compact,
+    )?;
+    Ok((draft, additions))
+}
+
+/// The caller has validated the complete batch and any selected partition.
+#[allow(clippy::too_many_arguments)]
+fn prepare_general<T: Borrow<Transaction> + Sync>(
+    state: &State,
+    instance: u64,
+    seed: u64,
+    transactions: &[T],
+    advance: bool,
+    additions: &[Container],
+    compact: &[u64],
+) -> Result<Draft, String> {
+    #[cfg(feature = "profile")]
+    let mut phase = game_diagnostics::span("physical.batches.flatten");
     let large = transactions.len() < 64
-        && transactions
-            .par_iter()
-            .any(|row| row.movements.len() >= 2048 || row.creations.len() >= 2048);
+        && transactions.par_iter().any(|row| {
+            let row = row.borrow();
+            row.movements.len() >= 2048 || row.creations.len() >= 2048
+        });
     let moves: Vec<_> = if large {
         transactions
             .par_iter()
-            .flat_map(|row| row.movements.par_iter().copied())
+            .flat_map(|row| row.borrow().movements.par_iter().copied())
             .collect()
     } else {
         transactions
             .par_iter()
-            .flat_map_iter(|row| row.movements.iter().copied())
+            .flat_map_iter(|row| row.borrow().movements.iter().copied())
             .collect()
     };
     let creations: Vec<_> = if large {
         transactions
             .par_iter()
-            .flat_map(|row| row.creations.par_iter().cloned())
+            .flat_map(|row| row.borrow().creations.par_iter().cloned())
             .collect()
     } else {
         transactions
             .par_iter()
-            .flat_map_iter(|row| row.creations.iter().cloned())
+            .flat_map_iter(|row| row.borrow().creations.iter().cloned())
             .collect()
     };
     let move_counts: Vec<_> = transactions
         .par_iter()
-        .map(|row| row.movements.len() as u64)
+        .map(|row| row.borrow().movements.len() as u64)
         .collect();
     let creation_counts: Vec<_> = transactions
         .par_iter()
-        .map(|row| row.creations.len() as u64)
+        .map(|row| row.borrow().creations.len() as u64)
         .collect();
     let move_offsets = prefixes(&move_counts);
     let creation_offsets = prefixes(&creation_counts);
@@ -379,6 +403,7 @@ fn prepare_impl(
         .par_iter()
         .enumerate()
         .map(|(index, row)| {
+            let row = row.borrow();
             let a = move_offsets[index] as usize;
             let b = creation_offsets[index] as usize;
             (
@@ -392,6 +417,7 @@ fn prepare_impl(
         transactions
             .par_iter()
             .flat_map(|row| {
+                let row = row.borrow();
                 (0..row.movements.len())
                     .into_par_iter()
                     .map(move |_| row.id)
@@ -400,13 +426,17 @@ fn prepare_impl(
     } else {
         transactions
             .par_iter()
-            .flat_map_iter(|row| std::iter::repeat_n(row.id, row.movements.len()))
+            .flat_map_iter(|row| {
+                let row = row.borrow();
+                std::iter::repeat_n(row.id, row.movements.len())
+            })
             .collect()
     };
     let creation_owners: Vec<_> = if large {
         transactions
             .par_iter()
             .flat_map(|row| {
+                let row = row.borrow();
                 (0..row.creations.len())
                     .into_par_iter()
                     .map(move |_| row.id)
@@ -415,7 +445,10 @@ fn prepare_impl(
     } else {
         transactions
             .par_iter()
-            .flat_map_iter(|row| std::iter::repeat_n(row.id, row.creations.len()))
+            .flat_map_iter(|row| {
+                let row = row.borrow();
+                std::iter::repeat_n(row.id, row.creations.len())
+            })
             .collect()
     };
     #[cfg(feature = "profile")]
@@ -433,12 +466,12 @@ fn prepare_impl(
             groups: &groups,
             move_owners: &move_owners,
             creation_owners: &creation_owners,
-            additions: &additions,
-            compact: &compact,
+            additions,
+            compact,
         }),
         advance,
     )?;
     #[cfg(feature = "profile")]
     drop(phase);
-    Ok((draft, additions))
+    Ok(draft)
 }

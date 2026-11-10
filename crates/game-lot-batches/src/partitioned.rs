@@ -126,7 +126,7 @@ pub fn prepare_transactions(
         .par_iter()
         .zip(eligible.par_iter())
         .filter(|(_, eligible)| !**eligible)
-        .map(|(row, _)| row.clone())
+        .map(|(row, _)| row)
         .collect();
     #[cfg(feature = "profile")]
     {
@@ -140,19 +140,13 @@ pub fn prepare_transactions(
             )
         },
         || {
-            super::prepare_unpartitioned(
-                state,
-                instance,
-                seed,
-                &remaining,
-                advance,
-                additions.to_vec(),
-                compact,
+            super::prepare_general(
+                state, instance, seed, &remaining, advance, additions, compact,
             )
         },
     );
     let Some(fast) = fast? else { return Ok(None) };
-    let (general, _) = general?;
+    let general = general?;
     #[cfg(feature = "profile")]
     {
         drop(phase);

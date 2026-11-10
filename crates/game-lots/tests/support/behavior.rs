@@ -1447,6 +1447,47 @@ fn mixed_atomic_actions_match_general_arbitration() {
             }
         }
     }
+    // Unrelated identified custody must survive a validated fungible partition.
+    let mut with_item = initial.clone();
+    with_item.push(container(
+        Place::Person(900),
+        10,
+        vec![Lot {
+            item: Some(42),
+            good: 1,
+            quantity: 1,
+            expires_at: None,
+        }],
+    ));
+    let mut expected = store(with_item.clone());
+    let mut actual = store(with_item);
+    let mut reversed = actions.clone();
+    reversed.reverse();
+    let additions = vec![container(Place::Inventory(99999), 10, vec![])];
+    let (inner, additions_for_reference) = game_lot_batches::prepare_unpartitioned_validated(
+        &expected.state,
+        expected.instance,
+        13,
+        &reversed,
+        true,
+        additions.clone(),
+        &[1003],
+    )
+    .unwrap();
+    let reference = expected
+        .item_draft(inner, additions_for_reference, false)
+        .unwrap();
+    let staged = actual
+        .prepare_with_empty_compact(13, &reversed, additions, &[1003], true)
+        .unwrap();
+    assert_eq!(staged.transactions(), reference.transactions());
+    assert_eq!(staged.outcomes(), reference.outcomes());
+    assert_eq!(staged.creations(), reference.creations());
+    assert_eq!(staged.spoiled(), reference.spoiled());
+    expected.commit(reference).unwrap();
+    actual.commit(staged).unwrap();
+    assert_eq!(actual.export(), expected.export());
+    assert_eq!(actual.item_place(42), Some(Place::Person(900)));
     // IDs must still be checked across both partitions.
     actions.last_mut().unwrap().creations[0].id = 7;
     assert!(
@@ -1474,6 +1515,10 @@ fn mixed_atomic_action_benchmark() {
         .unwrap_or(0);
     let idle_expiry = std::env::var_os("LEGACY_IDLE_EXPIRY").is_some();
     let reverse_transfers = std::env::var_os("LEGACY_REVERSE_TRANSFERS").is_some();
+    let complex_stride = std::env::var("LEGACY_COMPLEX_STRIDE")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(0);
     let additions = if with_additions {
         vec![container(Place::Inventory(1), 10, vec![])]
     } else {
@@ -1484,16 +1529,27 @@ fn mixed_atomic_action_benchmark() {
     for id in 1..=count {
         holders.push(container(Place::Person(id), 10, vec![lot(1, 2, Some(5))]));
         holders.push(container(Place::Person(count + id), 10, vec![]));
-        actions.push(Transaction {
+        let mut movements = vec![Movement {
+            item: None,
             id,
-            movements: vec![Movement {
+            from: Place::Person(id),
+            to: Some(Place::Person(count + id)),
+            good: 1,
+            quantity: 1,
+        }];
+        if complex_stride != 0 && id.is_multiple_of(complex_stride) {
+            movements.push(Movement {
                 item: None,
-                id,
+                id: count + 2 + id,
                 from: Place::Person(id),
-                to: Some(Place::Person(count + id)),
+                to: None,
                 good: 1,
                 quantity: 1,
-            }],
+            });
+        }
+        actions.push(Transaction {
+            id,
+            movements,
             creations: vec![],
         });
     }
@@ -1564,7 +1620,7 @@ fn mixed_atomic_action_benchmark() {
                 }
                 samples.sort_by(f64::total_cmp);
                 println!(
-                    "workers={workers} transfers={count} idle_holders={idle} idle_expiry={idle_expiry} reverse_transfers={reverse_transfers} additions={with_additions} mode={mode} prepare={:.6}",
+                    "workers={workers} transfers={count} idle_holders={idle} idle_expiry={idle_expiry} reverse_transfers={reverse_transfers} complex_stride={complex_stride} additions={with_additions} mode={mode} prepare={:.6}",
                     samples[2]
                 );
             }
