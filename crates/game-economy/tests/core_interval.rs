@@ -636,6 +636,137 @@ fn interval_meals_consume_real_food_and_apply_effects_at_the_right_time() {
 }
 
 #[test]
+fn unsupported_completed_work_can_be_deferred_without_blocking_other_jobs() {
+    let run =
+        |workers| {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .unwrap()
+                .install(|| {
+                    let mut initial = fixture();
+                    initial.people[1].region = Some(1);
+                    initial.travel = None;
+                    initial.nutrition = None;
+                    initial.pending_food.clear();
+                    initial.physical.goods.push(Good {
+                        id: 3,
+                        name: "perishable".into(),
+                        food: Some(game_production_model::FoodProfile {
+                            portion: 1,
+                            hunger_relief: 1,
+                            nutrients: Default::default(),
+                            health_effect: 0,
+                            shelf_days: Some(1),
+                        }),
+                    });
+                    let mut recipe = initial.physical.recipes[0].clone();
+                    recipe.id = 2;
+                    recipe.outputs[0].good = 3;
+                    initial.physical.recipes.push(recipe);
+                    let stock = initial
+                        .physical
+                        .custody
+                        .containers
+                        .iter_mut()
+                        .find(|row| row.place == Place::Stock { region: 1, good: 1 })
+                        .unwrap();
+                    *stock = Container::new(
+                        stock.place,
+                        10,
+                        vec![Lot {
+                            item: None,
+                            good: 1,
+                            quantity: 2,
+                            expires_at: None,
+                        }],
+                    )
+                    .unwrap();
+                    initial.physical.custody.containers.push(
+                        Container::new(Place::Stock { region: 1, good: 3 }, 10, vec![]).unwrap(),
+                    );
+                    initial
+                        .physical
+                        .custody
+                        .containers
+                        .sort_by_key(|row| row.place);
+                    let mut physical = Runtime::compile(initial.physical).unwrap();
+                    assert!(
+                        physical
+                            .start(
+                                &[Start {
+                                    id: 2,
+                                    worker: 2,
+                                    region: 1,
+                                    recipe: 2,
+                                    units: 1
+                                }],
+                                7
+                            )
+                            .unwrap()[0]
+                            .1
+                    );
+                    initial.physical = physical.snapshot();
+                    let mut core = CoreInterval::begin(initial, &[(1, 2), (2, 2)]).unwrap();
+                    core.progress(400).unwrap();
+                    let before = core.snapshot();
+                    assert!(core.defer_work(0, 400, &[2]).is_err());
+                    assert_eq!(core.snapshot(), before);
+                    core.progress(100).unwrap();
+                    let due = core.snapshot();
+                    assert!(core.publish_early_work().is_err());
+                    assert!(core.defer_work(0, 500, &[2, 2]).is_err());
+                    assert_eq!(core.snapshot(), due);
+                    core.defer_work(0, 500, &[2]).unwrap();
+                    let mut core = CoreInterval::resume(
+                        serde_json::from_str(&serde_json::to_string(&core.snapshot()).unwrap())
+                            .unwrap(),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        core.publish_early_work().unwrap().unwrap().finished,
+                        vec![1]
+                    );
+                    assert_eq!(core.next_deadline(None).unwrap().after_millis, 500);
+                    assert!(
+                        core.start_work(
+                            0,
+                            500,
+                            &[(
+                                Start {
+                                    id: 3,
+                                    worker: 2,
+                                    region: 1,
+                                    recipe: 1,
+                                    units: 1
+                                },
+                                1
+                            )]
+                        )
+                        .is_err()
+                    );
+                    core.progress(500).unwrap();
+                    let events = core.settle().unwrap();
+                    assert_eq!(events.finished, vec![2]);
+                    let result = core.snapshot();
+                    assert_eq!(
+                        result
+                            .physical
+                            .custody
+                            .containers
+                            .iter()
+                            .find(|row| row.place == Place::JobOutput(2))
+                            .unwrap()
+                            .used,
+                        1
+                    );
+                    result
+                })
+        };
+    assert_eq!(run(1), run(6));
+}
+
+#[test]
 fn composed_core_interval_is_chunk_independent_and_resumable() {
     let initial = fixture();
     let run = |workers, chunks: &[u64], reload| {
@@ -1026,6 +1157,8 @@ fn interval_work_admission_benchmark() {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(count - 1)
         .min(count - 1);
+    let defer = std::env::var_os("LEGACY_DEFER").is_some();
+    assert!(!defer || std::env::var_os("LEGACY_ABANDON").is_none());
     let mut initial = fixture();
     let person = initial.people[0].clone();
     initial.people = (1..=count)
@@ -1070,7 +1203,7 @@ fn interval_work_admission_benchmark() {
                     recipe: 1,
                     units: 1,
                 },
-                1,
+                if defer { 2 } else { 1 },
             )
         })
         .collect();
@@ -1081,6 +1214,7 @@ fn interval_work_admission_benchmark() {
         .install(|| {
             let mut samples = Vec::new();
             let mut abandonment_samples = Vec::new();
+            let mut deferral_samples = Vec::new();
             for round in 0..4 {
                 let mut core = CoreInterval::begin(initial.clone(), &[(1, 1)]).unwrap();
                 assert_eq!(core.progress(400).unwrap(), 400);
@@ -1102,6 +1236,15 @@ fn interval_work_admission_benchmark() {
                     core.abandon_work(0, 400, &requests).unwrap();
                     if round > 0 {
                         abandonment_samples.push(start.elapsed().as_secs_f64());
+                    }
+                }
+                if defer {
+                    core.progress(500).unwrap();
+                    let jobs: Vec<_> = result.iter().filter(|row| row.1).map(|row| row.0).collect();
+                    let start = std::time::Instant::now();
+                    core.defer_work(0, 900, &jobs).unwrap();
+                    if round > 0 {
+                        deferral_samples.push(start.elapsed().as_secs_f64());
                     }
                 }
                 if round == 3 {
@@ -1126,6 +1269,13 @@ fn interval_work_admission_benchmark() {
                 println!(
                     "workers={workers} abandoned={stock_units} elapsed={:.6}",
                     abandonment_samples[1]
+                );
+            }
+            if defer {
+                deferral_samples.sort_by(f64::total_cmp);
+                println!(
+                    "workers={workers} deferred={stock_units} elapsed={:.6}",
+                    deferral_samples[1]
                 );
             }
             #[cfg(feature = "profile")]

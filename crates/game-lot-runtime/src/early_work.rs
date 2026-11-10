@@ -42,6 +42,57 @@ impl EarlyWorkDraft {
     }
 }
 impl Runtime {
+    /// Leave completed jobs for ordinary boundary settlement. Their inputs
+    /// remain reserved and their workers remain occupied until publication.
+    pub fn defer_interval_completions(&mut self, jobs: &[u64]) -> Result<(), String> {
+        let interval = self
+            .work_interval
+            .as_ref()
+            .ok_or("no physical work interval")?;
+        if interval.tick != self.tick()
+            || interval.custody_revision != self.store.revision()
+            || interval.elapsed_millis == 0
+            || interval.elapsed_millis >= self.tick_millis
+        {
+            return Err("completion deferral requires a valid partial interval".into());
+        }
+        let mut ordered = jobs.to_vec();
+        ordered.par_sort_unstable();
+        if ordered.par_windows(2).any(|rows| rows[0] == rows[1])
+            || ordered.par_iter().any(|id| {
+                interval
+                    .rates
+                    .binary_search_by_key(id, |row| row.0)
+                    .is_err()
+                    || self
+                        .work
+                        .binary_search_by_key(id, |row| row.job.id)
+                        .ok()
+                        .is_none_or(|index| {
+                            let row = &self.work[index];
+                            row.phase != Phase::Working || row.job.remaining != 0
+                        })
+            })
+        {
+            return Err("invalid interval completion deferral".into());
+        }
+        if ordered.is_empty() {
+            return Ok(());
+        }
+        let epoch = self
+            .epoch
+            .checked_add(1)
+            .ok_or("physical work revision overflow")?;
+        let rates: Vec<_> = interval
+            .rates
+            .par_iter()
+            .copied()
+            .filter(|(id, _)| ordered.binary_search(id).is_err())
+            .collect();
+        self.work_interval.as_mut().expect("checked interval").rates = rates;
+        self.epoch = epoch;
+        Ok(())
+    }
     /// Stage personal consumption without committing custody or physiology.
     pub fn prepare_interval_consumption(
         &self,

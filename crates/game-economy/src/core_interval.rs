@@ -297,6 +297,23 @@ impl CoreInterval {
         };
         self.physical.commit_early_work(draft).map(Some)
     }
+    /// Defer selected completed jobs to ordinary physical boundary settlement.
+    /// Outputs requiring identified-item owners still need a broader host.
+    pub fn defer_work(
+        &mut self,
+        tick: u64,
+        offset_millis: u64,
+        jobs: &[u64],
+    ) -> Result<(), String> {
+        if self.physical.tick() != tick
+            || self.elapsed_millis() != Some(offset_millis)
+            || offset_millis == 0
+            || offset_millis >= self.physical.tick_millis()
+        {
+            return Err("completion deferral has a stale or invalid interval time".into());
+        }
+        self.physical.defer_interval_completions(jobs)
+    }
     /// Publish completed living travelers without running other world effects.
     pub fn publish_arrivals(&mut self) -> Result<Option<CoreArrivals>, String> {
         let offset = self.elapsed_millis().ok_or("no physical interval")?;

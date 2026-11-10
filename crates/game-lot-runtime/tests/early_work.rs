@@ -181,6 +181,35 @@ fn abandoning_another_job_invalidates_a_completion_draft() {
 }
 
 #[test]
+fn deferring_one_completion_invalidates_old_drafts_and_keeps_its_materials() {
+    let mut runtime = fixture(false, 1);
+    runtime
+        .start(
+            &[Start {
+                id: 2,
+                worker: 2,
+                region: 1,
+                recipe: 1,
+                units: 1,
+            }],
+            7,
+        )
+        .unwrap();
+    runtime.begin_work_interval(&[(1, 2), (2, 2)]).unwrap();
+    runtime.progress_work_interval(500).unwrap();
+    let stale = runtime.prepare_early_work(7).unwrap().unwrap();
+    runtime.defer_interval_completions(&[2]).unwrap();
+    let before = runtime.snapshot();
+    assert!(runtime.commit_early_work(stale).is_err());
+    assert_eq!(runtime.snapshot(), before);
+    assert_eq!(runtime.custody(Place::JobInput(2)).unwrap().used, 2);
+    let draft = runtime.prepare_early_work(7).unwrap().unwrap();
+    assert_eq!(runtime.commit_early_work(draft).unwrap().finished, vec![1]);
+    runtime.progress_work_interval(500).unwrap();
+    assert_eq!(runtime.settle_work_interval(7).unwrap().finished, vec![2]);
+}
+
+#[test]
 fn interval_transfer_invalidates_completion_drafts_and_keeps_work_live() {
     let mut snapshot = fixture(false, 1).snapshot();
     snapshot
